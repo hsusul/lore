@@ -1,12 +1,16 @@
 //! Git evidence: provenance-separated observations and repository identity.
 //!
-//! Scaffold for M4 (`docs/architecture/GIT_INTEGRATION.md`, ADR-0006). Live
-//! repository capture (gix primary, hardened system-`git` fallback) is added in
-//! later increments. This module currently owns the dependency-free pieces that
-//! are needed regardless of the capture backend — notably remote-URL
-//! normalization, which strips credentials so a recorded remote can be stored in
+//! M4 (`docs/architecture/GIT_INTEGRATION.md`, ADR-0006). Live repository reads
+//! use `gix` (gitoxide) with network transports disabled at the dependency level
+//! so the archive core stays network-incapable; a hardened system-`git` fallback
+//! is added in a later increment. All operations here are strictly read-only:
+//! Lore never fetches, checks out, commits, mutates refs/index/worktree, or runs
+//! hooks/helpers. This module also owns remote-URL normalization, which strips
+//! credentials so a recorded remote can be stored in
 //! `git_observation.remote_url_norm` and used as identity evidence without ever
 //! persisting a secret.
+
+use std::path::{Path, PathBuf};
 
 /// Normalize a git remote URL to a canonical, credential-free `host[:port]/path`
 /// form suitable for identity matching and safe storage.
@@ -48,6 +52,62 @@ pub fn normalize_remote_url(raw: &str) -> Option<String> {
     } else {
         Some(format!("{host}/{path}"))
     }
+}
+
+/// Read-only facts captured from a live repository at observation time. These
+/// are `lore_captured` evidence — true at capture, never backdated to session
+/// time (`GIT_INTEGRATION.md` §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedRepo {
+    /// Canonical git common directory shared by all linked worktrees of one
+    /// local repository instance — the local grouping key for identity.
+    pub common_dir: PathBuf,
+    /// The worktree root, when the repository is not bare.
+    pub workdir: Option<PathBuf>,
+    /// Current branch short name, or `None` when HEAD is detached or unborn.
+    pub branch: Option<String>,
+    /// HEAD commit id (full hex), or `None` on an unborn branch.
+    pub head_commit: Option<String>,
+    /// HEAD is detached (a commit, not a branch).
+    pub detached: bool,
+    /// Working tree has uncommitted changes at capture, when determinable.
+    pub is_dirty: Option<bool>,
+}
+
+/// Capture read-only repository facts for the repository containing `path`.
+///
+/// Returns `None` when `path` is not inside a git repository (kept as
+/// "No repository" upstream). Never mutates anything and never touches the
+/// network. Detached HEAD yields `branch = None` with the commit still recorded.
+#[must_use]
+pub fn capture(path: &Path) -> Option<CapturedRepo> {
+    let repo = gix::discover(path).ok()?;
+
+    let raw_common = repo.common_dir();
+    let common_dir = raw_common
+        .canonicalize()
+        .unwrap_or_else(|_| raw_common.to_path_buf());
+    let workdir = repo
+        .workdir()
+        .map(|w| w.canonicalize().unwrap_or_else(|_| w.to_path_buf()));
+
+    let head = repo.head().ok()?;
+    let detached = head.is_detached();
+    let branch = head
+        .referent_name()
+        .map(|name| name.shorten().to_string())
+        .filter(|_| !detached);
+    let head_commit = repo.head_id().ok().map(|id| id.to_hex().to_string());
+    let is_dirty = repo.is_dirty().ok();
+
+    Some(CapturedRepo {
+        common_dir,
+        workdir,
+        branch,
+        head_commit,
+        detached,
+        is_dirty,
+    })
 }
 
 /// Split `host[/path]` at the first `/`.

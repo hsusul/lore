@@ -1,0 +1,118 @@
+//! M4 acceptance: read-only gix capture reports branch/HEAD/dirty state, treats
+//! a detached HEAD as branch-less, groups linked worktrees by common dir, and
+//! declines a non-git path — over throwaway fixture repositories.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::path::Path;
+use std::process::Command;
+
+use lore_core::git::capture;
+
+/// Run a git command in `dir` with a hermetic environment (no user/global/system
+/// config, no prompts) and a fixed identity so commits succeed deterministically.
+fn git(dir: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git must be installed to run M4 capture tests");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Create a repository on branch `main` with one commit and return its path.
+fn init_repo(dir: &Path) {
+    git(dir, &["init", "-b", "main"]);
+    std::fs::write(dir.join("README.md"), "hello\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "initial"]);
+}
+
+#[test]
+fn capture_reads_branch_commit_and_clean_state() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let facts = capture(dir.path()).expect("path is inside a repo");
+    assert_eq!(facts.branch.as_deref(), Some("main"));
+    assert!(!facts.detached);
+    assert_eq!(
+        facts.head_commit.as_deref().map(str::len),
+        Some(40),
+        "a born HEAD yields a full commit hash"
+    );
+    assert_eq!(facts.is_dirty, Some(false), "a fresh commit is clean");
+    assert!(facts.workdir.is_some());
+}
+
+#[test]
+fn capture_detects_a_dirty_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
+
+    let facts = capture(dir.path()).unwrap();
+    assert_eq!(facts.is_dirty, Some(true));
+}
+
+#[test]
+fn capture_reports_detached_head_with_null_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    git(dir.path(), &["checkout", "--detach", "HEAD"]);
+
+    let facts = capture(dir.path()).unwrap();
+    assert!(facts.detached, "HEAD is detached");
+    assert_eq!(
+        facts.branch, None,
+        "detached HEAD stores commit with branch NULL"
+    );
+    assert_eq!(facts.head_commit.as_deref().map(str::len), Some(40));
+}
+
+#[test]
+fn capture_returns_none_outside_a_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        capture(dir.path()).is_none(),
+        "a non-git path is kept under 'No repository'"
+    );
+}
+
+#[test]
+fn linked_worktrees_group_by_common_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let main = root.path().join("main");
+    std::fs::create_dir(&main).unwrap();
+    init_repo(&main);
+
+    // A linked worktree of the same local repository instance.
+    let linked = root.path().join("feature-wt");
+    git(
+        &main,
+        &["worktree", "add", linked.to_str().unwrap(), "-b", "feature"],
+    );
+
+    let main_facts = capture(&main).unwrap();
+    let linked_facts = capture(&linked).unwrap();
+
+    assert_eq!(
+        main_facts.common_dir, linked_facts.common_dir,
+        "linked worktrees resolve to one common dir (one repository identity)"
+    );
+    assert_ne!(
+        main_facts.workdir, linked_facts.workdir,
+        "but they have distinct worktree roots"
+    );
+    assert_eq!(linked_facts.branch.as_deref(), Some("feature"));
+}
