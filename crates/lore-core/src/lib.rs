@@ -22,6 +22,7 @@ pub mod git;
 pub mod ingest;
 pub mod jobs;
 pub mod model;
+pub mod pipeline;
 pub mod search;
 pub mod secrets;
 pub mod storage;
