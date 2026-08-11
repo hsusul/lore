@@ -1,0 +1,4 @@
+{"type":"session_meta","timestamp":"2026-08-11T14:00:00.000Z","payload":{"id":"019e0000-0000-7000-8000-000000000004","cwd":"/proj","cli_version":"0.133.0","model_provider":"openai"}}
+{"type":"turn_context","timestamp":"2026-08-11T14:00:00.500Z","payload":{"cwd":"/proj","model":"gpt-x","turn_id":"t1"}}
+{"type":"response_item","timestamp":"2026-08-11T14:00:01.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"synthetic response"}]}}
+{"type":"event_msg","timestamp":"2026-08-11T14:00:02.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":2,"cached_input_tokens":1,"cache_write_input_tokens":0,"reasoning_output_tokens":0,"total_tokens":13},"model_context_window":100000,"total_token_usage":{"input_tokens":120,"output_tokens":30,"cached_input_tokens":40,"cache_write_input_tokens":5,"reasoning_output_tokens":3,"total_tokens":198}},"rate_limits":null}}

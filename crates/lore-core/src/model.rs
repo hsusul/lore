@@ -253,6 +253,9 @@ pub struct ParsedSession {
     pub title: Option<String>,
     pub agent_version: Option<String>,
     pub primary_model: Option<String>,
+    /// Session-level totals when the source records cumulative usage. When a
+    /// field is absent, persistence falls back to summing per-message usage.
+    pub total_tokens: Tokens,
     pub started_at: Option<i64>,
     pub ended_at: Option<i64>,
     pub status: ParseStatus,
@@ -274,6 +277,7 @@ impl ParsedSession {
             title: None,
             agent_version: None,
             primary_model: None,
+            total_tokens: Tokens::default(),
             started_at: None,
             ended_at: None,
             status: ParseStatus::Ok,

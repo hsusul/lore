@@ -83,11 +83,13 @@ fn persist_rows(
         )?;
     }
 
+    let total_tokens = session_token_totals(parsed);
     tx.execute(
         "INSERT INTO agent_session
             (id, agent_id, native_session_id, dedupe_key, title, started_at, ended_at,
-             primary_model, message_count, tool_call_count, parse_status, parse_note, agent_version)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+             primary_model, message_count, tool_call_count, total_input_tokens,
+             total_output_tokens, total_cache_tokens, parse_status, parse_note, agent_version)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
         params![
             session_id,
             agent_id,
@@ -99,6 +101,9 @@ fn persist_rows(
             parsed.primary_model,
             parsed.messages.len() as i64,
             parsed.tool_calls.len() as i64,
+            total_tokens.input,
+            total_tokens.output,
+            total_tokens.cache,
             parsed.status.as_str(),
             parse_note(parsed),
             parsed.agent_version,
@@ -276,6 +281,38 @@ fn persist_rows(
     }
 
     Ok(session_id)
+}
+
+fn session_token_totals(parsed: &ParsedSession) -> crate::model::Tokens {
+    crate::model::Tokens {
+        input: parsed
+            .total_tokens
+            .input
+            .or_else(|| sum_message_tokens(parsed, |tokens| tokens.input)),
+        output: parsed
+            .total_tokens
+            .output
+            .or_else(|| sum_message_tokens(parsed, |tokens| tokens.output)),
+        cache: parsed
+            .total_tokens
+            .cache
+            .or_else(|| sum_message_tokens(parsed, |tokens| tokens.cache)),
+    }
+}
+
+fn sum_message_tokens(
+    parsed: &ParsedSession,
+    field: impl Fn(crate::model::Tokens) -> Option<i64>,
+) -> Option<i64> {
+    let mut seen = false;
+    let total = parsed.messages.iter().fold(0_i64, |sum, message| {
+        let value = field(message.tokens);
+        if value.is_some() {
+            seen = true;
+        }
+        sum.saturating_add(value.unwrap_or(0))
+    });
+    seen.then_some(total)
 }
 
 /// A bounded, content-free note summarizing parser diagnostics.

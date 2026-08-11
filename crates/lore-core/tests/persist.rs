@@ -34,15 +34,18 @@ fn basic_session_round_trips_in_order() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let sid = persist_fixture(&conn, "basic_text.jsonl");
 
-    let (count, title): (i64, String) = conn
+    let (count, title, input, output, cache): (i64, String, i64, i64, i64) = conn
         .query_row(
-            "SELECT message_count, title FROM agent_session WHERE id = ?1",
+            "SELECT message_count, title, total_input_tokens, total_output_tokens,
+                    total_cache_tokens
+             FROM agent_session WHERE id = ?1",
             [&sid],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .unwrap();
     assert_eq!(count, 2);
     assert_eq!(title, "Add health check endpoint");
+    assert_eq!((input, output, cache), (1200, 40, 800));
 
     // Messages in source order.
     let roles: Vec<String> = {
@@ -240,4 +243,20 @@ fn codex_patch_persists_file_events_and_tool_call() {
         )
         .unwrap();
     assert_eq!(name, "apply_patch");
+}
+
+#[test]
+fn codex_cumulative_token_totals_persist() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let sid = persist_codex(&conn, "token_count.jsonl");
+
+    let totals: (i64, i64, i64) = conn
+        .query_row(
+            "SELECT total_input_tokens, total_output_tokens, total_cache_tokens
+             FROM agent_session WHERE id = ?1",
+            [&sid],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(totals, (120, 30, 45));
 }

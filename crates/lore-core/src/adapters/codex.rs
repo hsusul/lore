@@ -179,6 +179,11 @@ impl CodexAdapter {
                             seq += 1;
                         }
                         "patch_apply_end" => extract_patch_changes(p, ts, &mut session),
+                        "token_count" => {
+                            if let Some(tokens) = token_totals(p) {
+                                session.total_tokens = tokens;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -265,6 +270,47 @@ fn recorded_git(meta: &Value) -> RecordedGit {
         str_field(g, "commit_hash"),
         str_field(g, "repository_url"),
     )
+}
+
+/// Read the latest cumulative token totals. Current Codex nests these under
+/// `info.total_token_usage`; the flat `info.{input,output}` form is retained as
+/// a tolerant legacy fallback because the on-disk format is version-sensitive.
+fn token_totals(payload: &Value) -> Option<Tokens> {
+    let info = payload.get("info")?.as_object()?;
+    let usage = info
+        .get("total_token_usage")
+        .and_then(Value::as_object)
+        .unwrap_or(info);
+    let input = int_field(usage, "input_tokens").or_else(|| int_field(usage, "input"));
+    let output = int_field(usage, "output_tokens").or_else(|| int_field(usage, "output"));
+    let cache = optional_sum([
+        int_field(usage, "cached_input_tokens"),
+        int_field(usage, "cache_write_input_tokens"),
+    ]);
+    if input.is_none() && output.is_none() && cache.is_none() {
+        None
+    } else {
+        Some(Tokens {
+            input,
+            output,
+            cache,
+        })
+    }
+}
+
+fn int_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<i64> {
+    object.get(key).and_then(Value::as_i64)
+}
+
+fn optional_sum<const N: usize>(values: [Option<i64>; N]) -> Option<i64> {
+    let mut seen = false;
+    let total = values.into_iter().fold(0_i64, |sum, value| {
+        if value.is_some() {
+            seen = true;
+        }
+        sum.saturating_add(value.unwrap_or(0))
+    });
+    seen.then_some(total)
 }
 
 fn message_item(
@@ -602,7 +648,9 @@ impl AgentAdapter for CodexAdapter {
             summaries: true,
             git_context: true,
             message_tree: false, // linear
-            durations: true,
+            // `task_complete.duration_ms` is turn latency; per-tool duration is
+            // not normalized yet.
+            durations: false,
             encrypted_regions: true,
         }
     }
@@ -818,5 +866,26 @@ mod tests {
         );
         let s = CodexAdapter::new().parse_str(content, "fallback");
         assert_eq!(s.segments[0].provider.as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn token_count_uses_latest_cumulative_totals() {
+        let content = concat!(
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":100,\"output_tokens\":20,\"cached_input_tokens\":30,\"cache_write_input_tokens\":4}}}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":140,\"output_tokens\":25,\"cached_input_tokens\":35,\"cache_write_input_tokens\":5}}}}\n"
+        );
+        let session = CodexAdapter::new().parse_str(content, "tokens");
+        assert_eq!(session.total_tokens.input, Some(140));
+        assert_eq!(session.total_tokens.output, Some(25));
+        assert_eq!(session.total_tokens.cache, Some(40));
+    }
+
+    #[test]
+    fn token_count_tolerates_flat_legacy_shape() {
+        let content = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"input\":7,\"output\":3}}}\n";
+        let session = CodexAdapter::new().parse_str(content, "legacy-tokens");
+        assert_eq!(session.total_tokens.input, Some(7));
+        assert_eq!(session.total_tokens.output, Some(3));
+        assert_eq!(session.total_tokens.cache, None);
     }
 }
