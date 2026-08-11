@@ -183,7 +183,24 @@ impl CodexAdapter {
                                 session.total_tokens = tokens;
                             }
                         }
-                        _ => {}
+                        // Known telemetry that carries no conversation content of
+                        // its own (the conversation is reconstructed from
+                        // response_item). Intentionally ignored, not flagged
+                        // (CODEX.md §3).
+                        "task_started"
+                        | "user_message"
+                        | "agent_message"
+                        | "agent_reasoning"
+                        | "thread_settings_applied"
+                        | "mcp_tool_call_end"
+                        | "web_search_end"
+                        | "task_complete"
+                        | "turn_aborted" => {}
+                        // A genuinely new event_msg subtype: degrade to a bounded,
+                        // content-free note rather than dropping it silently.
+                        other => {
+                            session.note_partial(format!("unknown event_msg: {}", bounded(other)));
+                        }
                     }
                 }
                 "compacted" => {
@@ -952,6 +969,26 @@ mod tests {
         assert_eq!(
             parse_git(",\"git\":{\"branch\":\"dev\",\"commit_hash\":\"abc\",\"repository_url\":\"github.com/x/y\"}"),
             (Some("dev".into()), Some("abc".into()), Some("github.com/x/y".into()))
+        );
+    }
+
+    #[test]
+    fn unknown_event_msg_is_flagged_but_known_telemetry_is_not() {
+        // Documented telemetry keeps the session Ok...
+        let known = concat!(
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"task_started\"}}\n",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"task_complete\"}}\n"
+        );
+        assert_eq!(
+            CodexAdapter::new().parse_str(known, "known").status,
+            crate::model::ParseStatus::Ok
+        );
+
+        // ...but a genuinely new event_msg subtype degrades to partial.
+        let unknown = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"brand_new_event\"}}\n";
+        assert_eq!(
+            CodexAdapter::new().parse_str(unknown, "unknown").status,
+            crate::model::ParseStatus::Partial
         );
     }
 
