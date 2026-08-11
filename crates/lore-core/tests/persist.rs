@@ -4,19 +4,29 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
+use lore_core::adapters::codex::CodexAdapter;
 use lore_core::ingest::persist_session;
 use rusqlite::Connection;
 
-fn fixture(name: &str) -> String {
+fn fixture_in(dir: &str, name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/claude_code")
+        .join(dir)
         .join(name);
     std::fs::read_to_string(path).unwrap()
+}
+
+fn fixture(name: &str) -> String {
+    fixture_in("fixtures/claude_code", name)
 }
 
 fn persist_fixture(conn: &Connection, name: &str) -> String {
     let parsed = ClaudeCodeAdapter::new().parse_str(&fixture(name), "fallback");
     persist_session(conn, "claude-code", "Claude Code", &parsed).unwrap()
+}
+
+fn persist_codex(conn: &Connection, name: &str) -> String {
+    let parsed = CodexAdapter::new().parse_str(&fixture_in("fixtures/codex", name), "fallback");
+    persist_session(conn, "codex", "Codex", &parsed).unwrap()
 }
 
 #[test]
@@ -162,4 +172,72 @@ fn out_of_order_parent_resolves() {
         Some(id_of_1.as_str()),
         "forward/out-of-order parent must resolve to the later message"
     );
+}
+
+#[test]
+fn codex_session_persists_git_and_provider() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let sid = persist_codex(&conn, "minimal.jsonl");
+
+    let (source, branch): (String, String) = conn
+        .query_row(
+            "SELECT source, branch FROM git_observation WHERE session_id = ?1",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(source, "agent_recorded");
+    assert_eq!(branch, "main");
+
+    let provider: String = conn
+        .query_row(
+            "SELECT provider FROM session_segment WHERE session_id = ?1 LIMIT 1",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(provider, "openai");
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT message_count FROM agent_session WHERE id = ?1",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 3, "user + reasoning + assistant");
+}
+
+#[test]
+fn codex_patch_persists_file_events_and_tool_call() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let sid = persist_codex(&conn, "patch_apply.jsonl");
+
+    let files: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM file_event WHERE session_id = ?1 AND source = 'agent_patch'",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(files, 3);
+
+    let (path, old): (String, String) = conn
+        .query_row(
+            "SELECT path, old_path FROM file_event WHERE session_id = ?1 AND change_kind = 'move'",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(path, "src/renamed.ts");
+    assert_eq!(old, "src/old.ts");
+
+    let name: String = conn
+        .query_row(
+            "SELECT name FROM tool_call WHERE session_id = ?1",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(name, "apply_patch");
 }

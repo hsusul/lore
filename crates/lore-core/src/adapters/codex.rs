@@ -809,4 +809,14 @@ mod tests {
             .iter()
             .all(|f| f.tool_native_call_id.as_deref() == Some("call_9")));
     }
+
+    #[test]
+    fn non_openai_provider_is_preserved() {
+        let content = concat!(
+            "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"z\",\"cli_version\":\"1\",\"cwd\":\"/p\",\"model_provider\":\"anthropic\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"hi\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "fallback");
+        assert_eq!(s.segments[0].provider.as_deref(), Some("anthropic"));
+    }
 }
