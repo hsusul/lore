@@ -10,7 +10,10 @@
 //! `git_observation.remote_url_norm` and used as identity evidence without ever
 //! persisting a secret.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Normalize a git remote URL to a canonical, credential-free `host[:port]/path`
 /// form suitable for identity matching and safe storage.
@@ -90,11 +93,39 @@ const ROOT_WALK_LIMIT: usize = 50_000;
 
 /// Capture read-only repository facts for the repository containing `path`.
 ///
-/// Returns `None` when `path` is not inside a git repository (kept as
-/// "No repository" upstream). Never mutates anything and never touches the
-/// network. Detached HEAD yields `branch = None` with the commit still recorded.
+/// Primary path is `gix`; if `gix` cannot read the repository but a `.git`
+/// exists in an ancestor (so it really is a repository `gix` choked on), fall
+/// back to the hardened system-`git` reader. Returns `None` when `path` is not
+/// inside a git repository at all — without spawning any process in that case.
+/// Never mutates anything and never touches the network.
 #[must_use]
 pub fn capture(path: &Path) -> Option<CapturedRepo> {
+    if let Some(facts) = capture_gix(path) {
+        return Some(facts);
+    }
+    if looks_like_repo(path) {
+        capture_via_git(path)
+    } else {
+        None
+    }
+}
+
+/// Cheap ancestor check for a `.git` entry, so the fallback never spawns a
+/// process for a plainly non-git path.
+fn looks_like_repo(path: &Path) -> bool {
+    let mut dir = Some(path);
+    while let Some(current) = dir {
+        if current.join(".git").exists() {
+            return true;
+        }
+        dir = current.parent();
+    }
+    false
+}
+
+/// Capture via `gix`. Detached HEAD yields `branch = None` with the commit still
+/// recorded.
+fn capture_gix(path: &Path) -> Option<CapturedRepo> {
     let repo = gix::discover(path).ok()?;
 
     let raw_common = repo.common_dir();
@@ -210,6 +241,188 @@ fn trim_slashes(path: &str) -> &str {
 fn clean_path(path: &str) -> String {
     let path = trim_slashes(path);
     path.strip_suffix(".git").unwrap_or(path).to_string()
+}
+
+// ── Hardened system-git fallback (GIT_INTEGRATION.md §5) ─────────────────────
+
+/// Wall-clock cap on a single git invocation.
+const GIT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Maximum bytes retained from a git command's stdout (excess is drained and
+/// discarded so the child can finish, but never buffered).
+const OUTPUT_CAP: usize = 4 * 1024 * 1024;
+/// The only git subcommands the fallback may ever run — all local and read-only.
+/// Nothing that fetches, checks out, or mutates is representable.
+const ALLOWED_SUBCOMMANDS: &[&str] = &[
+    "rev-parse",
+    "rev-list",
+    "for-each-ref",
+    "cat-file",
+    "status",
+    "diff",
+];
+/// Config overrides that neutralize every executable-config vector git honors,
+/// applied on the command line so they win over hostile repo-local config.
+const SAFE_CONFIG: &[&str] = &[
+    "core.fsmonitor=",          // no filesystem-monitor hook (runs on status)
+    "core.hooksPath=/dev/null", // no hooks
+    "core.pager=cat",           // never launch a pager
+    "core.editor=false",
+    "core.sshCommand=false",
+    "core.askpass=",
+    "diff.external=",       // no external diff driver
+    "credential.helper=",   // no credential helpers
+    "protocol.allow=never", // deny all transports
+    "uploadpack.packObjectsHook=",
+    "gc.auto=0",
+];
+
+/// Fallback capture via a hardened, read-only system-`git`. Provides the core
+/// facts (branch/HEAD/dirty/common dir/roots); remotes are not read here (that
+/// would need a non-allowlisted subcommand), so identity falls back to the
+/// common dir when only this path is available.
+#[must_use]
+pub fn capture_via_git(path: &Path) -> Option<CapturedRepo> {
+    let common_raw = run_git(path, &["rev-parse", "--git-common-dir"])?;
+    let common_dir = resolve_dir(path, common_raw.trim());
+    let workdir = run_git(path, &["rev-parse", "--show-toplevel"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| resolve_dir(path, &s));
+
+    let head_ref = run_git(path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let detached = head_ref.trim() == "HEAD";
+    let branch = (!detached).then(|| head_ref.trim().to_string());
+    let head_commit = run_git(path, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string());
+    let is_dirty = run_git(path, &["status", "--porcelain"]).map(|s| !s.trim().is_empty());
+    let root_commits = run_git(path, &["rev-list", "--max-parents=0", "HEAD"])
+        .map(|s| {
+            let mut roots: Vec<String> = s.split_whitespace().map(str::to_string).collect();
+            roots.sort();
+            roots.dedup();
+            roots
+        })
+        .unwrap_or_default();
+
+    Some(CapturedRepo {
+        common_dir,
+        workdir,
+        branch,
+        head_commit,
+        detached,
+        is_dirty,
+        remotes: Vec::new(),
+        root_commits,
+        history_truncated: false,
+    })
+}
+
+/// Resolve a possibly-relative git path against the query directory.
+fn resolve_dir(base: &Path, raw: &str) -> PathBuf {
+    let candidate = PathBuf::from(raw);
+    let candidate = if candidate.is_absolute() {
+        candidate
+    } else {
+        base.join(candidate)
+    };
+    candidate.canonicalize().unwrap_or(candidate)
+}
+
+/// Run one allowlisted, hardened git command and return its trimmed stdout, or
+/// `None` on a disallowed subcommand, spawn failure, non-zero exit, timeout, or
+/// non-UTF-8 output. Never uses a shell; arguments are passed as an array.
+fn run_git(repo: &Path, args: &[&str]) -> Option<String> {
+    if !args
+        .first()
+        .is_some_and(|sub| ALLOWED_SUBCOMMANDS.contains(sub))
+    {
+        return None;
+    }
+
+    let mut cmd = Command::new("git");
+    cmd.arg("--no-optional-locks");
+    for override_kv in SAFE_CONFIG {
+        cmd.arg("-c").arg(override_kv);
+    }
+    cmd.args(args);
+    cmd.current_dir(repo);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    sanitize_env(&mut cmd);
+
+    let mut child = cmd.spawn().ok()?;
+    // Drain both pipes on threads so a large output cannot deadlock the wait.
+    let mut stdout = child.stdout.take()?;
+    let mut stderr = child.stderr.take()?;
+    let out_thread = std::thread::spawn(move || read_capped(&mut stdout));
+    let err_thread = std::thread::spawn(move || drain(&mut stderr));
+
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if start.elapsed() > GIT_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => break None,
+        }
+    };
+
+    let stdout_bytes = out_thread.join().ok()?;
+    let _ = err_thread.join();
+    if !status?.success() {
+        return None;
+    }
+    String::from_utf8(stdout_bytes).ok()
+}
+
+/// A sanitized environment: cleared, then only PATH plus vars that disable
+/// prompts, ignore system/global config, deny transports, and refuse askpass.
+fn sanitize_env(cmd: &mut Command) {
+    cmd.env_clear();
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    cmd.env("HOME", "/nonexistent");
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
+    cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
+    cmd.env("GIT_ATTR_NOSYSTEM", "1");
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
+    cmd.env("GIT_ALLOW_PROTOCOL", ""); // empty allow-list denies every transport
+    cmd.env("GIT_ASKPASS", "/bin/false");
+    cmd.env("SSH_ASKPASS", "/bin/false");
+}
+
+/// Read up to `OUTPUT_CAP` bytes; keep draining past the cap (discarding) so the
+/// child never blocks on a full pipe, but never buffer more than the cap.
+fn read_capped(reader: &mut impl Read) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if buf.len() < OUTPUT_CAP {
+                    let take = (OUTPUT_CAP - buf.len()).min(n);
+                    buf.extend_from_slice(&chunk[..take]);
+                }
+            }
+        }
+    }
+    buf
+}
+
+/// Drain a pipe to EOF, discarding everything (used for stderr).
+fn drain(reader: &mut impl Read) {
+    let mut sink = [0u8; 8192];
+    while matches!(reader.read(&mut sink), Ok(n) if n > 0) {}
 }
 
 #[cfg(test)]

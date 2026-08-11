@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use lore_core::git::capture;
+use lore_core::git::{capture, capture_via_git};
 
 /// Run a git command in `dir` with a hermetic environment (no user/global/system
 /// config, no prompts) and a fixed identity so commits succeed deterministically.
@@ -111,6 +111,73 @@ fn capture_returns_none_outside_a_repository() {
     assert!(
         capture(dir.path()).is_none(),
         "a non-git path is kept under 'No repository'"
+    );
+}
+
+#[test]
+fn hardened_fallback_reads_the_same_core_facts_as_gix() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let facts = capture_via_git(dir.path()).expect("fallback reads the repo");
+    assert_eq!(facts.branch.as_deref(), Some("main"));
+    assert!(!facts.detached);
+    assert_eq!(facts.head_commit.as_deref().map(str::len), Some(40));
+    assert_eq!(facts.is_dirty, Some(false));
+    assert_eq!(facts.root_commits.len(), 1);
+    assert!(facts.workdir.is_some());
+
+    // Dirty and detached behave the same via the fallback.
+    std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
+    assert_eq!(capture_via_git(dir.path()).unwrap().is_dirty, Some(true));
+    git(dir.path(), &["stash"]);
+    git(dir.path(), &["checkout", "--detach", "HEAD"]);
+    let detached = capture_via_git(dir.path()).unwrap();
+    assert!(detached.detached);
+    assert_eq!(detached.branch, None);
+}
+
+#[test]
+fn hardened_fallback_neutralizes_hostile_executable_config() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    // A hostile fsmonitor hook that runs on `git status` (a read) if honored.
+    let sentinel = dir.path().join("PWNED");
+    let evil = dir.path().join("evil.sh");
+    std::fs::write(
+        &evil,
+        format!("#!/bin/sh\ntouch \"{}\"\n", sentinel.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&evil, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    git(
+        dir.path(),
+        &["config", "core.fsmonitor", evil.to_str().unwrap()],
+    );
+
+    // Control: plain git honors the hook, proving the vector is live here.
+    let _ = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        sentinel.exists(),
+        "control: hostile fsmonitor executes under un-hardened git"
+    );
+    std::fs::remove_file(&sentinel).unwrap();
+
+    // Hardened fallback: reads still succeed and the hook never executes.
+    let facts = capture_via_git(dir.path()).expect("hardened capture still reads the repo");
+    assert_eq!(facts.branch.as_deref(), Some("main"));
+    assert!(
+        !sentinel.exists(),
+        "hardened git must neutralize hostile executable config (no helper/hook run)"
     );
 }
 
