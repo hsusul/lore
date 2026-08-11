@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { agentLabel, formatRelative, formatTime } from "../format";
 import type {
   FileEventDto,
   GitObservationDto,
@@ -21,18 +22,30 @@ const FILE_SOURCE_LABEL: Record<string, string> = {
   lore_capture: "captured",
 };
 
-function formatTime(ms: number | null): string {
-  if (ms == null) return "";
-  return new Date(ms).toLocaleString();
+function DiffBlock({ text }: { text: string }) {
+  const lines = text.replace(/\n$/, "").split("\n");
+  return (
+    <div className="diff" role="group" aria-label="patch">
+      {lines.map((line, index) => {
+        let cls = "diff__line";
+        if (line.startsWith("@@")) cls += " diff__line--hunk";
+        else if (line.startsWith("+++") || line.startsWith("---")) {
+          cls += " diff__line--hunk";
+        } else if (line.startsWith("+")) cls += " diff__line--add";
+        else if (line.startsWith("-")) cls += " diff__line--del";
+        return (
+          <span key={index} className={cls}>
+            {line || " "}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function Part({ part }: { part: MessagePartDto }) {
   if (part.kind === "opaque") {
-    return (
-      <p className="part part--opaque">
-        <em>Encrypted content — not shown.</em>
-      </p>
-    );
+    return <p className="part part--opaque">Encrypted content — not shown.</p>;
   }
   if (part.kind === "thinking") {
     return (
@@ -46,25 +59,19 @@ function Part({ part }: { part: MessagePartDto }) {
     return <p className="part">{part.text}</p>;
   }
   if (part.content_json != null) {
-    return (
-      <pre className="part part--json">
-        {`${part.kind}: ${part.content_json}`}
-      </pre>
-    );
+    return <pre className="part part--json">{`${part.kind}: ${part.content_json}`}</pre>;
   }
   return null;
 }
 
 function Message({ message }: { message: MessageDto }) {
   return (
-    <article className={`msg msg--${message.role}`} aria-label={`message ${message.seq}`}>
-      <header className="msg__meta">
-        <span className="msg__role">{message.role}</span>
+    <article className="msg" aria-label={`message ${message.seq}`}>
+      <div className="msg__meta">
+        <span className={`role-tag role-tag--${message.role}`}>{message.role}</span>
         {message.model && <span className="msg__model">{message.model}</span>}
-        {message.ts != null && (
-          <time className="msg__ts">{formatTime(message.ts)}</time>
-        )}
-      </header>
+        {message.ts != null && <time className="msg__time">{formatTime(message.ts)}</time>}
+      </div>
       {message.parts.map((part) => (
         <Part key={part.ordinal} part={part} />
       ))}
@@ -74,24 +81,30 @@ function Message({ message }: { message: MessageDto }) {
 
 function GitRail({ observations }: { observations: GitObservationDto[] }) {
   if (observations.length === 0) {
-    return <p className="git-rail__empty">No repository context.</p>;
+    return <p className="git-rail__empty empty">No repository context.</p>;
   }
   return (
     <ul className="git-rail">
       {observations.map((observation, index) => (
-        <li key={`${observation.source}-${index}`} className={`git-obs git-obs--${observation.source}`}>
+        <li
+          key={`${observation.source}-${index}`}
+          className={`git-obs git-obs--${observation.source}`}
+        >
+          <span className="dot" aria-hidden />
           <span className="git-obs__label">
             {SOURCE_LABEL[observation.source] ?? observation.source}
           </span>
-          {observation.branch && <span className="git-obs__branch">{observation.branch}</span>}
+          {observation.branch && (
+            <span className="git-obs__branch mono">{observation.branch}</span>
+          )}
           {observation.commit_sha && (
             <code className="git-obs__commit">{observation.commit_sha.slice(0, 8)}</code>
           )}
-          {observation.is_dirty === true && <span className="git-obs__dirty">dirty</span>}
+          {observation.is_dirty === true && <span className="chip chip--warn">dirty</span>}
           {observation.commit_exists === false && (
-            <span className="git-obs__missing">commit missing</span>
+            <span className="chip chip--danger">commit missing</span>
           )}
-          <time className="git-obs__time">{formatTime(observation.observed_at)}</time>
+          <time className="git-obs__time">{formatRelative(observation.observed_at)}</time>
         </li>
       ))}
     </ul>
@@ -116,25 +129,26 @@ function FileEventRow({
   }
 
   return (
-    <li>
-      <code>{fileEvent.path}</code> · {fileEvent.change_kind}
-      {fileEvent.lines_added != null && (
-        <span className="diffstat"> +{fileEvent.lines_added}</span>
-      )}
-      {fileEvent.lines_removed != null && (
-        <span className="diffstat"> −{fileEvent.lines_removed}</span>
-      )}
-      <span className="file-source">
-        {FILE_SOURCE_LABEL[fileEvent.source] ?? fileEvent.source}
-      </span>
-      {fileEvent.has_patch && (
-        <>
-          <button className="file-patch__toggle" onClick={toggle}>
+    <li className="file">
+      <div className="file__row">
+        <code className="file__path">{fileEvent.path}</code>
+        <span className="file__kind">{fileEvent.change_kind}</span>
+        {fileEvent.lines_added != null && (
+          <span className="diffstat diffstat--add">+{fileEvent.lines_added}</span>
+        )}
+        {fileEvent.lines_removed != null && (
+          <span className="diffstat diffstat--del">−{fileEvent.lines_removed}</span>
+        )}
+        <span className="file-source">
+          {FILE_SOURCE_LABEL[fileEvent.source] ?? fileEvent.source}
+        </span>
+        {fileEvent.has_patch && (
+          <button className="file__toggle" onClick={toggle}>
             {open ? "Hide patch" : "View patch"}
           </button>
-          {open && <pre className="file-patch">{patch}</pre>}
-        </>
-      )}
+        )}
+      </div>
+      {open && patch != null && <DiffBlock text={patch} />}
     </li>
   );
 }
@@ -162,26 +176,33 @@ export default function SessionView({
       <header className="session__header">
         <h2>{summary.title ?? "(untitled session)"}</h2>
         <p className="session__meta">
-          {summary.agent_id}
-          {summary.primary_model ? ` · ${summary.primary_model}` : ""} ·{" "}
-          {summary.message_count} messages
+          <span className="chip chip--agent">{agentLabel(summary.agent_id)}</span>
+          {summary.primary_model && <span className="mono">{summary.primary_model}</span>}
+          <span>{summary.message_count} messages</span>
+          <span>{summary.tool_call_count} tools</span>
           {summary.parse_status !== "ok" && (
-            <span className={`badge badge--${summary.parse_status}`}>
+            <span
+              className={`chip ${summary.parse_status === "failed" ? "chip--danger" : "chip--warn"}`}
+            >
               {summary.parse_status}
             </span>
           )}
         </p>
       </header>
 
-      <section aria-labelledby="git-heading" className="session__git">
-        <h3 id="git-heading">Git</h3>
+      <section aria-labelledby="git-heading">
+        <h3 id="git-heading" className="section-title">
+          Git
+        </h3>
         <GitRail observations={git} />
       </section>
 
       {file_events.length > 0 && (
-        <section aria-labelledby="files-heading" className="session__files">
-          <h3 id="files-heading">Files</h3>
-          <ul>
+        <section aria-labelledby="files-heading">
+          <h3 id="files-heading" className="section-title">
+            Files
+          </h3>
+          <ul className="files">
             {file_events.map((fileEvent, index) => (
               <FileEventRow
                 key={`${fileEvent.id}-${index}`}
@@ -193,11 +214,15 @@ export default function SessionView({
         </section>
       )}
 
-      <section aria-labelledby="timeline-heading" className="session__timeline">
-        <h3 id="timeline-heading">Timeline</h3>
-        {messages.map((message) => (
-          <Message key={message.id} message={message} />
-        ))}
+      <section aria-labelledby="timeline-heading">
+        <h3 id="timeline-heading" className="section-title">
+          Timeline
+        </h3>
+        <div className="timeline">
+          {messages.map((message) => (
+            <Message key={message.id} message={message} />
+          ))}
+        </div>
       </section>
     </section>
   );

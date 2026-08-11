@@ -12,30 +12,34 @@ export default function RepositoryList({
   return (
     <nav className="repos" aria-label="repositories">
       <button
-        className="repos__all"
+        className="nav-item"
         aria-pressed={selectedId === null}
         onClick={() => onSelect(null)}
       >
-        All sessions
+        <span className="dot dot--accent" aria-hidden />
+        <span className="nav-item__name">All sessions</span>
       </button>
-      <h2 className="repos__heading">Repositories</h2>
+
+      <h2 className="nav-heading">Repositories</h2>
       {repositories.length === 0 ? (
         <p className="repos__empty">None resolved yet.</p>
       ) : (
-        <ul>
+        <ul className="nav-list">
           {repositories.map((repo) => (
             <li key={repo.id}>
               <button
+                className="nav-item"
                 aria-pressed={selectedId === repo.id}
                 onClick={() => onSelect(repo.id)}
-                className="repos__item"
               >
-                <span className="repos__name">{repo.display_name}</span>
-                <span className={`conf conf--${repo.identity_confidence}`}>
-                  {repo.identity_confidence}
-                </span>
-                {repo.is_missing && <span className="badge badge--missing">missing</span>}
-                <span className="repos__count">{repo.session_count}</span>
+                <span
+                  className={`dot dot--${repo.identity_confidence}`}
+                  aria-label={`${repo.identity_confidence} confidence`}
+                  title={`${repo.identity_confidence} confidence`}
+                />
+                <span className="nav-item__name">{repo.display_name}</span>
+                {repo.is_missing && <span className="chip chip--danger">missing</span>}
+                <span className="nav-item__count">{repo.session_count}</span>
               </button>
             </li>
           ))}

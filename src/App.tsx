@@ -23,6 +23,22 @@ import {
 
 const SESSION_LIMIT = 500;
 
+/** A small commit-graph mark. */
+function Mark() {
+  return (
+    <svg className="shell__mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="4" cy="4" r="2" fill="currentColor" />
+      <circle cx="4" cy="12" r="2" fill="currentColor" />
+      <circle cx="12" cy="8" r="2" fill="currentColor" />
+      <path
+        d="M4 6v4M5.7 5 10.3 7.2M5.7 11 10.3 8.8"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+    </svg>
+  );
+}
+
 /**
  * The M5 three-pane shell: repositories (left), the sessions list (middle), and
  * the session reader with its git rail (right). Under active development.
@@ -99,13 +115,36 @@ export default function App() {
     }
   }
 
+  function toggleTheme() {
+    const root = document.documentElement;
+    const next =
+      root.dataset.theme === "dark"
+        ? "light"
+        : root.dataset.theme === "light"
+          ? "dark"
+          : matchMedia("(prefers-color-scheme: dark)").matches
+            ? "light"
+            : "dark";
+    root.dataset.theme = next;
+  }
+
   return (
     <div className="shell">
       <header className="shell__bar">
+        <Mark />
         <h1>Lore</h1>
         <span className="shell__tagline">git memory for coding agents</span>
-        <span className="shell__dev">under active development — not a release</span>
-        <button onClick={handleRescan} disabled={scanning}>
+        <span className="shell__spacer" />
+        <span className="shell__dev">preview build</span>
+        <button
+          className="icon-btn"
+          onClick={toggleTheme}
+          aria-label="Toggle theme"
+          title="Toggle light/dark"
+        >
+          ◐
+        </button>
+        <button className="btn--primary" onClick={handleRescan} disabled={scanning}>
           {scanning ? "Scanning…" : "Rescan"}
         </button>
       </header>

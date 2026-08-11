@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { agentLabel, formatRelative } from "../format";
 import type { SessionSummary } from "../ipc";
 
 /**
@@ -62,14 +63,18 @@ export default function SessionList({
           }}
         >
           <span className="sessions__title">{session.title ?? "(untitled)"}</span>
-          <span className="sessions__meta">
-            {session.agent_id} · {session.message_count} msgs
-          </span>
           {session.parse_status !== "ok" && (
-            <span className={`badge badge--${session.parse_status}`}>
+            <span
+              className={`chip ${session.parse_status === "failed" ? "chip--danger" : "chip--warn"}`}
+            >
               {session.parse_status}
             </span>
           )}
+          <span className="sessions__meta">
+            <span className="chip chip--agent">{agentLabel(session.agent_id)}</span>
+            <span>{session.message_count} msgs</span>
+            <span className="sessions__time">{formatRelative(session.started_at)}</span>
+          </span>
         </li>
       ))}
     </ul>

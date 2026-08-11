@@ -1,0 +1,42 @@
+// Small shared formatting helpers for the UI.
+
+const AGENT_LABELS: Record<string, string> = {
+  "claude-code": "Claude",
+  codex: "Codex",
+};
+
+/** Short, human agent label (falls back to the raw id). */
+export function agentLabel(agentId: string): string {
+  return AGENT_LABELS[agentId] ?? agentId;
+}
+
+/** Absolute local time, or "" for null. */
+export function formatTime(ms: number | null): string {
+  if (ms == null) return "";
+  return new Date(ms).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** Compact relative time ("just now", "5m", "3h", "2d", "4w", or a date). */
+export function formatRelative(ms: number | null): string {
+  if (ms == null) return "";
+  const seconds = Math.round((Date.now() - ms) / 1000);
+  if (seconds < 45) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days}d`;
+  const weeks = Math.round(days / 7);
+  if (weeks < 5) return `${weeks}w`;
+  return new Date(ms).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
