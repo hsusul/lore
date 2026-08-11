@@ -17,8 +17,7 @@ use super::common::{
     bounded, epoch_ms, resolve_file_event_segments, sanitize_path, unified_diff_line_counts,
 };
 use super::{
-    AdapterError, AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots,
-    SessionRef,
+    AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
 };
 use crate::model::{
     EventKind, FileChangeKind, FileEventSource, ParsedFileEvent, ParsedMessage, ParsedPart,
@@ -675,13 +674,8 @@ impl AgentAdapter for CodexAdapter {
         out
     }
 
-    fn parse_session(&self, source: &SessionRef) -> Result<ParsedSession, AdapterError> {
-        let content = std::fs::read_to_string(&source.path).map_err(|_| AdapterError::Io)?;
-        let fallback = source
-            .native_id
-            .clone()
-            .unwrap_or_else(|| source.path.to_string_lossy().into_owned());
-        Ok(self.parse_str(&content, &fallback))
+    fn parse_content(&self, content: &str, fallback_dedupe: &str) -> ParsedSession {
+        self.parse_str(content, fallback_dedupe)
     }
 }
 

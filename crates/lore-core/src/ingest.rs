@@ -571,16 +571,12 @@ pub fn ingest_file(
         }
     };
 
-    let session_ref = SessionRef {
-        agent: adapter.id(),
-        path: path.to_path_buf(),
-        mtime: meta.modified().ok(),
-        size: meta.len(),
-        native_id: path.file_stem().map(|s| s.to_string_lossy().into_owned()),
-    };
-    let parsed = adapter
-        .parse_session(&session_ref)
-        .map_err(|_| StorageError::Io)?;
+    // Parse the bytes already read above; do not re-read the file from disk.
+    let fallback = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| snapshot.path.clone());
+    let parsed = adapter.parse_content(&content, &fallback);
 
     // Stage blob files before opening the transaction (DATA_MODEL.md §3).
     let patch_blobs = stage_patch_blobs(blobs, &parsed)?;

@@ -100,9 +100,26 @@ pub trait AgentAdapter: Send + Sync {
     /// Enumerate candidate session files. Idempotent and cheap; no parsing.
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef>;
 
-    /// Parse one session file into the normalized model. Must be tolerant:
-    /// unknown/partial input degrades to `ParseStatus::Partial`, never a panic.
-    fn parse_session(&self, source: &SessionRef) -> Result<ParsedSession, AdapterError>;
+    /// Parse already-read session content into the normalized model. This is the
+    /// bounded interface the ingest layer prefers: a caller that has already read
+    /// the source bytes (for hashing/checkpointing) passes them straight in,
+    /// avoiding a second whole-file read. Deterministic and side-effect-free;
+    /// tolerant, so unknown/partial input degrades to `ParseStatus::Partial`
+    /// rather than panicking. `fallback_dedupe` seeds the dedupe key when the
+    /// source carries no native session id.
+    fn parse_content(&self, content: &str, fallback_dedupe: &str) -> ParsedSession;
+
+    /// Parse one session file into the normalized model. The default reads the
+    /// file once and delegates to [`AgentAdapter::parse_content`]; adapters need
+    /// not override it.
+    fn parse_session(&self, source: &SessionRef) -> Result<ParsedSession, AdapterError> {
+        let content = std::fs::read_to_string(&source.path).map_err(|_| AdapterError::Io)?;
+        let fallback = source
+            .native_id
+            .clone()
+            .unwrap_or_else(|| source.path.to_string_lossy().into_owned());
+        Ok(self.parse_content(&content, &fallback))
+    }
 }
 
 /// Registered adapter set. Registration rejects duplicate stable ids so a
