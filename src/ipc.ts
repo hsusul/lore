@@ -6,14 +6,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { DetectedAgent } from "../crates/lore-ipc/bindings/DetectedAgent";
+import type { GitObservationDto } from "../crates/lore-ipc/bindings/GitObservationDto";
+import type { RepositorySummary } from "../crates/lore-ipc/bindings/RepositorySummary";
 import type { RescanResult } from "../crates/lore-ipc/bindings/RescanResult";
 import type { ScanProgress } from "../crates/lore-ipc/bindings/ScanProgress";
+import type { SessionDetail } from "../crates/lore-ipc/bindings/SessionDetail";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 
 export type {
   DetectedAgent,
+  GitObservationDto,
+  RepositorySummary,
   RescanResult,
   ScanProgress,
+  SessionDetail,
   SessionSummary,
 };
 
@@ -25,6 +31,21 @@ export function listDetectedAgents(): Promise<DetectedAgent[]> {
 /** The most recent sessions, newest first, capped at `limit`. */
 export function listSessions(limit: number): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("list_sessions", { limit });
+}
+
+/** The repositories resolved by git enrichment. */
+export function listRepositories(): Promise<RepositorySummary[]> {
+  return invoke<RepositorySummary[]>("list_repositories");
+}
+
+/** Read one session in context, or null when it is unknown. */
+export function getSession(id: string): Promise<SessionDetail | null> {
+  return invoke<SessionDetail | null>("get_session", { id });
+}
+
+/** Read the provenance-labeled git observations for a session. */
+export function getGitSnapshot(id: string): Promise<GitObservationDto[]> {
+  return invoke<GitObservationDto[]>("get_git_snapshot", { id });
 }
 
 /** Run a discovery→ingest→enrich pass and resolve with the final tally. */

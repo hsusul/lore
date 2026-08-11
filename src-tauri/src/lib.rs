@@ -12,7 +12,10 @@ use lore_core::adapters::AdapterRegistry;
 use lore_core::discovery::DiscoveryConfig;
 use lore_core::pipeline::{Pipeline, ProgressEvent, ProgressSink};
 use lore_core::storage::blob::BlobStore;
-use lore_ipc::{DetectedAgent, RescanResult, ScanProgress, SessionSummary};
+use lore_ipc::{
+    DetectedAgent, GitObservationDto, RepositorySummary, RescanResult, ScanProgress, SessionDetail,
+    SessionSummary,
+};
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -88,6 +91,30 @@ fn list_sessions(state: State<'_, AppState>, limit: i64) -> Result<Vec<SessionSu
     lore_core::query::list_sessions(&conn, limit.clamp(1, 10_000)).map_err(|e| e.to_string())
 }
 
+/// List the repositories resolved by git enrichment.
+#[tauri::command]
+fn list_repositories(state: State<'_, AppState>) -> Result<Vec<RepositorySummary>, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::query::list_repositories(&conn).map_err(|e| e.to_string())
+}
+
+/// Read one session in context (header, segments, ordered-part timeline, files).
+#[tauri::command]
+fn get_session(state: State<'_, AppState>, id: String) -> Result<Option<SessionDetail>, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::query::get_session(&conn, &id).map_err(|e| e.to_string())
+}
+
+/// Read the provenance-labeled git observations for a session.
+#[tauri::command]
+fn get_git_snapshot(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<GitObservationDto>, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::query::get_git_snapshot(&conn, &id).map_err(|e| e.to_string())
+}
+
 /// Run a discovery→ingest→enrich pass, streaming `scan_progress` events, and
 /// return the final tally.
 #[tauri::command]
@@ -147,6 +174,9 @@ pub fn run() {
             core_version,
             list_detected_agents,
             list_sessions,
+            list_repositories,
+            get_session,
+            get_git_snapshot,
             rescan
         ])
         .run(tauri::generate_context!());
