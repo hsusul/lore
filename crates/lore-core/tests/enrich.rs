@@ -304,6 +304,18 @@ fn list_repositories_reports_enriched_repositories() {
     assert_eq!(repos[0].worktree_count, 1);
     assert!(!repos[0].is_missing);
     assert!(!repos[0].display_name.is_empty());
+
+    // The session is reachable by filtering on its repository.
+    let repo_sessions =
+        lore_core::query::list_repository_sessions(&conn, &repos[0].id, 50).unwrap();
+    assert_eq!(repo_sessions.len(), 1);
+    assert_eq!(repo_sessions[0].id, sid);
+    // A different repository id matches nothing.
+    assert!(
+        lore_core::query::list_repository_sessions(&conn, "nope", 50)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

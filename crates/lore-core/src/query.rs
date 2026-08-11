@@ -67,6 +67,42 @@ pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary
     Ok(rows)
 }
 
+/// The most recent sessions that touched `repository_id` (newest first), capped
+/// at `limit`. A session qualifies if any of its segments resolved to the repo.
+pub fn list_repository_sessions(
+    conn: &Connection,
+    repository_id: &str,
+    limit: i64,
+) -> Result<Vec<SessionSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.agent_id, s.title, s.started_at, s.ended_at, s.message_count,
+                s.tool_call_count, s.primary_model, s.parse_status
+         FROM agent_session s
+         WHERE EXISTS (
+             SELECT 1 FROM session_segment sg
+             WHERE sg.session_id = s.id AND sg.repository_id = ?1
+         )
+         ORDER BY s.started_at DESC, s.id DESC
+         LIMIT ?2",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![repository_id, limit], |row| {
+            Ok(SessionSummary {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                title: row.get(2)?,
+                started_at: row.get(3)?,
+                ended_at: row.get(4)?,
+                message_count: row.get(5)?,
+                tool_call_count: row.get(6)?,
+                primary_model: row.get(7)?,
+                parse_status: row.get(8)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// The full read of one session: header, context segments, the ordered-part
 /// message timeline, and touched files. Returns `None` when the session is
 /// unknown. Opaque/encrypted parts are returned without readable content and

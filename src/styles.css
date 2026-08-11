@@ -2,58 +2,290 @@
   color-scheme: light dark;
   font-family: system-ui, -apple-system, sans-serif;
   line-height: 1.5;
+  --border: color-mix(in srgb, currentColor 18%, transparent);
+  --muted: color-mix(in srgb, currentColor 60%, transparent);
+  --accent: #3b82f6;
 }
 
 body {
   margin: 0;
 }
 
-.app {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 2rem 1.5rem;
-}
-
-.app__header {
+.shell {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.shell__bar {
+  display: flex;
   align-items: baseline;
-  gap: 0.75rem 1rem;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
 }
 
-.app__header h1 {
+.shell__bar h1 {
   margin: 0;
+  font-size: 1.1rem;
 }
 
-.app__tagline {
-  margin: 0;
-  opacity: 0.7;
-  flex: 1;
-}
-
-.app__status {
-  opacity: 0.6;
+.shell__tagline {
+  color: var(--muted);
   font-size: 0.85rem;
 }
 
-.app__error {
+.shell__dev {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.shell__progress,
+.shell__error {
+  margin: 0;
+  padding: 0.35rem 1rem;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--border);
+}
+
+.shell__error {
   color: #b00020;
 }
 
-.app__progress {
-  font-variant-numeric: tabular-nums;
+.shell__panes {
+  display: grid;
+  grid-template-columns: 15rem 20rem 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+.pane {
+  overflow: auto;
+  padding: 0.75rem;
+  border-right: 1px solid var(--border);
+}
+
+.pane--detail {
+  border-right: none;
+}
+
+/* Sidebar lists */
+.repos__heading {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 0.75rem 0 0.35rem;
+}
+
+.repos ul,
+.sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 button {
-  padding: 0.4rem 0.9rem;
+  padding: 0.35rem 0.7rem;
   border-radius: 6px;
   border: 1px solid currentColor;
   background: transparent;
   color: inherit;
   cursor: pointer;
+  font: inherit;
 }
 
 button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.repos__all,
+.repos__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+}
+
+.repos__item[aria-pressed="true"],
+.repos__all[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.repos__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repos__count,
+.sessions__meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* Sessions listbox */
+.sessions:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sessions__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.sessions__item.is-active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.sessions__item[aria-selected="true"] {
+  font-weight: 600;
+}
+
+/* Session detail */
+.session__header h2 {
+  margin: 0 0 0.2rem;
+}
+
+.session__meta {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.session h3 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 1rem 0 0.4rem;
+}
+
+.msg {
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 0;
+}
+
+.msg__meta {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.msg__role {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.part {
+  margin: 0.3rem 0;
+  white-space: pre-wrap;
+}
+
+.part--opaque {
+  color: var(--muted);
+}
+
+.part--json {
+  font-size: 0.8rem;
+  overflow-x: auto;
+}
+
+/* Git rail */
+.git-rail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.git-obs {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.git-obs__label {
+  font-weight: 600;
+}
+
+.git-obs--agent_recorded .git-obs__label {
+  color: #a855f7;
+}
+
+.git-obs--lore_captured .git-obs__label {
+  color: #0ea5e9;
+}
+
+.git-obs--lore_reverified .git-obs__label {
+  color: #10b981;
+}
+
+.git-obs__time {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.git-obs__dirty,
+.git-obs__missing {
+  color: #b45309;
+}
+
+/* Badges / confidence chips */
+.badge,
+.conf {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.badge--partial {
+  color: #b45309;
+}
+
+.badge--failed,
+.badge--missing {
+  color: #b00020;
+}
+
+.conf--high {
+  color: #10b981;
+}
+
+.conf--medium {
+  color: #d97706;
+}
+
+.conf--low,
+.conf--unresolved {
+  color: var(--muted);
+}
+
+.diffstat {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+}
+
+.file-source {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-left: 0.35rem;
 }

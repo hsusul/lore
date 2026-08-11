@@ -98,6 +98,18 @@ fn list_repositories(state: State<'_, AppState>) -> Result<Vec<RepositorySummary
     lore_core::query::list_repositories(&conn).map_err(|e| e.to_string())
 }
 
+/// List the most recent sessions that touched a repository.
+#[tauri::command]
+fn list_repository_sessions(
+    state: State<'_, AppState>,
+    id: String,
+    limit: i64,
+) -> Result<Vec<SessionSummary>, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::query::list_repository_sessions(&conn, &id, limit.clamp(1, 10_000))
+        .map_err(|e| e.to_string())
+}
+
 /// Read one session in context (header, segments, ordered-part timeline, files).
 #[tauri::command]
 fn get_session(state: State<'_, AppState>, id: String) -> Result<Option<SessionDetail>, String> {
@@ -175,6 +187,7 @@ pub fn run() {
             list_detected_agents,
             list_sessions,
             list_repositories,
+            list_repository_sessions,
             get_session,
             get_git_snapshot,
             rescan

@@ -6,19 +6,27 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { DetectedAgent } from "../crates/lore-ipc/bindings/DetectedAgent";
+import type { FileEventDto } from "../crates/lore-ipc/bindings/FileEventDto";
 import type { GitObservationDto } from "../crates/lore-ipc/bindings/GitObservationDto";
+import type { MessageDto } from "../crates/lore-ipc/bindings/MessageDto";
+import type { MessagePartDto } from "../crates/lore-ipc/bindings/MessagePartDto";
 import type { RepositorySummary } from "../crates/lore-ipc/bindings/RepositorySummary";
 import type { RescanResult } from "../crates/lore-ipc/bindings/RescanResult";
 import type { ScanProgress } from "../crates/lore-ipc/bindings/ScanProgress";
+import type { SegmentDto } from "../crates/lore-ipc/bindings/SegmentDto";
 import type { SessionDetail } from "../crates/lore-ipc/bindings/SessionDetail";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 
 export type {
   DetectedAgent,
+  FileEventDto,
   GitObservationDto,
+  MessageDto,
+  MessagePartDto,
   RepositorySummary,
   RescanResult,
   ScanProgress,
+  SegmentDto,
   SessionDetail,
   SessionSummary,
 };
@@ -36,6 +44,14 @@ export function listSessions(limit: number): Promise<SessionSummary[]> {
 /** The repositories resolved by git enrichment. */
 export function listRepositories(): Promise<RepositorySummary[]> {
   return invoke<RepositorySummary[]>("list_repositories");
+}
+
+/** The most recent sessions that touched a repository, capped at `limit`. */
+export function listRepositorySessions(
+  id: string,
+  limit: number,
+): Promise<SessionSummary[]> {
+  return invoke<SessionSummary[]>("list_repository_sessions", { id, limit });
 }
 
 /** Read one session in context, or null when it is unknown. */
