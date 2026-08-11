@@ -4,7 +4,7 @@
 //! These functions back the first M0 commands — `list_detected_agents` and
 //! `list_sessions` — returning [`lore_ipc`] wire types directly.
 
-use lore_ipc::{DetectedAgent, SessionSummary};
+use lore_ipc::{DetectedAgent, RepositorySummary, SessionSummary};
 use rusqlite::Connection;
 
 use crate::storage::Result;
@@ -60,6 +60,33 @@ pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary
     Ok(rows)
 }
 
+/// Repositories resolved by git enrichment, with session and worktree counts,
+/// ordered by display name for a stable list.
+pub fn list_repositories(conn: &Connection) -> Result<Vec<RepositorySummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.display_name, r.identity_confidence, r.primary_path, r.is_missing,
+                (SELECT count(DISTINCT sg.session_id) FROM session_segment sg
+                 WHERE sg.repository_id = r.id),
+                (SELECT count(*) FROM worktree w WHERE w.repository_id = r.id)
+         FROM repository r
+         ORDER BY r.display_name, r.id",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(RepositorySummary {
+                id: row.get(0)?,
+                display_name: row.get(1)?,
+                identity_confidence: row.get(2)?,
+                primary_path: row.get(3)?,
+                is_missing: row.get::<_, i64>(4)? != 0,
+                session_count: row.get(5)?,
+                worktree_count: row.get(6)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +133,6 @@ mod tests {
         let conn = crate::storage::open_in_memory().unwrap();
         assert!(list_agents(&conn).unwrap().is_empty());
         assert!(list_sessions(&conn, 10).unwrap().is_empty());
+        assert!(list_repositories(&conn).unwrap().is_empty());
     }
 }

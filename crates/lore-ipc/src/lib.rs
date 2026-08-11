@@ -31,6 +31,25 @@ pub struct DetectedAgent {
     pub session_count: i64,
 }
 
+/// A repository grouping for the Repositories view. Payload element of
+/// `list_repositories`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RepositorySummary {
+    pub id: String,
+    pub display_name: String,
+    /// Identity confidence: `confirmed` | `high` | `medium` | `low`.
+    pub identity_confidence: String,
+    /// Latest local path hint, when known (may be display-sensitive).
+    pub primary_path: Option<String>,
+    /// The repository's checkout(s) are gone from disk.
+    pub is_missing: bool,
+    #[ts(type = "number")]
+    pub session_count: i64,
+    #[ts(type = "number")]
+    pub worktree_count: i64,
+}
+
 /// A one-line session for list views. Payload element of `list_sessions`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

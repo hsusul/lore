@@ -288,6 +288,25 @@ fn fork_sharing_a_root_is_not_merged_with_upstream() {
 }
 
 #[test]
+fn list_repositories_reports_enriched_repositories() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+
+    let sid = persist_session_at(&conn, &store, "repolist", repo.path());
+    enrich_session(&conn, &sid).unwrap();
+
+    let repos = lore_core::query::list_repositories(&conn).unwrap();
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[0].identity_confidence, "high");
+    assert_eq!(repos[0].session_count, 1);
+    assert_eq!(repos[0].worktree_count, 1);
+    assert!(!repos[0].is_missing);
+    assert!(!repos[0].display_name.is_empty());
+}
+
+#[test]
 fn non_git_cwd_is_left_unlinked() {
     let plain = tempfile::tempdir().unwrap();
     let conn = lore_core::storage::open_in_memory().unwrap();
