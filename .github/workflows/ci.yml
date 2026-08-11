@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-core:
+    name: Rust core — fmt · clippy · test · network guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy -p lore-core -p lore-ipc --all-targets --all-features -- -D warnings
+      - name: Test (locked)
+        run: cargo test --locked -p lore-core -p lore-ipc --all-targets
+      - name: Network-boundary guard
+        run: cargo test -p lore-core --test no_network_in_archive
+      - name: Generated IPC bindings are in sync
+        run: |
+          cargo test -p lore-ipc
+          git diff --exit-code crates/lore-ipc/bindings
+
+  ui:
+    name: UI — lint · typecheck · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install (frozen lockfile)
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+
+  desktop-shell:
+    name: Desktop shell — Tauri build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Build UI (frozen lockfile)
+        run: |
+          npm ci
+          npm run build
+      - name: Clippy the shell (deny warnings)
+        run: cargo clippy -p lore-app --all-targets -- -D warnings
+      - name: Build the shell
+        run: cargo build --locked -p lore-app
