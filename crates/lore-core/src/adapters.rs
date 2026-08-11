@@ -11,6 +11,8 @@ use std::time::SystemTime;
 
 use crate::model::ParsedSession;
 
+pub mod claude_code;
+
 /// Stable adapter identity, matching the `agent.id` primary key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentId(pub &'static str);

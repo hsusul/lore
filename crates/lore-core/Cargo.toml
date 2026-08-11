@@ -16,6 +16,9 @@ workspace = true
 # depend on a system libsqlite3 and FTS5 is always present.
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "1"
+serde_json = "1"
+# RFC3339 timestamp parsing only (no networking/std feature creep).
+time = { version = "0.3", features = ["parsing"] }
 
 [dev-dependencies]
 tempfile = "3"
