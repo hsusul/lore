@@ -1,0 +1,21 @@
+[package]
+name = "lore-ipc"
+description = "Versioned IPC data-transfer objects shared by the Lore core and UI. The TypeScript bindings in ./bindings are generated from these Rust types by ts-rs and must never be hand-edited."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The single source of truth for the wire contract: serde for JSON, ts-rs to
+# generate the TypeScript the UI imports. No Tauri/webview/network dependency.
+serde = { version = "1", features = ["derive"] }
+ts-rs = "12"
+
+[dev-dependencies]
+serde_json = "1"
