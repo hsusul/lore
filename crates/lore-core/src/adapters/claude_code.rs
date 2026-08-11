@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
+use super::common::{bounded, epoch_ms, sanitize_path};
 use super::{
     AdapterError, AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots,
     SessionRef,
@@ -224,23 +225,6 @@ fn tool_result_text(block: &Value) -> Option<String> {
         }
     }
     None
-}
-
-/// Neutralize path traversal so a recorded `FileEvent.path` can never represent
-/// an escape (`../`). Produces a clean relative path; segments of `..` are
-/// dropped rather than allowed to ascend.
-fn sanitize_path(raw: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for seg in raw.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            other => parts.push(other),
-        }
-    }
-    parts.join("/")
 }
 
 /// After segments exist, assign each derived file event the segment of the
@@ -464,17 +448,6 @@ fn str_field(obj: &Value, key: &str) -> Option<String> {
 
 fn json_field(obj: &Value, key: &str) -> Option<String> {
     obj.get(key).and_then(|v| serde_json::to_string(v).ok())
-}
-
-/// Parse an RFC3339 timestamp to epoch milliseconds.
-fn epoch_ms(s: &str) -> Option<i64> {
-    let dt = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()?;
-    i64::try_from(dt.unix_timestamp_nanos() / 1_000_000).ok()
-}
-
-/// Bound a schema token used in a diagnostic (never user content).
-fn bounded(s: &str) -> String {
-    s.chars().take(40).collect()
 }
 
 impl AgentAdapter for ClaudeCodeAdapter {
