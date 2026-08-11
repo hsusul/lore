@@ -19,6 +19,8 @@ thiserror = "1"
 serde_json = "1"
 # RFC3339 timestamp parsing only (no networking/std feature creep).
 time = { version = "0.3", features = ["parsing"] }
+# Cross-platform watcher; default macOS backend is FSEvents.
+notify = "8.2"
 
 [dev-dependencies]
 tempfile = "3"
