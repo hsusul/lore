@@ -160,6 +160,51 @@ fn capture_gix(path: &Path) -> Option<CapturedRepo> {
     })
 }
 
+/// Result of re-checking a previously recorded commit/branch against the
+/// repository as it exists now (`lore_reverified`; `GIT_INTEGRATION.md` §4, §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reverification {
+    /// The recorded commit object still exists (false after a GC/rebase drop).
+    pub commit_exists: bool,
+    /// The recorded branch still exists — `None` when no branch was recorded.
+    pub branch_exists: Option<bool>,
+    /// The recorded branch still points at the recorded commit — `None` when the
+    /// branch is gone or nothing was recorded to compare.
+    pub branch_at_recorded_commit: Option<bool>,
+}
+
+/// Re-verify a recorded commit (and optional branch) against the current
+/// repository at `path`, read-only. Returns `None` when the repository cannot be
+/// read (e.g. it was moved or deleted). Never mutates history; the caller records
+/// the result as a separate `lore_reverified` observation.
+#[must_use]
+pub fn reverify(path: &Path, commit_sha: &str, branch: Option<&str>) -> Option<Reverification> {
+    let repo = gix::discover(path).ok()?;
+    let commit_exists = gix::ObjectId::from_hex(commit_sha.as_bytes())
+        .ok()
+        .is_some_and(|oid| repo.find_object(oid).is_ok());
+
+    let (branch_exists, branch_at_recorded_commit) = match branch {
+        Some(branch) => match repo.find_reference(&format!("refs/heads/{branch}")) {
+            Ok(mut reference) => {
+                let at = reference
+                    .peel_to_id()
+                    .ok()
+                    .map(|id| id.to_hex().to_string() == commit_sha);
+                (Some(true), at)
+            }
+            Err(_) => (Some(false), None),
+        },
+        None => (None, None),
+    };
+
+    Some(Reverification {
+        commit_exists,
+        branch_exists,
+        branch_at_recorded_commit,
+    })
+}
+
 /// Normalized, credential-free fetch remotes (sorted, deduped).
 fn collect_remotes(repo: &gix::Repository) -> Vec<String> {
     let mut out = Vec::new();

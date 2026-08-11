@@ -10,10 +10,14 @@
 //! - records a `lore_captured` GitObservation whose branch/HEAD/dirty state is
 //!   labeled `current_only` — true at capture, never backdated to session time.
 //!
-//! Ambiguous remote/root-only matching, cross-repository merge/split, and later
-//! re-verification are deliberately out of scope here and remain separate
-//! observations. Capture (filesystem I/O) runs before the write transaction
-//! opens; all row writes commit atomically.
+//! [`reverify_session`] is the companion batch pass: it re-checks recorded
+//! commits/branches against the repository as it exists now and records
+//! `lore_reverified` observations, never overwriting the historical rows.
+//!
+//! Ambiguous remote/root-only matching and cross-repository merge/split are
+//! deliberately out of scope here and remain separate observations. Capture
+//! (filesystem I/O) runs before the write transaction opens; all row writes
+//! commit atomically.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -58,6 +62,149 @@ pub fn enrich_session(conn: &Connection, session_id: &str) -> Result<usize> {
     }
     tx.commit()?;
     Ok(enriched)
+}
+
+/// Re-verify a session's agent-recorded commits against the repositories as they
+/// exist now, recording `lore_reverified` observations. This never modifies the
+/// original `agent_recorded` rows: a rebased/GC'd/deleted commit yields a new
+/// observation with `commit_exists = 0`, and history is preserved
+/// (`GIT_INTEGRATION.md` §6). Intended as a batch/background pass, not part of
+/// ingest. Returns the number of observations recorded.
+pub fn reverify_session(conn: &Connection, session_id: &str) -> Result<usize> {
+    let targets = reverify_targets(conn, session_id)?;
+    if targets.is_empty() {
+        return Ok(0);
+    }
+
+    // Filesystem/git reads happen before the write transaction opens.
+    let outcomes: Vec<ReverifyOutcome> = targets
+        .into_iter()
+        .map(|target| {
+            let path = Path::new(&target.path);
+            if !path.exists() {
+                return ReverifyOutcome::unavailable(target, "path_missing");
+            }
+            match git::reverify(path, &target.commit_sha, target.branch.as_deref()) {
+                Some(result) => ReverifyOutcome::verified(target, &result),
+                None => ReverifyOutcome::unavailable(target, "repository_unreadable"),
+            }
+        })
+        .collect();
+
+    let tx = conn.unchecked_transaction()?;
+    for outcome in &outcomes {
+        let obs_id = det_id(
+            "gr",
+            &[session_id, &outcome.segment_id, &outcome.commit_sha],
+        );
+        tx.execute(
+            "INSERT INTO git_observation
+                (id, session_id, segment_id, source, observed_at, temporal_confidence,
+                 branch, commit_sha, commit_exists, metadata_json)
+             VALUES (?1, ?2, ?3, 'lore_reverified', unixepoch('now')*1000, 'retrospective',
+                     ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+                observed_at = unixepoch('now')*1000,
+                commit_exists = excluded.commit_exists,
+                metadata_json = excluded.metadata_json",
+            params![
+                obs_id,
+                session_id,
+                outcome.segment_id,
+                outcome.branch,
+                outcome.commit_sha,
+                outcome.commit_exists,
+                outcome.metadata,
+            ],
+        )?;
+        // A vanished checkout marks its worktree missing (sessions/evidence kept).
+        if outcome.worktree_missing {
+            if let Some(worktree_id) = &outcome.worktree_id {
+                tx.execute(
+                    "UPDATE worktree SET is_missing = 1 WHERE id = ?1",
+                    params![worktree_id],
+                )?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(outcomes.len())
+}
+
+struct ReverifyTarget {
+    segment_id: String,
+    worktree_id: Option<String>,
+    path: String,
+    branch: Option<String>,
+    commit_sha: String,
+}
+
+struct ReverifyOutcome {
+    segment_id: String,
+    worktree_id: Option<String>,
+    branch: Option<String>,
+    commit_sha: String,
+    commit_exists: Option<i64>,
+    metadata: String,
+    worktree_missing: bool,
+}
+
+impl ReverifyOutcome {
+    fn verified(target: ReverifyTarget, result: &crate::git::Reverification) -> Self {
+        let metadata = serde_json::json!({
+            "commit_exists": result.commit_exists,
+            "branch_exists": result.branch_exists,
+            "branch_at_recorded_commit": result.branch_at_recorded_commit,
+        })
+        .to_string();
+        ReverifyOutcome {
+            segment_id: target.segment_id,
+            worktree_id: target.worktree_id,
+            branch: target.branch,
+            commit_sha: target.commit_sha,
+            commit_exists: Some(i64::from(result.commit_exists)),
+            metadata,
+            worktree_missing: false,
+        }
+    }
+
+    fn unavailable(target: ReverifyTarget, reason: &str) -> Self {
+        let metadata = serde_json::json!({ "unavailable": reason }).to_string();
+        ReverifyOutcome {
+            segment_id: target.segment_id,
+            worktree_id: target.worktree_id,
+            branch: target.branch,
+            commit_sha: target.commit_sha,
+            commit_exists: None,
+            metadata,
+            worktree_missing: true,
+        }
+    }
+}
+
+/// Segments carrying an agent-recorded commit, with the local path (worktree, or
+/// the recorded cwd) to re-check it against.
+fn reverify_targets(conn: &Connection, session_id: &str) -> Result<Vec<ReverifyTarget>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.worktree_id, COALESCE(w.path, s.cwd), o.branch, o.commit_sha
+         FROM session_segment s
+         JOIN git_observation o
+            ON o.segment_id = s.id AND o.source = 'agent_recorded' AND o.commit_sha IS NOT NULL
+         LEFT JOIN worktree w ON w.id = s.worktree_id
+         WHERE s.session_id = ?1 AND COALESCE(w.path, s.cwd) IS NOT NULL",
+    )?;
+    let rows = stmt
+        .query_map([session_id], |row| {
+            Ok(ReverifyTarget {
+                segment_id: row.get(0)?,
+                worktree_id: row.get(1)?,
+                path: row.get(2)?,
+                branch: row.get(3)?,
+                commit_sha: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 /// Segments with a recorded cwd that are not yet linked to a repository.
