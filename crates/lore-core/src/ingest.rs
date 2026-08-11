@@ -370,7 +370,7 @@ fn bounded(s: &str) -> String {
 }
 
 /// Deterministic opaque id from a prefix and stable natural-key parts.
-fn det_id(prefix: &str, parts: &[&str]) -> String {
+pub(crate) fn det_id(prefix: &str, parts: &[&str]) -> String {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut hash = OFFSET;

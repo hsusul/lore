@@ -18,6 +18,7 @@
 
 pub mod adapters;
 pub mod discovery;
+pub mod enrich;
 pub mod git;
 pub mod ingest;
 pub mod jobs;
