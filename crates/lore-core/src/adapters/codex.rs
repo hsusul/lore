@@ -231,6 +231,11 @@ impl CodexAdapter {
 fn extract_patch_changes(p: &Value, ts: Option<i64>, session: &mut ParsedSession) {
     let call_id = str_field(p, "call_id");
     let Some(changes) = p.get("changes").and_then(Value::as_object) else {
+        // A patch_apply_end whose `changes` is absent or not an object is
+        // malformed; note it rather than silently recording nothing.
+        if p.get("changes").is_some() {
+            session.note_partial("malformed patch_apply_end changes (not an object)");
+        }
         return;
     };
     for (path, change) in changes {
@@ -238,6 +243,13 @@ fn extract_patch_changes(p: &Value, ts: Option<i64>, session: &mut ParsedSession
         let move_path = change.get("move_path").and_then(Value::as_str);
         let unified_diff = change.get("unified_diff").and_then(Value::as_str);
         let content = change.get("content").and_then(Value::as_str);
+
+        // An unrecognized change value shape still yields a path-only file event
+        // (no content is invented), but the parse is flagged partial so the loss
+        // of the recorded payload is visible.
+        if typ.is_none() && move_path.is_none() && unified_diff.is_none() && content.is_none() {
+            session.note_partial("unrecognized patch_apply_end change shape");
+        }
 
         let (change_kind, event_path, old_path) = if let Some(dest) = move_path {
             (
@@ -867,6 +879,26 @@ mod tests {
             .file_events
             .iter()
             .all(|f| f.tool_native_call_id.as_deref() == Some("call_9")));
+    }
+
+    #[test]
+    fn malformed_patch_changes_degrade_without_loss_or_crash() {
+        // `changes` present but not an object: flagged, no file events invented.
+        let bad_shape = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"patch_apply_end\",\"call_id\":\"c\",\"changes\":\"oops\"}}\n";
+        let s = CodexAdapter::new().parse_str(bad_shape, "bad");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert!(s.file_events.is_empty());
+
+        // A change value with an unrecognized shape: the path is still recorded
+        // (no silent total loss) but no content is fabricated and the parse is
+        // flagged partial.
+        let unknown_value = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"patch_apply_end\",\"call_id\":\"c\",\"changes\":{\"src/x.ts\":{\"unexpected\":true}}}}\n";
+        let s = CodexAdapter::new().parse_str(unknown_value, "bad2");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert_eq!(s.file_events.len(), 1);
+        assert_eq!(s.file_events[0].path, "src/x.ts");
+        assert_eq!(s.file_events[0].change_kind, FileChangeKind::Patch);
+        assert!(s.file_events[0].patch_text.is_none());
     }
 
     #[test]
