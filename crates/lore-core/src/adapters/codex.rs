@@ -8,6 +8,7 @@
 //! Tool-call pairing and `patch_apply_end` file events follow in later steps.
 //! Read-only and tolerant: unknown/partial input degrades to `partial`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -18,7 +19,8 @@ use super::{
     SessionRef,
 };
 use crate::model::{
-    EventKind, ParsedMessage, ParsedPart, ParsedSegment, ParsedSession, PartKind, Role, Tokens,
+    EventKind, ParsedMessage, ParsedPart, ParsedSegment, ParsedSession, ParsedToolCall, PartKind,
+    Role, Tokens,
 };
 
 const AGENT_ID: AgentId = AgentId("codex");
@@ -64,6 +66,8 @@ impl CodexAdapter {
         let mut contexts: Vec<(Option<String>, Option<String>)> = Vec::new();
         let mut offset: i64 = 0;
         let mut seq: i64 = 0;
+        // native call_id -> index into session.tool_calls, for result pairing.
+        let mut id_map: HashMap<String, usize> = HashMap::new();
 
         for line in content.split_inclusive('\n') {
             let line_start = offset;
@@ -124,14 +128,35 @@ impl CodexAdapter {
                             contexts.push((cwd.clone(), model.clone()));
                             seq += 1;
                         }
-                        // Tool families are paired in M2.b/c.
-                        "function_call"
-                        | "function_call_output"
-                        | "custom_tool_call"
-                        | "custom_tool_call_output"
-                        | "tool_search_call"
-                        | "tool_search_output"
-                        | "web_search_call" => {}
+                        "function_call" | "custom_tool_call" => {
+                            let part = tool_part(PartKind::ToolUse, None, p);
+                            session.messages.push(tool_message(
+                                Role::Assistant,
+                                part,
+                                seq,
+                                ts,
+                                line_start,
+                            ));
+                            contexts.push((cwd.clone(), model.clone()));
+                            register_tool_call(p, seq, &mut session, &mut id_map);
+                            seq += 1;
+                        }
+                        "function_call_output" | "custom_tool_call_output" => {
+                            let output_text = json_text(p.get("output"));
+                            let part = tool_part(PartKind::ToolResult, output_text.clone(), p);
+                            session.messages.push(tool_message(
+                                Role::Tool,
+                                part,
+                                seq,
+                                ts,
+                                line_start,
+                            ));
+                            contexts.push((cwd.clone(), model.clone()));
+                            attach_tool_output(p, seq, output_text, &mut session, &id_map);
+                            seq += 1;
+                        }
+                        // tool_search_* / web_search_call are recorded but not yet modeled.
+                        "tool_search_call" | "tool_search_output" | "web_search_call" => {}
                         other => {
                             session
                                 .note_partial(format!("unknown response_item: {}", bounded(other)));
@@ -389,6 +414,107 @@ fn assign_segments(
     }
 }
 
+/// Build a single-part message wrapping a tool invocation or result.
+fn tool_message(
+    role: Role,
+    part: ParsedPart,
+    seq: i64,
+    ts: Option<i64>,
+    offset: i64,
+) -> ParsedMessage {
+    ParsedMessage {
+        seq,
+        segment_ix: 0,
+        native_uuid: None,
+        parent_native_uuid: None,
+        role,
+        event_kind: EventKind::Message,
+        is_sidechain: false,
+        ts,
+        model: None,
+        tokens: Tokens::default(),
+        stop_reason: None,
+        source_offset: Some(offset),
+        metadata_json: None,
+        parts: vec![part],
+    }
+}
+
+/// A tool_use/tool_result part preserving the raw payload as JSON content.
+fn tool_part(kind: PartKind, text: Option<String>, payload: &Value) -> ParsedPart {
+    ParsedPart {
+        ordinal: 0,
+        kind,
+        text,
+        content_json: serde_json::to_string(payload).ok(),
+        searchable: matches!(kind, PartKind::ToolResult),
+        metadata_json: None,
+    }
+}
+
+/// Register a function/custom tool call, keyed by `call_id`.
+fn register_tool_call(
+    p: &Value,
+    seq: i64,
+    session: &mut ParsedSession,
+    id_map: &mut HashMap<String, usize>,
+) {
+    let Some(call_id) = str_field(p, "call_id") else {
+        session.note_partial("tool call without call_id");
+        return;
+    };
+    let name = str_field(p, "name").unwrap_or_default();
+    // function_call uses "arguments" (a JSON string); custom_tool_call uses "input".
+    let input_json = json_text(p.get("arguments").or_else(|| p.get("input")));
+    let idx = session.tool_calls.len();
+    session.tool_calls.push(ParsedToolCall {
+        native_call_id: call_id.clone(),
+        name,
+        call_ref: (seq, 0),
+        result_ref: None,
+        input_json,
+        output_text: None,
+        is_error: None,
+        duration_ms: None,
+    });
+    id_map.insert(call_id, idx);
+}
+
+/// Attach a tool output to its call by `call_id`.
+fn attach_tool_output(
+    p: &Value,
+    seq: i64,
+    output_text: Option<String>,
+    session: &mut ParsedSession,
+    id_map: &HashMap<String, usize>,
+) {
+    let Some(call_id) = str_field(p, "call_id") else {
+        session.note_partial("tool output without call_id");
+        return;
+    };
+    let Some(&idx) = id_map.get(&call_id) else {
+        session.note_partial("tool output without matching call");
+        return;
+    };
+    let is_error = str_field(p, "status")
+        .as_deref()
+        .map(|s| !matches!(s, "completed" | "success" | "ok"));
+    let tc = &mut session.tool_calls[idx];
+    tc.result_ref = Some((seq, 0));
+    tc.output_text = output_text;
+    tc.is_error = is_error;
+}
+
+/// Extract text from a JSON value that may be a string or a structured object.
+fn json_text(v: Option<&Value>) -> Option<String> {
+    let v = v?;
+    if let Some(s) = v.as_str() {
+        Some(s.to_string())
+    } else {
+        serde_json::to_string(v).ok()
+    }
+}
+
 fn str_field(obj: &Value, key: &str) -> Option<String> {
     obj.get(key).and_then(Value::as_str).map(str::to_string)
 }
@@ -559,5 +685,35 @@ mod tests {
         let content = "{\"type\":\"brand_new_type\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{}}\n";
         let s = CodexAdapter::new().parse_str(content, "fallback");
         assert_eq!(s.status, crate::model::ParseStatus::Partial);
+    }
+
+    #[test]
+    fn pairs_function_call_with_output() {
+        let s = CodexAdapter::new().parse_str(&fixture("function_call.jsonl"), "fallback");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.tool_calls.len(), 1);
+        let tc = &s.tool_calls[0];
+        assert_eq!(tc.native_call_id, "call_1");
+        assert_eq!(tc.name, "shell");
+        assert!(tc
+            .input_json
+            .as_deref()
+            .is_some_and(|j| j.contains("migrate")));
+        assert!(tc.result_ref.is_some());
+        assert_eq!(tc.output_text.as_deref(), Some("migration complete"));
+        assert_eq!(tc.is_error, Some(false));
+
+        // Call and output are distinct linear records; the invocation part is a
+        // tool_use and the output part is a tool_result.
+        assert_eq!(s.tool_calls[0].call_ref.0, 1, "invoked at seq 1");
+        assert_eq!(s.tool_calls[0].result_ref.map(|r| r.0), Some(2));
+    }
+
+    #[test]
+    fn tool_output_without_matching_call_degrades_partial() {
+        let content = "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T12:00:00.000Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"ghost\",\"output\":\"x\"}}\n";
+        let s = CodexAdapter::new().parse_str(content, "fallback");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert!(s.tool_calls.is_empty());
     }
 }

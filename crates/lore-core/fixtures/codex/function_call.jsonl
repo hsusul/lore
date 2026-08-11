@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-08-11T12:00:00.000Z","payload":{"id":"019e0000-0000-7000-8000-000000000002","cwd":"/proj","cli_version":"0.133.0","model_provider":"openai"}}
+{"type":"turn_context","timestamp":"2026-08-11T12:00:00.500Z","payload":{"cwd":"/proj","model":"gpt-x"}}
+{"type":"response_item","timestamp":"2026-08-11T12:00:01.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"run the migration"}]}}
+{"type":"response_item","timestamp":"2026-08-11T12:00:02.000Z","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"npm run migrate\"}","call_id":"call_1"}}
+{"type":"response_item","timestamp":"2026-08-11T12:00:03.000Z","payload":{"type":"function_call_output","call_id":"call_1","output":"migration complete","status":"completed"}}
+{"type":"response_item","timestamp":"2026-08-11T12:00:04.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Migration done."}]}}
