@@ -5,6 +5,7 @@
 //! migrations (M1+); this module owns opening a configured connection and
 //! applying ordered, checksummed migrations transactionally.
 
+pub mod blob;
 pub mod migrations;
 
 use std::path::Path;
