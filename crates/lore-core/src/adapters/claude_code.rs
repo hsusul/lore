@@ -696,4 +696,23 @@ mod tests {
         assert_eq!(super::sanitize_path("./src/../src/app.ts"), "src/app.ts");
         assert_eq!(super::sanitize_path("/abs/path.rs"), "abs/path.rs");
     }
+
+    #[test]
+    fn cwd_change_starts_a_new_segment() {
+        let a = ClaudeCodeAdapter::new();
+        let s = a.parse_str(&fixture("segments.jsonl"), "fallback");
+        assert_eq!(s.segments.len(), 2, "cwd change splits segments");
+
+        assert_eq!(s.segments[0].cwd.as_deref(), Some("/repo/app"));
+        assert_eq!(s.segments[0].seq_start, 0);
+        assert_eq!(s.segments[0].seq_end, 1);
+        assert_eq!(s.segments[1].cwd.as_deref(), Some("/repo/lib"));
+        assert_eq!(s.segments[1].seq_start, 2);
+        assert_eq!(s.segments[1].seq_end, 3);
+
+        assert_eq!(s.messages[0].segment_ix, 0);
+        assert_eq!(s.messages[1].segment_ix, 0);
+        assert_eq!(s.messages[2].segment_ix, 1);
+        assert_eq!(s.messages[3].segment_ix, 1);
+    }
 }
