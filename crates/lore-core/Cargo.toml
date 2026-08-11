@@ -12,6 +12,9 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# Shared IPC DTOs (the generated Rust<->TS contract). No Tauri/webview here:
+# lore-core produces the wire types from DB queries; the shell serializes them.
+lore-ipc = { path = "../lore-ipc" }
 # Bundled SQLite (compiles the amalgamation with FTS5 enabled) so we never
 # depend on a system libsqlite3 and FTS5 is always present.
 rusqlite = { version = "0.32", features = ["bundled"] }
