@@ -917,6 +917,28 @@ mod tests {
     }
 
     #[test]
+    fn delete_patch_maps_kind_and_derives_removed_counts() {
+        // A delete recorded with a unified diff keeps the delete kind (not
+        // downgraded to edit) and derives removed-line counts from the diff.
+        let content = concat!(
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{",
+            "\"type\":\"patch_apply_end\",\"call_id\":\"c\",\"changes\":{\"src/gone.ts\":{",
+            "\"type\":\"delete\",\"unified_diff\":\"--- a/src/gone.ts\\n+++ /dev/null\\n@@ -1,2 +0,0 @@\\n-line one\\n-line two\\n\"}}}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "del");
+        assert_eq!(s.file_events.len(), 1);
+        let fe = &s.file_events[0];
+        assert_eq!(fe.change_kind, FileChangeKind::Delete);
+        assert_eq!(fe.path, "src/gone.ts");
+        assert_eq!(fe.lines_removed, Some(2));
+        assert_eq!(fe.lines_added, Some(0));
+        assert!(fe
+            .patch_text
+            .as_deref()
+            .is_some_and(|t| t.contains("-line one")));
+    }
+
+    #[test]
     fn non_openai_provider_is_preserved() {
         let content = concat!(
             "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"z\",\"cli_version\":\"1\",\"cwd\":\"/p\",\"model_provider\":\"anthropic\"}}\n",

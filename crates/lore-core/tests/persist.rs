@@ -279,6 +279,41 @@ fn codex_cumulative_token_totals_persist() {
 }
 
 #[test]
+fn codex_encrypted_reasoning_persists_opaque_and_non_searchable() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = blob_store();
+    let content = concat!(
+        "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"enc\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}\n",
+        "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":\"plan\",\"encrypted_content\":\"ENCRYPTED-BLOB\"}}\n"
+    );
+    let parsed = CodexAdapter::new().parse_str(content, "enc");
+    let sid = persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+
+    // The opaque part is persisted (faithful local storage) but flagged
+    // non-searchable, and its cleartext is never surfaced as `text`.
+    let (searchable, text): (i64, Option<String>) = conn
+        .query_row(
+            "SELECT mp.searchable, mp.text FROM message_part mp
+             JOIN message m ON m.id = mp.message_id
+             WHERE m.session_id = ?1 AND mp.kind = 'opaque'",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(searchable, 0, "encrypted content must never be searchable");
+    assert!(
+        text.is_none(),
+        "encrypted content is never rendered as text"
+    );
+
+    // No opaque part ever reaches the FTS-backed search projection.
+    let projected: i64 = conn
+        .query_row("SELECT count(*) FROM search_document", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(projected, 0);
+}
+
+#[test]
 fn codex_recorded_patch_payloads_persist_as_faithful_blobs() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let (_bd, blobs) = blob_store();
