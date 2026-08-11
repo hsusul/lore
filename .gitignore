@@ -1,0 +1,38 @@
+# Rust / Tauri (once scaffolded)
+/target
+/src-tauri/target
+**/*.rs.bk
+Cargo.lock            # keep for the app crate once it exists; remove this line then
+
+# Node / Vite (once scaffolded)
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# Lore local data (NEVER commit — may contain sensitive indexed content)
+*.db
+*.db-wal
+*.db-shm
+/blobs/
+/exports/
+/logs/
+
+# Fixtures: commit ONLY anonymized fixtures under src-tauri/fixtures/.
+# Never commit raw agent sessions or real ~/.claude / ~/.codex data.
+/scratch/
+*.real.jsonl
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Env / secrets (signing, notarization) — never commit
+.env
+.env.*
+*.p12
+*.provisionprofile
