@@ -218,8 +218,9 @@ pub struct ParsedFileEvent {
     pub old_path: Option<String>,
     pub lines_added: Option<i64>,
     pub lines_removed: Option<i64>,
-    /// Byte-faithful recorded patch/diff content (offloaded to a blob on persist,
-    /// from M6). `None` when the source only names the file (e.g. a tool input).
+    /// Byte-faithful recorded patch/diff content. Offloaded to a content-
+    /// addressed blob during persist and referenced by `file_event.patch_blob_id`.
+    /// `None` when the source only names the file (e.g. a tool input).
     pub patch_text: Option<String>,
     pub source: FileEventSource,
     pub event_ts: Option<i64>,
