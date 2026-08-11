@@ -671,7 +671,9 @@ impl AgentAdapter for CodexAdapter {
             tool_calls: true,
             file_events: true,
             token_usage: true,
-            cost: true,
+            // Cost estimation (est_cost_usd) is not implemented for any adapter
+            // yet; token usage is captured but no priced cost is produced.
+            cost: false,
             model_name: true,
             summaries: true,
             git_context: true,
@@ -747,6 +749,19 @@ mod tests {
             .join("fixtures/codex")
             .join(name);
         std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn capabilities_reflect_implemented_output() {
+        let c = CodexAdapter::new().capabilities();
+        // Implemented normalized output.
+        assert!(c.messages && c.tool_calls && c.file_events && c.token_usage);
+        assert!(c.thinking && c.model_name && c.git_context && c.encrypted_regions);
+        // Codex rollouts are a linear log.
+        assert!(!c.message_tree);
+        // Not yet implemented anywhere.
+        assert!(!c.cost, "cost estimation is not implemented");
+        assert!(!c.durations, "per-tool durations are not normalized");
     }
 
     #[test]

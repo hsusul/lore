@@ -446,9 +446,11 @@ impl AgentAdapter for ClaudeCodeAdapter {
             messages: true,
             thinking: true,
             tool_calls: true,
-            file_events: true, // derived from tool use (later step)
+            file_events: true, // derived from tool use
             token_usage: true,
-            cost: true,
+            // Cost estimation (est_cost_usd) is not implemented for any adapter
+            // yet; token usage is captured but no priced cost is produced.
+            cost: false,
             model_name: true,
             summaries: true,
             git_context: true, // branch only
@@ -516,6 +518,19 @@ mod tests {
             .join("fixtures/claude_code")
             .join(name);
         std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn capabilities_reflect_implemented_output() {
+        let c = ClaudeCodeAdapter::new().capabilities();
+        // Implemented normalized output.
+        assert!(c.messages && c.tool_calls && c.file_events && c.token_usage);
+        assert!(c.thinking && c.model_name && c.git_context && c.message_tree);
+        // Claude Code has no opaque/encrypted regions.
+        assert!(!c.encrypted_regions);
+        // Not yet implemented anywhere.
+        assert!(!c.cost, "cost estimation is not implemented");
+        assert!(!c.durations, "per-tool durations are not normalized");
     }
 
     #[test]
