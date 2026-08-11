@@ -105,6 +105,78 @@ pub trait AgentAdapter: Send + Sync {
     fn parse_session(&self, source: &SessionRef) -> Result<ParsedSession, AdapterError>;
 }
 
+/// Registered adapter set. Registration rejects duplicate stable ids so a
+/// discovered source can always be routed to exactly one parser.
+pub struct AdapterRegistry {
+    adapters: Vec<Box<dyn AgentAdapter>>,
+}
+
+impl AdapterRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            adapters: Vec::new(),
+        }
+    }
+
+    /// The native V0 adapter set, in stable display order.
+    #[must_use]
+    pub fn v0() -> Self {
+        Self {
+            adapters: vec![
+                Box::new(claude_code::ClaudeCodeAdapter::new()),
+                Box::new(codex::CodexAdapter::new()),
+            ],
+        }
+    }
+
+    /// Add an adapter, rejecting a second implementation for the same id.
+    pub fn register(&mut self, adapter: Box<dyn AgentAdapter>) -> Result<(), RegistryError> {
+        let id = adapter.id().0;
+        if self.get(id).is_some() {
+            return Err(RegistryError::DuplicateId(id));
+        }
+        self.adapters.push(adapter);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn get(&self, id: &str) -> Option<&dyn AgentAdapter> {
+        self.adapters
+            .iter()
+            .find(|adapter| adapter.id().0 == id)
+            .map(Box::as_ref)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &dyn AgentAdapter> {
+        self.adapters.iter().map(Box::as_ref)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.adapters.is_empty()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.adapters.len()
+    }
+}
+
+impl Default for AdapterRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Registry construction failure. Adapter ids are static schema identifiers,
+/// so including one in a diagnostic cannot expose session content.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum RegistryError {
+    #[error("duplicate adapter id: {0}")]
+    DuplicateId(&'static str),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +191,26 @@ mod tests {
     fn agent_id_is_comparable() {
         assert_eq!(AgentId("claude-code"), AgentId("claude-code"));
         assert_ne!(AgentId("claude-code"), AgentId("codex"));
+    }
+
+    #[test]
+    fn v0_registry_routes_each_native_adapter() {
+        let registry = AdapterRegistry::v0();
+        assert_eq!(registry.len(), 2);
+        assert!(registry.get("claude-code").is_some());
+        assert!(registry.get("codex").is_some());
+        assert!(registry.get("unknown").is_none());
+    }
+
+    #[test]
+    fn duplicate_adapter_ids_are_rejected() {
+        let mut registry = AdapterRegistry::new();
+        registry
+            .register(Box::new(claude_code::ClaudeCodeAdapter::new()))
+            .unwrap();
+        let error = registry
+            .register(Box::new(claude_code::ClaudeCodeAdapter::new()))
+            .unwrap_err();
+        assert_eq!(error, RegistryError::DuplicateId("claude-code"));
     }
 }
