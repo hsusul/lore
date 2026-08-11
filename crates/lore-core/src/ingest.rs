@@ -294,6 +294,12 @@ fn persist_rows(
             continue;
         }
         let gid = det_id("g", &[&session_id, &i.to_string()]);
+        // Store only the credential-free normalized remote; a recorded URL may
+        // carry an embedded token and must never be persisted verbatim.
+        let remote_url_norm = seg
+            .git_remote_url
+            .as_deref()
+            .and_then(crate::git::normalize_remote_url);
         tx.execute(
             "INSERT INTO git_observation
                 (id, session_id, segment_id, source, observed_at, temporal_confidence,
@@ -305,7 +311,7 @@ fn persist_rows(
                 segment_ids[i],
                 seg.git_branch,
                 seg.git_commit_sha,
-                seg.git_remote_url,
+                remote_url_norm,
             ],
         )?;
     }

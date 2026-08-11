@@ -279,6 +279,33 @@ fn codex_cumulative_token_totals_persist() {
 }
 
 #[test]
+fn recorded_remote_url_is_stored_credential_free() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = blob_store();
+    // A recorded remote URL that embeds a token must never be persisted verbatim.
+    let content = concat!(
+        "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"gitcreds\",\"cli_version\":\"1\",\"cwd\":\"/p\",\"git\":{\"branch\":\"main\",\"commit_hash\":\"abc123\",\"repository_url\":\"https://user:ghp_secrettoken@github.com/org/repo.git\"}}}\n",
+        "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"hi\"}}\n"
+    );
+    let parsed = CodexAdapter::new().parse_str(content, "gitcreds");
+    let sid = persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+
+    let remote: String = conn
+        .query_row(
+            "SELECT remote_url_norm FROM git_observation WHERE session_id = ?1",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(remote, "github.com/org/repo");
+    assert!(
+        !remote.contains("ghp_secrettoken"),
+        "token must be stripped"
+    );
+    assert!(!remote.contains('@'));
+}
+
+#[test]
 fn codex_encrypted_reasoning_persists_opaque_and_non_searchable() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let (_bd, blobs) = blob_store();
