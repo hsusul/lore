@@ -1,6 +1,7 @@
 # Rust / Tauri
 /target
 /src-tauri/target
+/src-tauri/gen/
 **/*.rs.bk
 # Cargo.lock IS committed: this is an application workspace.
 

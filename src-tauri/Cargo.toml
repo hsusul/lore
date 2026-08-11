@@ -1,0 +1,34 @@
+# Part of the root workspace. Note: unlike lore-core, the shell does NOT inherit
+# the workspace `unsafe_code = "forbid"` lint — it links webview FFI. All archive
+# logic stays in lore-core, which keeps that guarantee.
+[package]
+name = "lore-app"
+description = "Lore desktop shell (Tauri 2). Thin binary over lore-core; no archive logic lives here."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.90"
+license = "Apache-2.0"
+repository = "https://github.com/hsusul/lore"
+authors = ["Lore contributors"]
+
+[lib]
+name = "lore_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+lore-core = { path = "../crates/lore-core" }
+lore-ipc = { path = "../crates/lore-ipc" }
+# Same version as lore-core so the Connection type unifies (features are additive
+# across the graph; lore-core already enables the bundled SQLite).
+rusqlite = "0.32"
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# The updater is the sole network-capable component and is OFF by default
+# (M0 requirement). Compiling it in requires explicitly enabling this feature.
+updater = []

@@ -4,7 +4,7 @@
 # shell (src-tauri) will be added as a thin binary crate depending on lore-core.
 [workspace]
 resolver = "2"
-members = ["crates/lore-core", "crates/lore-ipc"]
+members = ["crates/lore-core", "crates/lore-ipc", "src-tauri"]
 
 [workspace.package]
 version = "0.0.0"
