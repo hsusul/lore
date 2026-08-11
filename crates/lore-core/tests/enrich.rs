@@ -184,6 +184,109 @@ fn linked_worktrees_group_under_one_repository() {
     assert_eq!(worktrees, 2);
 }
 
+/// Clone `src` to `dst` and point its origin at `remote_url`, so distinct local
+/// clones share a root commit but carry a chosen (forge-style) remote.
+fn clone_with_remote(root: &Path, src: &Path, dst: &Path, remote_url: &str) {
+    git(
+        root,
+        &["clone", src.to_str().unwrap(), dst.to_str().unwrap()],
+    );
+    git(dst, &["remote", "set-url", "origin", remote_url]);
+}
+
+fn repo_of(conn: &Connection, sid: &str) -> String {
+    conn.query_row(
+        "SELECT repository_id FROM session_segment WHERE session_id = ?1",
+        [sid],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn clones_of_one_upstream_merge_into_one_repository() {
+    let root = tempfile::tempdir().unwrap();
+    let upstream = root.path().join("upstream");
+    std::fs::create_dir(&upstream).unwrap();
+    init_repo(&upstream);
+
+    // Two clones share the root commit and the same upstream remote URL.
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    let url = "https://github.com/org/repo.git";
+    clone_with_remote(root.path(), &upstream, &a, url);
+    clone_with_remote(root.path(), &upstream, &b, url);
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let a_sid = persist_session_at(&conn, &store, "a", &a);
+    let b_sid = persist_session_at(&conn, &store, "b", &b);
+    enrich_session(&conn, &a_sid).unwrap();
+    enrich_session(&conn, &b_sid).unwrap();
+
+    assert_eq!(
+        repo_of(&conn, &a_sid),
+        repo_of(&conn, &b_sid),
+        "same remote + same root ⇒ one repository (clones merge)"
+    );
+    let repos: i64 = conn
+        .query_row("SELECT count(*) FROM repository", [], |r| r.get(0))
+        .unwrap();
+    let worktrees: i64 = conn
+        .query_row("SELECT count(*) FROM worktree", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(repos, 1);
+    assert_eq!(worktrees, 2, "each clone is a distinct worktree");
+
+    let confidence: String = conn
+        .query_row("SELECT identity_confidence FROM repository", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(confidence, "high", "remote + root is high confidence");
+}
+
+#[test]
+fn fork_sharing_a_root_is_not_merged_with_upstream() {
+    let root = tempfile::tempdir().unwrap();
+    let upstream = root.path().join("upstream");
+    std::fs::create_dir(&upstream).unwrap();
+    init_repo(&upstream);
+
+    // Same root commit, but different remotes (upstream vs a fork).
+    let up_clone = root.path().join("up");
+    let fork = root.path().join("fork");
+    clone_with_remote(
+        root.path(),
+        &upstream,
+        &up_clone,
+        "https://github.com/org/repo.git",
+    );
+    clone_with_remote(
+        root.path(),
+        &upstream,
+        &fork,
+        "https://github.com/someone-else/repo.git",
+    );
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let up_sid = persist_session_at(&conn, &store, "up", &up_clone);
+    let fork_sid = persist_session_at(&conn, &store, "fork", &fork);
+    enrich_session(&conn, &up_sid).unwrap();
+    enrich_session(&conn, &fork_sid).unwrap();
+
+    assert_ne!(
+        repo_of(&conn, &up_sid),
+        repo_of(&conn, &fork_sid),
+        "a fork shares the root but has a different remote ⇒ stays separate"
+    );
+    let repos: i64 = conn
+        .query_row("SELECT count(*) FROM repository", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(repos, 2, "fork and upstream are distinct repositories");
+}
+
 #[test]
 fn non_git_cwd_is_left_unlinked() {
     let plain = tempfile::tempdir().unwrap();

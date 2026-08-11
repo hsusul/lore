@@ -81,6 +81,31 @@ fn capture_reports_detached_head_with_null_branch() {
 }
 
 #[test]
+fn capture_reports_normalized_remote_and_root_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    git(
+        dir.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://user:tok@github.com/org/repo.git",
+        ],
+    );
+
+    let facts = capture(dir.path()).unwrap();
+    assert_eq!(
+        facts.remotes,
+        vec!["github.com/org/repo".to_string()],
+        "remote is normalized and credential-free"
+    );
+    assert_eq!(facts.root_commits.len(), 1, "one initial (root) commit");
+    assert_eq!(facts.root_commits[0].len(), 40);
+    assert!(!facts.history_truncated);
+}
+
+#[test]
 fn capture_returns_none_outside_a_repository() {
     let dir = tempfile::tempdir().unwrap();
     assert!(

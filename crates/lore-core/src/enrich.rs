@@ -72,6 +72,55 @@ fn unresolved_segments(conn: &Connection, session_id: &str) -> Result<Vec<(Strin
     Ok(rows)
 }
 
+/// The resolved repository identity for a captured repo.
+struct Identity {
+    key: String,
+    confidence: &'static str,
+    display_name: String,
+}
+
+/// Choose the repository identity from the strongest available evidence
+/// (`GIT_INTEGRATION.md` §2):
+/// - normalized remote(s) **and** a known root set → `high`; two clones of one
+///   upstream collide, while a fork (same root, different remote) does not;
+/// - remote(s) only (e.g. shallow/truncated history) → `medium`, remote-keyed;
+/// - no remote → key on the local common dir (`high` locally). Root-set alone is
+///   recorded as evidence but never used as the identity key, so unrelated repos
+///   that merely share a root commit are never merged.
+fn resolve_identity(facts: &CapturedRepo, common_key: &str, workdir: &Path) -> Identity {
+    let roots_known = !facts.root_commits.is_empty() && !facts.history_truncated;
+    let remote_name = facts
+        .remotes
+        .first()
+        .and_then(|r| r.rsplit('/').next())
+        .map(str::to_string);
+    let local_name = workdir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
+
+    if !facts.remotes.is_empty() && roots_known {
+        let mut material = facts.remotes.clone();
+        material.extend(facts.root_commits.iter().cloned());
+        Identity {
+            key: format!("rr:{}", fnv1a_hex(material.join("\n").as_bytes())),
+            confidence: "high",
+            display_name: remote_name.or(local_name).unwrap_or_default(),
+        }
+    } else if !facts.remotes.is_empty() {
+        Identity {
+            key: format!("r:{}", fnv1a_hex(facts.remotes.join("\n").as_bytes())),
+            confidence: "medium",
+            display_name: remote_name.or(local_name).unwrap_or_default(),
+        }
+    } else {
+        Identity {
+            key: format!("gcd:{common_key}"),
+            confidence: "high",
+            display_name: local_name.unwrap_or_else(|| format!("gcd:{common_key}")),
+        }
+    }
+}
+
 fn link_segment(
     tx: &Connection,
     session_id: &str,
@@ -79,17 +128,13 @@ fn link_segment(
     facts: &CapturedRepo,
 ) -> Result<()> {
     let common_key = fnv1a_hex(facts.common_dir.to_string_lossy().as_bytes());
-    let identity_key = format!("gcd:{common_key}");
-    let repo_id = det_id("repo", &[&identity_key]);
     let workdir = facts
         .workdir
         .clone()
         .unwrap_or_else(|| facts.common_dir.clone());
     let workdir_str = workdir.to_string_lossy().into_owned();
-    let display_name = workdir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| identity_key.clone());
+    let identity = resolve_identity(facts, &common_key, &workdir);
+    let repo_id = det_id("repo", &[&identity.key]);
     // The main worktree's common dir is its own `.git`; a linked worktree's is
     // the main repo's, so it differs from `<workdir>/.git`.
     let is_primary = i64::from(workdir.join(".git") == facts.common_dir);
@@ -98,11 +143,17 @@ fn link_segment(
         "INSERT INTO repository
             (id, identity_key, display_name, primary_path, identity_confidence,
              created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, 'high', unixepoch('now')*1000, unixepoch('now')*1000)
+         VALUES (?1, ?2, ?3, ?4, ?5, unixepoch('now')*1000, unixepoch('now')*1000)
          ON CONFLICT(identity_key) DO UPDATE SET
             primary_path = COALESCE(repository.primary_path, excluded.primary_path),
             updated_at = unixepoch('now')*1000",
-        params![repo_id, identity_key, display_name, workdir_str],
+        params![
+            repo_id,
+            identity.key,
+            identity.display_name,
+            workdir_str,
+            identity.confidence
+        ],
     )?;
 
     let wt_id = det_id("wt", &[&repo_id, &workdir_str]);
@@ -121,21 +172,13 @@ fn link_segment(
         ],
     )?;
 
-    let ev_id = det_id("ev", &[&repo_id, "git_common_dir", &common_key]);
-    tx.execute(
-        "INSERT INTO repository_identity_evidence
-            (id, repository_id, kind, value_hash, confidence, first_seen_at, last_seen_at)
-         VALUES (?1, ?2, 'git_common_dir', ?3, 'high',
-                 unixepoch('now')*1000, unixepoch('now')*1000)
-         ON CONFLICT(id) DO UPDATE SET last_seen_at = unixepoch('now')*1000",
-        params![ev_id, repo_id, common_key],
-    )?;
+    record_evidence(tx, &repo_id, &common_key, facts)?;
 
     tx.execute(
         "UPDATE session_segment
-         SET repository_id = ?2, worktree_id = ?3, resolution_confidence = 'high'
+         SET repository_id = ?2, worktree_id = ?3, resolution_confidence = ?4
          WHERE id = ?1",
-        params![segment_id, repo_id, wt_id],
+        params![segment_id, repo_id, wt_id, identity.confidence],
     )?;
 
     // lore_captured observation: current repository state, never session-time.
@@ -157,6 +200,60 @@ fn link_segment(
             facts.head_commit,
             facts.is_dirty.map(i64::from),
         ],
+    )?;
+    Ok(())
+}
+
+/// Record all identity evidence for a repository, keyed deterministically so
+/// re-enrichment refreshes rather than duplicates. Evidence never overwrites
+/// another kind; each is stored with its own confidence.
+fn record_evidence(
+    tx: &Connection,
+    repo_id: &str,
+    common_key: &str,
+    facts: &CapturedRepo,
+) -> Result<()> {
+    // git_common_dir — high local grouping.
+    upsert_evidence(tx, repo_id, "git_common_dir", common_key, None, "high")?;
+
+    // Each normalized remote — medium; the credential-free value is safe to show.
+    for remote in &facts.remotes {
+        let value_hash = fnv1a_hex(remote.as_bytes());
+        upsert_evidence(
+            tx,
+            repo_id,
+            "remote",
+            &value_hash,
+            Some(remote.as_str()),
+            "medium",
+        )?;
+    }
+
+    // Root-commit set — low; recorded for candidate matching, never an auto-merge
+    // key on its own. Skipped when the history walk was truncated.
+    if !facts.root_commits.is_empty() && !facts.history_truncated {
+        let value_hash = fnv1a_hex(facts.root_commits.join("\n").as_bytes());
+        upsert_evidence(tx, repo_id, "root_set", &value_hash, None, "low")?;
+    }
+    Ok(())
+}
+
+fn upsert_evidence(
+    tx: &Connection,
+    repo_id: &str,
+    kind: &str,
+    value_hash: &str,
+    display_value: Option<&str>,
+    confidence: &str,
+) -> Result<()> {
+    let ev_id = det_id("ev", &[repo_id, kind, value_hash]);
+    tx.execute(
+        "INSERT INTO repository_identity_evidence
+            (id, repository_id, kind, value_hash, display_value, confidence,
+             first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch('now')*1000, unixepoch('now')*1000)
+         ON CONFLICT(id) DO UPDATE SET last_seen_at = unixepoch('now')*1000",
+        params![ev_id, repo_id, kind, value_hash, display_value, confidence],
     )?;
     Ok(())
 }

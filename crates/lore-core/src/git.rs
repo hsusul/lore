@@ -72,7 +72,21 @@ pub struct CapturedRepo {
     pub detached: bool,
     /// Working tree has uncommitted changes at capture, when determinable.
     pub is_dirty: Option<bool>,
+    /// Normalized (credential-free) fetch remotes, sorted and deduped. Empty for
+    /// a local-only repository.
+    pub remotes: Vec<String>,
+    /// Sorted set of root commits (parentless) reachable from HEAD. Two clones of
+    /// one upstream share this set; a fork shares it too, which is why root alone
+    /// never merges repositories.
+    pub root_commits: Vec<String>,
+    /// The root walk hit its bound, so `root_commits` may be incomplete; identity
+    /// then falls back to weaker evidence rather than trusting a partial set.
+    pub history_truncated: bool,
 }
+
+/// Upper bound on commits walked to find the root set, so a very large history
+/// cannot make capture unbounded. Beyond this the root set is treated as unknown.
+const ROOT_WALK_LIMIT: usize = 50_000;
 
 /// Capture read-only repository facts for the repository containing `path`.
 ///
@@ -99,6 +113,8 @@ pub fn capture(path: &Path) -> Option<CapturedRepo> {
         .filter(|_| !detached);
     let head_commit = repo.head_id().ok().map(|id| id.to_hex().to_string());
     let is_dirty = repo.is_dirty().ok();
+    let remotes = collect_remotes(&repo);
+    let (root_commits, history_truncated) = collect_root_commits(&repo);
 
     Some(CapturedRepo {
         common_dir,
@@ -107,7 +123,56 @@ pub fn capture(path: &Path) -> Option<CapturedRepo> {
         head_commit,
         detached,
         is_dirty,
+        remotes,
+        root_commits,
+        history_truncated,
     })
+}
+
+/// Normalized, credential-free fetch remotes (sorted, deduped).
+fn collect_remotes(repo: &gix::Repository) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in repo.remote_names() {
+        let name_ref: &gix::bstr::BStr = name.as_ref();
+        let Ok(remote) = repo.find_remote(name_ref) else {
+            continue;
+        };
+        if let Some(url) = remote.url(gix::remote::Direction::Fetch) {
+            if let Some(normalized) = normalize_remote_url(&url.to_bstring().to_string()) {
+                out.push(normalized);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Sorted set of parentless (root) commits reachable from HEAD, bounded by
+/// [`ROOT_WALK_LIMIT`]. Returns `(roots, truncated)`; on truncation the caller
+/// treats the set as unknown rather than partial.
+fn collect_root_commits(repo: &gix::Repository) -> (Vec<String>, bool) {
+    let Ok(head) = repo.head_id() else {
+        return (Vec::new(), false);
+    };
+    let Ok(walk) = repo.rev_walk(Some(head.detach())).all() else {
+        return (Vec::new(), false);
+    };
+    let mut roots = std::collections::BTreeSet::new();
+    let mut visited = 0usize;
+    for item in walk {
+        let Ok(info) = item else {
+            return (Vec::new(), false);
+        };
+        visited += 1;
+        if visited > ROOT_WALK_LIMIT {
+            return (Vec::new(), true);
+        }
+        if info.parent_ids().count() == 0 {
+            roots.insert(info.id.to_hex().to_string());
+        }
+    }
+    (roots.into_iter().collect(), false)
 }
 
 /// Split `host[/path]` at the first `/`.
