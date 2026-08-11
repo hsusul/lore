@@ -1,8 +1,8 @@
-# Rust / Tauri (once scaffolded)
+# Rust / Tauri
 /target
 /src-tauri/target
 **/*.rs.bk
-Cargo.lock            # keep for the app crate once it exists; remove this line then
+# Cargo.lock IS committed: this is an application workspace.
 
 # Node / Vite (once scaffolded)
 node_modules/
@@ -36,3 +36,7 @@ dist-ssr/
 .env.*
 *.p12
 *.provisionprofile
+
+# Local project documentation
+docs/
+*.md

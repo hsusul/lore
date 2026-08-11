@@ -1,0 +1,32 @@
+# Lore — Cargo workspace.
+# lore-core is a pure-Rust library (no Tauri/GUI deps) so the archive logic is
+# fully unit-testable with `cargo test` and never links a webview. The Tauri
+# shell (src-tauri) will be added as a thin binary crate depending on lore-core.
+[workspace]
+resolver = "2"
+members = ["crates/lore-core"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.90"
+license = "Apache-2.0"
+repository = "https://github.com/hsusul/lore"
+authors = ["Lore contributors"]
+
+# Shared lints. Archive code must degrade on bad input, never panic on it.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# Groups get lower priority so the specific lints below can override them.
+all = { level = "warn", priority = -1 }
+# Guard the "no panic on untrusted input" rule at the type level in library code.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[profile.release]
+strip = true
+lto = "thin"
