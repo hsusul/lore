@@ -211,6 +211,50 @@ fn non_git_cwd_is_left_unlinked() {
 }
 
 #[test]
+fn pipeline_enriches_automatically_on_ingest() {
+    use lore_core::adapters::{AdapterRegistry, DiscoveryRoots};
+    use lore_core::discovery::DiscoveryConfig;
+    use lore_core::pipeline::{NullSink, Pipeline};
+
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+
+    // A discoverable Claude session file whose recorded cwd is the repo.
+    let home = tempfile::tempdir().unwrap();
+    let projects = home.path().join("projects");
+    let project = projects.join("encoded");
+    std::fs::create_dir_all(&project).unwrap();
+    let content = format!(
+        "{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"pipe\",\"cwd\":\"{}\",\"gitBranch\":\"main\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n",
+        repo.path().to_string_lossy()
+    );
+    std::fs::write(project.join("s.jsonl"), content).unwrap();
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let registry = AdapterRegistry::v0();
+    let mut config = DiscoveryConfig::new();
+    config.set_roots("claude-code", DiscoveryRoots::new(vec![projects]));
+    // Isolate Codex to an empty root so discovery never touches real ~/.codex.
+    config.set_roots(
+        "codex",
+        DiscoveryRoots::new(vec![home.path().join("codex-empty")]),
+    );
+    let pipeline = Pipeline::new(&conn, &registry, &store, &config, 64);
+
+    pipeline.enqueue_scan(&NullSink).unwrap();
+    let summary = pipeline.drain(&NullSink, 10).unwrap();
+    assert_eq!(summary.ingested, 1);
+    assert_eq!(summary.enriched, 1, "ingest triggers enrichment");
+    assert_eq!(summary.enrich_failed, 0);
+
+    let repos: i64 = conn
+        .query_row("SELECT count(*) FROM repository", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(repos, 1);
+}
+
+#[test]
 fn enrich_is_idempotent() {
     let repo = tempfile::tempdir().unwrap();
     init_repo(repo.path());

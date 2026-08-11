@@ -67,6 +67,11 @@ pub struct DrainSummary {
     pub skipped: usize,
     pub failed: usize,
     pub requeued: usize,
+    /// Segments linked to a repository by post-ingest git enrichment.
+    pub enriched: usize,
+    /// Ingests whose (best-effort) enrichment errored. The session is still
+    /// persisted; enrichment can be retried on a later ingest.
+    pub enrich_failed: usize,
 }
 
 impl DrainSummary {
@@ -189,12 +194,22 @@ impl<'a> Pipeline<'a> {
                                 agent_id: agent_id.clone(),
                             });
                         }
-                        IngestOutcome::Ingested { change, .. } => {
+                        IngestOutcome::Ingested {
+                            change,
+                            ref session_id,
+                            ..
+                        } => {
                             summary.ingested += 1;
                             sink.emit(ProgressEvent::Ingested {
                                 agent_id: agent_id.clone(),
                                 change,
                             });
+                            // Best-effort git enrichment: a failure never undoes
+                            // the committed session (it can be retried later).
+                            match crate::enrich::enrich_session(self.conn, session_id) {
+                                Ok(n) => summary.enriched += n,
+                                Err(_) => summary.enrich_failed += 1,
+                            }
                         }
                     }
                     if jobs::finish(self.conn, &job.id)? == FinishOutcome::Requeued {
