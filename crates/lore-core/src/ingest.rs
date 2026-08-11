@@ -11,11 +11,11 @@
 //! canonical rows only.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::adapters::{AgentAdapter, SessionRef};
+use crate::adapters::{AdapterRegistry, AgentAdapter, SessionRef};
 use crate::model::ParsedSession;
 use crate::storage::{Result, StorageError};
 
@@ -337,6 +337,70 @@ pub enum IngestOutcome {
         generation: i64,
         change: ChangeClass,
     },
+}
+
+/// Content-free classification for a source that could not be ingested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IngestFailureKind {
+    AdapterNotRegistered,
+    SourceFailed,
+}
+
+/// One failed source. The local path is retained for an actionable UI; no
+/// source content or parser/SQLite detail is copied into the report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestFailure {
+    pub agent_id: &'static str,
+    pub path: PathBuf,
+    pub kind: IngestFailureKind,
+}
+
+/// Result of one sequential discovery-to-ingest pass. M3 replaces the
+/// sequential loop with a bounded durable job queue while preserving this
+/// per-source failure isolation contract.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IngestReport {
+    pub ingested: Vec<IngestOutcome>,
+    pub skipped: usize,
+    pub failures: Vec<IngestFailure>,
+}
+
+impl IngestReport {
+    #[must_use]
+    pub fn processed(&self) -> usize {
+        self.ingested.len() + self.skipped + self.failures.len()
+    }
+}
+
+/// Route discovered sessions to their registered adapters and ingest each in
+/// its own transaction. One unreadable or malformed source does not stop peers.
+#[must_use]
+pub fn ingest_discovered(
+    conn: &Connection,
+    registry: &AdapterRegistry,
+    sessions: &[SessionRef],
+) -> IngestReport {
+    let mut report = IngestReport::default();
+    for source in sessions {
+        let Some(adapter) = registry.get(source.agent.0) else {
+            report.failures.push(IngestFailure {
+                agent_id: source.agent.0,
+                path: source.path.clone(),
+                kind: IngestFailureKind::AdapterNotRegistered,
+            });
+            continue;
+        };
+        match ingest_file(conn, adapter, &source.path) {
+            Ok(IngestOutcome::Skipped) => report.skipped += 1,
+            Ok(outcome) => report.ingested.push(outcome),
+            Err(_) => report.failures.push(IngestFailure {
+                agent_id: source.agent.0,
+                path: source.path.clone(),
+                kind: IngestFailureKind::SourceFailed,
+            }),
+        }
+    }
+    report
 }
 
 struct SourceRow {
