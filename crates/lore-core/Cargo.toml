@@ -12,5 +12,10 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# Bundled SQLite (compiles the amalgamation with FTS5 enabled) so we never
+# depend on a system libsqlite3 and FTS5 is always present.
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "1"
 
 [dev-dependencies]
+tempfile = "3"
