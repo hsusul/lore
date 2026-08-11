@@ -72,6 +72,88 @@ pub struct SessionSummary {
     pub parse_status: String,
 }
 
+/// One ordered content block within a message. Opaque/encrypted blocks carry no
+/// readable content (`text`/`content_json` are null) and are never rendered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MessagePartDto {
+    #[ts(type = "number")]
+    pub ordinal: i64,
+    /// `text` | `thinking` | `tool_use` | `tool_result` | `attachment` |
+    /// `summary` | `opaque` | `other`.
+    pub kind: String,
+    pub text: Option<String>,
+    /// Structured block payload as JSON text, when not plain text.
+    pub content_json: Option<String>,
+    /// False for opaque/encrypted and (by default) thinking blocks.
+    pub searchable: bool,
+}
+
+/// One message/turn with its ordered parts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MessageDto {
+    pub id: String,
+    #[ts(type = "number")]
+    pub seq: i64,
+    /// `user` | `assistant` | `system` | `tool` | `meta`.
+    pub role: String,
+    /// `message` | `summary` | `compaction` | `attachment` | `title` | `mode` |
+    /// `pr_link` | `other`.
+    pub event_kind: String,
+    pub is_sidechain: bool,
+    #[ts(type = "number | null")]
+    pub ts: Option<i64>,
+    pub model: Option<String>,
+    pub parts: Vec<MessagePartDto>,
+}
+
+/// A context segment (cwd/model/provider valid for a seq range), with its
+/// resolved repository link and confidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SegmentDto {
+    pub id: String,
+    #[ts(type = "number")]
+    pub seq_start: i64,
+    #[ts(type = "number")]
+    pub seq_end: i64,
+    pub cwd: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub repository_id: Option<String>,
+    /// `high` | `medium` | `low` | `unresolved`.
+    pub resolution_confidence: String,
+}
+
+/// A file the session touched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FileEventDto {
+    pub path: String,
+    /// `edit` | `write` | `create` | `delete` | `move` | `read` | `patch`.
+    pub change_kind: String,
+    pub old_path: Option<String>,
+    #[ts(type = "number | null")]
+    pub lines_added: Option<i64>,
+    #[ts(type = "number | null")]
+    pub lines_removed: Option<i64>,
+    /// Provenance: `agent_patch` | `agent_tool_input` | `lore_capture`.
+    pub source: String,
+    /// A byte-faithful recorded patch payload is stored and can be fetched.
+    pub has_patch: bool,
+}
+
+/// The full read of one session in context. Payload of `get_session`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SessionDetail {
+    pub summary: SessionSummary,
+    pub segments: Vec<SegmentDto>,
+    pub messages: Vec<MessageDto>,
+    pub file_events: Vec<FileEventDto>,
+}
+
 /// Content-free progress for a running scan. Payload of the `scan_progress`
 /// event — counts only, never session content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
