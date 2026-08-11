@@ -28,6 +28,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "schema",
         sql: include_str!("../../migrations/0002_schema.sql"),
     },
+    Migration {
+        version: 3,
+        name: "job_redo",
+        sql: include_str!("../../migrations/0003_job_redo.sql"),
+    },
 ];
 
 /// Apply all pending migrations. Idempotent.

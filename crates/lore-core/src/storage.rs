@@ -73,7 +73,7 @@ mod tests {
         let applied: i64 = conn
             .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(applied, 2, "both migrations should be recorded");
+        assert_eq!(applied, 3, "all migrations should be recorded");
         assert!(foreign_keys_on(&conn), "foreign_keys must be enforced");
         // Infra tables exist.
         for t in ["setting", "job"] {
@@ -89,6 +89,21 @@ mod tests {
     }
 
     #[test]
+    fn job_redo_column_is_added_with_default_zero() {
+        let conn = open_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO job (id, kind, created_at, updated_at)
+             VALUES ('j', 'ingest_source', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let redo: i64 = conn
+            .query_row("SELECT redo FROM job WHERE id = 'j'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(redo, 0, "migration 0003 adds redo defaulting to 0");
+    }
+
+    #[test]
     fn migrations_are_idempotent() {
         let conn = open_in_memory().unwrap();
         migrations::run(&conn).unwrap();
@@ -96,7 +111,7 @@ mod tests {
         let applied: i64 = conn
             .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(applied, 2, "re-running migrations must not duplicate rows");
+        assert_eq!(applied, 3, "re-running migrations must not duplicate rows");
     }
 
     #[test]

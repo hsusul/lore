@@ -100,6 +100,106 @@ pub fn enqueue(conn: &Connection, job: &NewJob<'_>, capacity: usize) -> Result<E
     Ok(EnqueueOutcome::Enqueued)
 }
 
+/// Outcome of scheduling a source-ingest task whose id coalesces repeated
+/// filesystem events for the same source (see [`schedule_source`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceSchedule {
+    /// Newly queued: no job existed, or a previously finished job was re-armed.
+    Enqueued,
+    /// An identical task is already pending; the storm coalesced onto it.
+    CoalescedPending,
+    /// A task for this source is running now; it was flagged to re-run on finish
+    /// so the change that arrived mid-run is not lost.
+    MarkedRedo,
+}
+
+/// Redo-aware completion outcome for a source-ingest task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinishOutcome {
+    /// Marked done.
+    Done,
+    /// A change arrived while the task ran; it was returned to `pending`.
+    Requeued,
+}
+
+/// Schedule an ingest task for a source, coalescing duplicate filesystem events.
+///
+/// The job `id` is expected to be a stable function of the source identity, so
+/// repeated events for the same source converge:
+/// - no row yet → enqueue (subject to `capacity`);
+/// - a `pending` row → coalesce (the queued run will pick up the latest bytes);
+/// - a `running` row → set `redo` so it re-runs on completion (the mid-run
+///   change is never dropped);
+/// - a finished (`done`/`failed`) row → re-arm it to `pending`.
+pub fn schedule_source(
+    conn: &Connection,
+    job: &NewJob<'_>,
+    capacity: usize,
+) -> Result<SourceSchedule> {
+    let state: Option<String> = conn
+        .query_row("SELECT state FROM job WHERE id = ?1", [job.id], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    match state.as_deref() {
+        None => {
+            enqueue(conn, job, capacity)?;
+            Ok(SourceSchedule::Enqueued)
+        }
+        Some("pending") => Ok(SourceSchedule::CoalescedPending),
+        Some("running") => {
+            conn.execute(
+                "UPDATE job SET redo = 1, updated_at = unixepoch('now')*1000
+                 WHERE id = ?1 AND state = 'running'",
+                [job.id],
+            )?;
+            Ok(SourceSchedule::MarkedRedo)
+        }
+        Some("done" | "failed") => {
+            // Re-arm the finished job for another run with the latest payload.
+            conn.execute(
+                "UPDATE job SET state = 'pending', redo = 0, error = NULL,
+                                payload_json = ?2, updated_at = unixepoch('now')*1000
+                 WHERE id = ?1",
+                params![job.id, job.payload_json],
+            )?;
+            Ok(SourceSchedule::Enqueued)
+        }
+        Some(_) => Err(JobQueueError::InvalidState),
+    }
+}
+
+/// Complete a claimed task, honoring a `redo` flag set while it ran: if the
+/// source changed mid-run the task returns to `pending` instead of `done`.
+pub fn finish(conn: &Connection, id: &str) -> Result<FinishOutcome> {
+    let redo: Option<i64> = conn
+        .query_row(
+            "SELECT redo FROM job WHERE id = ?1 AND state = 'running'",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(redo) = redo else {
+        return Err(JobQueueError::NotRunning);
+    };
+    if redo != 0 {
+        conn.execute(
+            "UPDATE job SET state = 'pending', redo = 0, error = NULL,
+                            updated_at = unixepoch('now')*1000
+             WHERE id = ?1",
+            [id],
+        )?;
+        Ok(FinishOutcome::Requeued)
+    } else {
+        conn.execute(
+            "UPDATE job SET state = 'done', updated_at = unixepoch('now')*1000
+             WHERE id = ?1",
+            [id],
+        )?;
+        Ok(FinishOutcome::Done)
+    }
+}
+
 /// Atomically claim the highest-priority oldest pending task.
 pub fn claim_next(conn: &Connection) -> Result<Option<Job>> {
     let tx = conn.unchecked_transaction()?;
@@ -279,6 +379,83 @@ mod tests {
         assert_eq!(job.error.unwrap().len(), 500);
         assert!(matches!(
             complete(&conn, "job"),
+            Err(JobQueueError::NotRunning)
+        ));
+    }
+
+    #[test]
+    fn schedule_source_coalesces_a_pending_storm() {
+        let conn = db();
+        assert_eq!(
+            schedule_source(&conn, &new_job("src", 0), 10).unwrap(),
+            SourceSchedule::Enqueued
+        );
+        // Repeated events for the same source collapse onto the pending job.
+        assert_eq!(
+            schedule_source(&conn, &new_job("src", 0), 10).unwrap(),
+            SourceSchedule::CoalescedPending
+        );
+        let active: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM job WHERE state = 'pending'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(active, 1, "a storm must not inflate the queue");
+    }
+
+    #[test]
+    fn change_during_run_is_not_lost_and_reruns() {
+        let conn = db();
+        schedule_source(&conn, &new_job("src", 0), 10).unwrap();
+        let claimed = claim_next(&conn).unwrap().unwrap();
+        assert_eq!(claimed.id, "src");
+
+        // A change arrives while the job is running: flag a redo, do not lose it.
+        assert_eq!(
+            schedule_source(&conn, &new_job("src", 0), 10).unwrap(),
+            SourceSchedule::MarkedRedo
+        );
+
+        // Finishing a redo-flagged job returns it to pending for another pass.
+        assert_eq!(finish(&conn, "src").unwrap(), FinishOutcome::Requeued);
+        assert_eq!(
+            load(&conn, "src").unwrap().unwrap().state,
+            JobState::Pending
+        );
+
+        // The re-run claims and finishes cleanly (no further redo pending).
+        assert_eq!(claim_next(&conn).unwrap().unwrap().id, "src");
+        assert_eq!(finish(&conn, "src").unwrap(), FinishOutcome::Done);
+        assert_eq!(load(&conn, "src").unwrap().unwrap().state, JobState::Done);
+    }
+
+    #[test]
+    fn finished_source_job_is_rearmed_on_new_change() {
+        let conn = db();
+        schedule_source(&conn, &new_job("src", 0), 10).unwrap();
+        claim_next(&conn).unwrap();
+        assert_eq!(finish(&conn, "src").unwrap(), FinishOutcome::Done);
+
+        // A later change re-arms the completed job rather than being dropped.
+        assert_eq!(
+            schedule_source(&conn, &new_job("src", 0), 10).unwrap(),
+            SourceSchedule::Enqueued
+        );
+        assert_eq!(
+            load(&conn, "src").unwrap().unwrap().state,
+            JobState::Pending
+        );
+    }
+
+    #[test]
+    fn finish_requires_a_running_job() {
+        let conn = db();
+        schedule_source(&conn, &new_job("src", 0), 10).unwrap();
+        // Pending, not running.
+        assert!(matches!(
+            finish(&conn, "src"),
             Err(JobQueueError::NotRunning)
         ));
     }
