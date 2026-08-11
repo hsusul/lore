@@ -1,0 +1,59 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.app__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem 1rem;
+}
+
+.app__header h1 {
+  margin: 0;
+}
+
+.app__tagline {
+  margin: 0;
+  opacity: 0.7;
+  flex: 1;
+}
+
+.app__status {
+  opacity: 0.6;
+  font-size: 0.85rem;
+}
+
+.app__error {
+  color: #b00020;
+}
+
+.app__progress {
+  font-variant-numeric: tabular-nums;
+}
+
+button {
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
