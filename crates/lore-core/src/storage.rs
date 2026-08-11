@@ -18,6 +18,8 @@ pub enum StorageError {
     Sqlite(#[from] rusqlite::Error),
     #[error("migration error: {0}")]
     Migration(String),
+    #[error("io error reading source")]
+    Io,
 }
 
 /// Convenience result alias for the storage layer.

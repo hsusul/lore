@@ -11,13 +11,20 @@
 //! canonical rows only.
 
 use std::collections::HashMap;
+use std::path::Path;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::adapters::{AgentAdapter, SessionRef};
 use crate::model::ParsedSession;
-use crate::storage::Result;
+use crate::storage::{Result, StorageError};
 
-/// Persist a parsed session, returning its database id. Idempotent.
+/// Bumped when parser output for a source could change; drives re-ingest.
+const PARSER_VERSION: &str = "1";
+/// Bytes of a source file hashed to distinguish append from rewrite.
+const PREFIX_BYTES: usize = 4096;
+
+/// Persist a parsed session in its own transaction. Idempotent.
 pub fn persist_session(
     conn: &Connection,
     agent_id: &str,
@@ -25,9 +32,24 @@ pub fn persist_session(
     parsed: &ParsedSession,
 ) -> Result<String> {
     let tx = conn.unchecked_transaction()?;
+    let session_id = persist_rows(&tx, agent_id, agent_name, parsed, None)?;
+    tx.commit()?;
+    Ok(session_id)
+}
+
+/// Write all normalized rows for a session into the caller-owned transaction
+/// `tx`. Separating this from transaction management lets the ingest service
+/// bundle source-artifact tracking and the checkpoint atomically with the rows.
+/// `source_artifact_id` stamps message provenance when known.
+fn persist_rows(
+    tx: &Connection,
+    agent_id: &str,
+    agent_name: &str,
+    parsed: &ParsedSession,
+    source_artifact_id: Option<&str>,
+) -> Result<String> {
     // Defer FK checks to commit so forward self-references (a child message whose
     // parent is inserted later) and other out-of-order links are legal mid-txn.
-    // Resets automatically after commit.
     tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
 
     tx.execute(
@@ -36,17 +58,30 @@ pub fn persist_session(
         params![agent_id, agent_name],
     )?;
 
-    let natural_key = parsed
-        .native_session_id
-        .as_deref()
-        .unwrap_or(&parsed.dedupe_key);
-    let session_id = det_id("s", &[agent_id, natural_key]);
+    let session_id = session_id_for(agent_id, parsed);
+    let existing_sources = session_sources(tx, &session_id)?;
 
     // Idempotent replace: cascade-delete any prior rows for this session.
     tx.execute(
         "DELETE FROM agent_session WHERE id = ?1",
         params![session_id],
     )?;
+
+    // Deleting the logical session above cascades its source links. Preserve
+    // links from copies/continued artifacts so replaying one source does not
+    // orphan the others.
+    for source in existing_sources {
+        tx.execute(
+            "INSERT INTO session_source (session_id, source_artifact_id, first_seq, last_seq)
+             VALUES (?1,?2,?3,?4)",
+            params![
+                session_id,
+                source.artifact_id,
+                source.first_seq,
+                source.last_seq
+            ],
+        )?;
+    }
 
     tx.execute(
         "INSERT INTO agent_session
@@ -117,8 +152,8 @@ pub fn persist_session(
             "INSERT INTO message
                 (id, session_id, segment_id, native_uuid, parent_id, parent_native_uuid, seq,
                  role, event_kind, is_sidechain, ts, model, token_input, token_output,
-                 token_cache, stop_reason, source_offset)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                 token_cache, stop_reason, source_artifact_id, source_offset)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
             params![
                 mid,
                 session_id,
@@ -136,6 +171,7 @@ pub fn persist_session(
                 m.tokens.output,
                 m.tokens.cache,
                 m.stop_reason,
+                source_artifact_id,
                 m.source_offset,
             ],
         )?;
@@ -239,7 +275,6 @@ pub fn persist_session(
         )?;
     }
 
-    tx.commit()?;
     Ok(session_id)
 }
 
@@ -277,6 +312,454 @@ fn det_id(prefix: &str, parts: &[&str]) -> String {
         }
     }
     format!("{prefix}_{hash:016x}")
+}
+
+// ── Recoverable source-file ingest ──────────────────────────────────────────
+
+/// How a source file changed since the last successful ingest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeClass {
+    New,
+    Unchanged,
+    Appended,
+    Rewritten,
+    Truncated,
+}
+
+/// Outcome of ingesting one source file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IngestOutcome {
+    /// Content hash unchanged; nothing re-parsed.
+    Skipped,
+    Ingested {
+        session_id: String,
+        source_artifact_id: String,
+        generation: i64,
+        change: ChangeClass,
+    },
+}
+
+struct SourceRow {
+    id: String,
+    size: i64,
+    full_hash: Option<String>,
+    prefix_hash: Option<String>,
+    generation: i64,
+    parser_version: Option<String>,
+    ingest_state: Option<String>,
+}
+
+struct SourceSnapshot {
+    path: String,
+    native_file_id: Option<String>,
+    size: i64,
+    mtime: Option<i64>,
+    full_hash: String,
+    prefix_hash: String,
+    last_offset: i64,
+    last_line: i64,
+}
+
+struct SessionSourceRow {
+    artifact_id: String,
+    first_seq: Option<i64>,
+    last_seq: Option<i64>,
+}
+
+/// Discover, classify, parse, and persist one source file recoverably.
+///
+/// Idempotent by construction: a changed file is fully re-parsed and its session
+/// rows are replaced, so append / truncate / rewrite all converge to the correct
+/// state. Classification (via size + a prefix hash) drives generation bumps and
+/// lets an unchanged file be skipped without re-parsing. Source-artifact
+/// tracking, the session rows, the session↔source link, and the checkpoint all
+/// commit in one transaction.
+pub fn ingest_file(
+    conn: &Connection,
+    adapter: &dyn AgentAdapter,
+    path: &Path,
+) -> Result<IngestOutcome> {
+    let meta = std::fs::metadata(path).map_err(|_| StorageError::Io)?;
+    let content = std::fs::read_to_string(path).map_err(|_| StorageError::Io)?;
+    let snapshot = source_snapshot(path, &meta, &content);
+    let agent_id = adapter.id().0;
+
+    let prev = find_source(
+        conn,
+        agent_id,
+        snapshot.native_file_id.as_deref(),
+        &snapshot.path,
+        &snapshot.full_hash,
+    )?;
+
+    let (artifact_id, generation, change) = match &prev {
+        None => (
+            det_id(
+                "sa",
+                &[
+                    agent_id,
+                    snapshot.native_file_id.as_deref().unwrap_or(&snapshot.path),
+                    &snapshot.path,
+                ],
+            ),
+            0,
+            ChangeClass::New,
+        ),
+        Some(row)
+            if row.full_hash.as_deref() == Some(snapshot.full_hash.as_str())
+                && row.parser_version.as_deref() == Some(PARSER_VERSION)
+                && row.ingest_state.as_deref() == Some("ok") =>
+        {
+            // Unchanged content: refresh stat/alias only, no re-parse.
+            let tx = conn.unchecked_transaction()?;
+            update_source(&tx, &row.id, &snapshot, row.generation)?;
+            add_path_alias(&tx, &row.id, &snapshot.path)?;
+            tx.commit()?;
+            return Ok(IngestOutcome::Skipped);
+        }
+        Some(row) => {
+            let same_content = row.full_hash.as_deref() == Some(snapshot.full_hash.as_str());
+            let appended = !same_content && is_append(row, content.as_bytes());
+            let change = if same_content {
+                ChangeClass::Unchanged
+            } else if appended {
+                ChangeClass::Appended
+            } else if snapshot.size < row.size {
+                ChangeClass::Truncated
+            } else {
+                ChangeClass::Rewritten
+            };
+            let generation = if same_content || appended {
+                row.generation
+            } else {
+                row.generation + 1
+            };
+            (row.id.clone(), generation, change)
+        }
+    };
+
+    let session_ref = SessionRef {
+        agent: adapter.id(),
+        path: path.to_path_buf(),
+        mtime: meta.modified().ok(),
+        size: meta.len(),
+        native_id: path.file_stem().map(|s| s.to_string_lossy().into_owned()),
+    };
+    let parsed = adapter
+        .parse_session(&session_ref)
+        .map_err(|_| StorageError::Io)?;
+
+    let tx = conn.unchecked_transaction()?;
+    let target_session_id = session_id_for(agent_id, &parsed);
+    if prev.is_some() {
+        detach_reassigned_source(&tx, &artifact_id, &target_session_id)?;
+    }
+    let session_id = persist_rows(
+        &tx,
+        agent_id,
+        adapter.metadata().display_name,
+        &parsed,
+        Some(&artifact_id),
+    )?;
+
+    if prev.is_none() {
+        insert_source(&tx, &artifact_id, agent_id, &snapshot, generation)?;
+    } else {
+        update_source(&tx, &artifact_id, &snapshot, generation)?;
+    }
+    add_path_alias(&tx, &artifact_id, &snapshot.path)?;
+
+    tx.execute(
+        "INSERT INTO session_source (session_id, source_artifact_id, first_seq, last_seq)
+         VALUES (?1,?2,?3,?4)
+         ON CONFLICT(session_id, source_artifact_id) DO UPDATE SET
+            first_seq = excluded.first_seq, last_seq = excluded.last_seq",
+        params![
+            session_id,
+            artifact_id,
+            parsed.messages.first().map(|m| m.seq),
+            parsed.messages.last().map(|m| m.seq),
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO ingest_state
+            (source_artifact_id, generation, last_offset, last_line, prefix_hash,
+             parser_version, state, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,'ok', unixepoch('now')*1000)
+         ON CONFLICT(source_artifact_id) DO UPDATE SET
+            generation = excluded.generation, last_offset = excluded.last_offset,
+            last_line = excluded.last_line, prefix_hash = excluded.prefix_hash,
+            parser_version = excluded.parser_version, state = 'ok',
+            updated_at = excluded.updated_at",
+        params![
+            artifact_id,
+            generation,
+            snapshot.last_offset,
+            snapshot.last_line,
+            snapshot.prefix_hash,
+            PARSER_VERSION,
+        ],
+    )?;
+    tx.commit()?;
+
+    Ok(IngestOutcome::Ingested {
+        session_id,
+        source_artifact_id: artifact_id,
+        generation,
+        change,
+    })
+}
+
+fn session_id_for(agent_id: &str, parsed: &ParsedSession) -> String {
+    let natural_key = parsed
+        .native_session_id
+        .as_deref()
+        .unwrap_or(&parsed.dedupe_key);
+    det_id("s", &[agent_id, natural_key])
+}
+
+fn session_sources(tx: &Connection, session_id: &str) -> Result<Vec<SessionSourceRow>> {
+    let mut statement = tx.prepare(
+        "SELECT source_artifact_id, first_seq, last_seq
+         FROM session_source WHERE session_id = ?1",
+    )?;
+    let rows = statement
+        .query_map([session_id], |row| {
+            Ok(SessionSourceRow {
+                artifact_id: row.get(0)?,
+                first_seq: row.get(1)?,
+                last_seq: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// If a physical source is rewritten into a different native session, detach
+/// it from the old logical session and remove that session only when no other
+/// source still supports it.
+fn detach_reassigned_source(
+    tx: &Connection,
+    source_artifact_id: &str,
+    target_session_id: &str,
+) -> Result<()> {
+    let old_session_ids = {
+        let mut statement = tx.prepare(
+            "SELECT session_id FROM session_source
+             WHERE source_artifact_id = ?1 AND session_id <> ?2",
+        )?;
+        let rows = statement
+            .query_map(params![source_artifact_id, target_session_id], |row| {
+                row.get(0)
+            })?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        rows
+    };
+
+    for old_session_id in old_session_ids {
+        tx.execute(
+            "DELETE FROM session_source WHERE session_id = ?1 AND source_artifact_id = ?2",
+            params![old_session_id, source_artifact_id],
+        )?;
+        let remaining: i64 = tx.query_row(
+            "SELECT count(*) FROM session_source WHERE session_id = ?1",
+            [&old_session_id],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            tx.execute("DELETE FROM agent_session WHERE id = ?1", [&old_session_id])?;
+        }
+    }
+    Ok(())
+}
+
+fn find_source(
+    conn: &Connection,
+    agent_id: &str,
+    native_file_id: Option<&str>,
+    path: &str,
+    full_hash: &str,
+) -> Result<Option<SourceRow>> {
+    let map = |r: &rusqlite::Row<'_>| {
+        Ok(SourceRow {
+            id: r.get(0)?,
+            size: r.get(1)?,
+            full_hash: r.get(2)?,
+            prefix_hash: r.get(3)?,
+            generation: r.get(4)?,
+            parser_version: r.get(5)?,
+            ingest_state: r.get(6)?,
+        })
+    };
+    let by_path = conn
+        .query_row(
+            "SELECT sa.id, sa.size, sa.full_hash, sa.prefix_hash, sa.generation,
+                    ist.parser_version, ist.state
+             FROM source_artifact sa
+             LEFT JOIN ingest_state ist ON ist.source_artifact_id = sa.id
+             WHERE sa.agent_id = ?1 AND sa.current_path = ?2",
+            params![agent_id, path],
+            map,
+        )
+        .optional()?;
+    if by_path.is_some() {
+        return Ok(by_path);
+    }
+
+    let Some(fid) = native_file_id else {
+        return Ok(None);
+    };
+    conn.query_row(
+        "SELECT sa.id, sa.size, sa.full_hash, sa.prefix_hash, sa.generation,
+                ist.parser_version, ist.state
+         FROM source_artifact sa
+         LEFT JOIN ingest_state ist ON ist.source_artifact_id = sa.id
+         WHERE sa.agent_id = ?1 AND sa.native_file_id = ?2 AND sa.full_hash = ?3
+         ORDER BY sa.last_seen_at DESC LIMIT 1",
+        params![agent_id, fid, full_hash],
+        map,
+    )
+    .optional()
+    .map_err(StorageError::from)
+}
+
+fn insert_source(
+    tx: &Connection,
+    id: &str,
+    agent_id: &str,
+    snapshot: &SourceSnapshot,
+    generation: i64,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO source_artifact
+            (id, agent_id, current_path, native_file_id, size, mtime, full_hash,
+             prefix_hash, generation, state, first_seen_at, last_seen_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'active',
+                 unixepoch('now')*1000, unixepoch('now')*1000)",
+        params![
+            id,
+            agent_id,
+            snapshot.path,
+            snapshot.native_file_id,
+            snapshot.size,
+            snapshot.mtime,
+            snapshot.full_hash,
+            snapshot.prefix_hash,
+            generation
+        ],
+    )?;
+    Ok(())
+}
+
+fn update_source(
+    tx: &Connection,
+    id: &str,
+    snapshot: &SourceSnapshot,
+    generation: i64,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE source_artifact SET
+            current_path = ?2, native_file_id = ?3, size = ?4, mtime = ?5,
+            full_hash = ?6, prefix_hash = ?7, generation = ?8, state = 'active',
+            last_seen_at = unixepoch('now')*1000
+         WHERE id = ?1",
+        params![
+            id,
+            snapshot.path,
+            snapshot.native_file_id,
+            snapshot.size,
+            snapshot.mtime,
+            snapshot.full_hash,
+            snapshot.prefix_hash,
+            generation
+        ],
+    )?;
+    Ok(())
+}
+
+fn add_path_alias(tx: &Connection, source_artifact_id: &str, path: &str) -> Result<()> {
+    tx.execute(
+        "INSERT INTO source_artifact_path (source_artifact_id, path, first_seen_at, last_seen_at)
+         VALUES (?1, ?2, unixepoch('now')*1000, unixepoch('now')*1000)
+         ON CONFLICT(source_artifact_id, path) DO UPDATE SET last_seen_at = unixepoch('now')*1000",
+        params![source_artifact_id, path],
+    )?;
+    Ok(())
+}
+
+fn source_snapshot(path: &Path, meta: &std::fs::Metadata, content: &str) -> SourceSnapshot {
+    let bytes = content.as_bytes();
+    let prefix_len = bytes.len().min(PREFIX_BYTES);
+    let (last_offset, last_line) = complete_line_checkpoint(bytes);
+    SourceSnapshot {
+        path: path.to_string_lossy().into_owned(),
+        native_file_id: file_id(meta),
+        size: i64::try_from(meta.len()).unwrap_or(i64::MAX),
+        mtime: mtime_ms(meta),
+        full_hash: fnv1a_hex(bytes),
+        prefix_hash: fnv1a_hex(&bytes[..prefix_len]),
+        last_offset,
+        last_line,
+    }
+}
+
+fn is_append(previous: &SourceRow, current: &[u8]) -> bool {
+    let Ok(previous_size) = usize::try_from(previous.size) else {
+        return false;
+    };
+    if current.len() <= previous_size {
+        return false;
+    }
+    let prefix_len = previous_size.min(PREFIX_BYTES);
+    previous.prefix_hash.as_deref() == Some(fnv1a_hex(&current[..prefix_len]).as_str())
+}
+
+/// Return the byte offset and count of newline-terminated records. A valid JSON
+/// value without a trailing newline is conservatively reparsed on the next pass;
+/// a partial final line is never checkpointed as complete.
+fn complete_line_checkpoint(bytes: &[u8]) -> (i64, i64) {
+    let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') else {
+        return (0, 0);
+    };
+    let offset = last_newline.saturating_add(1);
+    let lines = bytes[..offset]
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count();
+    (
+        i64::try_from(offset).unwrap_or(i64::MAX),
+        i64::try_from(lines).unwrap_or(i64::MAX),
+    )
+}
+
+fn mtime_ms(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+}
+
+#[cfg(unix)]
+fn file_id(meta: &std::fs::Metadata) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    Some(format!("{}:{}", meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_id(_meta: &std::fs::Metadata) -> Option<String> {
+    None
+}
+
+/// FNV-1a 64-bit hex digest (content fingerprint; not a security hash).
+fn fnv1a_hex(bytes: &[u8]) -> String {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    format!("{hash:016x}")
 }
 
 #[cfg(test)]
