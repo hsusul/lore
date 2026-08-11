@@ -7,6 +7,7 @@
 //! tolerant: an unparseable or truncated line degrades the session to
 //! `partial` with a bounded, content-free note — never a panic.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde_json::Value;
@@ -16,7 +17,8 @@ use super::{
     SessionRef,
 };
 use crate::model::{
-    EventKind, ParsedMessage, ParsedPart, ParsedSegment, ParsedSession, PartKind, Role, Tokens,
+    EventKind, FileChangeKind, FileEventSource, ParsedFileEvent, ParsedMessage, ParsedPart,
+    ParsedSegment, ParsedSession, ParsedToolCall, PartKind, Role, Tokens,
 };
 
 const AGENT_ID: AgentId = AgentId("claude-code");
@@ -56,6 +58,8 @@ impl ClaudeCodeAdapter {
         let mut contexts: Vec<(Option<String>, Option<String>)> = Vec::new();
         let mut offset: i64 = 0;
         let mut seq: i64 = 0;
+        // native_call_id -> index into session.tool_calls, for result pairing.
+        let mut id_map: HashMap<String, usize> = HashMap::new();
 
         for line in content.split_inclusive('\n') {
             let line_start = offset;
@@ -100,6 +104,7 @@ impl ClaudeCodeAdapter {
             }
 
             let msg = build_message(&obj, event_type, seq, line_start, &mut session);
+            extract_tool_calls(&obj, seq, &mut session, &mut id_map);
             contexts.push((str_field(&obj, "cwd"), str_field(&obj, "gitBranch")));
             if let Some(ts) = msg.ts {
                 session.started_at = Some(session.started_at.map_or(ts, |s| s.min(ts)));
@@ -113,7 +118,150 @@ impl ClaudeCodeAdapter {
         }
 
         assign_segments(&mut session, &contexts);
+        resolve_file_event_segments(&mut session);
         session
+    }
+}
+
+/// Extract tool calls and results from a message's content blocks, pairing
+/// results to calls by `tool_use_id`, and derive file events from file-mutating
+/// tool invocations.
+fn extract_tool_calls(
+    obj: &Value,
+    seq: i64,
+    session: &mut ParsedSession,
+    id_map: &mut HashMap<String, usize>,
+) {
+    let Some(blocks) = obj
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    for (i, block) in blocks.iter().enumerate() {
+        let ordinal = i as i64;
+        match block.get("type").and_then(Value::as_str).unwrap_or("") {
+            "tool_use" => {
+                let Some(id) = str_field(block, "id") else {
+                    session.note_partial("tool_use without id");
+                    continue;
+                };
+                let name = str_field(block, "name").unwrap_or_default();
+                let idx = session.tool_calls.len();
+                session.tool_calls.push(ParsedToolCall {
+                    native_call_id: id.clone(),
+                    name: name.clone(),
+                    call_ref: (seq, ordinal),
+                    result_ref: None,
+                    input_json: json_field(block, "input"),
+                    output_text: None,
+                    is_error: None,
+                    duration_ms: None,
+                });
+                id_map.insert(id.clone(), idx);
+                if let Some(fe) = file_event_from_tool(&name, block, id) {
+                    session.file_events.push(fe);
+                }
+            }
+            "tool_result" => {
+                let Some(tid) = str_field(block, "tool_use_id") else {
+                    session.note_partial("tool_result without tool_use_id");
+                    continue;
+                };
+                if let Some(&idx) = id_map.get(&tid) {
+                    let tc = &mut session.tool_calls[idx];
+                    tc.result_ref = Some((seq, ordinal));
+                    tc.output_text = tool_result_text(block);
+                    tc.is_error = block.get("is_error").and_then(Value::as_bool);
+                } else {
+                    session.note_partial("tool_result without matching tool_use");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Derive a file event from a file-mutating tool invocation (Claude has no
+/// structured patch event; the file path comes from the tool input).
+fn file_event_from_tool(name: &str, block: &Value, call_id: String) -> Option<ParsedFileEvent> {
+    let change_kind = match name {
+        "Edit" | "MultiEdit" | "NotebookEdit" => FileChangeKind::Edit,
+        "Write" => FileChangeKind::Write,
+        _ => return None,
+    };
+    let raw = block
+        .get("input")
+        .and_then(|inp| inp.get("file_path"))
+        .and_then(Value::as_str)?;
+    Some(ParsedFileEvent {
+        segment_ix: 0,
+        tool_native_call_id: Some(call_id),
+        path: sanitize_path(raw),
+        change_kind,
+        old_path: None,
+        lines_added: None,
+        lines_removed: None,
+        source: FileEventSource::AgentToolInput,
+        event_ts: None,
+    })
+}
+
+/// Extract textual tool-result output (string, or concatenated text blocks).
+fn tool_result_text(block: &Value) -> Option<String> {
+    let content = block.get("content")?;
+    if let Some(s) = content.as_str() {
+        return Some(s.to_string());
+    }
+    if let Some(arr) = content.as_array() {
+        let joined: Vec<String> = arr
+            .iter()
+            .filter_map(|b| b.get("text").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        if !joined.is_empty() {
+            return Some(joined.join("\n"));
+        }
+    }
+    None
+}
+
+/// Neutralize path traversal so a recorded `FileEvent.path` can never represent
+/// an escape (`../`). Produces a clean relative path; segments of `..` are
+/// dropped rather than allowed to ascend.
+fn sanitize_path(raw: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in raw.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
+/// After segments exist, assign each derived file event the segment of the
+/// message its tool call was invoked in.
+fn resolve_file_event_segments(session: &mut ParsedSession) {
+    let call_seq: HashMap<String, i64> = session
+        .tool_calls
+        .iter()
+        .map(|t| (t.native_call_id.clone(), t.call_ref.0))
+        .collect();
+    let seq_seg: HashMap<i64, usize> = session
+        .messages
+        .iter()
+        .map(|m| (m.seq, m.segment_ix))
+        .collect();
+    for fe in &mut session.file_events {
+        if let Some(id) = &fe.tool_native_call_id {
+            if let Some(s) = call_seq.get(id) {
+                fe.segment_ix = seq_seg.get(s).copied().unwrap_or(0);
+            }
+        }
     }
 }
 
@@ -490,5 +638,62 @@ mod tests {
         let s = a.parse_str(content, "fallback");
         assert_eq!(s.status, crate::model::ParseStatus::Partial);
         assert!(s.messages.is_empty());
+    }
+
+    #[test]
+    fn pairs_tool_use_with_result_and_derives_file_event() {
+        let a = ClaudeCodeAdapter::new();
+        let s = a.parse_str(&fixture("tool_use.jsonl"), "fallback");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+
+        assert_eq!(s.tool_calls.len(), 1);
+        let tc = &s.tool_calls[0];
+        assert_eq!(tc.native_call_id, "toolu_1");
+        assert_eq!(tc.name, "Edit");
+        assert_eq!(tc.call_ref.0, 1, "invoked in the assistant message (seq 1)");
+        assert!(tc.result_ref.is_some(), "result paired");
+        assert_eq!(tc.output_text.as_deref(), Some("File edited successfully"));
+        assert_eq!(tc.is_error, Some(false));
+        assert!(tc
+            .input_json
+            .as_deref()
+            .is_some_and(|j| j.contains("app.ts")));
+
+        assert_eq!(s.file_events.len(), 1);
+        let fe = &s.file_events[0];
+        assert_eq!(fe.path, "src/app.ts");
+        assert_eq!(fe.change_kind, FileChangeKind::Edit);
+        assert_eq!(fe.source, FileEventSource::AgentToolInput);
+        assert_eq!(fe.tool_native_call_id.as_deref(), Some("toolu_1"));
+    }
+
+    #[test]
+    fn tool_result_error_flag_is_captured() {
+        let a = ClaudeCodeAdapter::new();
+        let content = concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"u1\",\"sessionId\":\"s\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c9\",\"name\":\"Bash\",\"input\":{\"command\":\"npm test\"}}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"sessionId\":\"s\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"c9\",\"is_error\":true,\"content\":\"1 failing\"}]}}\n"
+        );
+        let s = a.parse_str(content, "fallback");
+        assert_eq!(s.tool_calls.len(), 1);
+        assert_eq!(s.tool_calls[0].is_error, Some(true));
+        // Bash is not a file-mutating tool: no file event.
+        assert!(s.file_events.is_empty());
+    }
+
+    #[test]
+    fn orphan_tool_result_degrades_partial() {
+        let a = ClaudeCodeAdapter::new();
+        let content = "{\"type\":\"user\",\"uuid\":\"u\",\"sessionId\":\"s\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"missing\",\"content\":\"x\"}]}}\n";
+        let s = a.parse_str(content, "fallback");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert!(s.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn sanitize_path_neutralizes_traversal() {
+        assert_eq!(super::sanitize_path("../../etc/passwd"), "etc/passwd");
+        assert_eq!(super::sanitize_path("./src/../src/app.ts"), "src/app.ts");
+        assert_eq!(super::sanitize_path("/abs/path.rs"), "abs/path.rs");
     }
 }
