@@ -13,14 +13,16 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::common::{bounded, epoch_ms};
+use super::common::{
+    bounded, epoch_ms, resolve_file_event_segments, sanitize_path, unified_diff_line_counts,
+};
 use super::{
     AdapterError, AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots,
     SessionRef,
 };
 use crate::model::{
-    EventKind, ParsedMessage, ParsedPart, ParsedSegment, ParsedSession, ParsedToolCall, PartKind,
-    Role, Tokens,
+    EventKind, FileChangeKind, FileEventSource, ParsedFileEvent, ParsedMessage, ParsedPart,
+    ParsedSegment, ParsedSession, ParsedToolCall, PartKind, Role, Tokens,
 };
 
 const AGENT_ID: AgentId = AgentId("codex");
@@ -166,14 +168,18 @@ impl CodexAdapter {
                 "event_msg" => {
                     let Some(p) = payload else { continue };
                     // Conversation comes from response_item; most event_msg entries are
-                    // telemetry. context_compacted leaves a marker; patch_apply_end and
-                    // token_count are handled in later steps.
-                    if p.get("type").and_then(Value::as_str) == Some("context_compacted") {
-                        session
-                            .messages
-                            .push(compaction_marker(None, seq, ts, line_start));
-                        contexts.push((cwd.clone(), model.clone()));
-                        seq += 1;
+                    // telemetry. context_compacted leaves a marker; patch_apply_end yields
+                    // file events attached to the matching tool call by call_id.
+                    match p.get("type").and_then(Value::as_str).unwrap_or("") {
+                        "context_compacted" => {
+                            session
+                                .messages
+                                .push(compaction_marker(None, seq, ts, line_start));
+                            contexts.push((cwd.clone(), model.clone()));
+                            seq += 1;
+                        }
+                        "patch_apply_end" => extract_patch_changes(p, ts, &mut session),
+                        _ => {}
                     }
                 }
                 "compacted" => {
@@ -193,7 +199,59 @@ impl CodexAdapter {
         }
 
         assign_segments(&mut session, &contexts, provider.as_ref(), &git);
+        resolve_file_event_segments(&mut session);
         session
+    }
+}
+
+/// Derive file events from a `patch_apply_end.changes` object (keyed by path).
+/// Each value is `{type, content}` (create/write) or `{type, unified_diff,
+/// move_path?}` (update/move). Line counts come only from a valid unified diff.
+fn extract_patch_changes(p: &Value, ts: Option<i64>, session: &mut ParsedSession) {
+    let call_id = str_field(p, "call_id");
+    let Some(changes) = p.get("changes").and_then(Value::as_object) else {
+        return;
+    };
+    for (path, change) in changes {
+        let typ = change.get("type").and_then(Value::as_str);
+        let move_path = change.get("move_path").and_then(Value::as_str);
+        let unified_diff = change.get("unified_diff").and_then(Value::as_str);
+        let content = change.get("content").and_then(Value::as_str);
+
+        let (change_kind, event_path, old_path) = if let Some(dest) = move_path {
+            (
+                FileChangeKind::Move,
+                sanitize_path(dest),
+                Some(sanitize_path(path)),
+            )
+        } else {
+            let kind = match typ {
+                Some("add" | "create") => FileChangeKind::Create,
+                Some("delete" | "remove") => FileChangeKind::Delete,
+                Some("update" | "modify" | "edit") => FileChangeKind::Edit,
+                _ if unified_diff.is_some() => FileChangeKind::Edit,
+                _ if content.is_some() => FileChangeKind::Write,
+                _ => FileChangeKind::Patch,
+            };
+            (kind, sanitize_path(path), None)
+        };
+
+        let (lines_added, lines_removed) = unified_diff
+            .and_then(unified_diff_line_counts)
+            .map_or((None, None), |(a, r)| (Some(a), Some(r)));
+
+        session.file_events.push(ParsedFileEvent {
+            segment_ix: 0,
+            tool_native_call_id: call_id.clone(),
+            path: event_path,
+            change_kind,
+            old_path,
+            lines_added,
+            lines_removed,
+            patch_text: unified_diff.or(content).map(str::to_string),
+            source: FileEventSource::AgentPatch,
+            event_ts: ts,
+        });
     }
 }
 
@@ -715,5 +773,40 @@ mod tests {
         let s = CodexAdapter::new().parse_str(content, "fallback");
         assert_eq!(s.status, crate::model::ParseStatus::Partial);
         assert!(s.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn patch_apply_end_yields_file_events() {
+        let s = CodexAdapter::new().parse_str(&fixture("patch_apply.jsonl"), "fallback");
+        assert_eq!(s.file_events.len(), 3);
+
+        let by_path = |p: &str| s.file_events.iter().find(|f| f.path == p).unwrap().clone();
+
+        // Create from content (no diff → no line counts).
+        let created = by_path("src/new.ts");
+        assert_eq!(created.change_kind, FileChangeKind::Create);
+        assert_eq!(created.source, FileEventSource::AgentPatch);
+        assert_eq!(created.lines_added, None);
+        assert!(created
+            .patch_text
+            .as_deref()
+            .is_some_and(|t| t.contains("export")));
+
+        // Update from unified diff → line counts derived.
+        let edited = by_path("src/edit.ts");
+        assert_eq!(edited.change_kind, FileChangeKind::Edit);
+        assert_eq!(edited.lines_added, Some(1));
+        assert_eq!(edited.lines_removed, Some(1));
+
+        // Move: destination is the path, source is old_path.
+        let moved = by_path("src/renamed.ts");
+        assert_eq!(moved.change_kind, FileChangeKind::Move);
+        assert_eq!(moved.old_path.as_deref(), Some("src/old.ts"));
+
+        // All attach to the apply_patch tool call and its segment.
+        assert!(s
+            .file_events
+            .iter()
+            .all(|f| f.tool_native_call_id.as_deref() == Some("call_9")));
     }
 }

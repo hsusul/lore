@@ -119,7 +119,7 @@ impl ClaudeCodeAdapter {
         }
 
         assign_segments(&mut session, &contexts);
-        resolve_file_event_segments(&mut session);
+        super::common::resolve_file_event_segments(&mut session);
         session
     }
 }
@@ -204,6 +204,7 @@ fn file_event_from_tool(name: &str, block: &Value, call_id: String) -> Option<Pa
         old_path: None,
         lines_added: None,
         lines_removed: None,
+        patch_text: None,
         source: FileEventSource::AgentToolInput,
         event_ts: None,
     })
@@ -225,28 +226,6 @@ fn tool_result_text(block: &Value) -> Option<String> {
         }
     }
     None
-}
-
-/// After segments exist, assign each derived file event the segment of the
-/// message its tool call was invoked in.
-fn resolve_file_event_segments(session: &mut ParsedSession) {
-    let call_seq: HashMap<String, i64> = session
-        .tool_calls
-        .iter()
-        .map(|t| (t.native_call_id.clone(), t.call_ref.0))
-        .collect();
-    let seq_seg: HashMap<i64, usize> = session
-        .messages
-        .iter()
-        .map(|m| (m.seq, m.segment_ix))
-        .collect();
-    for fe in &mut session.file_events {
-        if let Some(id) = &fe.tool_native_call_id {
-            if let Some(s) = call_seq.get(id) {
-                fe.segment_ix = seq_seg.get(s).copied().unwrap_or(0);
-            }
-        }
-    }
 }
 
 /// Build one `ParsedMessage` from an event object.

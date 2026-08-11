@@ -1,0 +1,4 @@
+{"type":"session_meta","timestamp":"2026-08-11T13:00:00.000Z","payload":{"id":"019e0000-0000-7000-8000-000000000003","cwd":"/proj","cli_version":"0.133.0","model_provider":"openai"}}
+{"type":"turn_context","timestamp":"2026-08-11T13:00:00.500Z","payload":{"cwd":"/proj","model":"gpt-x"}}
+{"type":"response_item","timestamp":"2026-08-11T13:00:01.000Z","payload":{"type":"function_call","name":"apply_patch","arguments":"{}","call_id":"call_9"}}
+{"type":"event_msg","timestamp":"2026-08-11T13:00:02.000Z","payload":{"type":"patch_apply_end","call_id":"call_9","success":true,"changes":{"src/new.ts":{"type":"add","content":"export const x = 1\n"},"src/edit.ts":{"type":"update","unified_diff":"--- a/src/edit.ts\n+++ b/src/edit.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n"},"src/old.ts":{"type":"update","move_path":"src/renamed.ts","unified_diff":"@@ moved @@"}}}}
