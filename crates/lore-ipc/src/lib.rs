@@ -130,6 +130,8 @@ pub struct SegmentDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct FileEventDto {
+    /// Stable id; pass to `get_file_patch` to fetch the recorded patch.
+    pub id: String,
     pub path: String,
     /// `edit` | `write` | `create` | `delete` | `move` | `read` | `patch`.
     pub change_kind: String,

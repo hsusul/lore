@@ -3,7 +3,11 @@
 /**
  * A file the session touched.
  */
-export type FileEventDto = { path: string, 
+export type FileEventDto = { 
+/**
+ * Stable id; pass to `get_file_patch` to fetch the recorded patch.
+ */
+id: string, path: string, 
 /**
  * `edit` | `write` | `create` | `delete` | `move` | `read` | `patch`.
  */

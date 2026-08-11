@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import SessionView from "./SessionView";
 import type { GitObservationDto, SessionDetail } from "../ipc";
@@ -45,6 +45,7 @@ const detail: SessionDetail = {
   ],
   file_events: [
     {
+      id: "fe0",
       path: "billing/webhook.ts",
       change_kind: "edit",
       old_path: null,
@@ -111,10 +112,15 @@ describe("SessionView", () => {
     expect(screen.getByText("done")).toBeTruthy();
   });
 
-  it("lists file events with a recorded-patch badge and diffstat", () => {
-    render(<SessionView detail={detail} git={git} />);
+  it("lists file events with a diffstat and loads the patch inline on demand", async () => {
+    const loadPatch = vi.fn().mockResolvedValue("@@ -1 +1 @@\n-old\n+new\n");
+    render(<SessionView detail={detail} git={git} loadPatch={loadPatch} />);
     expect(screen.getByText("billing/webhook.ts")).toBeTruthy();
-    expect(screen.getByText("patch stored")).toBeTruthy();
     expect(screen.getByText(/\+3/)).toBeTruthy();
+
+    // The recorded patch is fetched only when the user asks to view it.
+    fireEvent.click(screen.getByRole("button", { name: /view patch/i }));
+    expect(loadPatch).toHaveBeenCalledWith("fe0");
+    await waitFor(() => expect(screen.getByText(/\+new/)).toBeTruthy());
   });
 });

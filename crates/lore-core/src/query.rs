@@ -226,24 +226,40 @@ fn session_messages(conn: &Connection, session_id: &str) -> Result<Vec<MessageDt
 
 fn session_file_events(conn: &Connection, session_id: &str) -> Result<Vec<FileEventDto>> {
     let mut stmt = conn.prepare(
-        "SELECT path, change_kind, old_path, lines_added, lines_removed, source,
+        "SELECT id, path, change_kind, old_path, lines_added, lines_removed, source,
                 patch_blob_id IS NOT NULL
          FROM file_event WHERE session_id = ?1 ORDER BY id",
     )?;
     let rows = stmt
         .query_map([session_id], |row| {
             Ok(FileEventDto {
-                path: row.get(0)?,
-                change_kind: row.get(1)?,
-                old_path: row.get(2)?,
-                lines_added: row.get(3)?,
-                lines_removed: row.get(4)?,
-                source: row.get(5)?,
-                has_patch: row.get::<_, i64>(6)? != 0,
+                id: row.get(0)?,
+                path: row.get(1)?,
+                change_kind: row.get(2)?,
+                old_path: row.get(3)?,
+                lines_added: row.get(4)?,
+                lines_removed: row.get(5)?,
+                source: row.get(6)?,
+                has_patch: row.get::<_, i64>(7)? != 0,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// The `storage_relpath` of a file event's recorded patch blob, or `None` when
+/// the event has no stored patch. The caller reads the bytes from the blob
+/// store; the path is validated on read.
+pub fn file_patch_relpath(conn: &Connection, file_event_id: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT b.storage_relpath
+         FROM file_event f JOIN blob b ON b.id = f.patch_blob_id
+         WHERE f.id = ?1",
+        [file_event_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
 }
 
 /// Every git observation for a session, provenance-labeled and ordered by
@@ -392,6 +408,34 @@ mod tests {
         assert!(!detail.file_events[0].has_patch);
 
         assert!(get_session(&conn, "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn file_patch_relpath_resolves_a_recorded_patch_blob() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+        let parsed = CodexAdapter::new().parse_str(&fixture("codex", "patch_apply.jsonl"), "p");
+        let sid = persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+
+        let detail = get_session(&conn, &sid).unwrap().unwrap();
+        let edited = detail
+            .file_events
+            .iter()
+            .find(|f| f.path == "src/edit.ts")
+            .expect("edited file present");
+        assert!(edited.has_patch);
+
+        let relpath = file_patch_relpath(&conn, &edited.id)
+            .unwrap()
+            .expect("a patch blob is referenced");
+        let bytes = blobs.read(&relpath).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("-old") && text.contains("+new"));
+
+        // A file event with no recorded patch resolves to None.
+        let no_patch = file_patch_relpath(&conn, "does-not-exist").unwrap();
+        assert!(no_patch.is_none());
     }
 
     #[test]

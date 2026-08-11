@@ -4,6 +4,7 @@ import RepositoryList from "./components/RepositoryList";
 import SessionList from "./components/SessionList";
 import SessionView from "./components/SessionView";
 import {
+  getFilePatch,
   getGitSnapshot,
   getSession,
   listDetectedAgents,
@@ -145,7 +146,7 @@ export default function App() {
         </section>
 
         <section className="pane pane--detail">
-          <SessionView detail={detail} git={git} />
+          <SessionView detail={detail} git={git} loadPatch={getFilePatch} />
         </section>
       </div>
     </div>

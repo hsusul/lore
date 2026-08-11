@@ -117,6 +117,23 @@ fn get_session(state: State<'_, AppState>, id: String) -> Result<Option<SessionD
     lore_core::query::get_session(&conn, &id).map_err(|e| e.to_string())
 }
 
+/// Fetch the recorded patch text for a file event, or null when none is stored
+/// or the payload is not valid UTF-8.
+#[tauri::command]
+fn get_file_patch(state: State<'_, AppState>, id: String) -> Result<Option<String>, String> {
+    let relpath = {
+        let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+        lore_core::query::file_patch_relpath(&conn, &id).map_err(|e| e.to_string())?
+    };
+    let Some(relpath) = relpath else {
+        return Ok(None);
+    };
+    match state.blobs.read(&relpath) {
+        Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Read the provenance-labeled git observations for a session.
 #[tauri::command]
 fn get_git_snapshot(
@@ -190,6 +207,7 @@ pub fn run() {
             list_repository_sessions,
             get_session,
             get_git_snapshot,
+            get_file_patch,
             rescan
         ])
         .run(tauri::generate_context!());

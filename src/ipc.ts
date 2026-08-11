@@ -64,6 +64,11 @@ export function getGitSnapshot(id: string): Promise<GitObservationDto[]> {
   return invoke<GitObservationDto[]>("get_git_snapshot", { id });
 }
 
+/** Fetch the recorded patch text for a file event, or null when none is stored. */
+export function getFilePatch(id: string): Promise<string | null> {
+  return invoke<string | null>("get_file_patch", { id });
+}
+
 /** Run a discovery→ingest→enrich pass and resolve with the final tally. */
 export function rescan(): Promise<RescanResult> {
   return invoke<RescanResult>("rescan");

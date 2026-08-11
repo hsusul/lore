@@ -8,6 +8,7 @@ vi.mock("./ipc", () => ({
   listRepositorySessions: vi.fn().mockResolvedValue([]),
   getSession: vi.fn().mockResolvedValue(null),
   getGitSnapshot: vi.fn().mockResolvedValue([]),
+  getFilePatch: vi.fn().mockResolvedValue(null),
   rescan: vi.fn().mockResolvedValue({}),
   onScanProgress: vi.fn().mockResolvedValue(() => {}),
 }));

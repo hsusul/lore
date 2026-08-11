@@ -1,4 +1,7 @@
+import { useState } from "react";
+
 import type {
+  FileEventDto,
   GitObservationDto,
   MessageDto,
   MessagePartDto,
@@ -95,12 +98,55 @@ function GitRail({ observations }: { observations: GitObservationDto[] }) {
   );
 }
 
+function FileEventRow({
+  fileEvent,
+  loadPatch,
+}: {
+  fileEvent: FileEventDto;
+  loadPatch?: (id: string) => Promise<string | null>;
+}) {
+  const [patch, setPatch] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  async function toggle() {
+    if (!open && patch === null && loadPatch) {
+      setPatch((await loadPatch(fileEvent.id)) ?? "(patch unavailable)");
+    }
+    setOpen((v) => !v);
+  }
+
+  return (
+    <li>
+      <code>{fileEvent.path}</code> · {fileEvent.change_kind}
+      {fileEvent.lines_added != null && (
+        <span className="diffstat"> +{fileEvent.lines_added}</span>
+      )}
+      {fileEvent.lines_removed != null && (
+        <span className="diffstat"> −{fileEvent.lines_removed}</span>
+      )}
+      <span className="file-source">
+        {FILE_SOURCE_LABEL[fileEvent.source] ?? fileEvent.source}
+      </span>
+      {fileEvent.has_patch && (
+        <>
+          <button className="file-patch__toggle" onClick={toggle}>
+            {open ? "Hide patch" : "View patch"}
+          </button>
+          {open && <pre className="file-patch">{patch}</pre>}
+        </>
+      )}
+    </li>
+  );
+}
+
 export default function SessionView({
   detail,
   git,
+  loadPatch,
 }: {
   detail: SessionDetail | null;
   git: GitObservationDto[];
+  loadPatch?: (id: string) => Promise<string | null>;
 }) {
   if (!detail) {
     return (
@@ -137,19 +183,11 @@ export default function SessionView({
           <h3 id="files-heading">Files</h3>
           <ul>
             {file_events.map((fileEvent, index) => (
-              <li key={`${fileEvent.path}-${index}`}>
-                <code>{fileEvent.path}</code> · {fileEvent.change_kind}
-                {fileEvent.lines_added != null && (
-                  <span className="diffstat"> +{fileEvent.lines_added}</span>
-                )}
-                {fileEvent.lines_removed != null && (
-                  <span className="diffstat"> −{fileEvent.lines_removed}</span>
-                )}
-                <span className="file-source">
-                  {FILE_SOURCE_LABEL[fileEvent.source] ?? fileEvent.source}
-                </span>
-                {fileEvent.has_patch && <span className="badge">patch stored</span>}
-              </li>
+              <FileEventRow
+                key={`${fileEvent.id}-${index}`}
+                fileEvent={fileEvent}
+                loadPatch={loadPatch}
+              />
             ))}
           </ul>
         </section>
