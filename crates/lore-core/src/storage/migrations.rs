@@ -17,11 +17,18 @@ struct Migration {
 }
 
 /// The ordered migration set. Append-only; never edit an applied migration.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "init",
-    sql: include_str!("../../migrations/0001_init.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "init",
+        sql: include_str!("../../migrations/0001_init.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "schema",
+        sql: include_str!("../../migrations/0002_schema.sql"),
+    },
+];
 
 /// Apply all pending migrations. Idempotent.
 pub fn run(conn: &Connection) -> Result<()> {
