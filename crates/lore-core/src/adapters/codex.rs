@@ -882,4 +882,89 @@ mod tests {
         assert_eq!(session.total_tokens.output, Some(3));
         assert_eq!(session.total_tokens.cache, None);
     }
+
+    #[test]
+    fn top_level_compacted_and_context_compacted_become_markers() {
+        // A mid-session compaction (both the top-level `compacted` record and the
+        // `event_msg.context_compacted` marker) must be represented, not dropped.
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"before\"}}\n",
+            "{\"type\":\"compacted\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"message\":\"summary of earlier turns\"}}\n",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:02.000Z\",\"payload\":{\"type\":\"context_compacted\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:03.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"after\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "compaction");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(
+            s.messages.len(),
+            4,
+            "compaction markers preserve surrounding turns"
+        );
+
+        let markers: Vec<_> = s
+            .messages
+            .iter()
+            .filter(|m| m.event_kind == EventKind::Compaction)
+            .collect();
+        assert_eq!(markers.len(), 2);
+        assert!(markers.iter().all(|m| m.role == Role::Meta));
+        // The top-level marker keeps its summary text; the context marker has none.
+        assert_eq!(
+            markers[0].parts[0].text.as_deref(),
+            Some("summary of earlier turns")
+        );
+        assert!(markers[1].parts.is_empty());
+    }
+
+    #[test]
+    fn session_meta_git_variants_map_only_present_fields() {
+        let parse_git = |git: &str| {
+            let content = format!(
+                concat!(
+                    "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{{\"id\":\"x\",\"cli_version\":\"1\",\"cwd\":\"/p\"{git}}}}}\n",
+                    "{{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":\"hi\"}}}}\n"
+                ),
+                git = git
+            );
+            let s = CodexAdapter::new().parse_str(&content, "git");
+            assert_eq!(
+                s.status,
+                crate::model::ParseStatus::Ok,
+                "git shape never fails a parse"
+            );
+            let seg = s.segments[0].clone();
+            (seg.git_branch, seg.git_commit_sha, seg.git_remote_url)
+        };
+
+        // Empty object: no fields.
+        assert_eq!(parse_git(",\"git\":{}"), (None, None, None));
+        // Branch only.
+        assert_eq!(
+            parse_git(",\"git\":{\"branch\":\"dev\"}"),
+            (Some("dev".into()), None, None)
+        );
+        // Branch + commit.
+        assert_eq!(
+            parse_git(",\"git\":{\"branch\":\"dev\",\"commit_hash\":\"abc\"}"),
+            (Some("dev".into()), Some("abc".into()), None)
+        );
+        // Full: branch + commit + repository url.
+        assert_eq!(
+            parse_git(",\"git\":{\"branch\":\"dev\",\"commit_hash\":\"abc\",\"repository_url\":\"github.com/x/y\"}"),
+            (Some("dev".into()), Some("abc".into()), Some("github.com/x/y".into()))
+        );
+    }
+
+    #[test]
+    fn truncated_final_line_degrades_to_partial() {
+        // A partial final record (interrupted write) is noted, and complete
+        // records before it still parse.
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"complete\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11"
+        );
+        let s = CodexAdapter::new().parse_str(content, "truncated");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert_eq!(s.messages.len(), 1, "the complete record is kept");
+    }
 }
