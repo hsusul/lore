@@ -17,12 +17,15 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::adapters::{AdapterRegistry, AgentAdapter, SessionRef};
 use crate::model::ParsedSession;
+use crate::storage::blob::{BlobStore, StagedBlob};
 use crate::storage::{Result, StorageError};
 
 /// Bumped when parser output for a source could change; drives re-ingest.
 const PARSER_VERSION: &str = "1";
 /// Bytes of a source file hashed to distinguish append from rewrite.
 const PREFIX_BYTES: usize = 4096;
+/// Media type recorded for agent-recorded patch/diff blobs.
+const PATCH_MEDIA_TYPE: &str = "text/x-patch";
 
 /// Persist a parsed session in its own transaction. Idempotent.
 pub fn persist_session(
@@ -30,11 +33,31 @@ pub fn persist_session(
     agent_id: &str,
     agent_name: &str,
     parsed: &ParsedSession,
+    blobs: &BlobStore,
 ) -> Result<String> {
+    // Blob files are content-addressed and finalized on disk before the write
+    // transaction opens (DATA_MODEL.md §3); the row that references them commits
+    // atomically with the normalized rows below.
+    let patch_blobs = stage_patch_blobs(blobs, parsed)?;
     let tx = conn.unchecked_transaction()?;
-    let session_id = persist_rows(&tx, agent_id, agent_name, parsed, None)?;
+    let session_id = persist_rows(&tx, agent_id, agent_name, parsed, None, &patch_blobs)?;
     tx.commit()?;
     Ok(session_id)
+}
+
+/// Durably stage the recorded patch payload for every file event that carries
+/// one, keeping the result index-aligned with `parsed.file_events`. Staging is
+/// done before any transaction opens so the write lock is not held during file
+/// I/O.
+fn stage_patch_blobs(blobs: &BlobStore, parsed: &ParsedSession) -> Result<Vec<Option<StagedBlob>>> {
+    parsed
+        .file_events
+        .iter()
+        .map(|fe| match &fe.patch_text {
+            Some(text) => blobs.stage(text.as_bytes()).map(Some),
+            None => Ok(None),
+        })
+        .collect()
 }
 
 /// Write all normalized rows for a session into the caller-owned transaction
@@ -47,6 +70,7 @@ fn persist_rows(
     agent_name: &str,
     parsed: &ParsedSession,
     source_artifact_id: Option<&str>,
+    patch_blobs: &[Option<StagedBlob>],
 ) -> Result<String> {
     // Defer FK checks to commit so forward self-references (a child message whose
     // parent is inserted later) and other out-of-order links are legal mid-txn.
@@ -228,7 +252,8 @@ fn persist_rows(
         )?;
     }
 
-    // File events.
+    // File events. A recorded patch payload is referenced from its staged blob
+    // (byte-faithful; the diff itself lives in the content-addressed store).
     for (i, fe) in parsed.file_events.iter().enumerate() {
         let fid = det_id("f", &[&session_id, &i.to_string()]);
         let segment_id = segment_ids.get(fe.segment_ix);
@@ -236,11 +261,15 @@ fn persist_rows(
             .tool_native_call_id
             .as_ref()
             .map(|c| det_id("t", &[&session_id, c]));
+        let patch_blob_id = match patch_blobs.get(i).and_then(Option::as_ref) {
+            Some(staged) => Some(BlobStore::reference(tx, staged, PATCH_MEDIA_TYPE)?),
+            None => None,
+        };
         tx.execute(
             "INSERT INTO file_event
                 (id, session_id, segment_id, tool_call_id, path, change_kind, old_path,
-                 lines_added, lines_removed, source, event_ts)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                 lines_added, lines_removed, patch_blob_id, source, event_ts)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![
                 fid,
                 session_id,
@@ -251,6 +280,7 @@ fn persist_rows(
                 fe.old_path,
                 fe.lines_added,
                 fe.lines_removed,
+                patch_blob_id,
                 fe.source.as_str(),
                 fe.event_ts,
             ],
@@ -416,6 +446,7 @@ pub fn ingest_discovered(
     conn: &Connection,
     registry: &AdapterRegistry,
     sessions: &[SessionRef],
+    blobs: &BlobStore,
 ) -> IngestReport {
     let mut report = IngestReport::default();
     for source in sessions {
@@ -427,7 +458,7 @@ pub fn ingest_discovered(
             });
             continue;
         };
-        match ingest_file(conn, adapter, &source.path) {
+        match ingest_file(conn, adapter, &source.path, blobs) {
             Ok(IngestOutcome::Skipped) => report.skipped += 1,
             Ok(outcome) => report.ingested.push(outcome),
             Err(_) => report.failures.push(IngestFailure {
@@ -479,6 +510,7 @@ pub fn ingest_file(
     conn: &Connection,
     adapter: &dyn AgentAdapter,
     path: &Path,
+    blobs: &BlobStore,
 ) -> Result<IngestOutcome> {
     let meta = std::fs::metadata(path).map_err(|_| StorageError::Io)?;
     let content = std::fs::read_to_string(path).map_err(|_| StorageError::Io)?;
@@ -550,6 +582,9 @@ pub fn ingest_file(
         .parse_session(&session_ref)
         .map_err(|_| StorageError::Io)?;
 
+    // Stage blob files before opening the transaction (DATA_MODEL.md §3).
+    let patch_blobs = stage_patch_blobs(blobs, &parsed)?;
+
     let tx = conn.unchecked_transaction()?;
     let target_session_id = session_id_for(agent_id, &parsed);
     if prev.is_some() {
@@ -561,6 +596,7 @@ pub fn ingest_file(
         adapter.metadata().display_name,
         &parsed,
         Some(&artifact_id),
+        &patch_blobs,
     )?;
 
     if prev.is_none() {

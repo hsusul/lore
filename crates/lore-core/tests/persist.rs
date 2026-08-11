@@ -6,6 +6,7 @@
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
 use lore_core::adapters::codex::CodexAdapter;
 use lore_core::ingest::persist_session;
+use lore_core::storage::blob::BlobStore;
 use rusqlite::Connection;
 
 fn fixture_in(dir: &str, name: &str) -> String {
@@ -19,20 +20,29 @@ fn fixture(name: &str) -> String {
     fixture_in("fixtures/claude_code", name)
 }
 
-fn persist_fixture(conn: &Connection, name: &str) -> String {
-    let parsed = ClaudeCodeAdapter::new().parse_str(&fixture(name), "fallback");
-    persist_session(conn, "claude-code", "Claude Code", &parsed).unwrap()
+/// A blob store rooted in a fresh temp dir; the returned guard must stay in
+/// scope so the blob files survive for the duration of the test.
+fn blob_store() -> (tempfile::TempDir, BlobStore) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = BlobStore::open(dir.path()).unwrap();
+    (dir, store)
 }
 
-fn persist_codex(conn: &Connection, name: &str) -> String {
+fn persist_fixture(conn: &Connection, blobs: &BlobStore, name: &str) -> String {
+    let parsed = ClaudeCodeAdapter::new().parse_str(&fixture(name), "fallback");
+    persist_session(conn, "claude-code", "Claude Code", &parsed, blobs).unwrap()
+}
+
+fn persist_codex(conn: &Connection, blobs: &BlobStore, name: &str) -> String {
     let parsed = CodexAdapter::new().parse_str(&fixture_in("fixtures/codex", name), "fallback");
-    persist_session(conn, "codex", "Codex", &parsed).unwrap()
+    persist_session(conn, "codex", "Codex", &parsed, blobs).unwrap()
 }
 
 #[test]
 fn basic_session_round_trips_in_order() {
     let conn = lore_core::storage::open_in_memory().unwrap();
-    let sid = persist_fixture(&conn, "basic_text.jsonl");
+    let (_bd, blobs) = blob_store();
+    let sid = persist_fixture(&conn, &blobs, "basic_text.jsonl");
 
     let (count, title, input, output, cache): (i64, String, i64, i64, i64) = conn
         .query_row(
@@ -81,7 +91,8 @@ fn basic_session_round_trips_in_order() {
 #[test]
 fn tool_call_file_event_and_git_observation_persist() {
     let conn = lore_core::storage::open_in_memory().unwrap();
-    let sid = persist_fixture(&conn, "tool_use.jsonl");
+    let (_bd, blobs) = blob_store();
+    let sid = persist_fixture(&conn, &blobs, "tool_use.jsonl");
 
     let (name, is_err, out): (String, i64, String) = conn
         .query_row(
@@ -118,7 +129,8 @@ fn tool_call_file_event_and_git_observation_persist() {
 #[test]
 fn segments_persist_on_cwd_change() {
     let conn = lore_core::storage::open_in_memory().unwrap();
-    let sid = persist_fixture(&conn, "segments.jsonl");
+    let (_bd, blobs) = blob_store();
+    let sid = persist_fixture(&conn, &blobs, "segments.jsonl");
     let n: i64 = conn
         .query_row(
             "SELECT count(*) FROM session_segment WHERE session_id = ?1",
@@ -132,8 +144,9 @@ fn segments_persist_on_cwd_change() {
 #[test]
 fn reingest_is_idempotent() {
     let conn = lore_core::storage::open_in_memory().unwrap();
-    persist_fixture(&conn, "basic_text.jsonl");
-    persist_fixture(&conn, "basic_text.jsonl");
+    let (_bd, blobs) = blob_store();
+    persist_fixture(&conn, &blobs, "basic_text.jsonl");
+    persist_fixture(&conn, &blobs, "basic_text.jsonl");
 
     let sessions: i64 = conn
         .query_row("SELECT count(*) FROM agent_session", [], |r| r.get(0))
@@ -154,7 +167,8 @@ fn out_of_order_parent_resolves() {
         "{\"type\":\"user\",\"uuid\":\"u_b\",\"parentUuid\":null,\"sessionId\":\"ooo\",\"message\":{\"role\":\"user\",\"content\":\"parent second\"}}\n"
     );
     let parsed = ClaudeCodeAdapter::new().parse_str(content, "fallback");
-    let sid = persist_session(&conn, "claude-code", "Claude Code", &parsed).unwrap();
+    let (_bd, blobs) = blob_store();
+    let sid = persist_session(&conn, "claude-code", "Claude Code", &parsed, &blobs).unwrap();
 
     let parent_of_0: Option<String> = conn
         .query_row(
@@ -180,7 +194,8 @@ fn out_of_order_parent_resolves() {
 #[test]
 fn codex_session_persists_git_and_provider() {
     let conn = lore_core::storage::open_in_memory().unwrap();
-    let sid = persist_codex(&conn, "minimal.jsonl");
+    let (_bd, blobs) = blob_store();
+    let sid = persist_codex(&conn, &blobs, "minimal.jsonl");
 
     let (source, branch): (String, String) = conn
         .query_row(
@@ -214,7 +229,8 @@ fn codex_session_persists_git_and_provider() {
 #[test]
 fn codex_patch_persists_file_events_and_tool_call() {
     let conn = lore_core::storage::open_in_memory().unwrap();
-    let sid = persist_codex(&conn, "patch_apply.jsonl");
+    let (_bd, blobs) = blob_store();
+    let sid = persist_codex(&conn, &blobs, "patch_apply.jsonl");
 
     let files: i64 = conn
         .query_row(
@@ -248,7 +264,8 @@ fn codex_patch_persists_file_events_and_tool_call() {
 #[test]
 fn codex_cumulative_token_totals_persist() {
     let conn = lore_core::storage::open_in_memory().unwrap();
-    let sid = persist_codex(&conn, "token_count.jsonl");
+    let (_bd, blobs) = blob_store();
+    let sid = persist_codex(&conn, &blobs, "token_count.jsonl");
 
     let totals: (i64, i64, i64) = conn
         .query_row(
@@ -259,4 +276,51 @@ fn codex_cumulative_token_totals_persist() {
         )
         .unwrap();
     assert_eq!(totals, (120, 30, 45));
+}
+
+#[test]
+fn codex_recorded_patch_payloads_persist_as_faithful_blobs() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = blob_store();
+    let sid = persist_codex(&conn, &blobs, "patch_apply.jsonl");
+
+    // Every recorded change in the fixture carries a payload, so each file event
+    // references a distinct byte-faithful blob.
+    let (with_blob, distinct_blobs): (i64, i64) = conn
+        .query_row(
+            "SELECT count(patch_blob_id), count(DISTINCT patch_blob_id)
+             FROM file_event WHERE session_id = ?1",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        with_blob, 3,
+        "all three recorded changes keep their payload"
+    );
+    assert_eq!(distinct_blobs, 3);
+
+    let read_patch = |path: &str| -> String {
+        let (relpath, media, state): (String, String, String) = conn
+            .query_row(
+                "SELECT b.storage_relpath, b.media_type, b.scan_state
+                 FROM file_event f JOIN blob b ON b.id = f.patch_blob_id
+                 WHERE f.session_id = ?1 AND f.path = ?2",
+                rusqlite::params![sid, path],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(media, "text/x-patch");
+        // Unscanned canonical storage must not yet be searchable/exportable.
+        assert_eq!(state, "pending");
+        String::from_utf8(blobs.read(&relpath).unwrap()).unwrap()
+    };
+
+    // Update: the exact recorded unified diff round-trips byte-for-byte.
+    let edited = read_patch("src/edit.ts");
+    assert!(edited.contains("-old") && edited.contains("+new"));
+    // Create: the recorded file content round-trips.
+    assert!(read_patch("src/new.ts").contains("export const x = 1"));
+    // Move: the recorded move diff round-trips.
+    assert!(read_patch("src/renamed.ts").contains("moved"));
 }

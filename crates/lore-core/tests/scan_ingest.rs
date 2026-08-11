@@ -7,6 +7,7 @@ use std::fs;
 use lore_core::adapters::{AdapterRegistry, AgentId, DiscoveryRoots, SessionRef};
 use lore_core::discovery::{discover, DiscoveryConfig};
 use lore_core::ingest::{ingest_discovered, IngestFailureKind};
+use lore_core::storage::blob::BlobStore;
 
 fn fixture_home() -> (tempfile::TempDir, DiscoveryConfig) {
     let dir = tempfile::tempdir().unwrap();
@@ -41,8 +42,10 @@ fn both_v0_agents_ingest_end_to_end_and_restart_skips() {
     let registry = AdapterRegistry::v0();
     let discovery = discover(&registry, &config);
     let conn = lore_core::storage::open_in_memory().unwrap();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(blob_dir.path()).unwrap();
 
-    let first = ingest_discovered(&conn, &registry, &discovery.sessions);
+    let first = ingest_discovered(&conn, &registry, &discovery.sessions, &blobs);
     assert_eq!(first.processed(), 2);
     assert_eq!(first.ingested.len(), 2);
     assert_eq!(first.skipped, 0);
@@ -62,7 +65,7 @@ fn both_v0_agents_ingest_end_to_end_and_restart_skips() {
     assert_eq!(sessions, 2);
     assert_eq!(messages, 5, "Claude fixture has 2; Codex fixture has 3");
 
-    let restart = ingest_discovered(&conn, &registry, &discovery.sessions);
+    let restart = ingest_discovered(&conn, &registry, &discovery.sessions, &blobs);
     assert_eq!(restart.processed(), 2);
     assert!(restart.ingested.is_empty());
     assert_eq!(restart.skipped, 2);
@@ -90,8 +93,10 @@ fn unknown_adapter_and_unreadable_source_fail_independently() {
         },
     ];
     let conn = lore_core::storage::open_in_memory().unwrap();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(blob_dir.path()).unwrap();
 
-    let report = ingest_discovered(&conn, &AdapterRegistry::v0(), &sessions);
+    let report = ingest_discovered(&conn, &AdapterRegistry::v0(), &sessions, &blobs);
     assert_eq!(report.processed(), 2);
     assert_eq!(report.failures.len(), 2);
     assert_eq!(

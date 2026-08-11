@@ -7,6 +7,7 @@ use std::path::Path;
 
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
 use lore_core::ingest::{ingest_file, ChangeClass, IngestOutcome};
+use lore_core::storage::blob::BlobStore;
 use rusqlite::Connection;
 
 const USER_LINE: &str = concat!(
@@ -18,8 +19,23 @@ const ASSISTANT_LINE: &str = concat!(
     "\n"
 );
 
+/// A process-wide blob store in a temp dir kept alive for the test binary. The
+/// Claude fixtures used here carry no recorded patch payloads, so no blob files
+/// are written; the store only satisfies the ingest signature.
+fn blobs() -> &'static BlobStore {
+    use std::sync::OnceLock;
+    static STORE: OnceLock<(tempfile::TempDir, BlobStore)> = OnceLock::new();
+    &STORE
+        .get_or_init(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = BlobStore::open(dir.path()).unwrap();
+            (dir, store)
+        })
+        .1
+}
+
 fn ingest(conn: &Connection, path: &Path) -> IngestOutcome {
-    ingest_file(conn, &ClaudeCodeAdapter::new(), path).unwrap()
+    ingest_file(conn, &ClaudeCodeAdapter::new(), path, blobs()).unwrap()
 }
 
 fn generation(conn: &Connection) -> i64 {
