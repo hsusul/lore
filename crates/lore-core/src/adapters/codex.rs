@@ -697,6 +697,10 @@ impl AgentAdapter for CodexAdapter {
         }
     }
 
+    fn roots(&self, overrides: &DiscoveryRoots) -> Vec<PathBuf> {
+        Self::effective_roots(overrides)
+    }
+
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef> {
         let mut out = Vec::new();
         for root in Self::effective_roots(roots) {

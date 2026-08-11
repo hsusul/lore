@@ -97,6 +97,11 @@ pub trait AgentAdapter: Send + Sync {
     /// empty). Cheap; no parsing.
     fn detect_installation(&self, roots: &DiscoveryRoots) -> Detection;
 
+    /// The effective roots this adapter scans under the given overrides (its
+    /// documented defaults when the overrides are empty). Used to set up
+    /// filesystem watches and to resolve which adapter owns an observed path.
+    fn roots(&self, overrides: &DiscoveryRoots) -> Vec<PathBuf>;
+
     /// Enumerate candidate session files. Idempotent and cheap; no parsing.
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef>;
 

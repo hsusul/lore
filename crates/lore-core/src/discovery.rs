@@ -5,8 +5,11 @@
 //! deduplicated and sorted to make first scans deterministic.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
-use crate::adapters::{AdapterRegistry, AgentMetadata, Detection, DiscoveryRoots, SessionRef};
+use crate::adapters::{
+    AdapterRegistry, AgentId, AgentMetadata, Detection, DiscoveryRoots, SessionRef,
+};
 
 /// Per-adapter discovery roots. An absent override asks the adapter to use its
 /// documented default; an explicit empty root list intentionally does the same.
@@ -74,6 +77,42 @@ pub fn discover(registry: &AdapterRegistry, config: &DiscoveryConfig) -> Discove
     DiscoveryReport { agents, sessions }
 }
 
+/// The union of every registered adapter's effective roots — the set a
+/// filesystem watcher should observe. Deduplicated and sorted for determinism.
+#[must_use]
+pub fn watch_roots(registry: &AdapterRegistry, config: &DiscoveryConfig) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = registry
+        .iter()
+        .flat_map(|adapter| adapter.roots(&config.roots_for(adapter.id().0)))
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// Resolve which adapter owns an observed path by matching it against each
+/// adapter's effective roots (longest matching root wins, so nested roots
+/// resolve deterministically). Returns `None` for a path under no known root.
+#[must_use]
+pub fn owner_of(
+    registry: &AdapterRegistry,
+    config: &DiscoveryConfig,
+    path: &Path,
+) -> Option<AgentId> {
+    let mut best: Option<(usize, AgentId)> = None;
+    for adapter in registry.iter() {
+        for root in adapter.roots(&config.roots_for(adapter.id().0)) {
+            if path.starts_with(&root) {
+                let depth = root.components().count();
+                if best.is_none_or(|(d, _)| depth > d) {
+                    best = Some((depth, adapter.id()));
+                }
+            }
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -119,5 +158,41 @@ mod tests {
             .path
             .file_name()
             .is_some_and(|name| name == "rollout-test.jsonl"));
+    }
+
+    #[test]
+    fn owner_of_resolves_paths_and_watch_roots_are_deduped() {
+        let claude_root = std::path::PathBuf::from("/home/u/.claude/projects");
+        let codex_root = std::path::PathBuf::from("/home/u/.codex/sessions");
+        let mut config = DiscoveryConfig::new();
+        config.set_roots(
+            "claude-code",
+            DiscoveryRoots::new(vec![claude_root.clone()]),
+        );
+        config.set_roots("codex", DiscoveryRoots::new(vec![codex_root.clone()]));
+        let registry = AdapterRegistry::v0();
+
+        assert_eq!(
+            owner_of(&registry, &config, &claude_root.join("repo/session.jsonl")).map(|a| a.0),
+            Some("claude-code")
+        );
+        assert_eq!(
+            owner_of(
+                &registry,
+                &config,
+                &codex_root.join("2026/08/11/rollout-x.jsonl")
+            )
+            .map(|a| a.0),
+            Some("codex")
+        );
+        assert!(owner_of(
+            &registry,
+            &config,
+            std::path::Path::new("/tmp/elsewhere.jsonl")
+        )
+        .is_none());
+
+        let roots = watch_roots(&registry, &config);
+        assert_eq!(roots, vec![claude_root, codex_root]);
     }
 }
