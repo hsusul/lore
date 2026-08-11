@@ -144,6 +144,33 @@ pub struct FileEventDto {
     pub has_patch: bool,
 }
 
+/// One provenance-labeled git observation for the session's git rail. The UI
+/// must keep `agent_recorded`, `agent_patch`, `lore_captured`, and
+/// `lore_reverified` visually distinct and never collapse them into one
+/// unlabeled "session-time" rail. Payload element of `get_git_snapshot`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitObservationDto {
+    pub segment_id: Option<String>,
+    /// `agent_recorded` | `agent_patch` | `lore_captured` | `lore_reverified`.
+    pub source: String,
+    /// Time claimed by the source event, when any.
+    #[ts(type = "number | null")]
+    pub event_ts: Option<i64>,
+    /// When Lore read/verified it.
+    #[ts(type = "number")]
+    pub observed_at: i64,
+    /// `exact_event` | `near_event` | `retrospective` | `current_only`.
+    pub temporal_confidence: String,
+    pub branch: Option<String>,
+    pub commit_sha: Option<String>,
+    /// Credential-free normalized remote.
+    pub remote_url_norm: Option<String>,
+    pub is_dirty: Option<bool>,
+    /// Re-verification result: the recorded commit still exists.
+    pub commit_exists: Option<bool>,
+}
+
 /// The full read of one session in context. Payload of `get_session`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

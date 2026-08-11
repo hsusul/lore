@@ -111,6 +111,46 @@ fn reverify_confirms_an_existing_commit_without_touching_history() {
 }
 
 #[test]
+fn git_snapshot_returns_all_three_provenances_labeled() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let head = git_out(repo.path(), &["rev-parse", "HEAD"]);
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let sid = persist_and_enrich(&conn, &store, repo.path(), &head);
+    reverify_session(&conn, &sid).unwrap();
+
+    let snapshot = lore_core::query::get_git_snapshot(&conn, &sid).unwrap();
+    let sources: Vec<&str> = snapshot.iter().map(|o| o.source.as_str()).collect();
+    assert!(sources.contains(&"agent_recorded"));
+    assert!(sources.contains(&"lore_captured"));
+    assert!(sources.contains(&"lore_reverified"));
+
+    // The agent-recorded row is near_event; the captured row never claims
+    // session-time; the reverified row is retrospective and confirms the commit.
+    let recorded = snapshot
+        .iter()
+        .find(|o| o.source == "agent_recorded")
+        .unwrap();
+    assert_eq!(recorded.temporal_confidence, "near_event");
+    assert_eq!(recorded.commit_sha.as_deref(), Some(head.as_str()));
+
+    let captured = snapshot
+        .iter()
+        .find(|o| o.source == "lore_captured")
+        .unwrap();
+    assert_eq!(captured.temporal_confidence, "current_only");
+
+    let reverified = snapshot
+        .iter()
+        .find(|o| o.source == "lore_reverified")
+        .unwrap();
+    assert_eq!(reverified.temporal_confidence, "retrospective");
+    assert_eq!(reverified.commit_exists, Some(true));
+}
+
+#[test]
 fn reverify_flags_a_missing_commit() {
     let repo = tempfile::tempdir().unwrap();
     init_repo(repo.path());

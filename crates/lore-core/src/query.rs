@@ -2,15 +2,15 @@
 //!
 //! Heavy work stays in the Rust core (`AGENTS.md`): the webview never runs SQL.
 //! These functions back the read commands — `list_detected_agents`,
-//! `list_sessions`, `list_repositories`, and `get_session` — returning
-//! [`lore_ipc`] wire types directly. Opaque/encrypted parts are returned without
-//! readable content and are never rendered or exported.
+//! `list_sessions`, `list_repositories`, `get_session`, and `get_git_snapshot`
+//! — returning [`lore_ipc`] wire types directly. Opaque/encrypted parts are
+//! returned without readable content and are never rendered or exported.
 
 use std::collections::HashMap;
 
 use lore_ipc::{
-    DetectedAgent, FileEventDto, MessageDto, MessagePartDto, RepositorySummary, SegmentDto,
-    SessionDetail, SessionSummary,
+    DetectedAgent, FileEventDto, GitObservationDto, MessageDto, MessagePartDto, RepositorySummary,
+    SegmentDto, SessionDetail, SessionSummary,
 };
 use rusqlite::{Connection, OptionalExtension};
 
@@ -204,6 +204,37 @@ fn session_file_events(conn: &Connection, session_id: &str) -> Result<Vec<FileEv
                 lines_removed: row.get(4)?,
                 source: row.get(5)?,
                 has_patch: row.get::<_, i64>(6)? != 0,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Every git observation for a session, provenance-labeled and ordered by
+/// observation time then source, for the session's git rail. Distinct sources
+/// (agent-recorded, agent-patch, Lore-captured, Lore-reverified) coexist and are
+/// never merged.
+pub fn get_git_snapshot(conn: &Connection, session_id: &str) -> Result<Vec<GitObservationDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT segment_id, source, event_ts, observed_at, temporal_confidence,
+                branch, commit_sha, remote_url_norm, is_dirty, commit_exists
+         FROM git_observation
+         WHERE session_id = ?1
+         ORDER BY observed_at, source, id",
+    )?;
+    let rows = stmt
+        .query_map([session_id], |row| {
+            Ok(GitObservationDto {
+                segment_id: row.get(0)?,
+                source: row.get(1)?,
+                event_ts: row.get(2)?,
+                observed_at: row.get(3)?,
+                temporal_confidence: row.get(4)?,
+                branch: row.get(5)?,
+                commit_sha: row.get(6)?,
+                remote_url_norm: row.get(7)?,
+                is_dirty: row.get::<_, Option<i64>>(8)?.map(|v| v != 0),
+                commit_exists: row.get::<_, Option<i64>>(9)?.map(|v| v != 0),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
