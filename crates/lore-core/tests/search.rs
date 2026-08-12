@@ -75,13 +75,11 @@ fn agent_filter_narrows_results() {
         &user_message("c1", "/p", "deploy the service"),
         "c1",
     );
-    let codex = format!(
-        concat!(
-            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{{\"id\":\"x1\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}}}\n",
-            "{{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":\"deploy the service\"}}}}\n"
-        )
+    let codex = concat!(
+        "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"x1\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}\n",
+        "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"deploy the service\"}}\n"
     );
-    let parsed = CodexAdapter::new().parse_str(&codex, "x1");
+    let parsed = CodexAdapter::new().parse_str(codex, "x1");
     persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
 
     assert_eq!(search(&conn, "deploy", 20).unwrap().len(), 2);
