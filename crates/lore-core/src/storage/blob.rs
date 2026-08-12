@@ -140,12 +140,29 @@ impl BlobStore {
     /// Read a blob's bytes back by its `storage_relpath`. Reads are bounded by
     /// the file's own length.
     pub fn read(&self, relpath: &str) -> Result<Vec<u8>> {
-        // Reject any path that would escape the store root.
-        if relpath.split('/').any(|seg| seg == ".." || seg.is_empty()) {
+        if !safe_relpath(relpath) {
             return Err(StorageError::Io);
         }
         fs::read(self.root.join(relpath)).map_err(|_| StorageError::Io)
     }
+
+    /// Delete a blob file by `storage_relpath` (used when garbage-collecting an
+    /// unreferenced blob during "forget"). A missing file is not an error.
+    pub fn remove(&self, relpath: &str) -> Result<()> {
+        if !safe_relpath(relpath) {
+            return Err(StorageError::Io);
+        }
+        match fs::remove_file(self.root.join(relpath)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(StorageError::Io),
+        }
+    }
+}
+
+/// A relpath is safe when no segment escapes the store root.
+fn safe_relpath(relpath: &str) -> bool {
+    !relpath.split('/').any(|seg| seg == ".." || seg.is_empty())
 }
 
 /// Write `bytes` to `path` and flush to disk before returning.

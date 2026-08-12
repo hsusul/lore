@@ -1,0 +1,145 @@
+//! Redaction-aware session export (`SECURITY.md` §4, §6).
+//!
+//! A default export **masks** every flagged secret span, so exporting cannot
+//! amplify a secret out of the archive. Including flagged content requires an
+//! explicit, per-call override (`include_secrets`) — there is no sticky setting.
+//! Opaque/encrypted regions are never decoded or exported. Rendering reuses the
+//! canonical read path (`query::get_session`) and the same scanner as ingest.
+
+use std::fmt::Write;
+
+use rusqlite::Connection;
+
+use crate::query;
+use crate::secrets;
+use crate::storage::Result;
+
+/// Render a session as Markdown. When `include_secrets` is false (the default
+/// posture) every flagged secret span is masked; `true` is an explicit opt-in to
+/// full-fidelity content. Returns `None` when the session is unknown.
+pub fn export_session_markdown(
+    conn: &Connection,
+    session_id: &str,
+    include_secrets: bool,
+) -> Result<Option<String>> {
+    let Some(detail) = query::get_session(conn, session_id)? else {
+        return Ok(None);
+    };
+    let s = &detail.summary;
+    let mut out = String::new();
+    let render = |text: &str| render_field(text, include_secrets);
+
+    let _ = writeln!(
+        out,
+        "# {}",
+        s.title.as_deref().unwrap_or("(untitled session)")
+    );
+    let _ = writeln!(
+        out,
+        "\n> {} · {} messages · {} tool calls{}\n",
+        s.agent_id,
+        s.message_count,
+        s.tool_call_count,
+        if include_secrets {
+            " · ⚠ includes flagged secrets"
+        } else {
+            ""
+        }
+    );
+
+    for message in &detail.messages {
+        let _ = writeln!(out, "### {}", message.role);
+        for part in &message.parts {
+            match part.kind.as_str() {
+                "opaque" => {
+                    let _ = writeln!(out, "_[encrypted content omitted]_\n");
+                }
+                "thinking" => {
+                    if let Some(text) = &part.text {
+                        let _ = writeln!(out, "> _(thinking)_ {}\n", render(text));
+                    }
+                }
+                _ => {
+                    if let Some(text) = &part.text {
+                        let _ = writeln!(out, "{}\n", render(text));
+                    }
+                }
+            }
+        }
+    }
+
+    if !detail.file_events.is_empty() {
+        let _ = writeln!(out, "### Files");
+        for file in &detail.file_events {
+            let _ = writeln!(out, "- `{}` ({})", file.path, file.change_kind);
+        }
+    }
+
+    Ok(Some(out))
+}
+
+/// Mask flagged spans unless the caller explicitly opted into raw content.
+fn render_field(text: &str, include_secrets: bool) -> String {
+    if include_secrets {
+        text.to_string()
+    } else {
+        let findings = secrets::scan(text);
+        secrets::redact(text, &findings)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::claude_code::ClaudeCodeAdapter;
+    use crate::ingest::persist_session;
+    use crate::storage::blob::BlobStore;
+
+    fn persist(conn: &Connection, jsonl: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+        let parsed = ClaudeCodeAdapter::new().parse_str(jsonl, "e");
+        persist_session(conn, "claude-code", "Claude Code", &parsed, &blobs).unwrap()
+    }
+
+    #[test]
+    fn default_export_masks_secrets_override_includes_them() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let secret = format!("ghp{}", "_0123456789abcdefghijklmnopqrstuvwxyz");
+        let jsonl = format!(
+            "{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{{\"role\":\"user\",\"content\":\"deploy with {secret} now\"}}}}\n"
+        );
+        let sid = persist(&conn, &jsonl);
+
+        let masked = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+        assert!(masked.contains("deploy with"));
+        assert!(
+            !masked.contains(&secret),
+            "default export must mask the secret"
+        );
+        assert!(masked.contains("«redacted:github-token»"));
+
+        let full = export_session_markdown(&conn, &sid, true).unwrap().unwrap();
+        assert!(
+            full.contains(&secret),
+            "explicit override includes the secret"
+        );
+        assert!(full.contains("includes flagged secrets"));
+    }
+
+    #[test]
+    fn opaque_content_is_omitted_and_unknown_session_is_none() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+        assert!(md.starts_with("# "));
+        assert!(export_session_markdown(&conn, "nope", false)
+            .unwrap()
+            .is_none());
+    }
+}
