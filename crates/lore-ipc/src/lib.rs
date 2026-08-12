@@ -202,6 +202,28 @@ pub struct ScanProgress {
     pub done: bool,
 }
 
+/// One search result over the redacted projections. `snippet` contains
+/// highlight markers (`\u{e000}`…`\u{e001}`) around matched terms; the raw text
+/// is redacted, so a flagged secret never appears. Payload element of `search`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SearchHit {
+    pub session_id: String,
+    /// `message_part` | `file_event` | `session`.
+    pub source_kind: String,
+    pub source_id: String,
+    pub field: String,
+    /// Redacted snippet with highlight markers around matches.
+    pub snippet: String,
+    /// FTS5 BM25 score (more negative = better match).
+    #[ts(type = "number")]
+    pub rank: f64,
+    pub title: Option<String>,
+    pub agent_id: String,
+    #[ts(type = "number | null")]
+    pub started_at: Option<i64>,
+}
+
 /// Final tally returned by the `rescan` command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
