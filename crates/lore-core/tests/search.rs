@@ -105,6 +105,35 @@ fn path_filter_matches_touched_files() {
 }
 
 #[test]
+fn has_error_filter_selects_sessions_with_a_failed_tool() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    // e1: text mentions "migration" and has a failing tool call.
+    let with_error = format!(
+        "{}{}{}",
+        user_message("e1", "/p", "the migration failed here"),
+        "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e1\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"npm test\"}}]}}\n",
+        "{\"type\":\"user\",\"uuid\":\"u2\",\"sessionId\":\"e1\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"is_error\":true,\"content\":\"1 failing\"}]}}\n"
+    );
+    persist_claude(&conn, &blobs, &with_error, "e1");
+    // e2: mentions "migration" but no failure.
+    persist_claude(
+        &conn,
+        &blobs,
+        &user_message("e2", "/p", "the migration succeeded"),
+        "e2",
+    );
+
+    assert_eq!(search(&conn, "migration", 20).unwrap().len(), 2);
+    let failed = search(&conn, "migration has:error", 20).unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(
+        failed[0].session_id,
+        search(&conn, "failed has:error", 20).unwrap()[0].session_id
+    );
+}
+
+#[test]
 fn snippets_never_surface_a_secret() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let (_bd, blobs) = store();

@@ -182,6 +182,7 @@ pub fn scan(text: &str) -> Vec<Finding> {
     scan_private_key_blocks(text, &mut raw);
     scan_jwt(bytes, &mut raw);
     scan_connection_strings(text, bytes, &mut raw);
+    scan_webhooks(text, bytes, &mut raw);
     scan_entropy(text, bytes, &mut raw);
 
     // Drop allowlisted values.
@@ -353,6 +354,38 @@ fn scan_connection_strings(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
             });
         }
     }
+}
+
+/// Slack/Discord incoming-webhook URLs (the path token is the secret).
+fn scan_webhooks(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
+    const HOOKS: &[(&str, &str)] = &[
+        ("hooks.slack.com/services/", "slack-webhook"),
+        ("discord.com/api/webhooks/", "discord-webhook"),
+        ("discordapp.com/api/webhooks/", "discord-webhook"),
+    ];
+    for (needle, rule) in HOOKS {
+        let mut from = 0;
+        while let Some(rel) = text[from..].find(needle) {
+            let start = from + rel;
+            let mut end = start + needle.len();
+            while end < bytes.len() && is_url_token(bytes[end]) {
+                end += 1;
+            }
+            if end > start + needle.len() {
+                out.push(Finding {
+                    rule,
+                    start,
+                    end,
+                    severity: Severity::Medium,
+                });
+            }
+            from = start + needle.len();
+        }
+    }
+}
+
+fn is_url_token(b: u8) -> bool {
+    !b.is_ascii_whitespace() && !matches!(b, b'"' | b'\'' | b'<' | b'>' | b')' | b']')
 }
 
 fn scan_entropy(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
@@ -593,6 +626,18 @@ mod tests {
 
         let conn = format!("postgres://admin:{}@db.internal/app", "s3cr3tPassw0rd");
         assert!(found(&conn).contains(&"connection-string"));
+
+        let slack = format!(
+            "https://hooks.slack.com/services/{}",
+            "T00000000/B00000000/abcdefghijklmnopqrstuvwx"
+        );
+        assert!(found(&slack).contains(&"slack-webhook"));
+
+        let discord = format!(
+            "https://discord.com/api/webhooks/{}",
+            "123456789012345678/abcdefABCDEF-0123456789_ghijkl"
+        );
+        assert!(found(&discord).contains(&"discord-webhook"));
 
         let pem = format!(
             "-----BEGIN RSA {p} KEY-----\nMIIEabc123\n-----END RSA {p} KEY-----",
