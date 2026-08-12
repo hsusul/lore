@@ -200,6 +200,25 @@ pre,
   border-bottom: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
+.shell__notice {
+  margin: 0;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.8rem;
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--info) 25%, transparent);
+}
+
+.session__actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.session__forget {
+  color: var(--danger);
+}
+
 .shell__panes {
   display: grid;
   grid-template-columns: 15rem 21rem 1fr;

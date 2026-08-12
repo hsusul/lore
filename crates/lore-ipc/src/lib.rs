@@ -224,6 +224,16 @@ pub struct SearchHit {
     pub started_at: Option<i64>,
 }
 
+/// Result of forgetting a session. Payload of `forget_session`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ForgetReport {
+    #[ts(type = "number")]
+    pub blobs_removed: i64,
+    /// Original agent source paths Lore does not own and did not delete.
+    pub source_paths: Vec<String>,
+}
+
 /// Final tally returned by the `rescan` command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]

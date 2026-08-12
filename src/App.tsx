@@ -7,6 +7,8 @@ import SessionList from "./components/SessionList";
 import SessionView from "./components/SessionView";
 import { agentLabel } from "./format";
 import {
+  exportSessionMarkdown,
+  forgetSession,
   getFilePatch,
   getGitSnapshot,
   getSession,
@@ -17,6 +19,7 @@ import {
   onScanProgress,
   rescan,
   search,
+  sessionSecretCount,
   type DetectedAgent,
   type GitObservationDto,
   type RepositorySummary,
@@ -62,6 +65,8 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [secretCount, setSecretCount] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const loadSessions = useCallback(async (repo: string | null) => {
     const rows = repo
@@ -125,10 +130,48 @@ export default function App() {
   async function openSession(id: string) {
     setSelectedSession(id);
     setError(null);
+    setNotice(null);
     try {
-      const [loaded, snapshot] = await Promise.all([getSession(id), getGitSnapshot(id)]);
+      const [loaded, snapshot, secrets] = await Promise.all([
+        getSession(id),
+        getGitSnapshot(id),
+        sessionSecretCount(id),
+      ]);
       setDetail(loaded);
       setGit(snapshot);
+      setSecretCount(secrets);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleExport() {
+    if (!selectedSession) return;
+    try {
+      const markdown = await exportSessionMarkdown(selectedSession, false);
+      if (markdown == null) return;
+      await navigator.clipboard?.writeText(markdown);
+      setNotice("Exported Markdown to the clipboard (flagged secrets redacted).");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleForget() {
+    if (!selectedSession) return;
+    if (!window.confirm("Forget this session? This permanently removes it from Lore.")) {
+      return;
+    }
+    try {
+      const report = await forgetSession(selectedSession);
+      setDetail(null);
+      setSelectedSession(null);
+      await refresh();
+      const remaining =
+        report.source_paths.length > 0
+          ? ` The original agent log(s) remain: ${report.source_paths.join(", ")}.`
+          : "";
+      setNotice(`Session forgotten (${report.blobs_removed} blob(s) removed).${remaining}`);
     } catch (e) {
       setError(String(e));
     }
@@ -227,6 +270,11 @@ export default function App() {
           {error}
         </p>
       )}
+      {notice && (
+        <p className="shell__notice" role="status">
+          {notice}
+        </p>
+      )}
 
       <div className="shell__panes">
         <aside className="pane pane--repos">
@@ -268,7 +316,14 @@ export default function App() {
         </section>
 
         <section className="pane pane--detail">
-          <SessionView detail={detail} git={git} loadPatch={getFilePatch} />
+          <SessionView
+            detail={detail}
+            git={git}
+            loadPatch={getFilePatch}
+            secretCount={secretCount}
+            onExport={handleExport}
+            onForget={handleForget}
+          />
         </section>
       </div>
 

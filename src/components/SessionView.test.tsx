@@ -112,6 +112,25 @@ describe("SessionView", () => {
     expect(screen.getByText("done")).toBeTruthy();
   });
 
+  it("shows a flagged-secret badge and wires export/forget", () => {
+    const onExport = vi.fn();
+    const onForget = vi.fn();
+    render(
+      <SessionView
+        detail={detail}
+        git={git}
+        secretCount={2}
+        onExport={onExport}
+        onForget={onForget}
+      />,
+    );
+    expect(screen.getByText(/2 flagged/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /export/i }));
+    expect(onExport).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /forget/i }));
+    expect(onForget).toHaveBeenCalled();
+  });
+
   it("lists file events with a diffstat and loads the patch inline on demand", async () => {
     const loadPatch = vi.fn().mockResolvedValue("@@ -1 +1 @@\n-old\n+new\n");
     render(<SessionView detail={detail} git={git} loadPatch={loadPatch} />);

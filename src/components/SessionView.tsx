@@ -157,10 +157,16 @@ export default function SessionView({
   detail,
   git,
   loadPatch,
+  secretCount = 0,
+  onExport,
+  onForget,
 }: {
   detail: SessionDetail | null;
   git: GitObservationDto[];
   loadPatch?: (id: string) => Promise<string | null>;
+  secretCount?: number;
+  onExport?: () => void;
+  onForget?: () => void;
 }) {
   if (!detail) {
     return (
@@ -189,7 +195,29 @@ export default function SessionView({
               {summary.parse_status}
             </span>
           )}
+          {secretCount > 0 && (
+            <span
+              className="chip chip--warn"
+              title="Flagged secrets are redacted from search and default exports. The canonical copy may still contain them."
+            >
+              🔑 {secretCount} flagged
+            </span>
+          )}
         </p>
+        {(onExport || onForget) && (
+          <div className="session__actions">
+            {onExport && (
+              <button className="btn--ghost" onClick={onExport}>
+                Export
+              </button>
+            )}
+            {onForget && (
+              <button className="btn--ghost session__forget" onClick={onForget}>
+                Forget
+              </button>
+            )}
+          </div>
+        )}
       </header>
 
       <section aria-labelledby="git-heading">

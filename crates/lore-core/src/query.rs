@@ -262,6 +262,17 @@ pub fn file_patch_relpath(conn: &Connection, file_event_id: &str) -> Result<Opti
     .map_err(Into::into)
 }
 
+/// How many secret findings were flagged in a session (all are redacted from
+/// derived surfaces; the canonical copy may still contain them).
+pub fn secret_count(conn: &Connection, session_id: &str) -> Result<i64> {
+    conn.query_row(
+        "SELECT count(*) FROM secret_finding WHERE session_id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
 /// Every git observation for a session, provenance-labeled and ordered by
 /// observation time then source, for the session's git rail. Distinct sources
 /// (agent-recorded, agent-patch, Lore-captured, Lore-reverified) coexist and are

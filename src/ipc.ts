@@ -7,6 +7,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { DetectedAgent } from "../crates/lore-ipc/bindings/DetectedAgent";
 import type { FileEventDto } from "../crates/lore-ipc/bindings/FileEventDto";
+import type { ForgetReport } from "../crates/lore-ipc/bindings/ForgetReport";
 import type { GitObservationDto } from "../crates/lore-ipc/bindings/GitObservationDto";
 import type { MessageDto } from "../crates/lore-ipc/bindings/MessageDto";
 import type { MessagePartDto } from "../crates/lore-ipc/bindings/MessagePartDto";
@@ -21,6 +22,7 @@ import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary"
 export type {
   DetectedAgent,
   FileEventDto,
+  ForgetReport,
   GitObservationDto,
   MessageDto,
   MessagePartDto,
@@ -78,6 +80,27 @@ export function getFilePatch(id: string): Promise<string | null> {
 /** Full-text search over the redacted projections. Secret-safe by construction. */
 export function search(query: string, limit: number): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("search", { query, limit });
+}
+
+/** How many secrets were flagged in a session (all redacted from derived surfaces). */
+export function sessionSecretCount(id: string): Promise<number> {
+  return invoke<number>("session_secret_count", { id });
+}
+
+/** Export a session as Markdown; `includeSecrets` (default false) masks flagged spans. */
+export function exportSessionMarkdown(
+  id: string,
+  includeSecrets: boolean,
+): Promise<string | null> {
+  return invoke<string | null>("export_session_markdown", {
+    id,
+    includeSecrets,
+  });
+}
+
+/** Forget a session: remove its rows, projections, findings, and orphan blobs. */
+export function forgetSession(id: string): Promise<ForgetReport> {
+  return invoke<ForgetReport>("forget_session", { id });
 }
 
 /** Run a discovery→ingest→enrich pass and resolve with the final tally. */

@@ -13,8 +13,8 @@ use lore_core::discovery::DiscoveryConfig;
 use lore_core::pipeline::{Pipeline, ProgressEvent, ProgressSink};
 use lore_core::storage::blob::BlobStore;
 use lore_ipc::{
-    DetectedAgent, GitObservationDto, RepositorySummary, RescanResult, ScanProgress, SearchHit,
-    SessionDetail, SessionSummary,
+    DetectedAgent, ForgetReport, GitObservationDto, RepositorySummary, RescanResult, ScanProgress,
+    SearchHit, SessionDetail, SessionSummary,
 };
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -144,6 +144,38 @@ fn get_git_snapshot(
     lore_core::query::get_git_snapshot(&conn, &id).map_err(|e| e.to_string())
 }
 
+/// How many secrets were flagged in a session (all redacted from derived surfaces).
+#[tauri::command]
+fn session_secret_count(state: State<'_, AppState>, id: String) -> Result<i64, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::query::secret_count(&conn, &id).map_err(|e| e.to_string())
+}
+
+/// Export a session as Markdown. `include_secrets` defaults off (masked); passing
+/// true is an explicit opt-in to full-fidelity content.
+#[tauri::command]
+fn export_session_markdown(
+    state: State<'_, AppState>,
+    id: String,
+    include_secrets: bool,
+) -> Result<Option<String>, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::export::export_session_markdown(&conn, &id, include_secrets)
+        .map_err(|e| e.to_string())
+}
+
+/// Forget a session: remove its rows, projections, findings, and orphan blobs.
+#[tauri::command]
+fn forget_session(state: State<'_, AppState>, id: String) -> Result<ForgetReport, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    let report =
+        lore_core::forget::forget_session(&conn, &state.blobs, &id).map_err(|e| e.to_string())?;
+    Ok(ForgetReport {
+        blobs_removed: i64::try_from(report.blobs_removed).unwrap_or(i64::MAX),
+        source_paths: report.source_paths,
+    })
+}
+
 /// Full-text search over the redacted projections (secret-safe by construction).
 #[tauri::command]
 fn search(state: State<'_, AppState>, query: String, limit: i64) -> Result<Vec<SearchHit>, String> {
@@ -215,6 +247,9 @@ pub fn run() {
             get_session,
             get_git_snapshot,
             get_file_patch,
+            session_secret_count,
+            export_session_markdown,
+            forget_session,
             search,
             rescan
         ])
