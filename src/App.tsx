@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import CommandPalette, { type Command } from "./components/CommandPalette";
 import RepositoryList from "./components/RepositoryList";
+import SearchResults from "./components/SearchResults";
 import SessionList from "./components/SessionList";
 import SessionView from "./components/SessionView";
 import { agentLabel } from "./format";
@@ -15,10 +16,12 @@ import {
   listSessions,
   onScanProgress,
   rescan,
+  search,
   type DetectedAgent,
   type GitObservationDto,
   type RepositorySummary,
   type ScanProgress,
+  type SearchHit,
   type SessionDetail,
   type SessionSummary,
 } from "./ipc";
@@ -57,6 +60,8 @@ export default function App() {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchHit[]>([]);
 
   const loadSessions = useCallback(async (repo: string | null) => {
     const rows = repo
@@ -99,6 +104,19 @@ export default function App() {
     setError(null);
     try {
       await loadSessions(repo);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function runSearch(next: string) {
+    setQuery(next);
+    if (next.trim() === "") {
+      setHits([]);
+      return;
+    }
+    try {
+      setHits(await search(next, 50));
     } catch (e) {
       setError(String(e));
     }
@@ -225,11 +243,28 @@ export default function App() {
         </aside>
 
         <section className="pane pane--sessions" aria-label="sessions">
-          <SessionList
-            sessions={sessions}
-            selectedId={selectedSession}
-            onOpen={openSession}
+          <input
+            className="search-box"
+            type="search"
+            placeholder="Search… (e.g. retryBackoff agent:codex path:auth/)"
+            aria-label="search"
+            value={query}
+            onChange={(event) => void runSearch(event.target.value)}
           />
+          {query.trim() ? (
+            <SearchResults
+              hits={hits}
+              query={query}
+              selectedId={selectedSession}
+              onOpen={openSession}
+            />
+          ) : (
+            <SessionList
+              sessions={sessions}
+              selectedId={selectedSession}
+              onOpen={openSession}
+            />
+          )}
         </section>
 
         <section className="pane pane--detail">

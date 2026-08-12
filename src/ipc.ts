@@ -13,6 +13,7 @@ import type { MessagePartDto } from "../crates/lore-ipc/bindings/MessagePartDto"
 import type { RepositorySummary } from "../crates/lore-ipc/bindings/RepositorySummary";
 import type { RescanResult } from "../crates/lore-ipc/bindings/RescanResult";
 import type { ScanProgress } from "../crates/lore-ipc/bindings/ScanProgress";
+import type { SearchHit } from "../crates/lore-ipc/bindings/SearchHit";
 import type { SegmentDto } from "../crates/lore-ipc/bindings/SegmentDto";
 import type { SessionDetail } from "../crates/lore-ipc/bindings/SessionDetail";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
@@ -26,10 +27,15 @@ export type {
   RepositorySummary,
   RescanResult,
   ScanProgress,
+  SearchHit,
   SegmentDto,
   SessionDetail,
   SessionSummary,
 };
+
+/** Snippet highlight markers (must match lore_core::search). */
+export const HIGHLIGHT_START = "\u{e000}";
+export const HIGHLIGHT_END = "\u{e001}";
 
 /** The agents Lore knows about, with ingested-session counts. */
 export function listDetectedAgents(): Promise<DetectedAgent[]> {
@@ -67,6 +73,11 @@ export function getGitSnapshot(id: string): Promise<GitObservationDto[]> {
 /** Fetch the recorded patch text for a file event, or null when none is stored. */
 export function getFilePatch(id: string): Promise<string | null> {
   return invoke<string | null>("get_file_patch", { id });
+}
+
+/** Full-text search over the redacted projections. Secret-safe by construction. */
+export function search(query: string, limit: number): Promise<SearchHit[]> {
+  return invoke<SearchHit[]>("search", { query, limit });
 }
 
 /** Run a discovery→ingest→enrich pass and resolve with the final tally. */

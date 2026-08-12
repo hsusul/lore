@@ -788,6 +788,83 @@ kbd {
   color: var(--text-3);
 }
 
+/* ── Search ────────────────────────────────────────────────────────────── */
+
+.search-box {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 0.35rem 0.55rem;
+  margin-bottom: 0.4rem;
+}
+
+.search-box:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.results__item {
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--r);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.results__item:hover {
+  background: var(--surface-hover);
+}
+
+.results__item.is-active {
+  background: var(--accent-weak);
+  border-left-color: var(--accent);
+}
+
+.results__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.15rem;
+}
+
+.results__title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.results__field {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 0.72rem;
+}
+
+.hit__snippet {
+  display: block;
+  color: var(--text-2);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.hit__snippet mark {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 /* ── Command palette ───────────────────────────────────────────────────── */
 
 .omnibar {

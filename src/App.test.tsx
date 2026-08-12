@@ -9,8 +9,11 @@ vi.mock("./ipc", () => ({
   getSession: vi.fn().mockResolvedValue(null),
   getGitSnapshot: vi.fn().mockResolvedValue([]),
   getFilePatch: vi.fn().mockResolvedValue(null),
+  search: vi.fn().mockResolvedValue([]),
   rescan: vi.fn().mockResolvedValue({}),
   onScanProgress: vi.fn().mockResolvedValue(() => {}),
+  HIGHLIGHT_START: "\u{e000}",
+  HIGHLIGHT_END: "\u{e001}",
 }));
 
 import App from "./App";

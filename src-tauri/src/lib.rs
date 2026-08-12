@@ -13,8 +13,8 @@ use lore_core::discovery::DiscoveryConfig;
 use lore_core::pipeline::{Pipeline, ProgressEvent, ProgressSink};
 use lore_core::storage::blob::BlobStore;
 use lore_ipc::{
-    DetectedAgent, GitObservationDto, RepositorySummary, RescanResult, ScanProgress, SessionDetail,
-    SessionSummary,
+    DetectedAgent, GitObservationDto, RepositorySummary, RescanResult, ScanProgress, SearchHit,
+    SessionDetail, SessionSummary,
 };
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -144,6 +144,13 @@ fn get_git_snapshot(
     lore_core::query::get_git_snapshot(&conn, &id).map_err(|e| e.to_string())
 }
 
+/// Full-text search over the redacted projections (secret-safe by construction).
+#[tauri::command]
+fn search(state: State<'_, AppState>, query: String, limit: i64) -> Result<Vec<SearchHit>, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::search::search(&conn, &query, limit).map_err(|e| e.to_string())
+}
+
 /// Run a discovery→ingest→enrich pass, streaming `scan_progress` events, and
 /// return the final tally.
 #[tauri::command]
@@ -208,6 +215,7 @@ pub fn run() {
             get_session,
             get_git_snapshot,
             get_file_patch,
+            search,
             rescan
         ])
         .run(tauri::generate_context!());
