@@ -373,8 +373,9 @@ fn codex_recorded_patch_payloads_persist_as_faithful_blobs() {
             )
             .unwrap();
         assert_eq!(media, "text/x-patch");
-        // Unscanned canonical storage must not yet be searchable/exportable.
-        assert_eq!(state, "pending");
+        // Recorded patches are secret-scanned at ingest; this fixture has no
+        // secret, so the blob finalizes as clean (searchable/exportable).
+        assert_eq!(state, "clean");
         String::from_utf8(blobs.read(&relpath).unwrap()).unwrap()
     };
 

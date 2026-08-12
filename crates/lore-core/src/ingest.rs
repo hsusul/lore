@@ -7,8 +7,11 @@
 //! Message `parent_id` is resolved from `parent_native_uuid` against a map built
 //! over *all* messages first, so out-of-order parents resolve correctly.
 //!
-//! Search projections and secret scanning are added in M6; this module writes
-//! canonical rows only.
+//! Every cleartext field is secret-scanned before it can be indexed or
+//! exported: findings are recorded and searchable fields get a **redacted**
+//! `SearchDocument` projection, so a flagged span never reaches FTS
+//! (`SECRET_SCANNING.md`, `SEARCH.md`). Recorded-patch blobs finalize their
+//! `scan_state` here.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -85,7 +88,13 @@ fn persist_rows(
     let session_id = session_id_for(agent_id, parsed);
     let existing_sources = session_sources(tx, &session_id)?;
 
-    // Idempotent replace: cascade-delete any prior rows for this session.
+    // Explicitly delete search projections first so the FTS external-content
+    // delete trigger fires (an FK cascade would not fire it), then cascade-delete
+    // the rest of the session's rows. Idempotent replace.
+    tx.execute(
+        "DELETE FROM search_document WHERE session_id = ?1",
+        params![session_id],
+    )?;
     tx.execute(
         "DELETE FROM agent_session WHERE id = ?1",
         params![session_id],
@@ -133,6 +142,20 @@ fn persist_rows(
             parsed.agent_version,
         ],
     )?;
+
+    // Title is a searchable projection (scanned + redacted like any cleartext).
+    if let Some(title) = &parsed.title {
+        scan_and_project(
+            tx,
+            &session_id,
+            None,
+            "session",
+            &session_id,
+            "title",
+            title,
+            true,
+        )?;
+    }
 
     // Segments.
     let mut segment_ids = Vec::with_capacity(parsed.segments.len());
@@ -221,6 +244,35 @@ fn persist_rows(
                     p.metadata_json,
                 ],
             )?;
+
+            // Scan every cleartext part for secrets. Index the text projection
+            // only when the part is searchable (thinking is scanned, not
+            // indexed); tool payload JSON is scanned but never indexed.
+            let seg = segment_id.map(String::as_str);
+            if let Some(text) = &p.text {
+                scan_and_project(
+                    tx,
+                    &session_id,
+                    seg,
+                    "message_part",
+                    &pid,
+                    "text",
+                    text,
+                    p.searchable,
+                )?;
+            }
+            if let Some(content) = &p.content_json {
+                scan_and_project(
+                    tx,
+                    &session_id,
+                    seg,
+                    "message_part",
+                    &pid,
+                    "content_json",
+                    content,
+                    false,
+                )?;
+            }
             part_ids.insert((m.seq, p.ordinal), pid);
         }
     }
@@ -285,6 +337,28 @@ fn persist_rows(
                 fe.event_ts,
             ],
         )?;
+
+        // Scan the recorded patch, index a redacted projection, and finalize the
+        // blob's scan_state so it becomes available to search/export.
+        if let Some(patch) = &fe.patch_text {
+            let seg = segment_id.map(String::as_str);
+            let has_secret = scan_and_project(
+                tx,
+                &session_id,
+                seg,
+                "file_event",
+                &fid,
+                "patch",
+                patch,
+                true,
+            )?;
+            if let Some(blob_id) = &patch_blob_id {
+                tx.execute(
+                    "UPDATE blob SET scan_state = ?2 WHERE id = ?1",
+                    params![blob_id, if has_secret { "findings" } else { "clean" }],
+                )?;
+            }
+        }
     }
 
     // Agent-recorded git observations from segment context (branch/commit as the
@@ -367,6 +441,64 @@ fn parse_note(parsed: &ParsedSession) -> Option<String> {
 
 fn bounded(s: &str) -> String {
     s.chars().take(500).collect()
+}
+
+/// Scan one cleartext field for secrets before it can be indexed or exported.
+/// Records a `secret_finding` per detection (offsets + rule + severity + a keyed
+/// fingerprint — never a second cleartext copy) and, when `index` is set, writes
+/// a **redacted** `SearchDocument` projection so a flagged span never reaches
+/// FTS. Returns whether any secret was found.
+#[allow(clippy::too_many_arguments)] // a projection target is naturally several fields
+fn scan_and_project(
+    tx: &Connection,
+    session_id: &str,
+    segment_id: Option<&str>,
+    source_kind: &str,
+    source_id: &str,
+    field: &str,
+    text: &str,
+    index: bool,
+) -> Result<bool> {
+    let findings = crate::secrets::scan(text);
+    for (i, finding) in findings.iter().enumerate() {
+        let fid = det_id("sf", &[source_id, field, &i.to_string()]);
+        tx.execute(
+            "INSERT INTO secret_finding
+                (id, session_id, source_kind, source_id, field, rule, span_start, span_end,
+                 severity, value_fingerprint, disposition, created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'redacted', unixepoch('now')*1000)",
+            params![
+                fid,
+                session_id,
+                source_kind,
+                source_id,
+                field,
+                finding.rule,
+                i64::try_from(finding.start).unwrap_or(i64::MAX),
+                i64::try_from(finding.end).unwrap_or(i64::MAX),
+                finding.severity.as_str(),
+                finding.fingerprint(text),
+            ],
+        )?;
+    }
+    if index {
+        let redacted = crate::secrets::redact(text, &findings);
+        tx.execute(
+            "INSERT INTO search_document
+                (session_id, segment_id, source_kind, source_id, field, ordinal, redacted_text,
+                 created_at)
+             VALUES (?1,?2,?3,?4,?5,0,?6, unixepoch('now')*1000)",
+            params![
+                session_id,
+                segment_id,
+                source_kind,
+                source_id,
+                field,
+                redacted
+            ],
+        )?;
+    }
+    Ok(!findings.is_empty())
 }
 
 /// Deterministic opaque id from a prefix and stable natural-key parts.
