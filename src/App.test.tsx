@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./ipc", () => ({
@@ -24,5 +24,12 @@ describe("App shell", () => {
     expect(screen.getByRole("button", { name: /rescan/i })).toBeTruthy();
     // Panes present: repositories nav and sessions listbox.
     expect(screen.getByRole("navigation", { name: /repositories/i })).toBeTruthy();
+  });
+
+  it("opens the command palette on ⌘K", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "Lore", level: 1 });
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(screen.getByRole("dialog", { name: /command palette/i })).toBeTruthy();
   });
 });

@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
+import CommandPalette, { type Command } from "./components/CommandPalette";
 import RepositoryList from "./components/RepositoryList";
 import SessionList from "./components/SessionList";
 import SessionView from "./components/SessionView";
+import { agentLabel } from "./format";
 import {
   getFilePatch,
   getGitSnapshot,
@@ -54,6 +56,7 @@ export default function App() {
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const loadSessions = useCallback(async (repo: string | null) => {
     const rows = repo
@@ -78,6 +81,17 @@ export default function App() {
     return () => void unlisten.then((off) => off());
     // Run once on mount; refresh is re-invoked explicitly elsewhere.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   async function selectRepo(repo: string | null) {
@@ -128,13 +142,47 @@ export default function App() {
     root.dataset.theme = next;
   }
 
+  const commands = useMemo<Command[]>(() => {
+    const actions: Command[] = [
+      { id: "cmd-rescan", group: "Action", label: "Rescan", run: () => void handleRescan() },
+      { id: "cmd-all", group: "Action", label: "All sessions", run: () => void selectRepo(null) },
+    ];
+    const repoCommands: Command[] = repositories.map((repo) => ({
+      id: `cmd-repo-${repo.id}`,
+      group: "Repository",
+      label: repo.display_name,
+      hint: `${repo.session_count} sessions`,
+      run: () => void selectRepo(repo.id),
+    }));
+    const sessionCommands: Command[] = sessions.map((session) => ({
+      id: `cmd-sess-${session.id}`,
+      group: "Session",
+      label: session.title ?? "(untitled)",
+      hint: agentLabel(session.agent_id),
+      run: () => void openSession(session.id),
+    }));
+    return [...actions, ...repoCommands, ...sessionCommands];
+    // Handlers are stable across renders; rebuild only when the data changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repositories, sessions]);
+
   return (
     <div className="shell">
       <header className="shell__bar">
         <Mark />
         <h1>Lore</h1>
         <span className="shell__tagline">git memory for coding agents</span>
-        <span className="shell__spacer" />
+        <button
+          className="omnibar"
+          onClick={() => setPaletteOpen(true)}
+          aria-label="Open command palette"
+        >
+          Jump to…
+          <span className="omnibar__hint">
+            <kbd>⌘</kbd>
+            <kbd>K</kbd>
+          </span>
+        </button>
         <span className="shell__dev">preview build</span>
         <button
           className="icon-btn"
@@ -188,6 +236,12 @@ export default function App() {
           <SessionView detail={detail} git={git} loadPatch={getFilePatch} />
         </section>
       </div>
+
+      <CommandPalette
+        items={commands}
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+      />
     </div>
   );
 }

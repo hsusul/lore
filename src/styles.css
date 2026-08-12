@@ -782,6 +782,115 @@ kbd {
   color: var(--text-3);
 }
 
+/* ── Command palette ───────────────────────────────────────────────────── */
+
+.omnibar {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  min-width: 14rem;
+  color: var(--text-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 0.24rem 0.55rem;
+  font-size: 0.8rem;
+}
+
+.omnibar:hover {
+  background: var(--surface-2);
+}
+
+.omnibar__hint {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 0.15rem;
+}
+
+.palette__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  z-index: 50;
+}
+
+.palette {
+  width: min(38rem, 92vw);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.palette__input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.palette__input::placeholder {
+  color: var(--text-3);
+}
+
+.palette__list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem;
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.palette__item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--r);
+  cursor: pointer;
+}
+
+.palette__item.is-active {
+  background: var(--accent-weak);
+}
+
+.palette__group {
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  min-width: 5.5rem;
+}
+
+.palette__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette__hint {
+  color: var(--text-3);
+  font-size: 0.78rem;
+}
+
+.palette__empty {
+  padding: 0.8rem 0.6rem;
+  color: var(--text-3);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
