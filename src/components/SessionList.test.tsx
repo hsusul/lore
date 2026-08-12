@@ -52,6 +52,24 @@ describe("SessionList", () => {
     expect(onOpen).toHaveBeenLastCalledWith("b");
   });
 
+  it("navigates with j/k and End keys", () => {
+    const onOpen = vi.fn();
+    render(<SessionList sessions={sessions} selectedId={null} onOpen={onOpen} />);
+    const listbox = screen.getByRole("listbox", { name: /sessions/i });
+
+    fireEvent.keyDown(listbox, { key: "j" }); // → second
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onOpen).toHaveBeenLastCalledWith("b");
+
+    fireEvent.keyDown(listbox, { key: "k" }); // → first
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onOpen).toHaveBeenLastCalledWith("a");
+
+    fireEvent.keyDown(listbox, { key: "End" }); // → last
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onOpen).toHaveBeenLastCalledWith("c");
+  });
+
   it("opens a row on click", () => {
     const onOpen = vi.fn();
     render(<SessionList sessions={sessions} selectedId={null} onOpen={onOpen} />);

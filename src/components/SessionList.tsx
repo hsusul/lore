@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { agentLabel, formatRelative } from "../format";
 import type { SessionSummary } from "../ipc";
 
 /**
- * A keyboard-navigable session list (listbox pattern): Arrow Up/Down moves the
- * active row, Enter opens it, click selects and opens.
+ * A keyboard-navigable session list (listbox pattern): Arrow/j/k move the active
+ * row, Home/End jump to the ends, Enter opens it, click selects and opens.
  */
 export default function SessionList({
   sessions,
@@ -17,19 +17,33 @@ export default function SessionList({
   onOpen: (id: string) => void;
 }) {
   const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLUListElement>(null);
 
   // Keep the active index in range as the list changes.
   useEffect(() => {
     setActive((current) => Math.min(current, Math.max(sessions.length - 1, 0)));
   }, [sessions.length]);
 
+  // Keep the active row visible during keyboard navigation.
+  useEffect(() => {
+    const activeEl = listRef.current?.querySelector<HTMLElement>(".sessions__item.is-active");
+    activeEl?.scrollIntoView?.({ block: "nearest" });
+  }, [active]);
+
   function onKeyDown(event: React.KeyboardEvent<HTMLUListElement>) {
-    if (event.key === "ArrowDown") {
+    const last = sessions.length - 1;
+    if (event.key === "ArrowDown" || event.key === "j") {
       event.preventDefault();
-      setActive((current) => Math.min(current + 1, sessions.length - 1));
-    } else if (event.key === "ArrowUp") {
+      setActive((current) => Math.min(current + 1, last));
+    } else if (event.key === "ArrowUp" || event.key === "k") {
       event.preventDefault();
       setActive((current) => Math.max(current - 1, 0));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setActive(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setActive(last);
     } else if (event.key === "Enter") {
       event.preventDefault();
       const session = sessions[active];
@@ -38,11 +52,21 @@ export default function SessionList({
   }
 
   if (sessions.length === 0) {
-    return <p className="sessions__empty">No sessions. Run a rescan to ingest history.</p>;
+    return (
+      <div className="sessions__empty">
+        <p>No sessions yet.</p>
+        <p className="empty">
+          Run a <strong>Rescan</strong> to ingest your agent history, or press{" "}
+          <kbd>⌘</kbd>
+          <kbd>K</kbd> to jump around.
+        </p>
+      </div>
+    );
   }
 
   return (
     <ul
+      ref={listRef}
       className="sessions"
       role="listbox"
       aria-label="sessions"

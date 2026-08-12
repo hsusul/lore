@@ -170,7 +170,7 @@ export default function SessionView({
     );
   }
 
-  const { summary, messages, file_events } = detail;
+  const { summary, segments, messages, file_events } = detail;
   return (
     <section className="session" aria-label="session">
       <header className="session__header">
@@ -180,6 +180,8 @@ export default function SessionView({
           {summary.primary_model && <span className="mono">{summary.primary_model}</span>}
           <span>{summary.message_count} messages</span>
           <span>{summary.tool_call_count} tools</span>
+          {segments.length > 1 && <span>{segments.length} segments</span>}
+          {summary.started_at != null && <span>{formatRelative(summary.started_at)}</span>}
           {summary.parse_status !== "ok" && (
             <span
               className={`chip ${summary.parse_status === "failed" ? "chip--danger" : "chip--warn"}`}
