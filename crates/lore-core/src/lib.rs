@@ -17,6 +17,7 @@
 //!   and opaque/encrypted regions, are never blurred together.
 
 pub mod adapters;
+pub mod backup;
 pub mod discovery;
 pub mod enrich;
 pub mod export;
