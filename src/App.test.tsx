@@ -12,6 +12,7 @@ vi.mock("./ipc", () => ({
   sessionSecretCount: vi.fn().mockResolvedValue(0),
   exportSessionMarkdown: vi.fn().mockResolvedValue(""),
   forgetSession: vi.fn().mockResolvedValue({ blobs_removed: 0, source_paths: [] }),
+  forgetEverything: vi.fn().mockResolvedValue({ blobs_removed: 0, source_paths: [] }),
   search: vi.fn().mockResolvedValue([]),
   rescan: vi.fn().mockResolvedValue({}),
   onScanProgress: vi.fn().mockResolvedValue(() => {}),

@@ -176,6 +176,19 @@ fn forget_session(state: State<'_, AppState>, id: String) -> Result<ForgetReport
     })
 }
 
+/// Forget everything: wipe all archive content (sessions, repos, sources,
+/// projections, findings, blobs) while keeping the database file open. Settings
+/// and the job queue are preserved.
+#[tauri::command]
+fn forget_everything(state: State<'_, AppState>) -> Result<ForgetReport, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    let report = lore_core::forget::forget_all(&conn, &state.blobs).map_err(|e| e.to_string())?;
+    Ok(ForgetReport {
+        blobs_removed: i64::try_from(report.blobs_removed).unwrap_or(i64::MAX),
+        source_paths: report.source_paths,
+    })
+}
+
 /// Full-text search over the redacted projections (secret-safe by construction).
 #[tauri::command]
 fn search(state: State<'_, AppState>, query: String, limit: i64) -> Result<Vec<SearchHit>, String> {
@@ -250,6 +263,7 @@ pub fn run() {
             session_secret_count,
             export_session_markdown,
             forget_session,
+            forget_everything,
             search,
             rescan
         ])

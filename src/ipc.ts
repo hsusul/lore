@@ -103,6 +103,11 @@ export function forgetSession(id: string): Promise<ForgetReport> {
   return invoke<ForgetReport>("forget_session", { id });
 }
 
+/** Forget everything: wipe all archive content (the database file stays). */
+export function forgetEverything(): Promise<ForgetReport> {
+  return invoke<ForgetReport>("forget_everything");
+}
+
 /** Run a discovery→ingest→enrich pass and resolve with the final tally. */
 export function rescan(): Promise<RescanResult> {
   return invoke<RescanResult>("rescan");

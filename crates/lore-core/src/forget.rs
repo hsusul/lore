@@ -68,6 +68,40 @@ pub fn forget_session(
     })
 }
 
+/// Forget **all** archive content, keeping the database file/connection open
+/// (the connection-safe form of "forget everything" for a running app): remove
+/// every session, repository, source, projection, finding, and blob, then run
+/// secure-delete maintenance. Settings and the job queue are preserved. The
+/// file-level [`forget_everything`] is for a full uninstall instead.
+pub fn forget_all(conn: &Connection, blobs: &BlobStore) -> Result<ForgetReport> {
+    conn.execute_batch("PRAGMA secure_delete = ON;")?;
+    let orphans = {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
+        // Delete projections first so the FTS external-content trigger fires.
+        tx.execute("DELETE FROM search_document", [])?;
+        tx.execute("DELETE FROM agent_session", [])?;
+        tx.execute("DELETE FROM repository", [])?;
+        tx.execute("DELETE FROM source_artifact", [])?;
+        tx.execute("DELETE FROM agent", [])?;
+        // Every blob is now unreferenced.
+        let orphans = orphan_blobs(&tx)?;
+        tx.execute("DELETE FROM blob", [])?;
+        tx.commit()?;
+        orphans
+    };
+
+    for (_, relpath) in &orphans {
+        blobs.remove(relpath)?;
+    }
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;");
+
+    Ok(ForgetReport {
+        blobs_removed: orphans.len(),
+        source_paths: Vec::new(),
+    })
+}
+
 /// Blobs no longer referenced by any content row.
 fn orphan_blobs(tx: &Connection) -> Result<Vec<(String, String)>> {
     let mut stmt = tx.prepare(
@@ -220,6 +254,34 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn forget_all_wipes_content_but_keeps_the_connection() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let (_bd, blobs) = store();
+        persist(&conn, &blobs, "a", "const A = 1");
+        persist(&conn, &blobs, "b", "const B = 2");
+
+        let report = forget_all(&conn, &blobs).unwrap();
+        assert_eq!(report.blobs_removed, 2);
+
+        // Every content table is empty; the connection is still usable.
+        for table in [
+            "agent_session",
+            "message",
+            "search_document",
+            "secret_finding",
+            "blob",
+            "repository",
+            "source_artifact",
+            "agent",
+        ] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{table} must be empty after forget_all");
+        }
     }
 
     #[test]

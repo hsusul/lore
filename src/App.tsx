@@ -5,6 +5,7 @@ import RepositoryList from "./components/RepositoryList";
 import SearchResults from "./components/SearchResults";
 import SessionList from "./components/SessionList";
 import SessionView from "./components/SessionView";
+import SettingsPanel from "./components/SettingsPanel";
 import { agentLabel } from "./format";
 import {
   exportSessionMarkdown,
@@ -17,6 +18,7 @@ import {
   listRepositorySessions,
   listSessions,
   onScanProgress,
+  forgetEverything,
   rescan,
   search,
   sessionSecretCount,
@@ -67,6 +69,7 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [secretCount, setSecretCount] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const loadSessions = useCallback(async (repo: string | null) => {
     const rows = repo
@@ -177,6 +180,26 @@ export default function App() {
     }
   }
 
+  async function handleForgetEverything() {
+    if (
+      !window.confirm(
+        "Forget everything? This permanently removes all sessions, repositories, and findings from Lore. Original agent logs are not touched.",
+      )
+    ) {
+      return;
+    }
+    try {
+      const report = await forgetEverything();
+      setDetail(null);
+      setSelectedSession(null);
+      setSettingsOpen(false);
+      await refresh();
+      setNotice(`Archive cleared (${report.blobs_removed} blob(s) removed).`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function handleRescan() {
     setScanning(true);
     setError(null);
@@ -252,6 +275,14 @@ export default function App() {
           title="Toggle light/dark"
         >
           ◐
+        </button>
+        <button
+          className="icon-btn"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Settings"
+          title="Settings"
+        >
+          ⚙
         </button>
         <button className="btn--primary" onClick={handleRescan} disabled={scanning}>
           {scanning ? "Scanning…" : "Rescan"}
@@ -331,6 +362,12 @@ export default function App() {
         items={commands}
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
+      />
+      <SettingsPanel
+        open={settingsOpen}
+        agents={agents}
+        onForgetEverything={handleForgetEverything}
+        onClose={() => setSettingsOpen(false)}
       />
     </div>
   );

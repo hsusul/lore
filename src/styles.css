@@ -286,6 +286,17 @@ button:disabled {
   padding: 0.28rem 0.5rem;
 }
 
+.btn--danger {
+  color: var(--accent-fg);
+  background: var(--danger);
+  border-color: transparent;
+  font-weight: 500;
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 88%, black);
+}
+
 .icon-btn {
   border: none;
   background: transparent;
@@ -991,6 +1002,57 @@ kbd {
 .palette__empty {
   padding: 0.8rem 0.6rem;
   color: var(--text-3);
+}
+
+/* ── Settings ──────────────────────────────────────────────────────────── */
+
+.settings {
+  width: min(34rem, 92vw);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  padding: 0 1.1rem 1.1rem;
+  max-height: 80vh;
+  overflow: auto;
+}
+
+.settings__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  padding: 0.9rem 0 0.3rem;
+}
+
+.settings__head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.settings__facts {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text-2);
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.settings__agents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.settings__agents li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+  border-top: 1px solid var(--border);
 }
 
 @media (prefers-reduced-motion: reduce) {
