@@ -41,3 +41,8 @@ dist-ssr/
 # Local project documentation
 docs/
 *.md
+
+# Local agent instructions and design previews
+/.claude/
+/preview.html
+/src/preview.tsx
