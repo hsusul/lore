@@ -17,6 +17,7 @@
 //!   and opaque/encrypted regions, are never blurred together.
 
 pub mod adapters;
+pub mod backup;
 pub mod discovery;
 pub mod enrich;
 pub mod export;
@@ -30,7 +31,9 @@ pub mod query;
 pub mod search;
 pub mod secrets;
 pub mod storage;
+pub mod synthetic;
 pub mod watcher;
+pub mod worker;
 
 /// The `lore-core` crate version (from `CARGO_PKG_VERSION`).
 #[must_use]

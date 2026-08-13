@@ -7,31 +7,42 @@
 //! in here.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use lore_core::adapters::AdapterRegistry;
-use lore_core::discovery::DiscoveryConfig;
+use lore_core::discovery::{watch_roots, DiscoveryConfig};
 use lore_core::pipeline::{Pipeline, ProgressEvent, ProgressSink};
 use lore_core::storage::blob::BlobStore;
+use lore_core::watcher::SessionWatcher;
+use lore_core::worker::{self, WorkerConfig, WorkerHandle};
 use lore_ipc::{
     DetectedAgent, ForgetReport, GitObservationDto, RepositorySummary, RescanResult, ScanProgress,
     SearchHit, SessionDetail, SessionSummary,
 };
 use rusqlite::Connection;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 /// Backpressure ceiling for queued ingest jobs in one scan.
 const QUEUE_CAPACITY: usize = 100_000;
 /// Upper bound on jobs drained per rescan call.
 const DRAIN_BUDGET: usize = 1_000_000;
+/// Quiet period a source path must be idle before the watcher hands it to the
+/// worker, coalescing partial writes and event storms.
+const WATCH_QUIET: Duration = Duration::from_millis(400);
 
-/// Process-wide application state: the archive connection (guarded; rusqlite
+/// Process-wide application state: the UI archive connection (guarded; rusqlite
 /// `Connection` is `Send` but not `Sync`), the blob store, the adapter registry,
-/// and discovery configuration.
+/// discovery configuration, and a handle to the background ingestion worker.
+///
+/// The worker runs on its own thread with its own connection, so continuous
+/// background ingestion never blocks UI queries or holds this connection's lock
+/// across file parsing or Git work.
 struct AppState {
     db: Mutex<Connection>,
     blobs: BlobStore,
     registry: AdapterRegistry,
     config: DiscoveryConfig,
+    worker: Mutex<Option<WorkerHandle>>,
 }
 
 /// A progress sink that accumulates content-free counts and relays them to the
@@ -60,6 +71,43 @@ impl ProgressSink for EmitSink<'_> {
             match event {
                 ProgressEvent::ScanEnqueued { discovered, .. } => {
                     progress.discovered = discovered as i64;
+                }
+                ProgressEvent::Ingested { .. } => progress.ingested += 1,
+                ProgressEvent::Skipped { .. } => progress.skipped += 1,
+                ProgressEvent::Failed { .. } => progress.failed += 1,
+                ProgressEvent::Requeued { .. } => {}
+            }
+            let _ = self.app.emit("scan_progress", *progress);
+        }
+    }
+}
+
+/// An owned, thread-safe progress sink for the background worker. Accumulates
+/// content-free counts and relays them to the webview as `scan_progress` events.
+/// Unlike [`EmitSink`] it owns a cloned [`AppHandle`], so it can live on the
+/// worker thread for the whole app lifetime.
+struct WorkerSink {
+    app: AppHandle,
+    progress: Mutex<ScanProgress>,
+}
+
+impl WorkerSink {
+    fn new(app: AppHandle) -> Self {
+        Self {
+            app,
+            progress: Mutex::new(ScanProgress::default()),
+        }
+    }
+}
+
+impl ProgressSink for WorkerSink {
+    fn emit(&self, event: ProgressEvent) {
+        if let Ok(mut progress) = self.progress.lock() {
+            match event {
+                ProgressEvent::ScanEnqueued { discovered, .. } => {
+                    // Live cumulative gauge: the worker never claims a pass is
+                    // "done" (ingestion is continuous), so `done` stays false.
+                    progress.discovered = progress.discovered.max(discovered as i64);
                 }
                 ProgressEvent::Ingested { .. } => progress.ingested += 1,
                 ProgressEvent::Skipped { .. } => progress.skipped += 1,
@@ -228,24 +276,86 @@ fn rescan(app: AppHandle, state: State<'_, AppState>) -> Result<RescanResult, St
     })
 }
 
-/// Open (creating if needed) the archive under the app data directory and build
-/// the shared state.
+/// Build the discovery configuration.
+///
+/// In release builds this is the adapters' documented default roots (the user's
+/// real `~/.claude` / `~/.codex`). In **debug** builds only, the roots can be
+/// redirected to a synthetic profile via `LORE_DEV_CLAUDE_ROOT` /
+/// `LORE_DEV_CODEX_ROOT` so `cargo tauri dev` can run against generated fixtures
+/// (see `lore_core::synthetic`) instead of real history. Release builds ignore
+/// these variables entirely, so shipped Lore never takes an env-driven root.
+fn dev_config() -> DiscoveryConfig {
+    #[allow(unused_mut)]
+    let mut config = DiscoveryConfig::new();
+    #[cfg(debug_assertions)]
+    {
+        use lore_core::adapters::DiscoveryRoots;
+        for (var, agent) in [
+            ("LORE_DEV_CLAUDE_ROOT", "claude-code"),
+            ("LORE_DEV_CODEX_ROOT", "codex"),
+        ] {
+            match std::env::var(var) {
+                Ok(path) if !path.is_empty() => {
+                    eprintln!("dev: {agent} discovery root overridden by {var}");
+                    config.set_roots(agent, DiscoveryRoots::new(vec![path.into()]));
+                }
+                _ => {}
+            }
+        }
+    }
+    config
+}
+
+/// Open (creating if needed) the archive under the app data directory, build the
+/// shared state, and start the background ingestion worker.
+///
+/// The worker gets its **own** connection to the same database file (WAL lets
+/// the UI and worker connections read/write concurrently) and its own recursive
+/// [`SessionWatcher`] over the adapters' effective roots. On its thread it
+/// recovers interrupted jobs, runs the initial incremental scan, then keeps
+/// converting debounced source changes into durable coalesced jobs and draining
+/// them in bounded batches — all off the UI thread.
 fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     let data_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
-    let conn = lore_core::storage::open(&data_dir.join("lore.db"))?;
+    let db_path = data_dir.join("lore.db");
+    let conn = lore_core::storage::open(&db_path)?;
     let blobs = BlobStore::open(data_dir.join("blobs"))?;
+    let config = dev_config();
+
+    // Background worker: independent connection + registry, watching the same
+    // roots the UI's discovery config resolves.
+    let worker = worker::open_worker(
+        &db_path,
+        AdapterRegistry::v0(),
+        blobs.clone(),
+        config.clone(),
+        WorkerConfig::default(),
+    )?;
+    let watcher =
+        match SessionWatcher::new(&watch_roots(&AdapterRegistry::v0(), &config), WATCH_QUIET) {
+            Ok(watcher) => Some(watcher),
+            // A watcher that cannot start (e.g. no roots yet) must not block the
+            // app; the initial scan and manual rescans still work without it.
+            Err(_) => {
+                eprintln!("warning: filesystem watcher unavailable; live updates disabled");
+                None
+            }
+        };
+    let handle = worker::spawn(worker, watcher, WorkerSink::new(app.clone()));
+
     Ok(AppState {
         db: Mutex::new(conn),
         blobs,
         registry: AdapterRegistry::v0(),
-        config: DiscoveryConfig::new(),
+        config,
+        worker: Mutex::new(Some(handle)),
     })
 }
 
 /// Build and run the desktop application.
 pub fn run() {
-    let result = tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(|app| {
             let state = init_state(app.handle())?;
             app.manage(state);
@@ -267,9 +377,28 @@ pub fn run() {
             search,
             rescan
         ])
-        .run(tauri::generate_context!());
-    if let Err(error) = result {
-        eprintln!("fatal: error while running Lore: {error}");
-        std::process::exit(1);
-    }
+        .build(tauri::generate_context!());
+    let app = match app {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("fatal: error while running Lore: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    app.run(|app_handle, event| {
+        // Shut the background worker down cleanly as the event loop exits: it
+        // finishes its current bounded step, then the thread joins. Interrupted
+        // work stays durable in SQLite and is recovered on the next launch, so
+        // checkpoints are never corrupted and no job is left unrecoverable.
+        if let RunEvent::Exit = event {
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                if let Ok(mut guard) = state.worker.lock() {
+                    if let Some(handle) = guard.take() {
+                        handle.shutdown();
+                    }
+                }
+            }
+        }
+    });
 }

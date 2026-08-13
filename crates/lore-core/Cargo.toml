@@ -17,7 +17,7 @@ workspace = true
 lore-ipc = { path = "../lore-ipc" }
 # Bundled SQLite (compiles the amalgamation with FTS5 enabled) so we never
 # depend on a system libsqlite3 and FTS5 is always present.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 thiserror = "1"
 serde_json = "1"
 # RFC3339 timestamp parsing only (no networking/std feature creep).
