@@ -59,6 +59,26 @@ fn foreign_keys_are_enforced() {
     assert!(res.is_err(), "FK to missing agent must be rejected");
 }
 
+#[test]
+fn data_model_indexes_exist() {
+    // DATA_MODEL.md §8 declares these as performance-critical; they are created
+    // by migration 0004. Assert the documented contract holds.
+    let conn = db();
+    let expected = ["ix_repo_identity_kind_hash", "ix_worktree_repository_path"];
+    for idx in expected {
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE name = ?1 AND type = 'index' AND tbl_name IN
+                   ('repository_identity_evidence','worktree')",
+                [idx],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "missing documented index: {idx}");
+    }
+}
+
 fn seed_session(conn: &rusqlite::Connection) {
     conn.execute(
         "INSERT INTO agent (id, display_name, detected) VALUES ('claude-code','Claude Code',1)",

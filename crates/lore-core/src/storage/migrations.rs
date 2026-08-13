@@ -33,6 +33,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "job_redo",
         sql: include_str!("../../migrations/0003_job_redo.sql"),
     },
+    Migration {
+        version: 4,
+        name: "identity_indexes",
+        sql: include_str!("../../migrations/0004_identity_indexes.sql"),
+    },
 ];
 
 /// Apply all pending migrations. Idempotent.
