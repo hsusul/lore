@@ -78,13 +78,18 @@ pub fn export_session_markdown(
     Ok(Some(out))
 }
 
-/// Mask flagged spans unless the caller explicitly opted into raw content.
+/// Mask flagged spans unless the caller explicitly opted into raw content. A
+/// scanner failure quarantines the field from the export: a content-free
+/// diagnostic replaces the text, never the un-scanned content
+/// (SECRET_SCANNING.md §6).
 fn render_field(text: &str, include_secrets: bool) -> String {
     if include_secrets {
         text.to_string()
     } else {
-        let findings = secrets::scan(text);
-        secrets::redact(text, &findings)
+        match secrets::scan(text) {
+            Ok(findings) => secrets::redact(text, &findings),
+            Err(_) => "«field unavailable: scan failed»".to_string(),
+        }
     }
 }
 
@@ -141,5 +146,24 @@ mod tests {
         assert!(export_session_markdown(&conn, "nope", false)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn a_scan_failure_quarantines_field_content_from_export() {
+        let secret = format!("ghp{}", "_0123456789abcdefghijklmnopqrstuvwxyz");
+        let text = format!("deploy with {secret} now");
+
+        crate::secrets::set_fail_scans_for_test(true);
+        let rendered = render_field(&text, false);
+        crate::secrets::set_fail_scans_for_test(false);
+
+        assert!(
+            !rendered.contains(&secret),
+            "un-scanned content must not reach an export"
+        );
+        assert!(
+            rendered.contains("unavailable"),
+            "a content-free diagnostic is shown instead"
+        );
     }
 }

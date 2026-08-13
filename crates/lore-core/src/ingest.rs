@@ -339,10 +339,12 @@ fn persist_rows(
         )?;
 
         // Scan the recorded patch, index a redacted projection, and finalize the
-        // blob's scan_state so it becomes available to search/export.
+        // blob's scan_state so it becomes available to search/export. A scanner
+        // failure quarantines the patch: no projection, blob marked
+        // `failed_quarantined` (SECRET_SCANNING.md §6).
         if let Some(patch) = &fe.patch_text {
             let seg = segment_id.map(String::as_str);
-            let has_secret = scan_and_project(
+            let outcome = scan_and_project(
                 tx,
                 &session_id,
                 seg,
@@ -353,9 +355,14 @@ fn persist_rows(
                 true,
             )?;
             if let Some(blob_id) = &patch_blob_id {
+                let state = match outcome {
+                    ScanOutcome::Failed => "failed_quarantined",
+                    ScanOutcome::Findings => "findings",
+                    ScanOutcome::Clean => "clean",
+                };
                 tx.execute(
                     "UPDATE blob SET scan_state = ?2 WHERE id = ?1",
-                    params![blob_id, if has_secret { "findings" } else { "clean" }],
+                    params![blob_id, state],
                 )?;
             }
         }
@@ -443,11 +450,24 @@ fn bounded(s: &str) -> String {
     s.chars().take(500).collect()
 }
 
+/// What a secret scan of one cleartext field concluded. A `Failed` scan
+/// quarantines the content (SECRET_SCANNING.md §6): no findings are recorded,
+/// no projection is indexed, and a recorded-patch blob is marked
+/// `failed_quarantined` — the field is unavailable to search/export but the
+/// rest of the session persists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScanOutcome {
+    Clean,
+    Findings,
+    Failed,
+}
+
 /// Scan one cleartext field for secrets before it can be indexed or exported.
 /// Records a `secret_finding` per detection (offsets + rule + severity + a keyed
 /// fingerprint — never a second cleartext copy) and, when `index` is set, writes
 /// a **redacted** `SearchDocument` projection so a flagged span never reaches
-/// FTS. Returns whether any secret was found.
+/// FTS. On a scanner failure the field is quarantined and [`ScanOutcome::Failed`]
+/// is returned; the session is not failed.
 #[allow(clippy::too_many_arguments)] // a projection target is naturally several fields
 fn scan_and_project(
     tx: &Connection,
@@ -458,8 +478,11 @@ fn scan_and_project(
     field: &str,
     text: &str,
     index: bool,
-) -> Result<bool> {
-    let findings = crate::secrets::scan(text);
+) -> Result<ScanOutcome> {
+    let findings = match crate::secrets::scan(text) {
+        Ok(findings) => findings,
+        Err(_) => return Ok(ScanOutcome::Failed),
+    };
     for (i, finding) in findings.iter().enumerate() {
         let fid = det_id("sf", &[source_id, field, &i.to_string()]);
         tx.execute(
@@ -498,7 +521,11 @@ fn scan_and_project(
             ],
         )?;
     }
-    Ok(!findings.is_empty())
+    Ok(if findings.is_empty() {
+        ScanOutcome::Clean
+    } else {
+        ScanOutcome::Findings
+    })
 }
 
 /// Deterministic opaque id from a prefix and stable natural-key parts.
@@ -1036,6 +1063,8 @@ fn fnv1a_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::codex::CodexAdapter;
+    use crate::storage::blob::BlobStore;
 
     #[test]
     fn det_id_is_deterministic_and_distinct() {
@@ -1043,5 +1072,63 @@ mod tests {
         assert_ne!(det_id("m", &["s", "0"]), det_id("m", &["s", "1"]));
         // Boundary between parts matters ("a","b" != "ab","").
         assert_ne!(det_id("x", &["a", "b"]), det_id("x", &["ab", ""]));
+    }
+
+    fn codex_patch(session: &str, content: &str) -> String {
+        format!(
+            concat!(
+                "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{{\"id\":\"{id}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}}}\n",
+                "{{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{{\"type\":\"function_call\",\"name\":\"apply_patch\",\"arguments\":\"{{}}\",\"call_id\":\"c1\"}}}}\n",
+                "{{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:02.000Z\",\"payload\":{{\"type\":\"patch_apply_end\",\"call_id\":\"c1\",\"success\":true,\"changes\":{{\"config.ts\":{{\"type\":\"add\",\"content\":\"{content}\"}}}}}}}}\n"
+            ),
+            id = session,
+            content = content
+        )
+    }
+
+    fn secret() -> String {
+        format!("ghp{}", "_0123456789abcdefghijklmnopqrstuvwxyz")
+    }
+
+    #[test]
+    fn a_scan_failure_quarantines_blobs_from_search_and_export() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        let content = format!("const KEY = {}", secret());
+        let parsed = CodexAdapter::new().parse_str(&codex_patch("s-a", &content), "s-a");
+
+        // SECRET_SCANNING.md §6: a scanner failure becomes `failed_quarantined`
+        // and the content is unavailable to search/export.
+        crate::secrets::set_fail_scans_for_test(true);
+        persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+        crate::secrets::set_fail_scans_for_test(false);
+
+        let scan_state: String = conn
+            .query_row("SELECT scan_state FROM blob", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(scan_state, "failed_quarantined");
+
+        let indexed: i64 = conn
+            .query_row("SELECT count(*) FROM search_document", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(indexed, 0, "quarantined content is unavailable to search");
+
+        let findings: i64 = conn
+            .query_row("SELECT count(*) FROM secret_finding", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            findings, 0,
+            "no findings are recorded for un-scanned content"
+        );
+
+        let sessions: i64 = conn
+            .query_row("SELECT count(*) FROM agent_session", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            sessions, 1,
+            "a scanner failure must not fail the whole session"
+        );
     }
 }

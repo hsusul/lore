@@ -15,6 +15,25 @@
 //! The scanner never stores a second cleartext copy of a value: a finding
 //! carries offsets, a rule id, a severity, and a keyed fingerprint only.
 
+use std::panic::AssertUnwindSafe;
+
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    // Test seam: while armed (on the current thread), `scan` fails content-free
+    // so quarantine behavior is exercisable deterministically. Thread-local so a
+    // test arming it never affects other tests' scans.
+    pub(crate) static FAIL_SCANS_FOR_TEST: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Arm/disarm the scan-failure seam for the current thread (tests only).
+#[cfg(test)]
+pub(crate) fn set_fail_scans_for_test(on: bool) {
+    FAIL_SCANS_FOR_TEST.with(|armed| armed.set(on));
+}
+
 /// Finding severity, most to least urgent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
@@ -173,8 +192,23 @@ const ALLOWLIST_VALUES: &[&str] = &[
 ];
 
 /// Scan `text` and return findings sorted by start offset and de-overlapped.
-#[must_use]
-pub fn scan(text: &str) -> Vec<Finding> {
+///
+/// Scanning is load-bearing for preventing amplification, so it is **fallible
+/// by contract**: a scanner defect on untrusted input must never panic the
+/// worker. A panic anywhere inside the detectors is captured and reported as a
+/// content-free failure, which quarantines the field from search/export
+/// (`SECRET_SCANNING.md` §6).
+pub fn scan(text: &str) -> Result<Vec<Finding>> {
+    #[cfg(test)]
+    if FAIL_SCANS_FOR_TEST.with(|armed| armed.get()) {
+        return Err(ScanError::Failed);
+    }
+    std::panic::catch_unwind(AssertUnwindSafe(|| scan_inner(text))).map_err(|_| ScanError::Failed)
+}
+
+/// The infallible detector pass; wrapped by [`scan`] so any panic on untrusted
+/// input becomes a content-free [`ScanError::Failed`].
+fn scan_inner(text: &str) -> Vec<Finding> {
     let bytes = text.as_bytes();
     let mut raw: Vec<Finding> = Vec::new();
 
@@ -190,6 +224,17 @@ pub fn scan(text: &str) -> Vec<Finding> {
 
     de_overlap(raw)
 }
+
+/// A secret-scan failure. Content-free: never echoes the offending text or a
+/// diagnostic (SECRET_SCANNING.md §6 — a failure quarantines the field).
+#[derive(Debug, thiserror::Error)]
+pub enum ScanError {
+    #[error("secret scan failed")]
+    Failed,
+}
+
+/// Convenience result alias for the scanner.
+pub type Result<T> = std::result::Result<T, ScanError>;
 
 /// Produce a redacted copy of `text` with every flagged span replaced by a
 /// deterministic, content-free mask. The surrounding text is preserved so it
@@ -596,9 +641,13 @@ mod tests {
     }
 
     fn rules_in(text: &str) -> Vec<&'static str> {
-        let mut r: Vec<&'static str> = scan(text).into_iter().map(|f| f.rule).collect();
+        let mut r: Vec<&'static str> = scan_ok(text).into_iter().map(|f| f.rule).collect();
         r.sort_unstable();
         r
+    }
+
+    fn scan_ok(text: &str) -> Vec<Finding> {
+        scan(text).unwrap()
     }
 
     fn found(secret: &str) -> Vec<&'static str> {
@@ -658,23 +707,23 @@ mod tests {
     fn does_not_flag_the_negative_corpus() {
         // git SHA (40 hex), UUID, data-URI base64, .env.example placeholders.
         let sha = t("9f1c2d3e4b5a", "69788c9daebf0011223344556677");
-        assert!(scan(&format!("commit {sha}")).is_empty());
-        assert!(scan("id 550e8400-e29b-41d4-a716-446655440000").is_empty());
-        assert!(scan("img data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB").is_empty());
-        assert!(scan(&format!("API_KEY={}", "YOUR_API_KEY_HERE")).is_empty());
-        assert!(scan(&format!("TOKEN={}", "x".repeat(20))).is_empty());
+        assert!(scan_ok(&format!("commit {sha}")).is_empty());
+        assert!(scan_ok("id 550e8400-e29b-41d4-a716-446655440000").is_empty());
+        assert!(scan_ok("img data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB").is_empty());
+        assert!(scan_ok(&format!("API_KEY={}", "YOUR_API_KEY_HERE")).is_empty());
+        assert!(scan_ok(&format!("TOKEN={}", "x".repeat(20))).is_empty());
     }
 
     #[test]
     fn allowlists_documented_example_keys() {
         let example = t("AKIA", "IOSFODNN7EXAMPLE");
-        assert!(scan(&format!("aws_access_key_id = {example}")).is_empty());
+        assert!(scan_ok(&format!("aws_access_key_id = {example}")).is_empty());
     }
 
     #[test]
     fn high_entropy_base64_token_is_flagged() {
         let token = t("Zm9vYmFy", "QmF6UXV4MTIzNDU2Nzg5MFFXZXJ0eVpY");
-        let findings = scan(&format!("api_key: {token}"));
+        let findings = scan_ok(&format!("api_key: {token}"));
         assert!(findings.iter().any(|f| f.rule == "high-entropy"));
     }
 
@@ -686,7 +735,7 @@ mod tests {
         text.push_str(&secret);
         text.push(' ');
         text.push_str(&"dolor sit ".repeat(2000));
-        let findings = scan(&text);
+        let findings = scan_ok(&text);
         let github = findings.iter().find(|f| f.rule == "github-token").unwrap();
         assert_eq!(github.start, at);
     }
@@ -695,7 +744,7 @@ mod tests {
     fn redaction_masks_the_span_and_keeps_context() {
         let secret = t("ghp", "_0123456789abcdefghijklmnopqrstuvwxyz");
         let text = format!("use {secret} now");
-        let findings = scan(&text);
+        let findings = scan_ok(&text);
         let redacted = redact(&text, &findings);
         assert!(!redacted.contains(&secret));
         assert!(redacted.contains("use "));
@@ -706,10 +755,25 @@ mod tests {
     #[test]
     fn fingerprint_is_stable_and_not_the_value() {
         let text = t("sk", "_live_0123456789abcdefABCD");
-        let finding = &scan(&text)[0];
+        let finding = &scan_ok(&text)[0];
         let fp = finding.fingerprint(&text);
         assert_eq!(fp.len(), 16);
         assert!(!fp.contains("live_"));
         assert_eq!(fp, finding.fingerprint(&text));
+    }
+
+    #[test]
+    fn a_scan_panic_is_captured_as_a_content_free_failure() {
+        // The seam simulates a scanner defect on untrusted input: it must be a
+        // captured failure (which quarantines the field), never a panic.
+        set_fail_scans_for_test(true);
+        let result = scan("any untrusted text");
+        set_fail_scans_for_test(false);
+
+        assert!(
+            result.is_err(),
+            "a scanner failure is an error, never a panic"
+        );
+        assert!(scan_ok("id 550e8400-e29b-41d4-a716-446655440000").is_empty());
     }
 }
