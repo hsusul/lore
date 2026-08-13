@@ -6,7 +6,7 @@
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
 use lore_core::adapters::codex::CodexAdapter;
 use lore_core::ingest::persist_session;
-use lore_core::search::{search, HIGHLIGHT_START};
+use lore_core::search::{search, search_page, HIGHLIGHT_START};
 use lore_core::storage::blob::BlobStore;
 use rusqlite::Connection;
 
@@ -154,4 +154,65 @@ fn snippets_never_surface_a_secret() {
         !hits[0].snippet.contains(body),
         "no raw secret in a snippet"
     );
+}
+
+#[test]
+fn keyset_pagination_is_stable_and_complete() {
+    // SEARCH.md §6: paging must reproduce the single-shot ranked order exactly,
+    // never dropping or repeating a row. Every document shares the same text so
+    // all bm25 ranks tie — the tie-break (started_at DESC, id ASC) alone drives
+    // the order, maximally stressing the keyset cursor. Codex sessions carry a
+    // timestamp (non-null started_at → the `Some` cursor branch); Claude ones
+    // do not (null started_at → the `None`/NULLs-last branch).
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    for i in 0..10 {
+        persist_claude(
+            &conn,
+            &blobs,
+            &user_message(&format!("cl{i}"), "/p", "commonterm appears here"),
+            &format!("cl{i}"),
+        );
+    }
+    for i in 0..6 {
+        let codex = format!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:0{i}.000Z\",\"payload\":{{\"id\":\"cx{i}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}}}\n\
+             {{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:0{i}.000Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":\"commonterm appears here\"}}}}\n"
+        );
+        let parsed = CodexAdapter::new().parse_str(&codex, &format!("cx{i}"));
+        persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+    }
+
+    // Ground truth: one big page.
+    let full = search(&conn, "commonterm", 100).unwrap();
+    assert_eq!(full.len(), 16, "all 16 sessions match");
+
+    // Page through in small pages and reassemble.
+    let mut paged: Vec<(String, String)> = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let page = search_page(&conn, "commonterm", 3, cursor.as_deref()).unwrap();
+        pages += 1;
+        assert!(pages <= 20, "pagination must terminate");
+        for h in &page.hits {
+            paged.push((h.session_id.clone(), h.source_id.clone()));
+        }
+        match page.next_cursor {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
+    }
+
+    let truth: Vec<(String, String)> = full
+        .iter()
+        .map(|h| (h.session_id.clone(), h.source_id.clone()))
+        .collect();
+    assert_eq!(
+        paged, truth,
+        "paged order matches single-shot order exactly"
+    );
+
+    let unique: std::collections::HashSet<_> = paged.iter().cloned().collect();
+    assert_eq!(unique.len(), paged.len(), "no row is repeated across pages");
 }

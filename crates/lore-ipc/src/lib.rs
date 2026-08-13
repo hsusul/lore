@@ -226,6 +226,17 @@ pub struct SearchHit {
     pub started_at: Option<i64>,
 }
 
+/// One page of search results plus an opaque keyset cursor. `next_cursor` is
+/// `Some` only when a full page was returned (more results may follow); pass it
+/// back verbatim as the `cursor` argument to fetch the next page. A cursor is
+/// valid only for the identical query that produced it. Payload of `search_page`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SearchPage {
+    pub hits: Vec<SearchHit>,
+    pub next_cursor: Option<String>,
+}
+
 /// Result of forgetting a session. Payload of `forget_session`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
