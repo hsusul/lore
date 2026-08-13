@@ -14,6 +14,7 @@ use lore_ipc::{
 };
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::storage::blob::BlobStore;
 use crate::storage::Result;
 
 /// The agents Lore knows about, with their ingested-session counts, ordered by
@@ -247,19 +248,42 @@ fn session_file_events(conn: &Connection, session_id: &str) -> Result<Vec<FileEv
     Ok(rows)
 }
 
-/// The `storage_relpath` of a file event's recorded patch blob, or `None` when
-/// the event has no stored patch. The caller reads the bytes from the blob
-/// store; the path is validated on read.
-pub fn file_patch_relpath(conn: &Connection, file_event_id: &str) -> Result<Option<String>> {
+/// The `(storage_relpath, scan_state)` of a file event's recorded patch blob, or
+/// `None` when the event has no stored patch. `scan_state` lets callers enforce
+/// the quarantine guarantee: a blob marked `failed_quarantined` was never fully
+/// scanned, so its content is unavailable to derived surfaces. The relpath is
+/// validated on read.
+pub fn file_patch_blob(conn: &Connection, file_event_id: &str) -> Result<Option<(String, String)>> {
     conn.query_row(
-        "SELECT b.storage_relpath
+        "SELECT b.storage_relpath, b.scan_state
          FROM file_event f JOIN blob b ON b.id = f.patch_blob_id
          WHERE f.id = ?1",
         [file_event_id],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
     .map_err(Into::into)
+}
+
+/// The recorded patch text for a file event, or `None` when none is stored, the
+/// payload is not valid UTF-8, or the blob is quarantined. A `failed_quarantined`
+/// blob's scan never completed, so its content is unavailable to derived
+/// surfaces including the UI patch read (SECRET_SCANNING.md §6).
+pub fn file_patch_text(
+    conn: &Connection,
+    blobs: &BlobStore,
+    file_event_id: &str,
+) -> Result<Option<String>> {
+    let Some((relpath, scan_state)) = file_patch_blob(conn, file_event_id)? else {
+        return Ok(None);
+    };
+    if scan_state == "failed_quarantined" {
+        return Ok(None);
+    }
+    match blobs.read(&relpath) {
+        Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
+        Err(e) => Err(e),
+    }
 }
 
 /// How many secret findings were flagged in a session (all are redacted from
@@ -345,6 +369,22 @@ mod tests {
             .join(dir)
             .join(name);
         std::fs::read_to_string(path).unwrap()
+    }
+
+    fn codex_patch(session: &str, content: &str) -> String {
+        format!(
+            concat!(
+                "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{{\"id\":\"{id}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}}}\n",
+                "{{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{{\"type\":\"function_call\",\"name\":\"apply_patch\",\"arguments\":\"{{}}\",\"call_id\":\"c1\"}}}}\n",
+                "{{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:02.000Z\",\"payload\":{{\"type\":\"patch_apply_end\",\"call_id\":\"c1\",\"success\":true,\"changes\":{{\"config.ts\":{{\"type\":\"add\",\"content\":\"{content}\"}}}}}}}}\n"
+            ),
+            id = session,
+            content = content
+        )
+    }
+
+    fn secret() -> String {
+        format!("ghp{}", "_0123456789abcdefghijklmnopqrstuvwxyz")
     }
 
     fn seed(conn: &Connection) {
@@ -437,16 +477,70 @@ mod tests {
             .expect("edited file present");
         assert!(edited.has_patch);
 
-        let relpath = file_patch_relpath(&conn, &edited.id)
+        let (relpath, scan_state) = file_patch_blob(&conn, &edited.id)
             .unwrap()
             .expect("a patch blob is referenced");
+        assert_eq!(scan_state, "clean");
         let bytes = blobs.read(&relpath).unwrap();
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains("-old") && text.contains("+new"));
+        assert!(file_patch_text(&conn, &blobs, &edited.id)
+            .unwrap()
+            .is_some());
 
         // A file event with no recorded patch resolves to None.
-        let no_patch = file_patch_relpath(&conn, "does-not-exist").unwrap();
+        let no_patch = file_patch_blob(&conn, "does-not-exist").unwrap();
         assert!(no_patch.is_none());
+        assert!(file_patch_text(&conn, &blobs, "does-not-exist")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_quarantined_patch_blob_is_unavailable_to_the_ui_read() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        // Healthy recorded patch: readable with a clean scan_state.
+        let healthy = CodexAdapter::new().parse_str(&fixture("codex", "patch_apply.jsonl"), "p");
+        let hsid = persist_session(&conn, "codex", "Codex", &healthy, &blobs).unwrap();
+        let edited = get_session(&conn, &hsid)
+            .unwrap()
+            .unwrap()
+            .file_events
+            .into_iter()
+            .find(|f| f.has_patch)
+            .expect("healthy patch present");
+        assert!(file_patch_text(&conn, &blobs, &edited.id)
+            .unwrap()
+            .is_some());
+
+        // A scanner failure quarantines the blob; its content must not reach the
+        // UI patch read (SECRET_SCANNING.md §6).
+        let content = format!("const KEY = {}", secret());
+        let quarantined = CodexAdapter::new().parse_str(&codex_patch("s-q", &content), "s-q");
+        crate::secrets::set_fail_scans_for_test(true);
+        let qsid = persist_session(&conn, "codex", "Codex", &quarantined, &blobs).unwrap();
+        crate::secrets::set_fail_scans_for_test(false);
+
+        let patch_event = get_session(&conn, &qsid)
+            .unwrap()
+            .unwrap()
+            .file_events
+            .into_iter()
+            .find(|f| f.has_patch)
+            .expect("quarantined patch present");
+        let (_, scan_state) = file_patch_blob(&conn, &patch_event.id)
+            .unwrap()
+            .expect("blob exists");
+        assert_eq!(scan_state, "failed_quarantined");
+        assert!(
+            file_patch_text(&conn, &blobs, &patch_event.id)
+                .unwrap()
+                .is_none(),
+            "un-scanned patch content is unavailable to the UI read"
+        );
     }
 
     #[test]
