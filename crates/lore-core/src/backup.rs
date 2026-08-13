@@ -14,12 +14,19 @@
 //! Naming is intentionally lexicographically sortable (zero-padded timestamp +
 //! per-process counter) so retention can prune "the newest N" without reading
 //! file metadata, and names carry no source content.
+//!
+//! Recovery (SECURITY.md §6): a Lore-owned backup can be restored wholesale
+//! into a destination database file via SQLite's restore API (the reverse of
+//! the online copy), then re-verified. Restore never needs the original agent
+//! logs — a backup contains the entire archive. The caller closes connections
+//! to the destination first (the recovery flow "closes the active DB"), because
+//! restore replaces the destination's content in place.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{backup::Backup, Connection};
+use rusqlite::{backup::Backup, Connection, DatabaseName};
 
 /// Name prefix for Lore-owned backup files.
 const BACKUP_PREFIX: &str = "lore-";
@@ -113,21 +120,49 @@ fn verify(path: &Path) -> Result<()> {
 /// Keep only the newest `keep` Lore-owned backups, deleting older copies.
 /// Names are lexicographically sorted, which is chronological by construction.
 fn prune(backup_dir: &Path, keep: usize) -> Result<()> {
+    let backups = list_backups(backup_dir)?;
+    if backups.len() <= keep {
+        return Ok(());
+    }
+    let drop_count = backups.len() - keep;
+    for old in backups.into_iter().take(drop_count) {
+        std::fs::remove_file(&old).map_err(|_| BackupError::Io)?;
+    }
+    Ok(())
+}
+
+/// List the Lore-owned backups under `backup_dir`, oldest first (names are
+/// lexicographically chronological). Content-free: only Lore-owned paths are
+/// returned, never archive data. Enables the recovery flow to offer a restore
+/// from the newest local backup (SECURITY.md §6).
+pub fn list_backups(backup_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut backups: Vec<PathBuf> = std::fs::read_dir(backup_dir)
         .map_err(|_| BackupError::Io)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|path| is_backup_file(path))
         .collect();
-    if backups.len() <= keep {
-        return Ok(());
-    }
-    let drop_count = backups.len() - keep;
     backups.sort();
-    for old in backups.into_iter().take(drop_count) {
-        std::fs::remove_file(&old).map_err(|_| BackupError::Io)?;
-    }
-    Ok(())
+    Ok(backups)
+}
+
+/// Restore a Lore-owned backup into the database at `dst_db_path`, replacing
+/// the destination's content wholesale, and verify the result opens cleanly.
+///
+/// This is the reverse of the online copy: the backup file (a standalone
+/// database) is copied page by page into the destination. The caller must
+/// ensure no other connection to `dst_db_path` is open — the recovery flow
+/// closes the active DB first (SECURITY.md §6). Original agent logs are never
+/// needed: a backup contains the entire archive. Content-free on failure.
+pub fn restore_backup(backup_path: &Path, dst_db_path: &Path) -> Result<()> {
+    let mut dst = Connection::open(dst_db_path).map_err(|_| BackupError::Io)?;
+    dst.restore(
+        DatabaseName::Main,
+        backup_path,
+        None::<fn(rusqlite::backup::Progress)>,
+    )?;
+    drop(dst);
+    verify(dst_db_path)
 }
 
 fn is_backup_file(path: &Path) -> bool {

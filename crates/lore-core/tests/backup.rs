@@ -5,6 +5,10 @@
 //! database containing every committed row — including content still sitting in
 //! the uncheckpointed WAL — and retention must keep only the newest `keep`
 //! copies. Backup files inherit the app's private-permission posture.
+//!
+//! Recovery: a Lore-owned backup must restore a usable archive without any
+//! original agent logs (SECURITY.md §6 "restore from a Lore-owned local
+//! backup"; TESTING.md §7 "works from local backup without source logs").
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use lore_core::adapters::codex::CodexAdapter;
@@ -152,6 +156,67 @@ fn retention_keeps_only_the_newest_backups() {
         all.len(),
         DEFAULT_BACKUP_RETENTION,
         "old copies are deleted"
+    );
+}
+
+#[test]
+fn restore_backup_recreates_the_archive_without_source_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, blobs) = archive(dir.path());
+    populate(&conn, &blobs);
+    let expected = counts(&conn);
+
+    let backups = dir.path().join("backups");
+    create_backup(&conn, &backups, DEFAULT_BACKUP_RETENTION).unwrap();
+
+    // Recovery must not assume agent logs still exist: the source here is only
+    // what was already ingested into the archive, and it is gone after the
+    // connections close (the WAL checkpoints into lore.db on clean close).
+    drop(conn);
+    drop(blobs);
+
+    let newest = lore_core::backup::list_backups(&backups)
+        .unwrap()
+        .into_iter()
+        .last()
+        .unwrap();
+    lore_core::backup::restore_backup(&newest, &dir.path().join("lore.db")).unwrap();
+
+    let (restored, _blobs) = archive(dir.path());
+    assert_eq!(
+        counts(&restored),
+        expected,
+        "restored archive must mirror the backup without source logs"
+    );
+}
+
+#[test]
+fn restore_backup_rejects_a_non_database_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let bad = dir.path().join("bad.db");
+    std::fs::write(&bad, "not a sqlite database").unwrap();
+    let dst = dir.path().join("out.db");
+    assert!(
+        lore_core::backup::restore_backup(&bad, &dst).is_err(),
+        "restoring from a non-database file must fail"
+    );
+}
+
+#[test]
+fn list_backups_lists_only_lore_owned_backups_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, _blobs) = archive(dir.path());
+    let backups = dir.path().join("backups");
+    for _ in 0..3 {
+        create_backup(&conn, &backups, 10).unwrap();
+    }
+    std::fs::write(backups.join("notes.txt"), "not a backup").unwrap();
+
+    let listed = lore_core::backup::list_backups(&backups).unwrap();
+    assert_eq!(listed.len(), 3, "stray non-backup files are ignored");
+    assert!(
+        listed.windows(2).all(|w| w[0] < w[1]),
+        "backups are listed oldest-first by sortable name"
     );
 }
 
