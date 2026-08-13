@@ -141,15 +141,15 @@ pub struct ForgetEverythingReport {
 }
 
 /// Remove all Lore-owned data under `archive_dir`: the database and its WAL/SHM
-/// sidecars, blobs, backups, cache, and content-bearing logs. Exports (which the
-/// user chose to keep) and original agent logs are left untouched. The caller
-/// must close DB connections first.
+/// sidecars, blobs, backups, cache, content-bearing logs, and quarantine
+/// artifacts. Exports (which the user chose to keep) and original agent logs
+/// are left untouched. The caller must close DB connections first.
 ///
 /// Note: secure physical erasure cannot be guaranteed on SSD/copy-on-write
 /// filesystems; this removes the files, not necessarily every underlying block.
 pub fn forget_everything(archive_dir: &Path) -> Result<ForgetEverythingReport> {
     const FILES: &[&str] = &["lore.db", "lore.db-wal", "lore.db-shm"];
-    const DIRS: &[&str] = &["blobs", "backups", "cache", "logs"];
+    const DIRS: &[&str] = &["blobs", "backups", "cache", "logs", "quarantine"];
     let mut removed = Vec::new();
 
     for name in FILES {
@@ -293,14 +293,18 @@ mod tests {
         std::fs::create_dir(root.join("blobs")).unwrap();
         std::fs::write(root.join("blobs/x"), b"blob").unwrap();
         std::fs::create_dir(root.join("backups")).unwrap();
+        std::fs::create_dir(root.join("quarantine")).unwrap();
+        std::fs::write(root.join("quarantine/lore-corrupt.db"), b"preserved").unwrap();
         std::fs::create_dir(root.join("exports")).unwrap();
         std::fs::write(root.join("exports/keep.md"), b"user export").unwrap();
 
         let report = forget_everything(root).unwrap();
         assert!(report.removed.contains(&"lore.db".to_string()));
         assert!(report.removed.contains(&"blobs".to_string()));
+        assert!(report.removed.contains(&"quarantine".to_string()));
         assert!(!root.join("lore.db").exists());
         assert!(!root.join("blobs").exists());
+        assert!(!root.join("quarantine").exists());
         // User-owned exports are never deleted.
         assert!(root.join("exports/keep.md").exists());
         assert!(report.remaining_note.contains("outside Lore's ownership"));

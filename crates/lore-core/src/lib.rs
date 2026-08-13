@@ -28,6 +28,7 @@ pub mod jobs;
 pub mod model;
 pub mod pipeline;
 pub mod query;
+pub mod recovery;
 pub mod search;
 pub mod secrets;
 pub mod storage;
