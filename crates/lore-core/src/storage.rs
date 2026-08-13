@@ -1,9 +1,10 @@
 //! SQLite storage: connection configuration and the migration runner.
 //!
 //! The archive is SQLite (WAL) with foreign keys enforced. FTS5 ships in the
-//! bundled amalgamation. Blob store and the full V0 schema arrive in later
-//! migrations (M1+); this module owns opening a configured connection and
-//! applying ordered, checksummed migrations transactionally.
+//! bundled amalgamation. The full V0 schema — including the blob store and the
+//! search/FTS tables — is applied here by ordered, checksummed migrations;
+//! this module owns opening a configured connection and running them
+//! transactionally.
 
 pub mod blob;
 pub mod migrations;
