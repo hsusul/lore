@@ -2,7 +2,8 @@
 //!
 //! The queue is persisted in SQLite so process restarts can return interrupted
 //! work to `pending`. Claiming is transactional and respects priority then FIFO.
-//! Worker threads and progress events are app-layer concerns added later in M3.
+//! Worker threads live in [`crate::worker`]; progress events are an app-layer
+//! concern surfaced through the Tauri shell.
 
 use rusqlite::{params, Connection, OptionalExtension};
 
