@@ -30,7 +30,9 @@ pub mod query;
 pub mod search;
 pub mod secrets;
 pub mod storage;
+pub mod synthetic;
 pub mod watcher;
+pub mod worker;
 
 /// The `lore-core` crate version (from `CARGO_PKG_VERSION`).
 #[must_use]

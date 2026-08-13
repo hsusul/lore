@@ -241,6 +241,40 @@ pub fn fail(conn: &Connection, id: &str, error: &str) -> Result<()> {
     transition_running(conn, id, "failed", Some(&bounded))
 }
 
+/// Observable backpressure snapshot: how much runnable work the durable queue
+/// holds right now. `pending + running` is what [`enqueue`]/[`schedule_source`]
+/// weigh against the configured capacity, so surfacing it lets the app report
+/// queue depth without exposing any job payload or source path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct QueueDepth {
+    pub pending: usize,
+    pub running: usize,
+}
+
+impl QueueDepth {
+    /// Rows that count toward the backpressure ceiling.
+    #[must_use]
+    pub fn active(&self) -> usize {
+        self.pending + self.running
+    }
+}
+
+/// Read the current [`QueueDepth`]. Content-free: counts only.
+pub fn queue_depth(conn: &Connection) -> Result<QueueDepth> {
+    let (pending, running) = conn.query_row(
+        "SELECT
+            count(*) FILTER (WHERE state = 'pending'),
+            count(*) FILTER (WHERE state = 'running')
+         FROM job",
+        [],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )?;
+    Ok(QueueDepth {
+        pending: usize::try_from(pending).unwrap_or(usize::MAX),
+        running: usize::try_from(running).unwrap_or(usize::MAX),
+    })
+}
+
 /// Return tasks left `running` by a terminated process to `pending`.
 pub fn recover_running(conn: &Connection) -> Result<usize> {
     let changed = conn.execute(
@@ -458,6 +492,33 @@ mod tests {
             finish(&conn, "src"),
             Err(JobQueueError::NotRunning)
         ));
+    }
+
+    #[test]
+    fn queue_depth_reports_pending_and_running_counts() {
+        let conn = db();
+        assert_eq!(queue_depth(&conn).unwrap(), QueueDepth::default());
+        enqueue(&conn, &new_job("a", 0), 10).unwrap();
+        enqueue(&conn, &new_job("b", 0), 10).unwrap();
+        assert_eq!(
+            queue_depth(&conn).unwrap(),
+            QueueDepth {
+                pending: 2,
+                running: 0
+            }
+        );
+        claim_next(&conn).unwrap();
+        let depth = queue_depth(&conn).unwrap();
+        assert_eq!(depth.pending, 1);
+        assert_eq!(depth.running, 1);
+        assert_eq!(
+            depth.active(),
+            2,
+            "active counts toward the capacity ceiling"
+        );
+        // Completed history does not inflate observed depth.
+        complete(&conn, "a").unwrap();
+        assert_eq!(queue_depth(&conn).unwrap().active(), 1);
     }
 
     #[test]
