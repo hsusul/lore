@@ -13,6 +13,7 @@ import {
   getFilePatch,
   getGitSnapshot,
   getSession,
+  getSetting,
   listDetectedAgents,
   listRepositories,
   listRepositorySessions,
@@ -21,6 +22,7 @@ import {
   forgetEverything,
   rescan,
   searchPage,
+  setSetting,
   sessionSecretCount,
   type DetectedAgent,
   type GitObservationDto,
@@ -101,6 +103,20 @@ export default function App() {
     return () => void unlisten.then((off) => off());
     // Run once on mount; refresh is re-invoked explicitly elsewhere.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Restore a persisted theme choice on launch; absent one, the CSS default
+  // (system preference) applies. Ignores an unset or malformed value.
+  useEffect(() => {
+    void getSetting("theme")
+      .then((raw) => {
+        if (!raw) return;
+        const theme = JSON.parse(raw) as unknown;
+        if (theme === "light" || theme === "dark") {
+          document.documentElement.dataset.theme = theme;
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -252,6 +268,9 @@ export default function App() {
             ? "light"
             : "dark";
     root.dataset.theme = next;
+    // Persist so the choice survives a restart (Lore-owned; cleared by "forget
+    // everything"). Fire-and-forget: a failed write must not break the toggle.
+    void setSetting("theme", JSON.stringify(next)).catch(() => {});
   }
 
   const commands = useMemo<Command[]>(() => {

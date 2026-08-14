@@ -15,6 +15,8 @@ vi.mock("./ipc", () => ({
   forgetEverything: vi.fn().mockResolvedValue({ blobs_removed: 0, source_paths: [] }),
   search: vi.fn().mockResolvedValue([]),
   searchPage: vi.fn().mockResolvedValue({ hits: [], next_cursor: null }),
+  getSetting: vi.fn().mockResolvedValue(null),
+  setSetting: vi.fn().mockResolvedValue(undefined),
   rescan: vi.fn().mockResolvedValue({}),
   onScanProgress: vi.fn().mockResolvedValue(() => {}),
   HIGHLIGHT_START: "\u{e000}",
