@@ -263,6 +263,20 @@ fn search_page(
         .map_err(|e| e.to_string())
 }
 
+/// Read a persisted setting's raw JSON value, or `null` when it is unset.
+#[tauri::command]
+fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::settings::get(&conn, &key).map_err(|e| e.to_string())
+}
+
+/// Persist a setting's raw JSON value (Lore-owned; cleared by "forget everything").
+#[tauri::command]
+fn set_setting(state: State<'_, AppState>, key: String, value_json: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::settings::set(&conn, &key, &value_json).map_err(|e| e.to_string())
+}
+
 /// Run a discovery→ingest→enrich pass, streaming `scan_progress` events, and
 /// return the final tally.
 #[tauri::command]
@@ -396,6 +410,8 @@ pub fn run() {
             forget_everything,
             search,
             search_page,
+            get_setting,
+            set_setting,
             rescan
         ])
         .build(tauri::generate_context!());

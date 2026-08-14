@@ -132,6 +132,16 @@ export function rescan(): Promise<RescanResult> {
   return invoke<RescanResult>("rescan");
 }
 
+/** Read a persisted setting's raw JSON value, or null when unset. */
+export function getSetting(key: string): Promise<string | null> {
+  return invoke<string | null>("get_setting", { key });
+}
+
+/** Persist a setting's raw JSON value (Lore-owned; cleared by "forget everything"). */
+export function setSetting(key: string, valueJson: string): Promise<void> {
+  return invoke<void>("set_setting", { key, valueJson });
+}
+
 /** Subscribe to content-free scan progress. Resolves with an unlisten handle. */
 export function onScanProgress(
   handler: (progress: ScanProgress) => void,
