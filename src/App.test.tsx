@@ -1,5 +1,16 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+
+const scan = vi.hoisted(() => ({
+  handler: null as null | ((progress: {
+    discovered: number;
+    ingested: number;
+    skipped: number;
+    failed: number;
+    enriched: number;
+    done: boolean;
+  }) => void),
+}));
 
 vi.mock("./ipc", () => ({
   listDetectedAgents: vi.fn().mockResolvedValue([]),
@@ -21,7 +32,10 @@ vi.mock("./ipc", () => ({
   setBackupSchedule: vi.fn().mockResolvedValue(undefined),
   backupNow: vi.fn().mockResolvedValue(undefined),
   rescan: vi.fn().mockResolvedValue({}),
-  onScanProgress: vi.fn().mockResolvedValue(() => {}),
+  onScanProgress: vi.fn().mockImplementation(async (handler) => {
+    scan.handler = handler;
+    return () => {};
+  }),
   HIGHLIGHT_START: "\u{e000}",
   HIGHLIGHT_END: "\u{e001}",
 }));
@@ -44,5 +58,24 @@ describe("App shell", () => {
     await screen.findByRole("heading", { name: "Lore", level: 1 });
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     expect(screen.getByRole("dialog", { name: /command palette/i })).toBeTruthy();
+  });
+
+  it("keeps rescan busy until the worker reports completion", async () => {
+    render(<App />);
+    const button = await screen.findByRole("button", { name: "Rescan" });
+    fireEvent.click(button);
+    expect(await screen.findByRole("button", { name: "Scanning…" })).toBeTruthy();
+
+    act(() => {
+      scan.handler?.({
+        discovered: 2,
+        ingested: 1,
+        skipped: 0,
+        failed: 0,
+        enriched: 1,
+        done: true,
+      });
+    });
+    expect(await screen.findByRole("button", { name: "Rescan" })).toBeTruthy();
   });
 });

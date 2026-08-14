@@ -105,6 +105,7 @@ export default function App() {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const unlisten = onScanProgress((next) => {
       setProgress(next);
+      if (next.done) setScanning(false);
       // Coalesce progress storms into one archive refresh. This makes results
       // appear as the background worker commits them without issuing a query
       // for every single ingested source.
@@ -266,7 +267,6 @@ export default function App() {
       await refresh();
     } catch (e) {
       setError(String(e));
-    } finally {
       setScanning(false);
     }
   }
