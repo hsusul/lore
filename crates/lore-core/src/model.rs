@@ -252,6 +252,12 @@ pub struct ParsedSession {
     pub native_session_id: Option<String>,
     pub dedupe_key: String,
     pub title: Option<String>,
+    /// True when `title` was derived from message content as a display fallback
+    /// (no native `custom-title`/`ai-title` event). A synthetic title merely
+    /// echoes the first user message, so it is kept for display but never
+    /// scanned or indexed — doing so would duplicate the message's own secret
+    /// findings and search hits (`SEARCH.md` §6, "without duplicates").
+    pub title_is_synthetic: bool,
     pub agent_version: Option<String>,
     pub primary_model: Option<String>,
     /// Session-level totals when the source records cumulative usage. When a
@@ -276,6 +282,7 @@ impl ParsedSession {
             native_session_id: None,
             dedupe_key: dedupe_key.into(),
             title: None,
+            title_is_synthetic: false,
             agent_version: None,
             primary_model: None,
             total_tokens: Tokens::default(),

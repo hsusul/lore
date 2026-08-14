@@ -121,6 +121,7 @@ impl ClaudeCodeAdapter {
         super::common::resolve_file_event_segments(&mut session);
         if session.title.is_none() {
             session.title = fallback_title(&session.messages);
+            session.title_is_synthetic = session.title.is_some();
         }
         session
     }

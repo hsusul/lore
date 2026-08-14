@@ -143,18 +143,24 @@ fn persist_rows(
         ],
     )?;
 
-    // Title is a searchable projection (scanned + redacted like any cleartext).
+    // A native title (custom/ai) is distinct content, so it is scanned and
+    // indexed like any cleartext. A synthetic fallback title merely echoes the
+    // first user message — already scanned and indexed — so re-scanning or
+    // re-indexing it would duplicate both secret findings and search hits
+    // (`SEARCH.md` §6). It is kept only in `agent_session.title` for display.
     if let Some(title) = &parsed.title {
-        scan_and_project(
-            tx,
-            &session_id,
-            None,
-            "session",
-            &session_id,
-            "title",
-            title,
-            true,
-        )?;
+        if !parsed.title_is_synthetic {
+            scan_and_project(
+                tx,
+                &session_id,
+                None,
+                "session",
+                &session_id,
+                "title",
+                title,
+                true,
+            )?;
+        }
     }
 
     // Segments.

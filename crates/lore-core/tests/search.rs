@@ -65,6 +65,41 @@ fn title_is_searchable() {
     assert!(hits.iter().any(|h| h.field == "title"));
 }
 
+/// Regression: a synthetic fallback title (derived from the first user message
+/// when no native title event exists) must not be indexed as its own document.
+/// Indexing it duplicated every message-text hit into a second `title` hit
+/// (`SEARCH.md` §6, "without duplicates"). A native title is still indexed
+/// (`title_is_searchable`); only the redundant fallback is suppressed.
+#[test]
+fn synthetic_fallback_title_is_not_indexed() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    // No custom-title/ai-title event: the title is derived from this message.
+    persist_claude(
+        &conn,
+        &blobs,
+        &user_message("f1", "/p", "the retryBackoff helper handles jitter"),
+        "f1",
+    );
+
+    // Exactly one hit, from the message part — never a second `title` hit for
+    // the same term, even though the display title echoes this text.
+    let hits = search(&conn, "retryBackoff", 20).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].source_kind, "message_part");
+    assert!(hits.iter().all(|h| h.field != "title"));
+
+    // And no `session`/`title` projection row was written at all.
+    let title_docs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM search_document WHERE source_kind = 'session'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(title_docs, 0, "fallback title must not be projected");
+}
+
 #[test]
 fn agent_filter_narrows_results() {
     let conn = lore_core::storage::open_in_memory().unwrap();

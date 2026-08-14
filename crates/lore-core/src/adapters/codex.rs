@@ -222,7 +222,9 @@ impl CodexAdapter {
 
         assign_segments(&mut session, &contexts, provider.as_ref(), &git);
         resolve_file_event_segments(&mut session);
+        // Codex has no native title event, so any derived title is synthetic.
         session.title = fallback_title(&session.messages);
+        session.title_is_synthetic = session.title.is_some();
         session
     }
 }
