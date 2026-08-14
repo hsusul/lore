@@ -845,6 +845,13 @@ kbd {
   gap: 1px;
 }
 
+.results__more {
+  margin: 0.5rem auto 0.25rem;
+  display: block;
+  font-size: 0.85rem;
+  color: var(--text-3);
+}
+
 .results__item {
   padding: 0.45rem 0.55rem;
   border-radius: var(--r);

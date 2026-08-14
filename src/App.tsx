@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import CommandPalette, { type Command } from "./components/CommandPalette";
 import RepositoryList from "./components/RepositoryList";
@@ -20,7 +20,7 @@ import {
   onScanProgress,
   forgetEverything,
   rescan,
-  search,
+  searchPage,
   sessionSecretCount,
   type DetectedAgent,
   type GitObservationDto,
@@ -32,6 +32,8 @@ import {
 } from "./ipc";
 
 const SESSION_LIMIT = 500;
+/** Search results fetched per page; "Load more" appends another page. */
+const SEARCH_PAGE = 50;
 
 /** A small commit-graph mark. */
 function Mark() {
@@ -67,6 +69,11 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Always holds the latest query so an in-flight page can tell it has been
+  // superseded by newer typing and drop its (stale) results.
+  const queryRef = useRef("");
   const [secretCount, setSecretCount] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -119,14 +126,35 @@ export default function App() {
 
   async function runSearch(next: string) {
     setQuery(next);
+    queryRef.current = next;
     if (next.trim() === "") {
       setHits([]);
+      setCursor(null);
       return;
     }
     try {
-      setHits(await search(next, 50));
+      const page = await searchPage(next, SEARCH_PAGE);
+      if (queryRef.current !== next) return; // superseded by newer typing
+      setHits(page.hits);
+      setCursor(page.next_cursor);
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  async function loadMore() {
+    if (cursor === null || loadingMore) return;
+    const forQuery = queryRef.current;
+    setLoadingMore(true);
+    try {
+      const page = await searchPage(forQuery, SEARCH_PAGE, cursor);
+      if (queryRef.current !== forQuery) return; // query changed mid-flight
+      setHits((prev) => [...prev, ...page.hits]);
+      setCursor(page.next_cursor);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -336,6 +364,9 @@ export default function App() {
               query={query}
               selectedId={selectedSession}
               onOpen={openSession}
+              hasMore={cursor !== null}
+              loadingMore={loadingMore}
+              onLoadMore={() => void loadMore()}
             />
           ) : (
             <SessionList
