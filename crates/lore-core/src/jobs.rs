@@ -112,6 +112,8 @@ pub enum SourceSchedule {
     /// A failed run already covers this exact source fingerprint, so it stays
     /// failed until the source or parser version changes.
     CoalescedFailed,
+    /// A successful run already covers this exact source fingerprint.
+    CoalescedDone,
     /// A task for this source is running now; it was flagged to re-run on finish
     /// so the change that arrived mid-run is not lost.
     MarkedRedo,
@@ -171,6 +173,13 @@ pub fn schedule_source(
                 [job.id],
             )?;
             Ok(SourceSchedule::MarkedRedo)
+        }
+        Some("done")
+            if existing
+                .as_ref()
+                .is_some_and(|(_, payload)| payload.as_deref() == job.payload_json) =>
+        {
+            Ok(SourceSchedule::CoalescedDone)
         }
         Some("failed")
             if existing
@@ -514,15 +523,24 @@ mod tests {
     }
 
     #[test]
-    fn finished_source_job_is_rearmed_on_new_change() {
+    fn finished_source_job_only_rearms_on_new_fingerprint() {
         let conn = db();
         schedule_source(&conn, &new_job("src", 0), 10).unwrap();
         claim_next(&conn).unwrap();
         assert_eq!(finish(&conn, "src").unwrap(), FinishOutcome::Done);
 
-        // A later change re-arms the completed job rather than being dropped.
         assert_eq!(
             schedule_source(&conn, &new_job("src", 0), 10).unwrap(),
+            SourceSchedule::CoalescedDone
+        );
+
+        // A later change re-arms the completed job rather than being dropped.
+        let changed = NewJob {
+            payload_json: Some(r#"{"source":"changed"}"#),
+            ..new_job("src", 1)
+        };
+        assert_eq!(
+            schedule_source(&conn, &changed, 10).unwrap(),
             SourceSchedule::Enqueued
         );
         assert_eq!(

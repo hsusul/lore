@@ -162,7 +162,13 @@ impl<'a> Pipeline<'a> {
             .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
             .unwrap_or(0);
         let size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
-        let payload = encode_payload(agent_id, path, size, priority);
+        let mtime_ns = metadata
+            .as_ref()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_nanos().to_string())
+            .unwrap_or_default();
+        let payload = encode_payload(agent_id, path, size, &mtime_ns);
         jobs::schedule_source(
             self.conn,
             &NewJob {
@@ -269,12 +275,12 @@ fn job_id(agent_id: &str, path: &Path) -> String {
     format!("ingest_{hash:016x}")
 }
 
-fn encode_payload(agent_id: &str, path: &Path, size: u64, mtime_ms: i64) -> String {
+fn encode_payload(agent_id: &str, path: &Path, size: u64, mtime_ns: &str) -> String {
     serde_json::json!({
         "agent_id": agent_id,
         "path": path.to_string_lossy(),
         "size": size,
-        "mtime_ms": mtime_ms,
+        "mtime_ns": mtime_ns,
         "parser_version": JOB_PARSER_VERSION,
     })
     .to_string()
@@ -302,7 +308,7 @@ mod tests {
 
     #[test]
     fn payload_round_trips() {
-        let encoded = encode_payload("codex", Path::new("/x/rollout.jsonl"), 42, 1234);
+        let encoded = encode_payload("codex", Path::new("/x/rollout.jsonl"), 42, "1234");
         let (agent, path) = decode_payload(&encoded).unwrap();
         assert_eq!(agent, "codex");
         assert_eq!(path, PathBuf::from("/x/rollout.jsonl"));

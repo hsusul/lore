@@ -199,11 +199,9 @@ fn appended_and_new_activity_ingested_without_manual_rescan() {
 
     // Verify the durable effect on a peer read connection to a shared file DB
     // would be ideal, but the in-memory worker owns its connection; instead
-    // assert via a fresh scan that nothing further changes (idempotent) and the
-    // appended message is present by re-running and expecting a skip.
+    // assert via a fresh scan that unchanged fingerprints schedule no work.
     let follow = worker.scan(&sink).unwrap();
-    assert_eq!(follow.ingested, 0, "already-ingested sources now skip");
-    assert_eq!(follow.skipped, 3, "1 Claude + 2 Codex sessions all skip");
+    assert_eq!(follow.processed(), 0, "already-ingested sources stay done");
 }
 
 // 3. Truncate/rewrite after ingest re-parses to the correct state (no stale
@@ -230,10 +228,10 @@ fn truncate_after_ingest_reparses_correctly() {
         pass.drained.ingested, 1,
         "the truncated file re-parses as a change"
     );
-    // A subsequent scan finds everything unchanged: no duplicate session lingers.
+    // A subsequent scan finds every completed fingerprint unchanged and queues
+    // nothing, so no duplicate session can be introduced.
     let follow = worker.scan(&sink).unwrap();
-    assert_eq!(follow.ingested, 0);
-    assert_eq!(follow.skipped, 2, "still exactly two sessions");
+    assert_eq!(follow.processed(), 0);
 }
 
 // 4. Repeated event storms coalesce onto a single pending job.

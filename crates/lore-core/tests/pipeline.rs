@@ -121,13 +121,14 @@ fn discovery_queue_ingest_checkpoint_completion_and_restart() {
         2
     );
 
-    // Restart: nothing was left running; a fresh scan re-arms finished jobs and
-    // a second drain finds unchanged sources and skips them — no duplicates.
+    // Restart: nothing was left running; the unchanged source fingerprints are
+    // already complete, so a fresh scan does not requeue or reread them.
     assert_eq!(pipeline.recover().unwrap(), 0);
     pipeline.enqueue_scan(&sink).unwrap();
     let restart = pipeline.drain(&sink, 10).unwrap();
-    assert_eq!(restart.skipped, 2);
+    assert_eq!(restart.skipped, 0);
     assert_eq!(restart.ingested, 0);
+    assert_eq!(restart.processed(), 0);
     assert_eq!(
         count(&conn, "SELECT count(*) FROM agent_session"),
         2,
@@ -175,15 +176,15 @@ fn archive_move_and_repeated_events_do_not_duplicate_sessions() {
         "an archive move must not create a new session"
     );
 
-    // Repeated events for the same path while nothing is running coalesce.
+    // Repeated events for the unchanged completed path stay completed.
     let first = pipeline.enqueue_path(&moved).unwrap().unwrap();
     let second = pipeline.enqueue_path(&moved).unwrap().unwrap();
     use lore_core::jobs::SourceSchedule;
-    assert_eq!(first, SourceSchedule::Enqueued);
-    assert_eq!(second, SourceSchedule::CoalescedPending);
+    assert_eq!(first, SourceSchedule::CoalescedDone);
+    assert_eq!(second, SourceSchedule::CoalescedDone);
     assert_eq!(
         count(&conn, "SELECT count(*) FROM job WHERE state='pending'"),
-        1
+        0
     );
 }
 
@@ -269,4 +270,21 @@ fn newest_sources_are_ingested_first() {
         payload.contains("rollout-a.jsonl"),
         "the most recently modified source should be claimed first"
     );
+}
+
+#[test]
+fn unchanged_scan_does_not_requeue_or_read_sources() {
+    let home = fixture_home();
+    let registry = AdapterRegistry::v0();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let pipeline = Pipeline::new(&conn, &registry, &home.blobs, &home.config, 128);
+    let sink = RecordingSink::default();
+
+    assert_eq!(pipeline.enqueue_scan(&sink).unwrap(), 2);
+    let first = pipeline.drain(&sink, 10).unwrap();
+    assert_eq!(first.ingested, 2);
+
+    assert_eq!(pipeline.enqueue_scan(&sink).unwrap(), 0);
+    let second = pipeline.drain(&sink, 10).unwrap();
+    assert_eq!(second.processed(), 0);
 }
