@@ -237,6 +237,17 @@ pub struct SearchPage {
     pub next_cursor: Option<String>,
 }
 
+/// The user-configurable automatic-backup schedule. `interval` is one of
+/// `"off"`, `"daily"`, `"weekly"`; `keep` is how many newest backups to retain.
+/// Payload of `get_backup_schedule` / argument of `set_backup_schedule`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BackupScheduleDto {
+    pub interval: String,
+    #[ts(type = "number")]
+    pub keep: i64,
+}
+
 /// Result of forgetting a session. Payload of `forget_session`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

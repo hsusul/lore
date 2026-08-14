@@ -16,8 +16,8 @@ use lore_core::storage::blob::BlobStore;
 use lore_core::watcher::SessionWatcher;
 use lore_core::worker::{self, WorkerConfig, WorkerHandle};
 use lore_ipc::{
-    DetectedAgent, ForgetReport, GitObservationDto, RepositorySummary, RescanResult, ScanProgress,
-    SearchHit, SearchPage, SessionDetail, SessionSummary,
+    BackupScheduleDto, DetectedAgent, ForgetReport, GitObservationDto, RepositorySummary,
+    RescanResult, ScanProgress, SearchHit, SearchPage, SessionDetail, SessionSummary,
 };
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
@@ -277,6 +277,47 @@ fn set_setting(state: State<'_, AppState>, key: String, value_json: String) -> R
     lore_core::settings::set(&conn, &key, &value_json).map_err(|e| e.to_string())
 }
 
+/// Read the automatic-backup schedule (interval + retention).
+#[tauri::command]
+fn get_backup_schedule(state: State<'_, AppState>) -> Result<BackupScheduleDto, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    let s = lore_core::backup::read_schedule(&conn).map_err(|e| e.to_string())?;
+    Ok(BackupScheduleDto {
+        interval: s.interval.as_str().to_string(),
+        keep: i64::try_from(s.keep).unwrap_or(i64::MAX),
+    })
+}
+
+/// Persist the automatic-backup schedule.
+#[tauri::command]
+fn set_backup_schedule(
+    state: State<'_, AppState>,
+    interval: String,
+    keep: i64,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::backup::write_schedule(
+        &conn,
+        lore_core::backup::BackupSchedule {
+            interval: lore_core::backup::BackupInterval::parse(&interval),
+            keep: usize::try_from(keep).unwrap_or(lore_core::backup::DEFAULT_BACKUP_RETENTION),
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Create a Lore-owned backup now, pruning to the configured retention.
+#[tauri::command]
+fn backup_now(state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    let keep = lore_core::backup::read_schedule(&conn)
+        .map(|s| s.keep)
+        .unwrap_or(lore_core::backup::DEFAULT_BACKUP_RETENTION);
+    lore_core::backup::create_backup(&conn, &state.archive_dir.join("backups"), keep)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Run a discovery→ingest→enrich pass, streaming `scan_progress` events, and
 /// return the final tally.
 #[tauri::command]
@@ -356,6 +397,18 @@ fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     let blobs = BlobStore::open(data_dir.join("blobs"))?;
     let config = dev_config();
 
+    // Run an automatic backup at launch if one is due per the user's schedule
+    // (a no-op when off or not yet due). Best-effort: a backup failure must never
+    // block the app from starting.
+    if let Ok(elapsed) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        let now_ms = i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX);
+        if let Err(e) =
+            lore_core::backup::run_scheduled_backup(&conn, &data_dir.join("backups"), now_ms)
+        {
+            eprintln!("warning: scheduled backup skipped: {e}");
+        }
+    }
+
     // Background worker: independent connection + registry, watching the same
     // roots the UI's discovery config resolves.
     let worker = worker::open_worker(
@@ -412,6 +465,9 @@ pub fn run() {
             search_page,
             get_setting,
             set_setting,
+            get_backup_schedule,
+            set_backup_schedule,
+            backup_now,
             rescan
         ])
         .build(tauri::generate_context!());

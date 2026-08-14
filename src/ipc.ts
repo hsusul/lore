@@ -14,6 +14,7 @@ import type { MessagePartDto } from "../crates/lore-ipc/bindings/MessagePartDto"
 import type { RepositorySummary } from "../crates/lore-ipc/bindings/RepositorySummary";
 import type { RescanResult } from "../crates/lore-ipc/bindings/RescanResult";
 import type { ScanProgress } from "../crates/lore-ipc/bindings/ScanProgress";
+import type { BackupScheduleDto } from "../crates/lore-ipc/bindings/BackupScheduleDto";
 import type { SearchHit } from "../crates/lore-ipc/bindings/SearchHit";
 import type { SearchPage } from "../crates/lore-ipc/bindings/SearchPage";
 import type { SegmentDto } from "../crates/lore-ipc/bindings/SegmentDto";
@@ -140,6 +141,23 @@ export function getSetting(key: string): Promise<string | null> {
 /** Persist a setting's raw JSON value (Lore-owned; cleared by "forget everything"). */
 export function setSetting(key: string, valueJson: string): Promise<void> {
   return invoke<void>("set_setting", { key, valueJson });
+}
+
+export type { BackupScheduleDto };
+
+/** Read the automatic-backup schedule (interval + retention). */
+export function getBackupSchedule(): Promise<BackupScheduleDto> {
+  return invoke<BackupScheduleDto>("get_backup_schedule");
+}
+
+/** Persist the automatic-backup schedule. `interval` is "off" | "daily" | "weekly". */
+export function setBackupSchedule(interval: string, keep: number): Promise<void> {
+  return invoke<void>("set_backup_schedule", { interval, keep });
+}
+
+/** Create a Lore-owned backup now, pruning to the configured retention. */
+export function backupNow(): Promise<void> {
+  return invoke<void>("backup_now");
 }
 
 /** Subscribe to content-free scan progress. Resolves with an unlisten handle. */
