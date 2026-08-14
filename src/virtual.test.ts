@@ -1,0 +1,48 @@
+import { describe, expect, it } from "vitest";
+
+import { computeWindow } from "./virtual";
+
+describe("computeWindow", () => {
+  it("renders every row when nothing can be measured (fallback)", () => {
+    // viewportHeight 0 is the jsdom / pre-layout case — degrade to a full render.
+    expect(computeWindow(1000, 0, 0, 0, 8)).toEqual({
+      startIndex: 0,
+      endIndex: 1000,
+      padTop: 0,
+      padBottom: 0,
+    });
+  });
+
+  it("windows to the visible slice plus overscan", () => {
+    // 1000 rows of 40px, 400px viewport (10 visible), scrolled to row 50.
+    const w = computeWindow(1000, 2000, 400, 40, 5);
+    expect(w.startIndex).toBe(45); // floor(2000/40) - 5
+    expect(w.endIndex).toBe(65); // ceil(2400/40) + 5
+    // Spacers reserve the exact scroll extent of the off-screen rows.
+    expect(w.padTop).toBe(45 * 40);
+    expect(w.padBottom).toBe((1000 - 65) * 40);
+    // Total reserved height equals the full list height.
+    const rendered = (w.endIndex - w.startIndex) * 40;
+    expect(w.padTop + rendered + w.padBottom).toBe(1000 * 40);
+  });
+
+  it("clamps at the top and bottom edges", () => {
+    const top = computeWindow(1000, 0, 400, 40, 8);
+    expect(top.startIndex).toBe(0);
+    expect(top.padTop).toBe(0);
+
+    // Scrolled to the very bottom: endIndex clamps to count, padBottom is 0.
+    const bottom = computeWindow(1000, 40 * 1000 - 400, 400, 40, 8);
+    expect(bottom.endIndex).toBe(1000);
+    expect(bottom.padBottom).toBe(0);
+  });
+
+  it("handles an empty list", () => {
+    expect(computeWindow(0, 0, 400, 40, 8)).toEqual({
+      startIndex: 0,
+      endIndex: 0,
+      padTop: 0,
+      padBottom: 0,
+    });
+  });
+});

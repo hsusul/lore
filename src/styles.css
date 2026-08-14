@@ -240,6 +240,24 @@ pre,
 .pane--sessions {
   padding: 0.35rem;
   background: var(--surface);
+  /* Column layout so the search box stays put and the list (or results) owns
+     its own scrollbar — a prerequisite for windowing the sessions list. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pane--sessions .search-box {
+  flex: 0 0 auto;
+}
+
+/* The list / results / empty-state fill the remaining height and scroll. */
+.pane--sessions > .sessions,
+.pane--sessions > .results,
+.pane--sessions > .sessions__empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .pane--detail {
@@ -453,9 +471,9 @@ kbd {
   margin: 0;
   padding: 0;
   outline: none;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  /* Block flow, not flex: windowing reserves off-screen rows with tall spacer
+     <li>s, and flex-shrink would collapse those spacers to fit the container. */
+  display: block;
 }
 
 .sessions:focus-visible .sessions__item.is-active {
@@ -846,6 +864,7 @@ kbd {
 }
 
 .results__more {
+  flex: 0 0 auto;
   margin: 0.5rem auto 0.25rem;
   display: block;
   font-size: 0.85rem;
