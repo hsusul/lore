@@ -109,6 +109,9 @@ pub enum SourceSchedule {
     Enqueued,
     /// An identical task is already pending; the storm coalesced onto it.
     CoalescedPending,
+    /// A failed run already covers this exact source fingerprint, so it stays
+    /// failed until the source or parser version changes.
+    CoalescedFailed,
     /// A task for this source is running now; it was flagged to re-run on finish
     /// so the change that arrived mid-run is not lost.
     MarkedRedo,
@@ -137,12 +140,14 @@ pub fn schedule_source(
     job: &NewJob<'_>,
     capacity: usize,
 ) -> Result<SourceSchedule> {
-    let state: Option<String> = conn
-        .query_row("SELECT state FROM job WHERE id = ?1", [job.id], |row| {
-            row.get(0)
-        })
+    let existing: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT state, payload_json FROM job WHERE id = ?1",
+            [job.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
         .optional()?;
-    match state.as_deref() {
+    match existing.as_ref().map(|(state, _)| state.as_str()) {
         None => {
             enqueue(conn, job, capacity)?;
             Ok(SourceSchedule::Enqueued)
@@ -166,6 +171,13 @@ pub fn schedule_source(
                 [job.id],
             )?;
             Ok(SourceSchedule::MarkedRedo)
+        }
+        Some("failed")
+            if existing
+                .as_ref()
+                .is_some_and(|(_, payload)| payload.as_deref() == job.payload_json) =>
+        {
+            Ok(SourceSchedule::CoalescedFailed)
         }
         Some("done" | "failed") => {
             // Re-arm the finished job for another run with the latest payload.
@@ -428,6 +440,29 @@ mod tests {
             complete(&conn, "job"),
             Err(JobQueueError::NotRunning)
         ));
+    }
+
+    #[test]
+    fn unchanged_failed_source_waits_for_a_new_fingerprint() {
+        let conn = db();
+        schedule_source(&conn, &new_job("src", 0), 10).unwrap();
+        claim_next(&conn).unwrap();
+        fail(&conn, "src", "source ingest failed").unwrap();
+
+        assert_eq!(
+            schedule_source(&conn, &new_job("src", 0), 10).unwrap(),
+            SourceSchedule::CoalescedFailed
+        );
+        assert_eq!(load(&conn, "src").unwrap().unwrap().state, JobState::Failed);
+
+        let changed = NewJob {
+            payload_json: Some(r#"{"source":"changed"}"#),
+            ..new_job("src", 1)
+        };
+        assert_eq!(
+            schedule_source(&conn, &changed, 10).unwrap(),
+            SourceSchedule::Enqueued
+        );
     }
 
     #[test]

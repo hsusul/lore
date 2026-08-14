@@ -23,6 +23,9 @@ use crate::storage::blob::BlobStore;
 
 /// Durable job kind for a single source-file ingest.
 const JOB_KIND: &str = "ingest_source";
+/// Must advance whenever parser output changes so terminal jobs are reconsidered.
+/// Keep aligned with the ingest checkpoint parser version.
+const JOB_PARSER_VERSION: &str = "2";
 
 /// A content-free progress event. Carries an adapter id (a static schema
 /// identifier), an outcome, and counts — never a path or session content.
@@ -145,17 +148,19 @@ impl<'a> Pipeline<'a> {
 
     fn schedule(&self, agent_id: &str, path: &Path) -> jobs::Result<SourceSchedule> {
         let id = job_id(agent_id, path);
-        let payload = encode_payload(agent_id, path);
+        let metadata = std::fs::metadata(path).ok();
         // Prefer recent sessions during a large first scan so the archive
         // becomes useful immediately instead of waiting behind months-old,
         // potentially multi-megabyte histories. The path remains the stable
         // coalescing identity; mtime only controls claim order.
-        let priority = std::fs::metadata(path)
-            .and_then(|meta| meta.modified())
-            .ok()
+        let priority = metadata
+            .as_ref()
+            .and_then(|meta| meta.modified().ok())
             .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
             .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
             .unwrap_or(0);
+        let size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
+        let payload = encode_payload(agent_id, path, size, priority);
         jobs::schedule_source(
             self.conn,
             &NewJob {
@@ -262,8 +267,15 @@ fn job_id(agent_id: &str, path: &Path) -> String {
     format!("ingest_{hash:016x}")
 }
 
-fn encode_payload(agent_id: &str, path: &Path) -> String {
-    serde_json::json!({ "agent_id": agent_id, "path": path.to_string_lossy() }).to_string()
+fn encode_payload(agent_id: &str, path: &Path, size: u64, mtime_ms: i64) -> String {
+    serde_json::json!({
+        "agent_id": agent_id,
+        "path": path.to_string_lossy(),
+        "size": size,
+        "mtime_ms": mtime_ms,
+        "parser_version": JOB_PARSER_VERSION,
+    })
+    .to_string()
 }
 
 fn decode_payload(payload: &str) -> Option<(String, PathBuf)> {
@@ -288,7 +300,7 @@ mod tests {
 
     #[test]
     fn payload_round_trips() {
-        let encoded = encode_payload("codex", Path::new("/x/rollout.jsonl"));
+        let encoded = encode_payload("codex", Path::new("/x/rollout.jsonl"), 42, 1234);
         let (agent, path) = decode_payload(&encoded).unwrap();
         assert_eq!(agent, "codex");
         assert_eq!(path, PathBuf::from("/x/rollout.jsonl"));
