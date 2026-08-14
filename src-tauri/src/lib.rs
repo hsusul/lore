@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use lore_core::adapters::AdapterRegistry;
 use lore_core::discovery::{watch_roots, DiscoveryConfig};
-use lore_core::pipeline::{Pipeline, ProgressEvent, ProgressSink};
+use lore_core::pipeline::{ProgressEvent, ProgressSink};
 use lore_core::storage::blob::BlobStore;
 use lore_core::watcher::SessionWatcher;
 use lore_core::worker::{self, WorkerConfig, WorkerHandle};
@@ -22,10 +22,6 @@ use lore_ipc::{
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
-/// Backpressure ceiling for queued ingest jobs in one scan.
-const QUEUE_CAPACITY: usize = 100_000;
-/// Upper bound on jobs drained per rescan call.
-const DRAIN_BUDGET: usize = 1_000_000;
 /// Quiet period a source path must be idle before the watcher hands it to the
 /// worker, coalescing partial writes and event storms.
 const WATCH_QUIET: Duration = Duration::from_millis(400);
@@ -46,43 +42,6 @@ struct AppState {
     /// The Lore-owned archive root (`app_data_dir`); used to purge on-disk
     /// backups/cache/quarantine on "forget everything".
     archive_dir: std::path::PathBuf,
-}
-
-/// A progress sink that accumulates content-free counts and relays them to the
-/// webview as `scan_progress` events.
-struct EmitSink<'a> {
-    app: &'a AppHandle,
-    progress: Mutex<ScanProgress>,
-}
-
-impl<'a> EmitSink<'a> {
-    fn new(app: &'a AppHandle) -> Self {
-        Self {
-            app,
-            progress: Mutex::new(ScanProgress::default()),
-        }
-    }
-
-    fn snapshot(&self) -> ScanProgress {
-        self.progress.lock().map(|p| *p).unwrap_or_default()
-    }
-}
-
-impl ProgressSink for EmitSink<'_> {
-    fn emit(&self, event: ProgressEvent) {
-        if let Ok(mut progress) = self.progress.lock() {
-            match event {
-                ProgressEvent::ScanEnqueued { discovered, .. } => {
-                    progress.discovered = discovered as i64;
-                }
-                ProgressEvent::Ingested { .. } => progress.ingested += 1,
-                ProgressEvent::Skipped { .. } => progress.skipped += 1,
-                ProgressEvent::Failed { .. } => progress.failed += 1,
-                ProgressEvent::Requeued { .. } => {}
-            }
-            let _ = self.app.emit("scan_progress", *progress);
-        }
-    }
 }
 
 /// An owned, thread-safe progress sink for the background worker. Accumulates
@@ -318,35 +277,32 @@ fn backup_now(state: State<'_, AppState>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Run a discovery→ingest→enrich pass, streaming `scan_progress` events, and
-/// return the final tally.
+/// Queue a discovery pass on the background worker and return immediately.
+/// Ingestion progress continues through `scan_progress` events, so a manual
+/// rescan never holds the UI database lock while parsing large histories.
 #[tauri::command]
 fn rescan(app: AppHandle, state: State<'_, AppState>) -> Result<RescanResult, String> {
-    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
-    let sink = EmitSink::new(&app);
-    let pipeline = Pipeline::new(
-        &conn,
-        &state.registry,
-        &state.blobs,
-        &state.config,
-        QUEUE_CAPACITY,
-    );
-    pipeline.enqueue_scan(&sink).map_err(|e| e.to_string())?;
-    let summary = pipeline
-        .drain(&sink, DRAIN_BUDGET)
-        .map_err(|e| e.to_string())?;
-
-    let mut final_progress = sink.snapshot();
-    final_progress.enriched = summary.enriched as i64;
-    final_progress.done = true;
-    let _ = app.emit("scan_progress", final_progress);
+    let discovered = lore_core::discovery::discover(&state.registry, &state.config)
+        .sessions
+        .len();
+    let progress = ScanProgress {
+        discovered: i64::try_from(discovered).unwrap_or(i64::MAX),
+        done: false,
+        ..ScanProgress::default()
+    };
+    let _ = app.emit("scan_progress", progress);
+    let worker = state.worker.lock().map_err(|_| "state lock poisoned")?;
+    let handle = worker
+        .as_ref()
+        .ok_or_else(|| "background ingestion worker unavailable".to_string())?;
+    handle.trigger_rescan();
 
     Ok(RescanResult {
-        discovered: final_progress.discovered,
-        ingested: summary.ingested as i64,
-        skipped: summary.skipped as i64,
-        failed: summary.failed as i64,
-        enriched: summary.enriched as i64,
+        discovered: progress.discovered,
+        ingested: 0,
+        skipped: 0,
+        failed: 0,
+        enriched: 0,
     })
 }
 

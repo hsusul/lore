@@ -146,12 +146,22 @@ impl<'a> Pipeline<'a> {
     fn schedule(&self, agent_id: &str, path: &Path) -> jobs::Result<SourceSchedule> {
         let id = job_id(agent_id, path);
         let payload = encode_payload(agent_id, path);
+        // Prefer recent sessions during a large first scan so the archive
+        // becomes useful immediately instead of waiting behind months-old,
+        // potentially multi-megabyte histories. The path remains the stable
+        // coalescing identity; mtime only controls claim order.
+        let priority = std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+            .unwrap_or(0);
         jobs::schedule_source(
             self.conn,
             &NewJob {
                 id: &id,
                 kind: JOB_KIND,
-                priority: 0,
+                priority,
                 payload_json: Some(&payload),
             },
             self.capacity,
@@ -217,8 +227,11 @@ impl<'a> Pipeline<'a> {
                         sink.emit(ProgressEvent::Requeued { agent_id });
                     }
                 }
-                Err(_) => {
-                    jobs::fail(self.conn, &job.id, "source ingest failed")?;
+                Err(error) => {
+                    // Storage errors are deliberately content-free, so keeping
+                    // their category makes failures diagnosable without
+                    // exposing source text or paths.
+                    jobs::fail(self.conn, &job.id, &error.to_string())?;
                     summary.failed += 1;
                     sink.emit(ProgressEvent::Failed {
                         agent_id,

@@ -147,7 +147,18 @@ pub fn schedule_source(
             enqueue(conn, job, capacity)?;
             Ok(SourceSchedule::Enqueued)
         }
-        Some("pending") => Ok(SourceSchedule::CoalescedPending),
+        Some("pending") => {
+            // A later discovery pass may have better scheduling metadata (for
+            // example, a file was appended and now has a newer mtime). Refresh
+            // the pending row without creating duplicate work.
+            conn.execute(
+                "UPDATE job SET priority = ?2, payload_json = ?3,
+                                updated_at = unixepoch('now')*1000
+                 WHERE id = ?1 AND state = 'pending'",
+                params![job.id, job.priority, job.payload_json],
+            )?;
+            Ok(SourceSchedule::CoalescedPending)
+        }
         Some("running") => {
             conn.execute(
                 "UPDATE job SET redo = 1, updated_at = unixepoch('now')*1000
@@ -160,9 +171,10 @@ pub fn schedule_source(
             // Re-arm the finished job for another run with the latest payload.
             conn.execute(
                 "UPDATE job SET state = 'pending', redo = 0, error = NULL,
-                                payload_json = ?2, updated_at = unixepoch('now')*1000
+                                priority = ?2, payload_json = ?3,
+                                updated_at = unixepoch('now')*1000
                  WHERE id = ?1",
-                params![job.id, job.payload_json],
+                params![job.id, job.priority, job.payload_json],
             )?;
             Ok(SourceSchedule::Enqueued)
         }

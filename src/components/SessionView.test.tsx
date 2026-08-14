@@ -112,6 +112,44 @@ describe("SessionView", () => {
     expect(screen.getByText("done")).toBeTruthy();
   });
 
+  it("lets each message collapse and starts very long messages collapsed", () => {
+    const longDetail: SessionDetail = {
+      ...detail,
+      messages: [
+        {
+          ...detail.messages[0],
+          parts: [
+            {
+              ordinal: 0,
+              kind: "text",
+              text: "x".repeat(2_001),
+              content_json: null,
+              searchable: true,
+            },
+          ],
+        },
+      ],
+    };
+    render(<SessionView detail={longDetail} git={[]} />);
+    const message = screen.getByLabelText("message 0");
+    expect(message.hasAttribute("open")).toBe(false);
+    expect(screen.getByText(/long message · collapsed/i)).toBeTruthy();
+    fireEvent.click(message.querySelector("summary")!);
+    expect(message.hasAttribute("open")).toBe(true);
+  });
+
+  it("progressively renders large timelines in bounded pages", () => {
+    const messages = Array.from({ length: 205 }, (_, seq) => ({
+      ...detail.messages[0],
+      id: `message-${seq}`,
+      seq,
+    }));
+    render(<SessionView detail={{ ...detail, messages }} git={[]} />);
+    expect(document.querySelectorAll(".msg")).toHaveLength(200);
+    fireEvent.click(screen.getByRole("button", { name: /show more messages \(200 of 205\)/i }));
+    expect(document.querySelectorAll(".msg")).toHaveLength(205);
+  });
+
   it("shows a flagged-secret badge and wires export/forget", () => {
     const onExport = vi.fn();
     const onForget = vi.fn();

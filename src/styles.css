@@ -736,6 +736,11 @@ kbd {
   flex-direction: column;
 }
 
+.timeline__more {
+  display: block;
+  margin: 0.75rem auto 1.25rem;
+}
+
 .msg {
   padding: 0.7rem 0;
   border-top: 1px solid var(--border);
@@ -745,7 +750,26 @@ kbd {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  cursor: pointer;
+  list-style-position: outside;
+  user-select: none;
+}
+
+.msg[open] .msg__meta {
   margin-bottom: 0.3rem;
+}
+
+.msg__meta::marker {
+  color: var(--text-3);
+}
+
+.msg__body {
+  padding-left: 1rem;
+}
+
+.msg__collapsed-hint {
+  color: var(--text-3);
+  font-size: 0.74rem;
 }
 
 .role-tag {

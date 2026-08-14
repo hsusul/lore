@@ -99,11 +99,25 @@ export default function App() {
 
   useEffect(() => {
     void refresh();
-    const unlisten = onScanProgress(setProgress);
-    return () => void unlisten.then((off) => off());
-    // Run once on mount; refresh is re-invoked explicitly elsewhere.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refresh]);
+
+  useEffect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const unlisten = onScanProgress((next) => {
+      setProgress(next);
+      // Coalesce progress storms into one archive refresh. This makes results
+      // appear as the background worker commits them without issuing a query
+      // for every single ingested source.
+      if (next.ingested > 0 || next.skipped > 0 || next.failed > 0) {
+        if (refreshTimer !== null) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => void refresh(), 300);
+      }
+    });
+    return () => {
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
+      void unlisten.then((off) => off());
+    };
+  }, [refresh]);
 
   // Restore a persisted theme choice on launch; absent one, the CSS default
   // (system preference) applies. Ignores an unset or malformed value.

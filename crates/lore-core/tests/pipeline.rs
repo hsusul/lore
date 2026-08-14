@@ -246,3 +246,27 @@ fn a_change_during_a_run_is_reprocessed_after_completion() {
     );
     assert_eq!(count(&conn, "SELECT count(*) FROM agent_session"), 2);
 }
+
+#[test]
+fn newest_sources_are_ingested_first() {
+    let home = fixture_home();
+    let registry = AdapterRegistry::v0();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let pipeline = Pipeline::new(&conn, &registry, &home.blobs, &home.config, 128);
+    let sink = RecordingSink::default();
+
+    pipeline.enqueue_scan(&sink).unwrap();
+    let newest = home.codex_root.join("2026/08/11/rollout-a.jsonl");
+    let file = fs::OpenOptions::new().write(true).open(&newest).unwrap();
+    file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(2_000_000_000))
+        .unwrap();
+    // Refresh priorities for already-pending jobs after the mtime change.
+    pipeline.enqueue_scan(&sink).unwrap();
+
+    let claimed = lore_core::jobs::claim_next(&conn).unwrap().unwrap();
+    let payload = claimed.payload_json.unwrap();
+    assert!(
+        payload.contains("rollout-a.jsonl"),
+        "the most recently modified source should be claimed first"
+    );
+}

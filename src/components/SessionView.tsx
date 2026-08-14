@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { agentLabel, formatRelative, formatTime } from "../format";
 import type {
@@ -21,6 +21,8 @@ const FILE_SOURCE_LABEL: Record<string, string> = {
   agent_tool_input: "tool input",
   lore_capture: "captured",
 };
+
+const TIMELINE_PAGE = 200;
 
 function DiffBlock({ text }: { text: string }) {
   const lines = text.replace(/\n$/, "").split("\n");
@@ -65,17 +67,25 @@ function Part({ part }: { part: MessagePartDto }) {
 }
 
 function Message({ message }: { message: MessageDto }) {
+  const textLength = message.parts.reduce(
+    (total, part) => total + (part.text?.length ?? 0) + (part.content_json?.length ?? 0),
+    0,
+  );
+  const startsOpen = textLength < 2_000;
   return (
-    <article className="msg" aria-label={`message ${message.seq}`}>
-      <div className="msg__meta">
+    <details className="msg" open={startsOpen} aria-label={`message ${message.seq}`}>
+      <summary className="msg__meta">
         <span className={`role-tag role-tag--${message.role}`}>{message.role}</span>
         {message.model && <span className="msg__model">{message.model}</span>}
+        {!startsOpen && <span className="msg__collapsed-hint">long message · collapsed</span>}
         {message.ts != null && <time className="msg__time">{formatTime(message.ts)}</time>}
+      </summary>
+      <div className="msg__body">
+        {message.parts.map((part) => (
+          <Part key={part.ordinal} part={part} />
+        ))}
       </div>
-      {message.parts.map((part) => (
-        <Part key={part.ordinal} part={part} />
-      ))}
-    </article>
+    </details>
   );
 }
 
@@ -168,6 +178,13 @@ export default function SessionView({
   onExport?: () => void;
   onForget?: () => void;
 }) {
+  const sessionId = detail?.summary.id ?? null;
+  const [visibleMessages, setVisibleMessages] = useState(TIMELINE_PAGE);
+
+  useEffect(() => {
+    setVisibleMessages(TIMELINE_PAGE);
+  }, [sessionId]);
+
   if (!detail) {
     return (
       <section className="session session--empty" aria-label="session">
@@ -249,10 +266,18 @@ export default function SessionView({
           Timeline
         </h3>
         <div className="timeline">
-          {messages.map((message) => (
+          {messages.slice(0, visibleMessages).map((message) => (
             <Message key={message.id} message={message} />
           ))}
         </div>
+        {visibleMessages < messages.length && (
+          <button
+            className="timeline__more btn--ghost"
+            onClick={() => setVisibleMessages((count) => count + TIMELINE_PAGE)}
+          >
+            Show more messages ({Math.min(visibleMessages, messages.length)} of {messages.length})
+          </button>
+        )}
       </section>
     </section>
   );
