@@ -6,7 +6,7 @@
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
 use lore_core::adapters::codex::CodexAdapter;
 use lore_core::ingest::persist_session;
-use lore_core::search::{search, search_page, HIGHLIGHT_START};
+use lore_core::search::{search, search_page, SortOrder, HIGHLIGHT_START};
 use lore_core::storage::blob::BlobStore;
 use rusqlite::Connection;
 
@@ -192,7 +192,14 @@ fn keyset_pagination_is_stable_and_complete() {
     let mut cursor: Option<String> = None;
     let mut pages = 0;
     loop {
-        let page = search_page(&conn, "commonterm", 3, cursor.as_deref()).unwrap();
+        let page = search_page(
+            &conn,
+            "commonterm",
+            3,
+            cursor.as_deref(),
+            SortOrder::Relevance,
+        )
+        .unwrap();
         pages += 1;
         assert!(pages <= 20, "pagination must terminate");
         for h in &page.hits {
@@ -215,4 +222,139 @@ fn keyset_pagination_is_stable_and_complete() {
 
     let unique: std::collections::HashSet<_> = paged.iter().cloned().collect();
     assert_eq!(unique.len(), paged.len(), "no row is repeated across pages");
+}
+
+/// Build a Codex session whose `session_meta` timestamp fixes `started_at`.
+fn codex_at(conn: &Connection, blobs: &BlobStore, id: &str, ts: &str, text: &str) {
+    let jsonl = format!(
+        "{{\"type\":\"session_meta\",\"timestamp\":\"{ts}\",\"payload\":{{\"id\":\"{id}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}}}\n\
+         {{\"type\":\"response_item\",\"timestamp\":\"{ts}\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":\"{text}\"}}}}\n"
+    );
+    let parsed = CodexAdapter::new().parse_str(&jsonl, id);
+    persist_session(conn, "codex", "Codex", &parsed, blobs).unwrap();
+}
+
+#[test]
+fn newest_and_oldest_sorts_order_by_start_time_nulls_last() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    // Three timestamped Codex sessions (non-null started_at, ascending) and one
+    // Claude session with no timestamp (null started_at).
+    codex_at(
+        &conn,
+        &blobs,
+        "cx0",
+        "2026-08-11T10:00:00.000Z",
+        "sortterm one",
+    );
+    codex_at(
+        &conn,
+        &blobs,
+        "cx1",
+        "2026-08-11T10:00:01.000Z",
+        "sortterm two",
+    );
+    codex_at(
+        &conn,
+        &blobs,
+        "cx2",
+        "2026-08-11T10:00:02.000Z",
+        "sortterm three",
+    );
+    persist_claude(
+        &conn,
+        &blobs,
+        &user_message("clx", "/p", "sortterm four"),
+        "clx",
+    );
+
+    let times = |sort| -> Vec<Option<i64>> {
+        search_page(&conn, "sortterm", 50, None, sort)
+            .unwrap()
+            .hits
+            .iter()
+            .map(|h| h.started_at)
+            .collect()
+    };
+
+    // Newest: non-null timestamps descending, then the null-start session.
+    let newest = times(SortOrder::Newest);
+    let non_null: Vec<i64> = newest.iter().flatten().copied().collect();
+    let mut sorted_desc = non_null.clone();
+    sorted_desc.sort_by(|a, b| b.cmp(a));
+    assert_eq!(non_null, sorted_desc, "newest orders non-null desc");
+    assert_eq!(newest.last(), Some(&None), "null-start session sorts last");
+
+    // Oldest: non-null timestamps ascending, null-start still last.
+    let oldest = times(SortOrder::Oldest);
+    let non_null: Vec<i64> = oldest.iter().flatten().copied().collect();
+    let mut sorted_asc = non_null.clone();
+    sorted_asc.sort_unstable();
+    assert_eq!(non_null, sorted_asc, "oldest orders non-null asc");
+    assert_eq!(oldest.last(), Some(&None), "null-start session sorts last");
+
+    // The non-null timestamps are reverses of each other; nulls stay last in
+    // both, so the full vectors are not simple reverses.
+    let newest_non_null: Vec<i64> = newest.iter().flatten().copied().collect();
+    let oldest_non_null_rev: Vec<i64> = oldest.iter().flatten().rev().copied().collect();
+    assert_eq!(
+        newest_non_null, oldest_non_null_rev,
+        "non-null order reverses between newest and oldest"
+    );
+}
+
+#[test]
+fn newest_sort_paginates_without_duplicates() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    // Ten timestamped sessions plus two null-start ones; page the newest sort in
+    // twos and require the reassembly to equal the single-shot newest order.
+    for i in 0..10 {
+        codex_at(
+            &conn,
+            &blobs,
+            &format!("cx{i}"),
+            &format!("2026-08-11T10:00:{i:02}.000Z"),
+            "pageterm here",
+        );
+    }
+    for i in 0..2 {
+        persist_claude(
+            &conn,
+            &blobs,
+            &user_message(&format!("cl{i}"), "/p", "pageterm here"),
+            &format!("cl{i}"),
+        );
+    }
+
+    let full: Vec<String> = search_page(&conn, "pageterm", 50, None, SortOrder::Newest)
+        .unwrap()
+        .hits
+        .iter()
+        .map(|h| h.session_id.clone())
+        .collect();
+    assert_eq!(full.len(), 12);
+
+    let mut paged = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = search_page(&conn, "pageterm", 2, cursor.as_deref(), SortOrder::Newest).unwrap();
+        for h in &page.hits {
+            paged.push(h.session_id.clone());
+        }
+        match page.next_cursor {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
+    }
+    assert_eq!(
+        paged, full,
+        "newest paging matches single-shot newest order"
+    );
+    let unique: std::collections::HashSet<_> = paged.iter().cloned().collect();
+    assert_eq!(
+        unique.len(),
+        paged.len(),
+        "no row repeats across newest pages"
+    );
 }

@@ -83,18 +83,22 @@ export function search(query: string, limit: number): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("search", { query, limit });
 }
 
+/** Result ordering for {@link searchPage}. */
+export type SearchSort = "relevance" | "newest" | "oldest";
+
 /**
  * Paginated full-text search. Pass `cursor = null` for the first page; on each
  * result, if `next_cursor` is non-null, pass it back verbatim for the next page.
- * A cursor is valid only for the identical query that produced it. Keyset-based,
- * so paging never drops or repeats a result.
+ * A cursor is valid only for the identical query and sort that produced it.
+ * Keyset-based, so paging never drops or repeats a result.
  */
 export function searchPage(
   query: string,
   limit: number,
   cursor: string | null = null,
+  sort: SearchSort = "relevance",
 ): Promise<SearchPage> {
-  return invoke<SearchPage>("search_page", { query, limit, cursor });
+  return invoke<SearchPage>("search_page", { query, limit, cursor, sort });
 }
 
 /** How many secrets were flagged in a session (all redacted from derived surfaces). */

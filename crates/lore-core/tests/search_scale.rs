@@ -53,7 +53,7 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 use lore_core::adapters::AdapterRegistry;
-use lore_core::search::{search, search_page};
+use lore_core::search::{search, search_page, SortOrder};
 use lore_core::storage::blob::BlobStore;
 use lore_core::synthetic::{generate, ProfileSpec};
 use lore_core::worker::{open_worker, WorkerConfig};
@@ -223,7 +223,7 @@ fn fts_query_latency_at_one_million_messages() {
     let mut deep = Duration::ZERO;
     for _ in 0..20 {
         let t = Instant::now();
-        let page = search_page(&conn, "add", 50, cursor.as_deref()).unwrap();
+        let page = search_page(&conn, "add", 50, cursor.as_deref(), SortOrder::Relevance).unwrap();
         deep = t.elapsed();
         match page.next_cursor {
             Some(c) => cursor = Some(c),

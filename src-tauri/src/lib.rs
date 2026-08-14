@@ -238,16 +238,19 @@ fn search(state: State<'_, AppState>, query: String, limit: i64) -> Result<Vec<S
 
 /// Paginated full-text search. `cursor` is `None` for the first page; pass the
 /// returned `next_cursor` back verbatim for the next page (valid only for the
-/// same query). Keyset-based, so paging never drops or repeats a result.
+/// same query and sort). `sort` is `"relevance"` (default), `"newest"`, or
+/// `"oldest"`. Keyset-based, so paging never drops or repeats a result.
 #[tauri::command]
 fn search_page(
     state: State<'_, AppState>,
     query: String,
     limit: i64,
     cursor: Option<String>,
+    sort: Option<String>,
 ) -> Result<SearchPage, String> {
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
-    lore_core::search::search_page(&conn, &query, limit, cursor.as_deref())
+    let sort = lore_core::search::SortOrder::parse(sort.as_deref());
+    lore_core::search::search_page(&conn, &query, limit, cursor.as_deref(), sort)
         .map_err(|e| e.to_string())
 }
 

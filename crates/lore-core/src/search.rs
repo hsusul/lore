@@ -24,6 +24,30 @@ const MAX_QUERY_LEN: usize = 512;
 const MAX_TERMS: usize = 16;
 const MAX_LIMIT: i64 = 200;
 
+/// Result ordering for [`search_page`]. `Relevance` is BM25 best-first (recency
+/// then id as a stable tie-break); `Newest`/`Oldest` order by session start
+/// time. Sessions with no start timestamp sort last in every mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortOrder {
+    #[default]
+    Relevance,
+    Newest,
+    Oldest,
+}
+
+impl SortOrder {
+    /// Parse the wire value (`"newest"` / `"oldest"`); anything else — including
+    /// `None` or an unknown string — is `Relevance`.
+    #[must_use]
+    pub fn parse(s: Option<&str>) -> Self {
+        match s {
+            Some("newest") => Self::Newest,
+            Some("oldest") => Self::Oldest,
+            _ => Self::Relevance,
+        }
+    }
+}
+
 /// A parsed query: plain terms plus optional structured filters.
 struct ParsedQuery {
     terms: Vec<String>,
@@ -38,21 +62,23 @@ struct ParsedQuery {
 /// results. Convenience wrapper over [`search_page`] for callers that do not
 /// paginate.
 pub fn search(conn: &Connection, raw: &str, limit: i64) -> Result<Vec<SearchHit>> {
-    Ok(search_page(conn, raw, limit, None)?.hits)
+    Ok(search_page(conn, raw, limit, None, SortOrder::Relevance)?.hits)
 }
 
-/// Search the archive with stable keyset pagination (`SEARCH.md` §6). Ordering
-/// is `bm25` ascending (best first), then `started_at` descending, then the
-/// `search_document` id — a total order, so paging never drops or repeats a row.
-/// Pass `cursor = None` for the first page; on each result, if `next_cursor` is
-/// `Some`, pass it back verbatim to fetch the next page. A cursor is only
-/// meaningful for the identical query that produced it; a malformed cursor
-/// degrades to the first page rather than erroring.
+/// Search the archive with stable keyset pagination (`SEARCH.md` §6) in the
+/// requested [`SortOrder`]. Each mode is a total order (relevance falls back to
+/// recency then id; newest/oldest fall back to id, with null-start sessions
+/// last), so paging never drops or repeats a row. Pass `cursor = None` for the
+/// first page; on each result, if `next_cursor` is `Some`, pass it back verbatim
+/// to fetch the next page. A cursor is only meaningful for the identical query
+/// **and sort** that produced it; a malformed cursor degrades to the first page
+/// rather than erroring.
 pub fn search_page(
     conn: &Connection,
     raw: &str,
     limit: i64,
     cursor: Option<&str>,
+    sort: SortOrder,
 ) -> Result<SearchPage> {
     let query = parse_query(raw);
     let Some(match_expr) = fts_match(&query.terms) else {
@@ -108,44 +134,19 @@ pub fn search_page(
     }
     sql.push(')');
 
-    // Keyset predicate: keep only rows strictly after the cursor in the total
-    // order (rank ASC, sa DESC with NULLs last, did ASC). `started_at` is
-    // nullable, so the NULL block (which sorts after every real timestamp) needs
-    // its own case.
-    if let Some(c) = &cursor {
-        match c.started_at {
-            Some(sa) => {
-                sql.push_str(
-                    " WHERE rank > ?
-                        OR (rank = ? AND sa < ?)
-                        OR (rank = ? AND sa IS NULL)
-                        OR (rank = ? AND sa = ? AND did > ?)",
-                );
-                let r = Value::Real(c.rank);
-                params.extend([
-                    r.clone(),
-                    r.clone(),
-                    Value::Integer(sa),
-                    r.clone(),
-                    r,
-                    Value::Integer(sa),
-                    Value::Integer(c.id),
-                ]);
-            }
-            None => {
-                // The cursor is already inside the trailing NULL-started_at
-                // block; no real-timestamp row can follow it at the same rank.
-                sql.push_str(
-                    " WHERE rank > ?
-                        OR (rank = ? AND sa IS NULL AND did > ?)",
-                );
-                let r = Value::Real(c.rank);
-                params.extend([r.clone(), r, Value::Integer(c.id)]);
-            }
-        }
-    }
+    // Keyset predicate: keep only rows strictly after the cursor in the chosen
+    // total order.
+    let (keyset_sql, keyset_params) = keyset(sort, &cursor);
+    sql.push_str(&keyset_sql);
+    params.extend(keyset_params);
 
-    sql.push_str(" ORDER BY rank, sa DESC, did LIMIT ?");
+    sql.push_str(match sort {
+        // NULLs sort last in every mode: `sa DESC` already trails NULLs, and the
+        // explicit `(sa IS NULL)` key does so for the recency sorts.
+        SortOrder::Relevance => " ORDER BY rank, sa DESC, did LIMIT ?",
+        SortOrder::Newest => " ORDER BY (sa IS NULL), sa DESC, did LIMIT ?",
+        SortOrder::Oldest => " ORDER BY (sa IS NULL), sa ASC, did LIMIT ?",
+    });
     params.push(Value::Integer(limit));
 
     let mut stmt = conn.prepare(&sql)?;
@@ -177,6 +178,69 @@ pub fn search_page(
         .flatten();
     let hits = rows.into_iter().map(|(hit, _)| hit).collect();
     Ok(SearchPage { hits, next_cursor })
+}
+
+/// Build the outer keyset predicate (with a leading ` WHERE `) and its bound
+/// params for `sort` and `cursor`. Empty when there is no cursor. Each arm keeps
+/// only rows strictly after the cursor in that sort's total order; `started_at`
+/// is nullable and always sorts last, so the null block gets its own case.
+fn keyset(sort: SortOrder, cursor: &Option<Cursor>) -> (String, Vec<Value>) {
+    let Some(c) = cursor else {
+        return (String::new(), Vec::new());
+    };
+    match sort {
+        SortOrder::Relevance => match c.started_at {
+            Some(sa) => {
+                let r = Value::Real(c.rank);
+                (
+                    " WHERE rank > ?
+                        OR (rank = ? AND sa < ?)
+                        OR (rank = ? AND sa IS NULL)
+                        OR (rank = ? AND sa = ? AND did > ?)"
+                        .to_string(),
+                    vec![
+                        r.clone(),
+                        r.clone(),
+                        Value::Integer(sa),
+                        r.clone(),
+                        r,
+                        Value::Integer(sa),
+                        Value::Integer(c.id),
+                    ],
+                )
+            }
+            None => {
+                // Already inside the trailing NULL-started_at block; no
+                // real-timestamp row can follow it at the same rank.
+                let r = Value::Real(c.rank);
+                (
+                    " WHERE rank > ?
+                        OR (rank = ? AND sa IS NULL AND did > ?)"
+                        .to_string(),
+                    vec![r.clone(), r, Value::Integer(c.id)],
+                )
+            }
+        },
+        SortOrder::Newest | SortOrder::Oldest => {
+            // Non-null timestamps first (DESC for newest, ASC for oldest), then
+            // the null-start block, tie-broken by id. `rank` is irrelevant here.
+            let cmp = if sort == SortOrder::Newest { "<" } else { ">" };
+            match c.started_at {
+                Some(sa) => (
+                    format!(
+                        " WHERE sa IS NULL
+                            OR (sa IS NOT NULL AND sa {cmp} ?)
+                            OR (sa = ? AND did > ?)"
+                    ),
+                    vec![Value::Integer(sa), Value::Integer(sa), Value::Integer(c.id)],
+                ),
+                None => (
+                    " WHERE sa IS NULL AND did > ?".to_string(),
+                    vec![Value::Integer(c.id)],
+                ),
+            }
+        }
+    }
 }
 
 /// Opaque keyset cursor: the sort key of the last row on a page. Encoded so the
