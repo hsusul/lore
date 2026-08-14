@@ -119,6 +119,21 @@ fn worker_in_memory(home: &Home, cfg: WorkerConfig) -> Worker {
     )
 }
 
+#[test]
+fn full_scan_emits_pass_boundaries() {
+    let home = home();
+    let worker = worker_in_memory(&home, WorkerConfig::default());
+    let sink = RecordingSink::default();
+
+    worker.scan(&sink).unwrap();
+    let events = sink.events();
+    assert!(matches!(
+        events.first(),
+        Some(ProgressEvent::ScanEnqueued { .. })
+    ));
+    assert!(matches!(events.last(), Some(ProgressEvent::ScanFinished)));
+}
+
 // 1. Initial scan populates incrementally: even with a batch size of one, the
 //    initial scan drains every discovered source and reports per-source
 //    progress (results land one source at a time, not in a single monolith).

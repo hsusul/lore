@@ -34,6 +34,8 @@ pub enum ProgressEvent {
     /// A scan pass scheduled work: `discovered` sources seen, `enqueued` newly
     /// queued (the rest coalesced onto existing jobs).
     ScanEnqueued { discovered: usize, enqueued: usize },
+    /// A full discovery scan has drained all work it scheduled.
+    ScanFinished,
     /// A source was ingested with the given change classification.
     Ingested {
         agent_id: String,

@@ -67,10 +67,13 @@ impl ProgressSink for WorkerSink {
         if let Ok(mut progress) = self.progress.lock() {
             match event {
                 ProgressEvent::ScanEnqueued { discovered, .. } => {
-                    // Live cumulative gauge: the worker never claims a pass is
-                    // "done" (ingestion is continuous), so `done` stays false.
-                    progress.discovered = progress.discovered.max(discovered as i64);
+                    *progress = ScanProgress {
+                        discovered: i64::try_from(discovered).unwrap_or(i64::MAX),
+                        done: false,
+                        ..ScanProgress::default()
+                    };
                 }
+                ProgressEvent::ScanFinished => progress.done = true,
                 ProgressEvent::Ingested { .. } => progress.ingested += 1,
                 ProgressEvent::Skipped { .. } => progress.skipped += 1,
                 ProgressEvent::Failed { .. } => progress.failed += 1,

@@ -122,7 +122,9 @@ impl Worker {
     pub fn scan(&self, sink: &dyn ProgressSink) -> jobs::Result<DrainSummary> {
         let pipeline = self.pipeline();
         pipeline.enqueue_scan(sink)?;
-        self.drain_to_empty(&pipeline, sink)
+        let summary = self.drain_to_empty(&pipeline, sink)?;
+        sink.emit(crate::pipeline::ProgressEvent::ScanFinished);
+        Ok(summary)
     }
 
     /// Schedule ingest jobs for a batch of observed paths (e.g. debounced
