@@ -74,7 +74,7 @@ mod tests {
         let applied: i64 = conn
             .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(applied, 5, "all migrations should be recorded");
+        assert_eq!(applied, 6, "all migrations should be recorded");
         assert!(foreign_keys_on(&conn), "foreign_keys must be enforced");
         // Infra tables exist.
         for t in ["setting", "job"] {
@@ -105,6 +105,26 @@ mod tests {
     }
 
     #[test]
+    fn job_failure_category_column_is_available() {
+        let conn = open_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO job
+                (id, kind, state, error_kind, created_at, updated_at)
+             VALUES ('failed', 'ingest_source', 'failed', 'source_io', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let category: String = conn
+            .query_row(
+                "SELECT error_kind FROM job WHERE id = 'failed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(category, "source_io");
+    }
+
+    #[test]
     fn migrations_are_idempotent() {
         let conn = open_in_memory().unwrap();
         migrations::run(&conn).unwrap();
@@ -112,7 +132,7 @@ mod tests {
         let applied: i64 = conn
             .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(applied, 5, "re-running migrations must not duplicate rows");
+        assert_eq!(applied, 6, "re-running migrations must not duplicate rows");
     }
 
     #[test]

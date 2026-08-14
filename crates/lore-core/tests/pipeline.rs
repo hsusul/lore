@@ -215,6 +215,13 @@ fn one_unreadable_source_does_not_stop_peers() {
         count(&conn, "SELECT count(*) FROM job WHERE state='failed'"),
         1
     );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT count(*) FROM job WHERE state='failed' AND error_kind='source_io'"
+        ),
+        1
+    );
 }
 
 #[test]

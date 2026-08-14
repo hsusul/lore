@@ -43,6 +43,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "source_artifact_indexes",
         sql: include_str!("../../migrations/0005_source_artifact_indexes.sql"),
     },
+    Migration {
+        version: 6,
+        name: "job_error_kind",
+        sql: include_str!("../../migrations/0006_job_error_kind.sql"),
+    },
 ];
 
 /// Apply all pending migrations. Idempotent.

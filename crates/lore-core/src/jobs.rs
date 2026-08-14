@@ -17,6 +17,7 @@ pub struct Job {
     pub attempts: i64,
     pub payload_json: Option<String>,
     pub error: Option<String>,
+    pub error_kind: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -191,7 +192,7 @@ pub fn schedule_source(
         Some("done" | "failed") => {
             // Re-arm the finished job for another run with the latest payload.
             conn.execute(
-                "UPDATE job SET state = 'pending', redo = 0, error = NULL,
+                "UPDATE job SET state = 'pending', redo = 0, error = NULL, error_kind = NULL,
                                 priority = ?2, payload_json = ?3,
                                 updated_at = unixepoch('now')*1000
                  WHERE id = ?1",
@@ -218,7 +219,7 @@ pub fn finish(conn: &Connection, id: &str) -> Result<FinishOutcome> {
     };
     if redo != 0 {
         conn.execute(
-            "UPDATE job SET state = 'pending', redo = 0, error = NULL,
+            "UPDATE job SET state = 'pending', redo = 0, error = NULL, error_kind = NULL,
                             updated_at = unixepoch('now')*1000
              WHERE id = ?1",
             [id],
@@ -252,7 +253,8 @@ pub fn claim_next(conn: &Connection) -> Result<Option<Job>> {
 
     let changed = tx.execute(
         "UPDATE job SET state = 'running', attempts = attempts + 1,
-                        error = NULL, updated_at = unixepoch('now')*1000
+                        error = NULL, error_kind = NULL,
+                        updated_at = unixepoch('now')*1000
          WHERE id = ?1 AND state = 'pending'",
         [&id],
     )?;
@@ -266,13 +268,19 @@ pub fn claim_next(conn: &Connection) -> Result<Option<Job>> {
 
 /// Mark a claimed task complete.
 pub fn complete(conn: &Connection, id: &str) -> Result<()> {
-    transition_running(conn, id, "done", None)
+    transition_running(conn, id, "done", None, None)
 }
 
 /// Mark a claimed task failed with a bounded, caller-scrubbed diagnostic.
 pub fn fail(conn: &Connection, id: &str, error: &str) -> Result<()> {
+    fail_with_kind(conn, id, "unknown", error)
+}
+
+/// Mark a claimed task failed with a stable category and bounded diagnostic.
+pub fn fail_with_kind(conn: &Connection, id: &str, kind: &str, error: &str) -> Result<()> {
     let bounded: String = error.chars().take(500).collect();
-    transition_running(conn, id, "failed", Some(&bounded))
+    let bounded_kind: String = kind.chars().take(80).collect();
+    transition_running(conn, id, "failed", Some(&bounded_kind), Some(&bounded))
 }
 
 /// Observable backpressure snapshot: how much runnable work the durable queue
@@ -327,12 +335,14 @@ fn transition_running(
     conn: &Connection,
     id: &str,
     target: &str,
+    error_kind: Option<&str>,
     error: Option<&str>,
 ) -> Result<()> {
     let changed = conn.execute(
-        "UPDATE job SET state = ?2, error = ?3, updated_at = unixepoch('now')*1000
+        "UPDATE job SET state = ?2, error_kind = ?3, error = ?4,
+                        updated_at = unixepoch('now')*1000
          WHERE id = ?1 AND state = 'running'",
-        params![id, target, error],
+        params![id, target, error_kind, error],
     )?;
     if changed == 1 {
         Ok(())
@@ -343,7 +353,8 @@ fn transition_running(
 
 fn load_job(conn: &Connection, id: &str) -> Result<Option<Job>> {
     conn.query_row(
-        "SELECT id, kind, priority, state, attempts, payload_json, error, created_at, updated_at
+        "SELECT id, kind, priority, state, attempts, payload_json, error, error_kind,
+                created_at, updated_at
          FROM job WHERE id = ?1",
         [id],
         |row| {
@@ -358,12 +369,24 @@ fn load_job(conn: &Connection, id: &str) -> Result<Option<Job>> {
                 row.get(6)?,
                 row.get(7)?,
                 row.get(8)?,
+                row.get(9)?,
             ))
         },
     )
     .optional()?
     .map(
-        |(id, kind, priority, state, attempts, payload_json, error, created_at, updated_at)| {
+        |(
+            id,
+            kind,
+            priority,
+            state,
+            attempts,
+            payload_json,
+            error,
+            error_kind,
+            created_at,
+            updated_at,
+        )| {
             Ok(Job {
                 id,
                 kind,
@@ -372,6 +395,7 @@ fn load_job(conn: &Connection, id: &str) -> Result<Option<Job>> {
                 attempts,
                 payload_json,
                 error,
+                error_kind,
                 created_at,
                 updated_at,
             })
@@ -445,6 +469,7 @@ mod tests {
         let job = load(&conn, "job").unwrap().unwrap();
         assert_eq!(job.state, JobState::Failed);
         assert_eq!(job.error.unwrap().len(), 500);
+        assert_eq!(job.error_kind.as_deref(), Some("unknown"));
         assert!(matches!(
             complete(&conn, "job"),
             Err(JobQueueError::NotRunning)

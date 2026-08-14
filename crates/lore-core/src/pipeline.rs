@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, ErrorCode};
 use serde_json::Value;
 
 use crate::adapters::AdapterRegistry;
@@ -20,6 +20,7 @@ use crate::discovery::{discover, owner_of, DiscoveryConfig};
 use crate::ingest::{ingest_file, ChangeClass, IngestFailureKind, IngestOutcome};
 use crate::jobs::{self, FinishOutcome, NewJob, SourceSchedule};
 use crate::storage::blob::BlobStore;
+use crate::storage::StorageError;
 
 /// Durable job kind for a single source-file ingest.
 const JOB_KIND: &str = "ingest_source";
@@ -194,12 +195,22 @@ impl<'a> Pipeline<'a> {
             };
             let Some((agent_id, path)) = job.payload_json.as_deref().and_then(decode_payload)
             else {
-                jobs::fail(self.conn, &job.id, "unreadable ingest job payload")?;
+                jobs::fail_with_kind(
+                    self.conn,
+                    &job.id,
+                    "invalid_payload",
+                    "unreadable ingest job payload",
+                )?;
                 summary.failed += 1;
                 continue;
             };
             let Some(adapter) = self.registry.get(&agent_id) else {
-                jobs::fail(self.conn, &job.id, "adapter not registered")?;
+                jobs::fail_with_kind(
+                    self.conn,
+                    &job.id,
+                    "adapter_not_registered",
+                    "adapter not registered",
+                )?;
                 sink.emit(ProgressEvent::Failed {
                     agent_id,
                     kind: IngestFailureKind::AdapterNotRegistered,
@@ -244,7 +255,12 @@ impl<'a> Pipeline<'a> {
                     // Storage errors are deliberately content-free, so keeping
                     // their category makes failures diagnosable without
                     // exposing source text or paths.
-                    jobs::fail(self.conn, &job.id, &error.to_string())?;
+                    jobs::fail_with_kind(
+                        self.conn,
+                        &job.id,
+                        ingest_failure_kind(&error),
+                        &error.to_string(),
+                    )?;
                     summary.failed += 1;
                     sink.emit(ProgressEvent::Failed {
                         agent_id,
@@ -254,6 +270,18 @@ impl<'a> Pipeline<'a> {
             }
         }
         Ok(summary)
+    }
+}
+
+fn ingest_failure_kind(error: &StorageError) -> &'static str {
+    match error {
+        StorageError::Io => "source_io",
+        StorageError::Migration(_) => "storage_migration",
+        StorageError::Sqlite(error) => match error.sqlite_error_code() {
+            Some(ErrorCode::ConstraintViolation) => "sqlite_constraint",
+            Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => "sqlite_busy",
+            _ => "sqlite",
+        },
     }
 }
 
