@@ -89,7 +89,7 @@ fn synthetic_profile_ingests_incrementally_and_dedupes() {
     // Re-scanning the unchanged home dedupes: nothing re-ingests, no duplicates.
     let again = worker.scan(&CountingSink::default()).unwrap();
     assert_eq!(again.ingested, 0);
-    assert_eq!(again.skipped, total);
+    assert_eq!(again.processed(), 0, "unchanged fingerprints queue no work");
     assert_eq!(
         count(&peer, "SELECT count(*) FROM agent_session"),
         total as i64,

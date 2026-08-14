@@ -990,18 +990,49 @@ fn add_path_alias(tx: &Connection, source_artifact_id: &str, path: &str) -> Resu
 
 fn source_snapshot(path: &Path, meta: &std::fs::Metadata, content: &str) -> SourceSnapshot {
     let bytes = content.as_bytes();
-    let prefix_len = bytes.len().min(PREFIX_BYTES);
-    let (last_offset, last_line) = complete_line_checkpoint(bytes);
+    let (full_hash, prefix_hash, last_offset, last_line) = fingerprint_and_checkpoint(bytes);
     SourceSnapshot {
         path: path.to_string_lossy().into_owned(),
         native_file_id: file_id(meta),
         size: i64::try_from(meta.len()).unwrap_or(i64::MAX),
         mtime: mtime_ms(meta),
-        full_hash: fnv1a_hex(bytes),
-        prefix_hash: fnv1a_hex(&bytes[..prefix_len]),
+        full_hash,
+        prefix_hash,
         last_offset,
         last_line,
     }
+}
+
+/// Compute both source fingerprints and the complete-record checkpoint in one
+/// traversal. Changed multi-megabyte sessions are commonly append-only; avoid
+/// walking their full history separately for hashing and newline accounting.
+fn fingerprint_and_checkpoint(bytes: &[u8]) -> (String, String, i64, i64) {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut full = OFFSET;
+    let mut prefix = OFFSET;
+    let mut last_offset = 0usize;
+    let mut complete_lines = 0usize;
+
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        full ^= u64::from(byte);
+        full = full.wrapping_mul(PRIME);
+        if index < PREFIX_BYTES {
+            prefix ^= u64::from(byte);
+            prefix = prefix.wrapping_mul(PRIME);
+        }
+        if byte == b'\n' {
+            last_offset = index.saturating_add(1);
+            complete_lines = complete_lines.saturating_add(1);
+        }
+    }
+
+    (
+        format!("{full:016x}"),
+        format!("{prefix:016x}"),
+        i64::try_from(last_offset).unwrap_or(i64::MAX),
+        i64::try_from(complete_lines).unwrap_or(i64::MAX),
+    )
 }
 
 fn is_append(previous: &SourceRow, current: &[u8]) -> bool {
@@ -1013,24 +1044,6 @@ fn is_append(previous: &SourceRow, current: &[u8]) -> bool {
     }
     let prefix_len = previous_size.min(PREFIX_BYTES);
     previous.prefix_hash.as_deref() == Some(fnv1a_hex(&current[..prefix_len]).as_str())
-}
-
-/// Return the byte offset and count of newline-terminated records. A valid JSON
-/// value without a trailing newline is conservatively reparsed on the next pass;
-/// a partial final line is never checkpointed as complete.
-fn complete_line_checkpoint(bytes: &[u8]) -> (i64, i64) {
-    let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') else {
-        return (0, 0);
-    };
-    let offset = last_newline.saturating_add(1);
-    let lines = bytes[..offset]
-        .iter()
-        .filter(|byte| **byte == b'\n')
-        .count();
-    (
-        i64::try_from(offset).unwrap_or(i64::MAX),
-        i64::try_from(lines).unwrap_or(i64::MAX),
-    )
 }
 
 fn mtime_ms(meta: &std::fs::Metadata) -> Option<i64> {
@@ -1066,6 +1079,15 @@ fn fnv1a_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combined_fingerprint_preserves_hashes_and_complete_line_checkpoint() {
+        let bytes = b"first\nsecond\npartial";
+        let (full, prefix, offset, lines) = fingerprint_and_checkpoint(bytes);
+        assert_eq!(full, fnv1a_hex(bytes));
+        assert_eq!(prefix, fnv1a_hex(&bytes[..bytes.len().min(PREFIX_BYTES)]));
+        assert_eq!((offset, lines), (13, 2));
+    }
     use crate::adapters::codex::CodexAdapter;
     use crate::storage::blob::BlobStore;
 

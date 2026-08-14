@@ -211,7 +211,7 @@ fn stale_parser_version_forces_reparse_without_generation_bump() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(parser_version, "1");
+    assert_eq!(parser_version, "2");
 }
 
 #[test]
