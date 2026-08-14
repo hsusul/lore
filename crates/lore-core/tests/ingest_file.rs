@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
+use lore_core::adapters::codex::CodexAdapter;
 use lore_core::ingest::{ingest_file, ChangeClass, IngestOutcome};
 use lore_core::storage::blob::BlobStore;
 use rusqlite::Connection;
@@ -50,6 +51,33 @@ fn message_count(conn: &Connection) -> i64 {
         row.get(0)
     })
     .unwrap()
+}
+
+#[test]
+fn codex_patch_without_persisted_tool_call_keeps_a_null_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-orphan-patch.jsonl");
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let content = concat!(
+        r#"{"type":"session_meta","payload":{"id":"orphan-patch","cwd":"/repo/demo"}}"#,
+        "\n",
+        r#"{"type":"event_msg","payload":{"type":"patch_apply_end","call_id":"missing-call","changes":{"src/lib.rs":{"type":"update","unified_diff":"@@ -1 +1 @@\n-old\n+new\n"}}}}"#,
+        "\n"
+    );
+    fs::write(&path, content).unwrap();
+
+    let outcome = ingest_file(&conn, &CodexAdapter::new(), &path, blobs()).unwrap();
+    assert!(matches!(outcome, IngestOutcome::Ingested { .. }));
+
+    let (events, linked): (i64, i64) = conn
+        .query_row(
+            "SELECT count(*), count(tool_call_id) FROM file_event",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(events, 1, "the recorded patch must be preserved");
+    assert_eq!(linked, 0, "a missing optional tool call stays unlinked");
 }
 
 #[test]

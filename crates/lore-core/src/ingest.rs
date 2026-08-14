@@ -13,7 +13,7 @@
 //! (`SECRET_SCANNING.md`, `SEARCH.md`). Recorded-patch blobs finalize their
 //! `scan_state` here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -278,6 +278,7 @@ fn persist_rows(
     }
 
     // Tool calls (the invocation part must exist to satisfy the NOT NULL FK).
+    let mut persisted_tool_call_ids = HashSet::new();
     for tc in &parsed.tool_calls {
         let Some(call_part_id) = part_ids.get(&tc.call_ref) else {
             continue;
@@ -302,6 +303,7 @@ fn persist_rows(
                 tc.duration_ms,
             ],
         )?;
+        persisted_tool_call_ids.insert(tc.native_call_id.as_str());
     }
 
     // File events. A recorded patch payload is referenced from its staged blob
@@ -312,6 +314,7 @@ fn persist_rows(
         let tool_call_id = fe
             .tool_native_call_id
             .as_ref()
+            .filter(|call_id| persisted_tool_call_ids.contains(call_id.as_str()))
             .map(|c| det_id("t", &[&session_id, c]));
         let patch_blob_id = match patch_blobs.get(i).and_then(Option::as_ref) {
             Some(staged) => Some(BlobStore::reference(tx, staged, PATCH_MEDIA_TYPE)?),
