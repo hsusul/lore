@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import type { DetectedAgent } from "../ipc";
 
@@ -17,6 +17,9 @@ export default function SettingsPanel({
   onForgetEverything: () => void;
   onClose: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") onClose();
@@ -25,15 +28,27 @@ export default function SettingsPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // Dialog focus management: on open, remember what had focus and move focus
+  // into the dialog so keyboard and screen-reader users land inside it; on
+  // close, return focus to the element that opened it.
+  useEffect(() => {
+    if (!open) return;
+    restoreFocusRef.current = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    return () => restoreFocusRef.current?.focus?.();
+  }, [open]);
+
   if (!open) return null;
 
   return (
     <div className="palette__backdrop" role="presentation" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="settings"
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="settings__head">

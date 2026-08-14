@@ -38,4 +38,25 @@ describe("SettingsPanel", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("moves focus into the dialog on open and restores it on close", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    const props = { agents, onForgetEverything: () => {}, onClose: () => {} };
+    const { rerender } = render(<SettingsPanel open={false} {...props} />);
+
+    // Opening moves focus into the dialog…
+    rerender(<SettingsPanel open {...props} />);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    // …and closing returns it to the element that had focus before.
+    rerender(<SettingsPanel open={false} {...props} />);
+    expect(document.activeElement).toBe(trigger);
+
+    trigger.remove();
+  });
 });
