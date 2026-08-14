@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { agentLabel, formatRelative } from "../format";
 import type { SessionSummary } from "../ipc";
+import { useWindowing } from "../virtual";
 
 /**
  * A keyboard-navigable session list (listbox pattern): Arrow/j/k move the active
@@ -18,17 +19,22 @@ export default function SessionList({
 }) {
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
+  const { startIndex, endIndex, padTop, padBottom, scrollToIndex } = useWindowing(
+    listRef,
+    sessions.length,
+  );
 
   // Keep the active index in range as the list changes.
   useEffect(() => {
     setActive((current) => Math.min(current, Math.max(sessions.length - 1, 0)));
   }, [sessions.length]);
 
-  // Keep the active row visible during keyboard navigation.
+  // Keep the active row visible during keyboard navigation. Driving the scroll
+  // by index (rather than querying the element) works even when the active row
+  // is outside the currently rendered window.
   useEffect(() => {
-    const activeEl = listRef.current?.querySelector<HTMLElement>(".sessions__item.is-active");
-    activeEl?.scrollIntoView?.({ block: "nearest" });
-  }, [active]);
+    scrollToIndex(active);
+  }, [active, scrollToIndex]);
 
   function onKeyDown(event: React.KeyboardEvent<HTMLUListElement>) {
     const last = sessions.length - 1;
@@ -74,33 +80,41 @@ export default function SessionList({
       aria-activedescendant={sessions[active]?.id}
       onKeyDown={onKeyDown}
     >
-      {sessions.map((session, index) => (
-        <li
-          key={session.id}
-          id={session.id}
-          role="option"
-          aria-selected={session.id === selectedId}
-          className={`sessions__item${index === active ? " is-active" : ""}`}
-          onClick={() => {
-            setActive(index);
-            onOpen(session.id);
-          }}
-        >
-          <span className="sessions__title">{session.title ?? "(untitled)"}</span>
-          {session.parse_status !== "ok" && (
-            <span
-              className={`chip ${session.parse_status === "failed" ? "chip--danger" : "chip--warn"}`}
-            >
-              {session.parse_status}
+      {padTop > 0 && <li aria-hidden="true" style={{ height: padTop }} />}
+      {sessions.slice(startIndex, endIndex).map((session, offset) => {
+        const index = startIndex + offset;
+        return (
+          <li
+            key={session.id}
+            id={session.id}
+            data-vrow
+            role="option"
+            aria-selected={session.id === selectedId}
+            aria-setsize={sessions.length}
+            aria-posinset={index + 1}
+            className={`sessions__item${index === active ? " is-active" : ""}`}
+            onClick={() => {
+              setActive(index);
+              onOpen(session.id);
+            }}
+          >
+            <span className="sessions__title">{session.title ?? "(untitled)"}</span>
+            {session.parse_status !== "ok" && (
+              <span
+                className={`chip ${session.parse_status === "failed" ? "chip--danger" : "chip--warn"}`}
+              >
+                {session.parse_status}
+              </span>
+            )}
+            <span className="sessions__meta">
+              <span className="chip chip--agent">{agentLabel(session.agent_id)}</span>
+              <span>{session.message_count} msgs</span>
+              <span className="sessions__time">{formatRelative(session.started_at)}</span>
             </span>
-          )}
-          <span className="sessions__meta">
-            <span className="chip chip--agent">{agentLabel(session.agent_id)}</span>
-            <span>{session.message_count} msgs</span>
-            <span className="sessions__time">{formatRelative(session.started_at)}</span>
-          </span>
-        </li>
-      ))}
+          </li>
+        );
+      })}
+      {padBottom > 0 && <li aria-hidden="true" style={{ height: padBottom }} />}
     </ul>
   );
 }
