@@ -1,0 +1,56 @@
+name: Release
+
+# Build a downloadable macOS app. Triggered by pushing a version tag (e.g.
+# v0.1.0), or manually from the Actions tab. The build is UNSIGNED — no Apple
+# Developer account is required — so first launch needs a one-time right-click →
+# Open (see the release notes below).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # create/attach to the GitHub Release on a tag
+
+jobs:
+  macos:
+    name: macOS .dmg (unsigned, Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install JS dependencies
+        run: npm ci
+      # `tauri build` runs the beforeBuildCommand (npm run build) itself, then
+      # compiles the Rust shell in release and bundles the .app + .dmg.
+      - name: Build the app bundle
+        run: npx tauri build
+      - name: Upload the .dmg as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lore-macos-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+      - name: Attach the .dmg to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/dmg/*.dmg
+          generate_release_notes: true
+          body: |
+            **Unsigned macOS build (Apple Silicon).** Lore is not yet signed with
+            an Apple Developer ID, so on first launch macOS will warn that it
+            "cannot verify the developer".
+
+            To open it the first time:
+            1. Drag **Lore** to Applications.
+            2. **Right-click** Lore → **Open**, then confirm **Open** in the dialog.
+               (Or run: `xattr -dr com.apple.quarantine /Applications/Lore.app`.)
+
+            After that it launches normally. Everything runs locally — Lore opens
+            no network connections by default.
