@@ -1081,6 +1081,24 @@ kbd {
   border-top: 1px solid var(--border);
 }
 
+.settings__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.3rem 0;
+}
+
+.settings__row input[type="number"] {
+  width: 4.5rem;
+}
+
+.settings__status {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text-3);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 
+import BackupSettings from "./BackupSettings";
 import { useFocusTrap } from "../focus-trap";
 import type { DetectedAgent } from "../ipc";
 
@@ -95,6 +96,8 @@ export default function SettingsPanel({
             </ul>
           )}
         </section>
+
+        <BackupSettings />
 
         <section aria-labelledby="data-heading">
           <h3 id="data-heading" className="section-title">

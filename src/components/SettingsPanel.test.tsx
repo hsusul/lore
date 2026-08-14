@@ -1,6 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+// SettingsPanel renders BackupSettings, which reads the schedule on mount.
+vi.mock("../ipc", () => ({
+  getBackupSchedule: vi.fn().mockResolvedValue({ interval: "off", keep: 5 }),
+  setBackupSchedule: vi.fn().mockResolvedValue(undefined),
+  backupNow: vi.fn().mockResolvedValue(undefined),
+}));
+
 import SettingsPanel from "./SettingsPanel";
 import type { DetectedAgent } from "../ipc";
 
