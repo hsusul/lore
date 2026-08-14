@@ -19,22 +19,28 @@ function hit(overrides: Partial<SearchHit> = {}): SearchHit {
   };
 }
 
+const noPaging = { hasMore: false, loadingMore: false, onLoadMore: () => {} };
+
 describe("SearchResults", () => {
   it("renders nothing for an empty query", () => {
     const { container } = render(
-      <SearchResults hits={[]} query="   " selectedId={null} onOpen={() => {}} />,
+      <SearchResults hits={[]} query="   " selectedId={null} onOpen={() => {}} {...noPaging} />,
     );
     expect(container.firstChild).toBeNull();
   });
 
   it("shows an empty state when a query has no matches", () => {
-    render(<SearchResults hits={[]} query="zzz" selectedId={null} onOpen={() => {}} />);
+    render(
+      <SearchResults hits={[]} query="zzz" selectedId={null} onOpen={() => {}} {...noPaging} />,
+    );
     expect(screen.getByText(/no matches/i)).toBeTruthy();
   });
 
   it("highlights matched terms and opens the session on click", () => {
     const onOpen = vi.fn();
-    render(<SearchResults hits={[hit()]} query="retry" selectedId={null} onOpen={onOpen} />);
+    render(
+      <SearchResults hits={[hit()]} query="retry" selectedId={null} onOpen={onOpen} {...noPaging} />,
+    );
 
     // The matched term is wrapped in <mark>, and the markers themselves are gone.
     const mark = screen.getByText("retryBackoff");
@@ -44,5 +50,43 @@ describe("SearchResults", () => {
 
     fireEvent.click(screen.getByRole("option"));
     expect(onOpen).toHaveBeenCalledWith("s1");
+  });
+
+  it("shows a Load more control only when more pages exist and fires it on click", () => {
+    const onLoadMore = vi.fn();
+    const { rerender } = render(
+      <SearchResults hits={[hit()]} query="retry" selectedId={null} onOpen={() => {}} {...noPaging} />,
+    );
+    // No further pages: no button.
+    expect(screen.queryByRole("button", { name: /load more/i })).toBeNull();
+
+    // More pages available: the button appears and invokes the callback.
+    rerender(
+      <SearchResults
+        hits={[hit()]}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        hasMore
+        loadingMore={false}
+        onLoadMore={onLoadMore}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /load more/i }));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+
+    // While a page is loading the control is disabled to prevent double fetches.
+    rerender(
+      <SearchResults
+        hits={[hit()]}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        hasMore
+        loadingMore
+        onLoadMore={onLoadMore}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /loading/i }).hasAttribute("disabled")).toBe(true);
   });
 });

@@ -39,34 +39,52 @@ export default function SearchResults({
   query,
   selectedId,
   onOpen,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: {
   hits: SearchHit[];
   query: string;
   selectedId: string | null;
   onOpen: (id: string) => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
 }) {
   if (query.trim() === "") return null;
   if (hits.length === 0) {
     return <p className="sessions__empty">No matches for “{query.trim()}”.</p>;
   }
   return (
-    <ul className="results" role="listbox" aria-label="search results">
-      {hits.map((hit, index) => (
-        <li
-          key={`${hit.source_id}-${index}`}
-          role="option"
-          aria-selected={hit.session_id === selectedId}
-          className={`results__item${hit.session_id === selectedId ? " is-active" : ""}`}
-          onClick={() => onOpen(hit.session_id)}
+    <>
+      <ul className="results" role="listbox" aria-label="search results">
+        {hits.map((hit, index) => (
+          <li
+            key={`${hit.source_id}-${index}`}
+            role="option"
+            aria-selected={hit.session_id === selectedId}
+            className={`results__item${hit.session_id === selectedId ? " is-active" : ""}`}
+            onClick={() => onOpen(hit.session_id)}
+          >
+            <div className="results__meta">
+              <span className="results__title">{hit.title ?? "(untitled)"}</span>
+              <span className="chip chip--agent">{agentLabel(hit.agent_id)}</span>
+              <span className="results__field">{FIELD_LABEL[hit.field] ?? hit.field}</span>
+            </div>
+            <Snippet text={hit.snippet} />
+          </li>
+        ))}
+      </ul>
+      {hasMore ? (
+        <button
+          type="button"
+          className="results__more"
+          onClick={onLoadMore}
+          disabled={loadingMore}
         >
-          <div className="results__meta">
-            <span className="results__title">{hit.title ?? "(untitled)"}</span>
-            <span className="chip chip--agent">{agentLabel(hit.agent_id)}</span>
-            <span className="results__field">{FIELD_LABEL[hit.field] ?? hit.field}</span>
-          </div>
-          <Snippet text={hit.snippet} />
-        </li>
-      ))}
-    </ul>
+          {loadingMore ? "Loading…" : "Load more results"}
+        </button>
+      ) : null}
+    </>
   );
 }

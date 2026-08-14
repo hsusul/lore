@@ -7,7 +7,7 @@
 //! bound as a parameter, so a malformed or hostile query can never become raw
 //! SQL or FTS syntax. Ranking is BM25; matches are wrapped in highlight markers.
 
-use lore_ipc::SearchHit;
+use lore_ipc::{SearchHit, SearchPage};
 use rusqlite::types::Value;
 use rusqlite::Connection;
 
@@ -24,6 +24,30 @@ const MAX_QUERY_LEN: usize = 512;
 const MAX_TERMS: usize = 16;
 const MAX_LIMIT: i64 = 200;
 
+/// Result ordering for [`search_page`]. `Relevance` is BM25 best-first (recency
+/// then id as a stable tie-break); `Newest`/`Oldest` order by session start
+/// time. Sessions with no start timestamp sort last in every mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortOrder {
+    #[default]
+    Relevance,
+    Newest,
+    Oldest,
+}
+
+impl SortOrder {
+    /// Parse the wire value (`"newest"` / `"oldest"`); anything else — including
+    /// `None` or an unknown string — is `Relevance`.
+    #[must_use]
+    pub fn parse(s: Option<&str>) -> Self {
+        match s {
+            Some("newest") => Self::Newest,
+            Some("oldest") => Self::Oldest,
+            _ => Self::Relevance,
+        }
+    }
+}
+
 /// A parsed query: plain terms plus optional structured filters.
 struct ParsedQuery {
     terms: Vec<String>,
@@ -32,25 +56,58 @@ struct ParsedQuery {
     has_error: bool,
 }
 
-/// Search the archive. `raw` is the user's query (plain terms plus optional
-/// `agent:`, `path:`, and `has:error` filters); returns up to `limit` hits
-/// ranked best-first. An empty term set yields no results.
+/// Search the archive, returning the first page only. `raw` is the user's query
+/// (plain terms plus optional `agent:`, `path:`, and `has:error` filters);
+/// returns up to `limit` hits ranked best-first. An empty term set yields no
+/// results. Convenience wrapper over [`search_page`] for callers that do not
+/// paginate.
 pub fn search(conn: &Connection, raw: &str, limit: i64) -> Result<Vec<SearchHit>> {
+    Ok(search_page(conn, raw, limit, None, SortOrder::Relevance)?.hits)
+}
+
+/// Search the archive with stable keyset pagination (`SEARCH.md` §6) in the
+/// requested [`SortOrder`]. Each mode is a total order (relevance falls back to
+/// recency then id; newest/oldest fall back to id, with null-start sessions
+/// last), so paging never drops or repeats a row. Pass `cursor = None` for the
+/// first page; on each result, if `next_cursor` is `Some`, pass it back verbatim
+/// to fetch the next page. A cursor is only meaningful for the identical query
+/// **and sort** that produced it; a malformed cursor degrades to the first page
+/// rather than erroring.
+pub fn search_page(
+    conn: &Connection,
+    raw: &str,
+    limit: i64,
+    cursor: Option<&str>,
+    sort: SortOrder,
+) -> Result<SearchPage> {
     let query = parse_query(raw);
     let Some(match_expr) = fts_match(&query.terms) else {
-        return Ok(Vec::new());
+        return Ok(SearchPage {
+            hits: Vec::new(),
+            next_cursor: None,
+        });
     };
     let limit = limit.clamp(1, MAX_LIMIT);
+    let cursor = cursor.and_then(Cursor::decode);
 
-    // Params are appended in the same order they appear in the SQL text.
+    // Inner query computes the ranked, filtered candidate set; the FTS auxiliary
+    // functions (bm25/snippet) are only valid alongside the MATCH, so they live
+    // here. The outer query applies the keyset predicate and ordering on the
+    // exposed `rank`/`sa`/`did` aliases. Params are appended in SQL text order.
     let mut sql = String::from(
-        "SELECT sd.session_id, sd.source_kind, sd.source_id, sd.field,
-                snippet(search_fts, 0, ?, ?, '…', 12), bm25(search_fts),
-                s.title, s.agent_id, s.started_at
-         FROM search_fts
-         JOIN search_document sd ON sd.id = search_fts.rowid
-         JOIN agent_session s ON s.id = sd.session_id
-         WHERE search_fts MATCH ?",
+        "SELECT session_id, source_kind, source_id, field, snip, rank,
+                title, agent_id, sa, did
+         FROM (
+           SELECT sd.session_id AS session_id, sd.source_kind AS source_kind,
+                  sd.source_id AS source_id, sd.field AS field,
+                  snippet(search_fts, 0, ?, ?, '…', 12) AS snip,
+                  bm25(search_fts) AS rank,
+                  s.title AS title, s.agent_id AS agent_id,
+                  s.started_at AS sa, sd.id AS did
+           FROM search_fts
+           JOIN search_document sd ON sd.id = search_fts.rowid
+           JOIN agent_session s ON s.id = sd.session_id
+           WHERE search_fts MATCH ?",
     );
     let mut params: Vec<Value> = vec![
         Value::Text(HIGHLIGHT_START.to_string()),
@@ -75,15 +132,27 @@ pub fn search(conn: &Connection, raw: &str, limit: i64) -> Result<Vec<SearchHit>
         );
         params.push(Value::Text(format!("{path}%")));
     }
-    // BM25 is ascending (lower is better); tie-break by recency then id so
-    // pagination is stable.
-    sql.push_str(" ORDER BY bm25(search_fts), s.started_at DESC, sd.id LIMIT ?");
+    sql.push(')');
+
+    // Keyset predicate: keep only rows strictly after the cursor in the chosen
+    // total order.
+    let (keyset_sql, keyset_params) = keyset(sort, &cursor);
+    sql.push_str(&keyset_sql);
+    params.extend(keyset_params);
+
+    sql.push_str(match sort {
+        // NULLs sort last in every mode: `sa DESC` already trails NULLs, and the
+        // explicit `(sa IS NULL)` key does so for the recency sorts.
+        SortOrder::Relevance => " ORDER BY rank, sa DESC, did LIMIT ?",
+        SortOrder::Newest => " ORDER BY (sa IS NULL), sa DESC, did LIMIT ?",
+        SortOrder::Oldest => " ORDER BY (sa IS NULL), sa ASC, did LIMIT ?",
+    });
     params.push(Value::Integer(limit));
 
     let mut stmt = conn.prepare(&sql)?;
-    let hits = stmt
+    let rows = stmt
         .query_map(rusqlite::params_from_iter(params), |row| {
-            Ok(SearchHit {
+            let hit = SearchHit {
                 session_id: row.get(0)?,
                 source_kind: row.get(1)?,
                 source_id: row.get(2)?,
@@ -93,10 +162,134 @@ pub fn search(conn: &Connection, raw: &str, limit: i64) -> Result<Vec<SearchHit>
                 title: row.get(6)?,
                 agent_id: row.get(7)?,
                 started_at: row.get(8)?,
-            })
+            };
+            let did: i64 = row.get(9)?;
+            Ok((hit, did))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(hits)
+
+    // Only advertise a cursor when the page was full: a short page is the end,
+    // so there is nothing more to fetch.
+    let next_cursor = (rows.len() as i64 == limit)
+        .then(|| {
+            rows.last()
+                .map(|(hit, did)| Cursor::from_row(hit, *did).encode())
+        })
+        .flatten();
+    let hits = rows.into_iter().map(|(hit, _)| hit).collect();
+    Ok(SearchPage { hits, next_cursor })
+}
+
+/// Build the outer keyset predicate (with a leading ` WHERE `) and its bound
+/// params for `sort` and `cursor`. Empty when there is no cursor. Each arm keeps
+/// only rows strictly after the cursor in that sort's total order; `started_at`
+/// is nullable and always sorts last, so the null block gets its own case.
+fn keyset(sort: SortOrder, cursor: &Option<Cursor>) -> (String, Vec<Value>) {
+    let Some(c) = cursor else {
+        return (String::new(), Vec::new());
+    };
+    match sort {
+        SortOrder::Relevance => match c.started_at {
+            Some(sa) => {
+                let r = Value::Real(c.rank);
+                (
+                    " WHERE rank > ?
+                        OR (rank = ? AND sa < ?)
+                        OR (rank = ? AND sa IS NULL)
+                        OR (rank = ? AND sa = ? AND did > ?)"
+                        .to_string(),
+                    vec![
+                        r.clone(),
+                        r.clone(),
+                        Value::Integer(sa),
+                        r.clone(),
+                        r,
+                        Value::Integer(sa),
+                        Value::Integer(c.id),
+                    ],
+                )
+            }
+            None => {
+                // Already inside the trailing NULL-started_at block; no
+                // real-timestamp row can follow it at the same rank.
+                let r = Value::Real(c.rank);
+                (
+                    " WHERE rank > ?
+                        OR (rank = ? AND sa IS NULL AND did > ?)"
+                        .to_string(),
+                    vec![r.clone(), r, Value::Integer(c.id)],
+                )
+            }
+        },
+        SortOrder::Newest | SortOrder::Oldest => {
+            // Non-null timestamps first (DESC for newest, ASC for oldest), then
+            // the null-start block, tie-broken by id. `rank` is irrelevant here.
+            let cmp = if sort == SortOrder::Newest { "<" } else { ">" };
+            match c.started_at {
+                Some(sa) => (
+                    format!(
+                        " WHERE sa IS NULL
+                            OR (sa IS NOT NULL AND sa {cmp} ?)
+                            OR (sa = ? AND did > ?)"
+                    ),
+                    vec![Value::Integer(sa), Value::Integer(sa), Value::Integer(c.id)],
+                ),
+                None => (
+                    " WHERE sa IS NULL AND did > ?".to_string(),
+                    vec![Value::Integer(c.id)],
+                ),
+            }
+        }
+    }
+}
+
+/// Opaque keyset cursor: the sort key of the last row on a page. Encoded so the
+/// client can round-trip it without depending on its shape. `rank` is stored by
+/// its exact bit pattern so the boundary comparison is not perturbed by decimal
+/// rounding.
+struct Cursor {
+    rank: f64,
+    started_at: Option<i64>,
+    id: i64,
+}
+
+impl Cursor {
+    fn from_row(hit: &SearchHit, id: i64) -> Self {
+        Cursor {
+            rank: hit.rank,
+            started_at: hit.started_at,
+            id,
+        }
+    }
+
+    fn encode(&self) -> String {
+        let sa = match self.started_at {
+            Some(v) => v.to_string(),
+            None => "n".to_string(),
+        };
+        format!("{:x}:{}:{}", self.rank.to_bits(), sa, self.id)
+    }
+
+    /// Parse a cursor produced by [`Cursor::encode`]. Any malformed input yields
+    /// `None`, which the caller treats as "no cursor" (first page) — never a
+    /// panic on untrusted client input.
+    fn decode(s: &str) -> Option<Cursor> {
+        let mut parts = s.split(':');
+        let rank = f64::from_bits(u64::from_str_radix(parts.next()?, 16).ok()?);
+        let started_at = match parts.next()? {
+            "n" => None,
+            v => Some(v.parse::<i64>().ok()?),
+        };
+        let id = parts.next()?.parse::<i64>().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Cursor {
+            rank,
+            started_at,
+            id,
+        })
+    }
 }
 
 fn parse_query(raw: &str) -> ParsedQuery {
@@ -170,5 +363,27 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(parse_query(&raw).terms.len(), MAX_TERMS);
+    }
+
+    #[test]
+    fn cursor_round_trips_exactly() {
+        for started_at in [Some(1_700_000_000_i64), None, Some(-5)] {
+            let c = Cursor {
+                rank: -3.5019287109375, // an exact f64 the bit pattern preserves
+                started_at,
+                id: 42,
+            };
+            let back = Cursor::decode(&c.encode()).expect("valid cursor decodes");
+            assert_eq!(back.rank.to_bits(), c.rank.to_bits());
+            assert_eq!(back.started_at, started_at);
+            assert_eq!(back.id, 42);
+        }
+    }
+
+    #[test]
+    fn malformed_cursor_decodes_to_none() {
+        for bad in ["", "garbage", "zz:1:2", "abc:notanint:2", "1:2", "1:2:3:4"] {
+            assert!(Cursor::decode(bad).is_none(), "{bad:?} should be rejected");
+        }
     }
 }
