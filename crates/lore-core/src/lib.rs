@@ -31,6 +31,7 @@ pub mod query;
 pub mod recovery;
 pub mod search;
 pub mod secrets;
+pub mod settings;
 pub mod storage;
 pub mod synthetic;
 pub mod watcher;
