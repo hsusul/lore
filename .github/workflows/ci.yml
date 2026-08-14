@@ -25,8 +25,10 @@ jobs:
         run: cargo clippy -p lore-core -p lore-ipc --all-targets --all-features -- -D warnings
       - name: Test (locked)
         run: cargo test --locked -p lore-core -p lore-ipc --all-targets
-      - name: Network-boundary guard
+      - name: Network-boundary guard (call-site)
         run: cargo test -p lore-core --test no_network_in_archive
+      - name: Egress guard (dependency graph + runtime network-deny)
+        run: ./scripts/egress-check.sh
       - name: Generated IPC bindings are in sync
         run: |
           cargo test -p lore-ipc
@@ -80,3 +82,5 @@ jobs:
         run: cargo clippy -p lore-app --all-targets -- -D warnings
       - name: Build the shell
         run: cargo build --locked -p lore-app
+      - name: Network-boundary guard (shell call-site)
+        run: cargo test -p lore-app --test no_egress
