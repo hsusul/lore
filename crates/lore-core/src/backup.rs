@@ -60,6 +60,8 @@ pub enum BackupError {
     Sqlite(#[from] rusqlite::Error),
     #[error("io error while creating or pruning backup")]
     Io,
+    #[error("settings storage error")]
+    Settings(#[from] crate::storage::StorageError),
 }
 
 /// Convenience result alias for the backup layer.
@@ -92,6 +94,124 @@ pub fn create_backup(conn: &Connection, backup_dir: &Path, keep: usize) -> Resul
 
     let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     Ok(BackupInfo { path, size_bytes })
+}
+
+// ── Automatic-backup schedule ──────────────────────────────────────────────
+// The cadence and retention are user-configurable and persisted in the settings
+// store (Lore-owned, cleared by "forget everything"). Defaults are conservative:
+// automatic backups are Off until the user opts into an interval.
+
+const KEY_INTERVAL: &str = "backup.interval";
+const KEY_KEEP: &str = "backup.keep";
+const KEY_LAST_AT: &str = "backup.last_at";
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How often automatic Lore-owned backups run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackupInterval {
+    /// No automatic backups (the default); the user can still back up on demand.
+    #[default]
+    Off,
+    Daily,
+    Weekly,
+}
+
+impl BackupInterval {
+    /// The stable wire value persisted in settings and crossed over IPC.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BackupInterval::Off => "off",
+            BackupInterval::Daily => "daily",
+            BackupInterval::Weekly => "weekly",
+        }
+    }
+
+    /// Parse the wire value; anything unrecognized is `Off`.
+    #[must_use]
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "daily" => BackupInterval::Daily,
+            "weekly" => BackupInterval::Weekly,
+            _ => BackupInterval::Off,
+        }
+    }
+
+    /// The period between automatic backups, or `None` when off.
+    fn period_ms(self) -> Option<i64> {
+        match self {
+            BackupInterval::Off => None,
+            BackupInterval::Daily => Some(DAY_MS),
+            BackupInterval::Weekly => Some(7 * DAY_MS),
+        }
+    }
+}
+
+/// The user-configurable automatic-backup schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackupSchedule {
+    pub interval: BackupInterval,
+    /// Number of newest backups to retain (clamped to a sane bound).
+    pub keep: usize,
+}
+
+impl Default for BackupSchedule {
+    fn default() -> Self {
+        Self {
+            interval: BackupInterval::Off,
+            keep: DEFAULT_BACKUP_RETENTION,
+        }
+    }
+}
+
+/// Read the automatic-backup schedule from settings, falling back to defaults
+/// for any unset or malformed value.
+pub fn read_schedule(conn: &Connection) -> Result<BackupSchedule> {
+    let interval = crate::settings::get(conn, KEY_INTERVAL)?
+        .and_then(|v| serde_json::from_str::<String>(&v).ok())
+        .map_or(BackupInterval::Off, |s| BackupInterval::parse(&s));
+    let keep = crate::settings::get(conn, KEY_KEEP)?
+        .and_then(|v| serde_json::from_str::<usize>(&v).ok())
+        .unwrap_or(DEFAULT_BACKUP_RETENTION)
+        .clamp(1, 100);
+    Ok(BackupSchedule { interval, keep })
+}
+
+/// Persist the automatic-backup schedule to settings.
+pub fn write_schedule(conn: &Connection, schedule: BackupSchedule) -> Result<()> {
+    crate::settings::set(
+        conn,
+        KEY_INTERVAL,
+        &format!("\"{}\"", schedule.interval.as_str()),
+    )?;
+    crate::settings::set(conn, KEY_KEEP, &schedule.keep.clamp(1, 100).to_string())?;
+    Ok(())
+}
+
+/// Create an automatic backup if one is due per the stored schedule: stamp the
+/// last-backup time and return the new backup. Returns `None` when backups are
+/// off or the interval has not elapsed since the last one. `now_ms` is the
+/// current epoch-millis clock, supplied by the caller so the decision is
+/// deterministic and testable.
+pub fn run_scheduled_backup(
+    conn: &Connection,
+    backup_dir: &Path,
+    now_ms: i64,
+) -> Result<Option<BackupInfo>> {
+    let schedule = read_schedule(conn)?;
+    let Some(period) = schedule.interval.period_ms() else {
+        return Ok(None);
+    };
+    let last_at =
+        crate::settings::get(conn, KEY_LAST_AT)?.and_then(|v| serde_json::from_str::<i64>(&v).ok());
+    let due = last_at.is_none_or(|t| now_ms.saturating_sub(t) >= period);
+    if !due {
+        return Ok(None);
+    }
+    let info = create_backup(conn, backup_dir, schedule.keep)?;
+    crate::settings::set(conn, KEY_LAST_AT, &now_ms.to_string())?;
+    Ok(Some(info))
 }
 
 /// A collision-free, lexicographically-chronological backup path.

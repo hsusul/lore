@@ -12,7 +12,10 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use lore_core::adapters::codex::CodexAdapter;
-use lore_core::backup::{create_backup, DEFAULT_BACKUP_RETENTION};
+use lore_core::backup::{
+    create_backup, read_schedule, run_scheduled_backup, write_schedule, BackupInterval,
+    BackupSchedule, DEFAULT_BACKUP_RETENTION,
+};
 use lore_core::ingest::persist_session;
 use lore_core::storage::blob::BlobStore;
 use std::path::Path;
@@ -249,4 +252,74 @@ fn all_backup_names(dir: &Path) -> Vec<String> {
         .into_iter()
         .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
         .collect()
+}
+
+#[test]
+fn schedule_round_trips_through_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, _blobs) = archive(dir.path());
+
+    // Default before anything is written: off, default retention.
+    assert_eq!(read_schedule(&conn).unwrap(), BackupSchedule::default());
+
+    write_schedule(
+        &conn,
+        BackupSchedule {
+            interval: BackupInterval::Weekly,
+            keep: 3,
+        },
+    )
+    .unwrap();
+    let got = read_schedule(&conn).unwrap();
+    assert_eq!(got.interval, BackupInterval::Weekly);
+    assert_eq!(got.keep, 3);
+
+    // Wire values are stable and parse back symmetrically.
+    assert_eq!(
+        BackupInterval::parse(BackupInterval::Daily.as_str()),
+        BackupInterval::Daily
+    );
+    assert_eq!(BackupInterval::parse("bogus"), BackupInterval::Off);
+}
+
+#[test]
+fn scheduled_backup_runs_only_when_due() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, blobs) = archive(dir.path());
+    populate(&conn, &blobs);
+    let backup_dir = dir.path().join("backups");
+    let day = 24 * 60 * 60 * 1000_i64;
+    let now = 1_800_000_000_000_i64;
+
+    // Off: never backs up, even on the first call (no backup dir is created).
+    assert!(run_scheduled_backup(&conn, &backup_dir, now)
+        .unwrap()
+        .is_none());
+    assert!(!backup_dir.exists(), "Off must not create any backup");
+
+    // Daily: the first call has no prior backup, so it is due.
+    write_schedule(
+        &conn,
+        BackupSchedule {
+            interval: BackupInterval::Daily,
+            keep: DEFAULT_BACKUP_RETENTION,
+        },
+    )
+    .unwrap();
+    assert!(run_scheduled_backup(&conn, &backup_dir, now)
+        .unwrap()
+        .is_some());
+    assert_eq!(list_backups(&backup_dir).len(), 1);
+
+    // A second call within the interval is not due.
+    assert!(run_scheduled_backup(&conn, &backup_dir, now + day / 2)
+        .unwrap()
+        .is_none());
+    assert_eq!(list_backups(&backup_dir).len(), 1);
+
+    // Once a full day has elapsed it is due again.
+    assert!(run_scheduled_backup(&conn, &backup_dir, now + day)
+        .unwrap()
+        .is_some());
+    assert_eq!(list_backups(&backup_dir).len(), 2);
 }
