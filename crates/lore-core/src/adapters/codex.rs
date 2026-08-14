@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::common::{
-    bounded, epoch_ms, resolve_file_event_segments, sanitize_path, unified_diff_line_counts,
+    bounded, epoch_ms, fallback_title, resolve_file_event_segments, sanitize_path,
+    unified_diff_line_counts,
 };
 use super::{
     AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
@@ -221,6 +222,7 @@ impl CodexAdapter {
 
         assign_segments(&mut session, &contexts, provider.as_ref(), &git);
         resolve_file_event_segments(&mut session);
+        session.title = fallback_title(&session.messages);
         session
     }
 }
@@ -777,6 +779,7 @@ mod tests {
             Some("019e0000-0000-7000-8000-000000000001")
         );
         assert_eq!(s.agent_version.as_deref(), Some("0.133.0"));
+        assert_eq!(s.title.as_deref(), Some("add a retry to the client"));
 
         // user message + reasoning + assistant message.
         assert_eq!(s.messages.len(), 3);
@@ -792,6 +795,16 @@ mod tests {
         assert_eq!(s.segments[0].git_commit_sha.as_deref(), Some("3ab9f1"));
         assert_eq!(s.segments[0].provider.as_deref(), Some("openai"));
         assert_eq!(s.segments[0].cwd.as_deref(), Some("/proj"));
+    }
+
+    #[test]
+    fn title_skips_injected_context_before_the_user_request() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"<permissions instructions>\\n…\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"Fix repository discovery\"}}\n"
+        );
+        let session = CodexAdapter::new().parse_str(content, "fallback");
+        assert_eq!(session.title.as_deref(), Some("Fix repository discovery"));
     }
 
     #[test]

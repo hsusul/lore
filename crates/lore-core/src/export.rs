@@ -32,7 +32,7 @@ pub fn export_session_markdown(
     let _ = writeln!(
         out,
         "# {}",
-        s.title.as_deref().unwrap_or("(untitled session)")
+        render(s.title.as_deref().unwrap_or("(untitled session)"))
     );
     let _ = writeln!(
         out,

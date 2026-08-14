@@ -24,7 +24,7 @@ use crate::storage::blob::{BlobStore, StagedBlob};
 use crate::storage::{Result, StorageError};
 
 /// Bumped when parser output for a source could change; drives re-ingest.
-const PARSER_VERSION: &str = "1";
+const PARSER_VERSION: &str = "2";
 /// Bytes of a source file hashed to distinguish append from rewrite.
 const PREFIX_BYTES: usize = 4096;
 /// Media type recorded for agent-recorded patch/diff blobs.

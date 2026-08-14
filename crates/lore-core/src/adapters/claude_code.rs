@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::common::{bounded, epoch_ms, sanitize_path};
+use super::common::{bounded, epoch_ms, fallback_title, sanitize_path};
 use super::{
     AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
 };
@@ -119,6 +119,9 @@ impl ClaudeCodeAdapter {
 
         assign_segments(&mut session, &contexts);
         super::common::resolve_file_event_segments(&mut session);
+        if session.title.is_none() {
+            session.title = fallback_title(&session.messages);
+        }
         session
     }
 }
@@ -573,6 +576,16 @@ mod tests {
         assert_eq!(asst.tokens.output, Some(40));
         assert_eq!(asst.tokens.cache, Some(800));
         assert_eq!(asst.model.as_deref(), Some("claude-x"));
+    }
+
+    #[test]
+    fn derives_title_when_native_title_event_is_absent() {
+        let content = concat!(
+            "{\"type\":\"user\",\"sessionId\":\"s\",\"message\":{\"role\":\"user\",\"content\":\"Investigate the cache miss\"}}\n",
+            "{\"type\":\"assistant\",\"sessionId\":\"s\",\"message\":{\"role\":\"assistant\",\"content\":\"On it\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(content, "fallback");
+        assert_eq!(session.title.as_deref(), Some("Investigate the cache miss"));
     }
 
     #[test]

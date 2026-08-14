@@ -1,5 +1,72 @@
 //! Small parsing helpers shared by adapters.
 
+use crate::model::{ParsedMessage, PartKind, Role};
+
+const TITLE_MAX_CHARS: usize = 80;
+
+/// Derive a compact title from the first meaningful user request when the
+/// native log does not provide one. Agent/runtime bootstrap messages are
+/// deliberately skipped so permissions and injected repository instructions
+/// do not become session titles.
+pub(crate) fn fallback_title(messages: &[ParsedMessage]) -> Option<String> {
+    messages
+        .iter()
+        .filter(|message| message.role == Role::User && !message.is_sidechain)
+        .flat_map(|message| &message.parts)
+        .filter(|part| part.kind == PartKind::Text)
+        .filter_map(|part| part.text.as_deref())
+        .find_map(title_from_text)
+}
+
+fn title_from_text(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    // App-provided rich requests place the actual prompt after this marker.
+    let candidate = text
+        .split_once("## My request:")
+        .map_or(text, |(_, request)| request.trim());
+
+    let bootstrap_prefixes = [
+        "<permissions instructions>",
+        "# AGENTS.md instructions",
+        "<environment_context>",
+        "<skill>",
+        "<app-context>",
+        "<apps_instructions>",
+        "<plugins_instructions>",
+        "<recommended_plugins>",
+    ];
+    if bootstrap_prefixes
+        .iter()
+        .any(|prefix| candidate.starts_with(prefix))
+    {
+        return None;
+    }
+
+    let line = candidate
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?
+        .trim_start_matches('#')
+        .trim_start_matches(['-', '*'])
+        .trim();
+    if line.is_empty() || (line.starts_with('<') && line.ends_with('>')) {
+        return None;
+    }
+
+    let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = normalized.chars();
+    let title: String = chars.by_ref().take(TITLE_MAX_CHARS).collect();
+    if chars.next().is_some() {
+        Some(format!("{}…", title.trim_end()))
+    } else {
+        Some(title)
+    }
+}
+
 /// Parse an RFC3339 timestamp to epoch milliseconds.
 pub(crate) fn epoch_ms(s: &str) -> Option<i64> {
     let dt = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()?;
@@ -86,5 +153,26 @@ mod tests {
         let diff = "--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-old\n+new\n ctx";
         assert_eq!(unified_diff_line_counts(diff), Some((1, 1)));
         assert_eq!(unified_diff_line_counts(""), None);
+    }
+
+    #[test]
+    fn fallback_title_skips_bootstrap_and_uses_the_real_request() {
+        assert_eq!(title_from_text("<permissions instructions>\n…"), None);
+        assert_eq!(title_from_text("# AGENTS.md instructions\n…"), None);
+        assert_eq!(
+            title_from_text("<appshot>…</appshot>\n\n## My request:\nFix the missing titles"),
+            Some("Fix the missing titles".to_string())
+        );
+    }
+
+    #[test]
+    fn fallback_title_is_single_line_and_bounded() {
+        assert_eq!(
+            title_from_text("  #   Improve   session   titles\nMore detail"),
+            Some("Improve session titles".to_string())
+        );
+        let title = title_from_text(&"x".repeat(100)).unwrap();
+        assert_eq!(title.chars().count(), TITLE_MAX_CHARS + 1);
+        assert!(title.ends_with('…'));
     }
 }
