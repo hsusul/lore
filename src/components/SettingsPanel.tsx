@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 
+import { useFocusTrap } from "../focus-trap";
 import type { DetectedAgent } from "../ipc";
 
 /**
@@ -19,6 +20,7 @@ export default function SettingsPanel({
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(dialogRef, open);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {

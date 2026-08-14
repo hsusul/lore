@@ -59,4 +59,22 @@ describe("SettingsPanel", () => {
 
     trigger.remove();
   });
+
+  it("traps Tab focus inside the dialog", () => {
+    render(<SettingsPanel open agents={agents} onForgetEverything={() => {}} onClose={() => {}} />);
+    const dialog = screen.getByRole("dialog");
+    const buttons = screen.getAllByRole("button");
+    const first = buttons[0];
+    const last = buttons[buttons.length - 1];
+
+    // Tab off the last focusable wraps to the first…
+    last.focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+
+    // …and Shift+Tab off the first wraps to the last.
+    first.focus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
 });
