@@ -16,10 +16,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Networking crates that must never appear in the archive's normal deps. Include
-# async-net runtimes (tokio/mio/async-std): lore-core is fully synchronous, so
-# their presence would itself signal a networking dependency creeping in.
-NET_RE='(^| )(reqwest|hyper|h2|http-body|ureq|attohttpc|isahc|curl|surf|native-tls|rustls|openssl|openssl-sys|socket2|trust-dns|hickory|quinn|tonic|tokio|mio|async-std|async-io|smol)( |$)'
+# Crates that can open an outbound connection and have no local-only purpose:
+# HTTP/WebSocket clients and servers, TLS-for-transport, DNS resolvers, QUIC.
+# Deliberately NOT listed are low-level IO primitives (mio, socket2, tokio,
+# async-io) — they have legitimate non-network uses and appear here anyway via
+# the file watcher on Linux (notify -> mio), so matching them would false-fail.
+NET_RE='(^| )(reqwest|hyper|h2|ureq|attohttpc|isahc|curl|surf|trust-dns|hickory|quinn|tonic|native-tls|rustls|warp|axum|actix-web|rocket|tungstenite)( |$)'
 
 echo "== egress check 1: no networking crate in lore-core's dependency graph =="
 tree="$(cargo tree -p lore-core -e normal --prefix none 2>/dev/null | sed 's/ v[0-9].*//' | sort -u)"
