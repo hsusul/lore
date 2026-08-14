@@ -131,48 +131,112 @@ fn session_source_paths(conn: &Connection, session_id: &str) -> Result<Vec<Strin
     Ok(rows)
 }
 
+/// The one user-owned subtree under the archive directory. Everything else
+/// there is Lore's (`DATA_MODEL.md` §9) and is swept by `forget_everything`.
+const EXPORTS_DIR: &str = "exports";
+
+const REMAINING_NOTE: &str =
+    "Original agent logs and any exports you kept are outside Lore's ownership \
+     and were not deleted. Secure block-level erasure is not guaranteed on SSDs.";
+
 /// Outcome of forgetting the whole archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForgetEverythingReport {
-    /// Lore-owned entries removed under the archive directory.
+    /// Lore-owned entries removed under the archive directory (top-level names).
     pub removed: Vec<String>,
+    /// User-owned exports left in place (top-level names under `exports/`), named
+    /// so the UI can disclose exactly what still exists after "forget everything".
+    pub preserved_exports: Vec<String>,
     /// A truthful note about copies Lore does not own and cannot delete.
     pub remaining_note: &'static str,
 }
 
-/// Remove all Lore-owned data under `archive_dir`: the database and its WAL/SHM
-/// sidecars, blobs, backups, cache, content-bearing logs, and quarantine
-/// artifacts. Exports (which the user chose to keep) and original agent logs
-/// are left untouched. The caller must close DB connections first.
+/// Remove **all** Lore-owned data under `archive_dir` — the database and its
+/// WAL/SHM/journal sidecars, blobs, backups, cache, content-bearing logs,
+/// quarantine artifacts, and anything else Lore wrote there. The user-owned
+/// `exports/` subtree and original agent logs are left untouched. The caller
+/// must close DB connections first.
+///
+/// The sweep is a **whitelist**, not a name list: it preserves `exports/` and
+/// removes every other top-level entry. This is exhaustive by construction, so a
+/// sidecar Lore adds later (or a stray `lore.db-journal`, a temp file, a
+/// `.DS_Store`) cannot silently survive the way a hardcoded blocklist would.
 ///
 /// Note: secure physical erasure cannot be guaranteed on SSD/copy-on-write
 /// filesystems; this removes the files, not necessarily every underlying block.
 pub fn forget_everything(archive_dir: &Path) -> Result<ForgetEverythingReport> {
-    const FILES: &[&str] = &["lore.db", "lore.db-wal", "lore.db-shm"];
-    const DIRS: &[&str] = &["blobs", "backups", "cache", "logs", "quarantine"];
     let mut removed = Vec::new();
-
-    for name in FILES {
-        let path = archive_dir.join(name);
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(|_| StorageError::Io)?;
-            removed.push((*name).to_string());
+    let entries = match std::fs::read_dir(archive_dir) {
+        Ok(entries) => entries,
+        // No archive directory means there is nothing Lore-owned to remove.
+        Err(_) => {
+            return Ok(ForgetEverythingReport {
+                removed,
+                preserved_exports: Vec::new(),
+                remaining_note: REMAINING_NOTE,
+            })
         }
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|_| StorageError::Io)?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == EXPORTS_DIR {
+            continue; // user-owned; never deleted
+        }
+        let path = entry.path();
+        if entry.file_type().map_err(|_| StorageError::Io)?.is_dir() {
+            std::fs::remove_dir_all(&path).map_err(|_| StorageError::Io)?;
+        } else {
+            std::fs::remove_file(&path).map_err(|_| StorageError::Io)?;
+        }
+        removed.push(name);
     }
-    for name in DIRS {
+    removed.sort();
+
+    Ok(ForgetEverythingReport {
+        removed,
+        preserved_exports: list_exports(archive_dir),
+        remaining_note: REMAINING_NOTE,
+    })
+}
+
+/// Content-bearing, recoverable Lore-owned stores that a full in-app "forget
+/// everything" must also clear so nothing survives to be restored: `backups/`
+/// hold whole-database copies, `cache/` holds rendered/search content, and
+/// `quarantine/` holds preserved corrupt archives. `logs/` is intentionally
+/// excluded — it is content-free by design (`DATA_MODEL.md` §9) and may be held
+/// open by the running process.
+const RECOVERABLE_DIRS: &[&str] = &["backups", "cache", "quarantine"];
+
+/// Remove the on-disk stores from which just-forgotten data could otherwise be
+/// recovered. This complements [`forget_all`], which wipes only the live database
+/// rows and blobs: without this, a whole-database copy under `backups/` still
+/// holds everything the user asked to forget (and `restore_backup` would bring it
+/// back). Returns the directory names actually removed. The live `lore.db` and
+/// `blobs/` are left to `forget_all`; user-owned `exports/` is never touched.
+pub fn purge_recoverable_copies(archive_dir: &Path) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    for name in RECOVERABLE_DIRS {
         let path = archive_dir.join(name);
         if path.exists() {
             std::fs::remove_dir_all(&path).map_err(|_| StorageError::Io)?;
             removed.push((*name).to_string());
         }
     }
+    Ok(removed)
+}
 
-    Ok(ForgetEverythingReport {
-        removed,
-        remaining_note:
-            "Original agent logs and any exports you kept are outside Lore's ownership \
-             and were not deleted. Secure block-level erasure is not guaranteed on SSDs.",
-    })
+/// Top-level entry names under `archive_dir/exports`, sorted; empty if absent.
+fn list_exports(archive_dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = match std::fs::read_dir(archive_dir.join(EXPORTS_DIR)) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    names
 }
 
 #[cfg(test)]
@@ -305,8 +369,98 @@ mod tests {
         assert!(!root.join("lore.db").exists());
         assert!(!root.join("blobs").exists());
         assert!(!root.join("quarantine").exists());
-        // User-owned exports are never deleted.
+        // User-owned exports are never deleted, and are disclosed by name.
         assert!(root.join("exports/keep.md").exists());
+        assert_eq!(report.preserved_exports, vec!["keep.md".to_string()]);
         assert!(report.remaining_note.contains("outside Lore's ownership"));
+    }
+
+    /// The deletion-sweep audit: entries a hardcoded name list would miss — a
+    /// stray `lore.db-journal`, a future/unknown sidecar dir, an OS `.DS_Store` —
+    /// must still be swept. Only the user-owned `exports/` subtree survives.
+    #[test]
+    fn forget_everything_sweeps_unlisted_owned_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // The documented owned set…
+        for f in ["lore.db", "lore.db-wal", "lore.db-shm", "lore.db-journal"] {
+            std::fs::write(root.join(f), b"x").unwrap();
+        }
+        for d in ["blobs", "backups", "cache", "logs", "quarantine"] {
+            std::fs::create_dir(root.join(d)).unwrap();
+        }
+        // …plus entries no blocklist enumerates.
+        std::fs::write(root.join(".DS_Store"), b"os").unwrap();
+        std::fs::write(root.join("lore.db.tmp-write"), b"partial").unwrap();
+        std::fs::create_dir(root.join("index-next")).unwrap();
+        std::fs::write(root.join("index-next/segments"), b"future").unwrap();
+        // …and a user export that must survive.
+        std::fs::create_dir(root.join("exports")).unwrap();
+        std::fs::write(root.join("exports/session.md"), b"kept").unwrap();
+
+        let report = forget_everything(root).unwrap();
+
+        // Everything Lore-owned is gone; only exports/ remains under the archive.
+        let remaining: Vec<String> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            remaining,
+            vec!["exports".to_string()],
+            "only exports survives"
+        );
+        for unlisted in [
+            ".DS_Store",
+            "lore.db-journal",
+            "lore.db.tmp-write",
+            "index-next",
+        ] {
+            assert!(
+                report.removed.contains(&unlisted.to_string()),
+                "unlisted owned entry {unlisted} must be swept and reported"
+            );
+        }
+        assert!(root.join("exports/session.md").exists());
+        assert_eq!(report.preserved_exports, vec!["session.md".to_string()]);
+    }
+
+    #[test]
+    fn purge_recoverable_copies_clears_backups_but_keeps_db_and_exports() {
+        // Regression: an in-app "forget everything" wiped DB rows and blobs but
+        // left whole-DB copies under backups/, so the forgotten data stayed
+        // recoverable. purge_recoverable_copies closes that hole.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("lore.db"), b"live-empty-db").unwrap();
+        std::fs::create_dir(root.join("blobs")).unwrap();
+        for d in ["backups", "cache", "quarantine", "logs"] {
+            std::fs::create_dir(root.join(d)).unwrap();
+        }
+        std::fs::write(root.join("backups/lore-20260813.db"), b"old data").unwrap();
+        std::fs::create_dir(root.join("exports")).unwrap();
+        std::fs::write(root.join("exports/keep.md"), b"user export").unwrap();
+
+        let mut removed = purge_recoverable_copies(root).unwrap();
+        removed.sort();
+        assert_eq!(removed, vec!["backups", "cache", "quarantine"]);
+        // Recoverable copies are gone…
+        assert!(!root.join("backups").exists());
+        assert!(!root.join("cache").exists());
+        assert!(!root.join("quarantine").exists());
+        // …but the live DB, blobs, content-free logs, and user exports remain.
+        assert!(root.join("lore.db").exists());
+        assert!(root.join("blobs").exists());
+        assert!(root.join("logs").exists());
+        assert!(root.join("exports/keep.md").exists());
+    }
+
+    #[test]
+    fn forget_everything_is_a_noop_on_a_missing_archive_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        let report = forget_everything(&missing).unwrap();
+        assert!(report.removed.is_empty());
+        assert!(report.preserved_exports.is_empty());
     }
 }
