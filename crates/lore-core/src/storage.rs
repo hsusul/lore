@@ -48,11 +48,22 @@ pub fn open_in_memory() -> Result<Connection> {
 /// Apply the connection pragmas Lore relies on. Run once at open, outside any
 /// transaction. `journal_mode`/`synchronous` return rows, so we use
 /// `execute_batch`, which ignores results.
+///
+/// The performance pragmas (`cache_size`, `temp_store`, `mmap_size`) are pure
+/// speed/memory tuning with no durability or correctness effect: a larger page
+/// cache and memory-backed temporaries keep the write-heavy initial scan's btree
+/// and FTS pages resident instead of spilling, materially cutting ingest time on
+/// a cold archive. `synchronous = NORMAL` is durable under WAL across app
+/// crashes (only an OS/power loss can drop the last transaction), which a
+/// re-scan recovers.
 fn configure(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;\n\
          PRAGMA foreign_keys = ON;\n\
-         PRAGMA synchronous = NORMAL;",
+         PRAGMA synchronous = NORMAL;\n\
+         PRAGMA cache_size = -65536;\n\
+         PRAGMA temp_store = MEMORY;\n\
+         PRAGMA mmap_size = 268435456;",
     )?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(())
