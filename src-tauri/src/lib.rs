@@ -43,6 +43,9 @@ struct AppState {
     registry: AdapterRegistry,
     config: DiscoveryConfig,
     worker: Mutex<Option<WorkerHandle>>,
+    /// The Lore-owned archive root (`app_data_dir`); used to purge on-disk
+    /// backups/cache/quarantine on "forget everything".
+    archive_dir: std::path::PathBuf,
 }
 
 /// A progress sink that accumulates content-free counts and relays them to the
@@ -221,8 +224,14 @@ fn forget_session(state: State<'_, AppState>, id: String) -> Result<ForgetReport
 /// and the job queue are preserved.
 #[tauri::command]
 fn forget_everything(state: State<'_, AppState>) -> Result<ForgetReport, String> {
-    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
-    let report = lore_core::forget::forget_all(&conn, &state.blobs).map_err(|e| e.to_string())?;
+    // Wipe the live database rows and blobs…
+    let report = {
+        let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+        lore_core::forget::forget_all(&conn, &state.blobs).map_err(|e| e.to_string())?
+    };
+    // …then clear the on-disk stores from which that data could be recovered
+    // (backups hold whole-database copies), so "forget everything" truly forgets.
+    lore_core::forget::purge_recoverable_copies(&state.archive_dir).map_err(|e| e.to_string())?;
     Ok(ForgetReport {
         blobs_removed: i64::try_from(report.blobs_removed).unwrap_or(i64::MAX),
         source_paths: report.source_paths,
@@ -360,6 +369,7 @@ fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
         registry: AdapterRegistry::v0(),
         config,
         worker: Mutex::new(Some(handle)),
+        archive_dir: data_dir,
     })
 }
 
