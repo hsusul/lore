@@ -62,15 +62,20 @@ fn foreign_keys_are_enforced() {
 #[test]
 fn data_model_indexes_exist() {
     // DATA_MODEL.md §8 declares these as performance-critical; they are created
-    // by migration 0004. Assert the documented contract holds.
+    // by migrations 0004 and 0005. Assert the documented contract holds.
     let conn = db();
-    let expected = ["ix_repo_identity_kind_hash", "ix_worktree_repository_path"];
+    let expected = [
+        "ix_repo_identity_kind_hash",
+        "ix_worktree_repository_path",
+        "ix_source_artifact_agent_path",
+        "ix_source_artifact_agent_native_hash",
+    ];
     for idx in expected {
         let n: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master
                  WHERE name = ?1 AND type = 'index' AND tbl_name IN
-                   ('repository_identity_evidence','worktree')",
+                   ('repository_identity_evidence','worktree','source_artifact')",
                 [idx],
                 |r| r.get(0),
             )
