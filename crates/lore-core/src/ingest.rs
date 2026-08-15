@@ -159,6 +159,8 @@ fn persist_rows(
                 "title",
                 title,
                 true,
+                parsed.started_at,
+                agent_id,
             )?;
         }
     }
@@ -265,6 +267,8 @@ fn persist_rows(
                     "text",
                     text,
                     p.searchable,
+                    parsed.started_at,
+                    agent_id,
                 )?;
             }
             if let Some(content) = &p.content_json {
@@ -277,6 +281,8 @@ fn persist_rows(
                     "content_json",
                     content,
                     false,
+                    parsed.started_at,
+                    agent_id,
                 )?;
             }
             part_ids.insert((m.seq, p.ordinal), pid);
@@ -362,6 +368,8 @@ fn persist_rows(
                 "patch",
                 patch,
                 true,
+                parsed.started_at,
+                agent_id,
             )?;
             if let Some(blob_id) = &patch_blob_id {
                 let state = match outcome {
@@ -487,6 +495,10 @@ fn scan_and_project(
     field: &str,
     text: &str,
     index: bool,
+    // Session-level sort/filter keys denormalized onto the projection so the
+    // ranked search page can order/limit before joining agent_session (0007).
+    started_at: Option<i64>,
+    agent_id: &str,
 ) -> Result<ScanOutcome> {
     let findings = match crate::secrets::scan(text) {
         Ok(findings) => findings,
@@ -518,15 +530,17 @@ fn scan_and_project(
         tx.execute(
             "INSERT INTO search_document
                 (session_id, segment_id, source_kind, source_id, field, ordinal, redacted_text,
-                 created_at)
-             VALUES (?1,?2,?3,?4,?5,0,?6, unixepoch('now')*1000)",
+                 started_at, agent_id, created_at)
+             VALUES (?1,?2,?3,?4,?5,0,?6,?7,?8, unixepoch('now')*1000)",
             params![
                 session_id,
                 segment_id,
                 source_kind,
                 source_id,
                 field,
-                redacted
+                redacted,
+                started_at,
+                agent_id
             ],
         )?;
     }

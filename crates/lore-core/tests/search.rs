@@ -51,6 +51,40 @@ fn identifier_recall_with_highlighted_snippet() {
 }
 
 #[test]
+fn projection_carries_session_sort_and_filter_keys() {
+    // Migration 0007 denormalizes started_at/agent_id onto search_document so the
+    // ranked page can order and filter before joining agent_session. Those keys
+    // must always mirror the owning session, or search would rank/filter wrong.
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    persist_claude(
+        &conn,
+        &blobs,
+        &user_message("s1", "/p", "deploy the retryBackoff helper"),
+        "s1",
+    );
+
+    // `IS NOT` is NULL-safe, so a null started_at on either side must also match.
+    let mismatches: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM search_document sd
+             JOIN agent_session s ON s.id = sd.session_id
+             WHERE sd.agent_id IS NOT s.agent_id OR sd.started_at IS NOT s.started_at",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(mismatches, 0, "projection keys must mirror agent_session");
+
+    let agent: String = conn
+        .query_row("SELECT DISTINCT agent_id FROM search_document", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(agent, "claude-code");
+}
+
+#[test]
 fn title_is_searchable() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let (_bd, blobs) = store();

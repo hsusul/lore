@@ -14,6 +14,9 @@ const scan = vi.hoisted(() => ({
 
 vi.mock("./ipc", () => ({
   listDetectedAgents: vi.fn().mockResolvedValue([]),
+  chooseAgentRootDirectory: vi.fn().mockResolvedValue(null),
+  addAgentRoot: vi.fn().mockResolvedValue(undefined),
+  removeAgentRoot: vi.fn().mockResolvedValue(undefined),
   listRepositories: vi.fn().mockResolvedValue([]),
   listSessionsPage: vi.fn().mockResolvedValue({ sessions: [], next_cursor: null }),
   listRepositorySessionsPage: vi.fn().mockResolvedValue({
@@ -45,12 +48,15 @@ vi.mock("./ipc", () => ({
 
 import App from "./App";
 import {
+  addAgentRoot,
+  chooseAgentRootDirectory,
   getSession,
   listDetectedAgents,
   listRepositories,
   listRepositorySessionsPage,
   listSessionsPage,
   rescan,
+  removeAgentRoot,
   searchPage,
   type DetectedAgent,
   type RepositorySummary,
@@ -74,7 +80,7 @@ function summary(id: string, title: string): SessionSummary {
 }
 
 function detail(session: SessionSummary): SessionDetail {
-  return { summary: session, segments: [], messages: [], file_events: [] };
+  return { summary: session, parse_note: null, segments: [], messages: [], file_events: [] };
 }
 
 function repository(id: string, name: string): RepositorySummary {
@@ -101,6 +107,9 @@ function deferred<T>() {
 
 afterEach(() => {
   vi.mocked(listDetectedAgents).mockResolvedValue([]);
+  vi.mocked(chooseAgentRootDirectory).mockResolvedValue(null);
+  vi.mocked(addAgentRoot).mockResolvedValue(undefined);
+  vi.mocked(removeAgentRoot).mockResolvedValue(undefined);
   vi.mocked(listRepositories).mockResolvedValue([]);
   vi.mocked(listSessionsPage).mockResolvedValue({ sessions: [], next_cursor: null });
   vi.mocked(listRepositorySessionsPage).mockResolvedValue({
@@ -146,6 +155,8 @@ describe("App shell", () => {
         installed: true,
         version: null,
         session_count: 0,
+        roots: ["/Users/dev/.claude/projects"],
+        custom_roots: [],
       },
       {
         id: "codex",
@@ -153,6 +164,8 @@ describe("App shell", () => {
         installed: false,
         version: null,
         session_count: 0,
+        roots: ["/Users/dev/.codex/sessions"],
+        custom_roots: [],
       },
     ]);
 
@@ -161,11 +174,21 @@ describe("App shell", () => {
     expect(
       await screen.findByRole("heading", { name: "Your agent history, searchable." }),
     ).toBeTruthy();
-    expect(screen.getByText("~/.claude/projects")).toBeTruthy();
-    expect(screen.getByText("~/.codex/sessions")).toBeTruthy();
+    expect(screen.getByText("/Users/dev/.claude/projects")).toBeTruthy();
+    expect(screen.getByText("/Users/dev/.codex/sessions")).toBeTruthy();
     expect(screen.getByText(/local and read-only/i)).toBeTruthy();
     expect(screen.getByText("Claude Code").closest("li")?.textContent).toContain("detected");
     expect(screen.getByText("Codex").closest("li")?.textContent).toContain("not detected");
+
+    vi.mocked(chooseAgentRootDirectory).mockResolvedValueOnce("/Volumes/archive/codex");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose Codex folder" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(chooseAgentRootDirectory).toHaveBeenCalledWith("Codex");
+    expect(addAgentRoot).toHaveBeenCalledWith("codex", "/Volumes/archive/codex");
+    expect(screen.getByRole("status").textContent).toContain("Codex folder added");
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Scan agent history" }));

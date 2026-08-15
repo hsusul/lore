@@ -1,16 +1,16 @@
 //! Read queries that project canonical rows into IPC DTOs for the UI.
 //!
 //! Heavy work stays in the Rust core (`AGENTS.md`): the webview never runs SQL.
-//! These functions back the read commands — `list_detected_agents`,
-//! `list_sessions`, `list_repositories`, `get_session`, and `get_git_snapshot`
+//! These functions back the archive read commands — `list_sessions`,
+//! `list_repositories`, `get_session`, and `get_git_snapshot`
 //! — returning [`lore_ipc`] wire types directly. Opaque/encrypted parts are
 //! returned without readable content and are never rendered or exported.
 
 use std::collections::HashMap;
 
 use lore_ipc::{
-    DetectedAgent, FileEventDto, GitObservationDto, MessageDto, MessagePartDto, RepositorySummary,
-    SegmentDto, SessionDetail, SessionPage, SessionSummary,
+    FileEventDto, GitObservationDto, MessageDto, MessagePartDto, RepositorySummary, SegmentDto,
+    SessionDetail, SessionPage, SessionSummary,
 };
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension};
@@ -18,27 +18,13 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::storage::blob::BlobStore;
 use crate::storage::Result;
 
-/// The agents Lore knows about, with their ingested-session counts, ordered by
-/// id for a stable list.
-pub fn list_agents(conn: &Connection) -> Result<Vec<DetectedAgent>> {
-    let mut stmt = conn.prepare(
-        "SELECT a.id, a.display_name, a.detected, a.version,
-                (SELECT count(*) FROM agent_session s WHERE s.agent_id = a.id)
-         FROM agent a
-         ORDER BY a.id",
-    )?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(DetectedAgent {
-                id: row.get(0)?,
-                display_name: row.get(1)?,
-                installed: row.get::<_, i64>(2)? != 0,
-                version: row.get(3)?,
-                session_count: row.get(4)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
+/// Number of sessions already archived for one adapter.
+pub fn agent_session_count(conn: &Connection, agent_id: &str) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT count(*) FROM agent_session WHERE agent_id = ?1",
+        [agent_id],
+        |row| row.get(0),
+    )?)
 }
 
 /// The most recent sessions (newest first), capped at `limit`. A stable
@@ -274,7 +260,7 @@ impl SessionCursor {
 /// unknown. Opaque/encrypted parts are returned without readable content and
 /// are never rendered or exported.
 pub fn get_session(conn: &Connection, session_id: &str) -> Result<Option<SessionDetail>> {
-    let Some(summary) = session_summary(conn, session_id)? else {
+    let Some((summary, parse_note)) = session_summary(conn, session_id)? else {
         return Ok(None);
     };
     let segments = session_segments(conn, session_id)?;
@@ -282,30 +268,37 @@ pub fn get_session(conn: &Connection, session_id: &str) -> Result<Option<Session
     let file_events = session_file_events(conn, session_id)?;
     Ok(Some(SessionDetail {
         summary,
+        parse_note,
         segments,
         messages,
         file_events,
     }))
 }
 
-fn session_summary(conn: &Connection, session_id: &str) -> Result<Option<SessionSummary>> {
+fn session_summary(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<(SessionSummary, Option<String>)>> {
     conn.query_row(
         "SELECT id, agent_id, title, started_at, ended_at, message_count,
-                tool_call_count, primary_model, parse_status
+                tool_call_count, primary_model, parse_status, parse_note
          FROM agent_session WHERE id = ?1",
         [session_id],
         |row| {
-            Ok(SessionSummary {
-                id: row.get(0)?,
-                agent_id: row.get(1)?,
-                title: row.get(2)?,
-                started_at: row.get(3)?,
-                ended_at: row.get(4)?,
-                message_count: row.get(5)?,
-                tool_call_count: row.get(6)?,
-                primary_model: row.get(7)?,
-                parse_status: row.get(8)?,
-            })
+            Ok((
+                SessionSummary {
+                    id: row.get(0)?,
+                    agent_id: row.get(1)?,
+                    title: row.get(2)?,
+                    started_at: row.get(3)?,
+                    ended_at: row.get(4)?,
+                    message_count: row.get(5)?,
+                    tool_call_count: row.get(6)?,
+                    primary_model: row.get(7)?,
+                    parse_status: row.get(8)?,
+                },
+                row.get(9)?,
+            ))
         },
     )
     .optional()
@@ -564,15 +557,11 @@ mod tests {
     }
 
     #[test]
-    fn lists_agents_with_session_counts() {
+    fn counts_sessions_for_an_agent() {
         let conn = crate::storage::open_in_memory().unwrap();
         seed(&conn);
-        let agents = list_agents(&conn).unwrap();
-        assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].id, "claude-code");
-        assert_eq!(agents[0].display_name, "Claude Code");
-        assert!(agents[0].installed);
-        assert_eq!(agents[0].session_count, 1);
+        assert_eq!(agent_session_count(&conn, "claude-code").unwrap(), 1);
+        assert_eq!(agent_session_count(&conn, "codex").unwrap(), 0);
     }
 
     #[test]
@@ -703,7 +692,6 @@ mod tests {
     #[test]
     fn empty_database_lists_nothing() {
         let conn = crate::storage::open_in_memory().unwrap();
-        assert!(list_agents(&conn).unwrap().is_empty());
         assert!(list_sessions(&conn, 10).unwrap().is_empty());
         assert!(list_repositories(&conn).unwrap().is_empty());
     }
@@ -738,6 +726,33 @@ mod tests {
         assert!(!detail.file_events[0].has_patch);
 
         assert!(get_session(&conn, "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn get_session_exposes_parse_diagnostics_without_inflating_list_rows() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+        let content = concat!(
+            "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"partial\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}\n",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"brand_new_event\"}}\n",
+        );
+        let parsed = CodexAdapter::new().parse_str(content, "partial");
+        let sid = persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+
+        let summary_json = serde_json::to_value(&list_sessions(&conn, 1).unwrap()[0]).unwrap();
+        assert!(
+            summary_json.get("parse_note").is_none(),
+            "browse summaries stay sparse"
+        );
+
+        let detail_json = serde_json::to_value(get_session(&conn, &sid).unwrap().unwrap()).unwrap();
+        assert_eq!(
+            detail_json
+                .get("parse_note")
+                .and_then(|value| value.as_str()),
+            Some("1 parser note(s); first: unknown event_msg: brand_new_event")
+        );
     }
 
     #[test]

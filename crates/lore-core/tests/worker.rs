@@ -432,6 +432,72 @@ fn spawned_worker_scans_then_shuts_down_clean() {
         .any(|e| matches!(e, ProgressEvent::Ingested { .. })));
 }
 
+#[test]
+fn spawned_worker_reconfigures_roots_without_restarting_the_app() {
+    let home = home();
+    let db_dir = tempfile::tempdir().unwrap();
+    let db_path = db_dir.path().join("lore.db");
+    let worker = lore_core::worker::open_worker(
+        &db_path,
+        AdapterRegistry::v0(),
+        home.blobs.clone(),
+        home.config.clone(),
+        WorkerConfig {
+            idle_poll: std::time::Duration::from_secs(3600),
+            ..WorkerConfig::default()
+        },
+    )
+    .unwrap();
+    let initial_watcher = lore_core::watcher::SessionWatcher::new(
+        &[home.claude_root.clone(), home.codex_root.clone()],
+        std::time::Duration::from_millis(10),
+    )
+    .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let handle = spawn(worker, Some(initial_watcher), ChannelSink(tx));
+
+    while !matches!(
+        rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap(),
+        ProgressEvent::ScanFinished
+    ) {}
+
+    let extra = tempfile::tempdir().unwrap();
+    let extra_root = extra.path().join("codex/sessions");
+    fs::create_dir_all(extra_root.join("2026/08/12")).unwrap();
+    let extra_file = extra_root.join("2026/08/12/rollout-extra.jsonl");
+    let content = fixture("codex/minimal.jsonl").replace(
+        "019e0000-0000-7000-8000-000000000001",
+        "019e0000-0000-7000-8000-0000000000ee",
+    );
+    fs::write(extra_file, content).unwrap();
+
+    let mut replacement = DiscoveryConfig::new();
+    replacement.set_roots(
+        "claude-code",
+        DiscoveryRoots::new(vec![extra.path().join("claude/projects")]),
+    );
+    replacement.set_roots("codex", DiscoveryRoots::new(vec![extra_root.clone()]));
+    let replacement_watcher = lore_core::watcher::SessionWatcher::new(
+        std::slice::from_ref(&extra_root),
+        std::time::Duration::from_millis(10),
+    )
+    .unwrap();
+    handle.reconfigure(replacement, Some(replacement_watcher));
+
+    while !matches!(
+        rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap(),
+        ProgressEvent::ScanFinished
+    ) {}
+    handle.shutdown();
+
+    let check = lore_core::storage::open(&db_path).unwrap();
+    assert_eq!(
+        count(&check, "SELECT count(*) FROM agent_session"),
+        3,
+        "the replacement root is scanned without restarting Lore"
+    );
+}
+
 // 9. Read-only invariant: Lore never needs write access to a source. Ingesting
 //    a source whose file is mode 0o444 succeeds and leaves the mode untouched.
 #[cfg(unix)]

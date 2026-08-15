@@ -288,7 +288,7 @@ pre,
 
 .onboarding__sources li {
   display: grid;
-  grid-template-columns: minmax(6rem, 0.8fr) minmax(8rem, 1.4fr) auto;
+  grid-template-columns: minmax(6rem, 0.75fr) minmax(8rem, 1.25fr) auto auto;
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
@@ -320,6 +320,12 @@ pre,
 
 .onboarding__source-status.is-detected {
   color: var(--success);
+}
+
+.onboarding__choose {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .onboarding__actions {
@@ -695,6 +701,115 @@ kbd {
   letter-spacing: -0.01em;
 }
 
+/* A partial parse is useful data with an explicit confidence boundary, not a
+   dead-end error. Keep the recovered evidence visible and the diagnostic terse. */
+.parse-notice {
+  margin: 1rem 0 1.4rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r);
+}
+
+.parse-notice--failed {
+  border-left-color: var(--danger);
+}
+
+.parse-notice__eyebrow {
+  margin: 0 0 0.2rem;
+  color: var(--warn);
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.parse-notice--failed .parse-notice__eyebrow {
+  color: var(--danger);
+}
+
+.parse-notice h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  letter-spacing: -0.01em;
+}
+
+.parse-notice__intro {
+  margin: 0.3rem 0 0.85rem;
+  color: var(--text-2);
+  font-size: 0.82rem;
+}
+
+.parse-notice__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  margin: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.parse-notice__metrics div {
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+}
+
+.parse-notice__metrics div + div {
+  border-left: 1px solid var(--border);
+}
+
+.parse-notice__metrics dt {
+  color: var(--text-3);
+  font-size: 0.67rem;
+}
+
+.parse-notice__metrics dd {
+  margin: 0.1rem 0 0;
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.parse-notice__diagnostic {
+  margin: 0.8rem 0 0;
+  color: var(--text-3);
+  font-size: 0.7rem;
+}
+
+.parse-notice__diagnostic span {
+  display: block;
+  margin-bottom: 0.15rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.parse-notice__diagnostic code {
+  display: block;
+  color: var(--text-2);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.parse-notice__reassurance {
+  margin: 0.75rem 0 0;
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 900px) {
+  .parse-notice__metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .parse-notice__metrics div + div {
+    border-top: 1px solid var(--border);
+    border-left: none;
+  }
+}
+
 .session__meta {
   display: flex;
   align-items: center;
@@ -1025,10 +1140,10 @@ kbd {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
   outline: none;
+  /* Block flow (not flex): windowing reserves off-screen rows with tall spacer
+     <li>s, and flex-shrink would collapse those spacers. Matches .sessions. */
+  display: block;
 }
 
 /* Focus indicator for the results listbox: a ring on the keyboard-active row,
@@ -1088,7 +1203,15 @@ kbd {
 }
 
 .hit__snippet {
-  display: block;
+  /* Clamp to a fixed two lines so every result row is the same height — a
+     prerequisite for windowing the list, and denser/more scannable. Full text
+     is one click away in the session view. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  height: 2.4em;
+  line-height: 1.2;
+  overflow: hidden;
   color: var(--text-2);
   font-size: 0.8rem;
   overflow-wrap: anywhere;
@@ -1270,11 +1393,67 @@ kbd {
   padding: 0;
 }
 
-.settings__agents li {
-  display: flex;
-  justify-content: space-between;
-  padding: 0.25rem 0;
+.settings__agents > li {
+  padding: 0.75rem 0;
   border-top: 1px solid var(--border);
+}
+
+.settings__agent-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.settings__agent-head .nav-item__count {
+  margin-left: auto;
+}
+
+.settings__agent-status,
+.settings__root-kind {
+  color: var(--text-3);
+  font-size: 0.7rem;
+}
+
+.settings__agent-status.is-detected {
+  color: var(--success);
+}
+
+.settings__roots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings__roots li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  background: var(--surface-2);
+  border-radius: var(--r);
+}
+
+.settings__roots code {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings__root-remove,
+.settings__add-root {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
+}
+
+.settings__add-root {
+  margin-top: 0.55rem;
 }
 
 .settings__row {

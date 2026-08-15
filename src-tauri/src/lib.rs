@@ -37,7 +37,7 @@ struct AppState {
     db: Mutex<Connection>,
     blobs: BlobStore,
     registry: AdapterRegistry,
-    config: DiscoveryConfig,
+    config: Mutex<DiscoveryConfig>,
     worker: Mutex<Option<WorkerHandle>>,
     /// The Lore-owned archive root (`app_data_dir`); used to purge on-disk
     /// backups/cache/quarantine on "forget everything".
@@ -90,11 +90,14 @@ fn core_version() -> String {
     lore_core::version().to_string()
 }
 
-/// List the agents Lore knows about, with ingested-session counts.
+/// List every supported adapter using a cheap live root probe plus its
+/// ingested-session count. This remains useful before the first scan.
 #[tauri::command]
 fn list_detected_agents(state: State<'_, AppState>) -> Result<Vec<DetectedAgent>, String> {
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
-    lore_core::query::list_agents(&conn).map_err(|e| e.to_string())
+    let config = state.config.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::source_roots::detected_agents(&conn, &state.registry, &config)
+        .map_err(|e| e.to_string())
 }
 
 /// List the most recent sessions (newest first), capped at `limit`.
@@ -262,9 +265,12 @@ fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>
     lore_core::settings::get(&conn, &key).map_err(|e| e.to_string())
 }
 
-/// Persist a setting's raw JSON value (Lore-owned; cleared by "forget everything").
+/// Persist a setting's raw JSON value (Lore-owned; archive clearing preserves it).
 #[tauri::command]
 fn set_setting(state: State<'_, AppState>, key: String, value_json: String) -> Result<(), String> {
+    if key.starts_with("agent_roots.") {
+        return Err("agent root settings require the folder picker".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::settings::set(&conn, &key, &value_json).map_err(|e| e.to_string())
 }
@@ -310,14 +316,68 @@ fn backup_now(state: State<'_, AppState>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn replace_source_configuration(state: &AppState, config: DiscoveryConfig) -> Result<(), String> {
+    let watcher = match SessionWatcher::new(&watch_roots(&state.registry, &config), WATCH_QUIET) {
+        Ok(watcher) => Some(watcher),
+        Err(_) => {
+            eprintln!("warning: filesystem watcher unavailable; live updates disabled");
+            None
+        }
+    };
+    *state.config.lock().map_err(|_| "state lock poisoned")? = config.clone();
+    let worker = state.worker.lock().map_err(|_| "state lock poisoned")?;
+    let handle = worker
+        .as_ref()
+        .ok_or_else(|| "background ingestion worker unavailable".to_string())?;
+    handle.reconfigure(config, watcher);
+    Ok(())
+}
+
+/// Persist a user-selected read-only source folder, rebuild live watches, and
+/// queue an incremental scan without restarting Lore.
+#[tauri::command]
+fn add_agent_root(
+    state: State<'_, AppState>,
+    agent_id: String,
+    path: String,
+) -> Result<(), String> {
+    let config = {
+        let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+        lore_core::source_roots::add_custom_root(&conn, &state.registry, &agent_id, &path)
+            .map_err(|e| e.to_string())?;
+        app_config(&conn, &state.registry).map_err(|e| e.to_string())?
+    };
+    replace_source_configuration(&state, config)
+}
+
+/// Stop scanning a user-selected folder. Previously archived sessions stay in
+/// Lore until the user explicitly forgets them; original logs are untouched.
+#[tauri::command]
+fn remove_agent_root(
+    state: State<'_, AppState>,
+    agent_id: String,
+    path: String,
+) -> Result<(), String> {
+    let config = {
+        let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+        lore_core::source_roots::remove_custom_root(&conn, &state.registry, &agent_id, &path)
+            .map_err(|e| e.to_string())?;
+        app_config(&conn, &state.registry).map_err(|e| e.to_string())?
+    };
+    replace_source_configuration(&state, config)
+}
+
 /// Queue a discovery pass on the background worker and return immediately.
 /// Ingestion progress continues through `scan_progress` events, so a manual
 /// rescan never holds the UI database lock while parsing large histories.
 #[tauri::command]
 fn rescan(app: AppHandle, state: State<'_, AppState>) -> Result<RescanResult, String> {
-    let discovered = lore_core::discovery::discover(&state.registry, &state.config)
-        .sessions
-        .len();
+    let discovered = {
+        let config = state.config.lock().map_err(|_| "state lock poisoned")?;
+        lore_core::discovery::discover(&state.registry, &config)
+            .sessions
+            .len()
+    };
     let progress = ScanProgress {
         discovered: i64::try_from(discovered).unwrap_or(i64::MAX),
         done: false,
@@ -341,15 +401,17 @@ fn rescan(app: AppHandle, state: State<'_, AppState>) -> Result<RescanResult, St
 
 /// Build the discovery configuration.
 ///
-/// In release builds this is the adapters' documented default roots (the user's
-/// real `~/.claude` / `~/.codex`). In **debug** builds only, the roots can be
-/// redirected to a synthetic profile via `LORE_DEV_CLAUDE_ROOT` /
+/// In release builds this combines the adapters' documented defaults with
+/// persisted user-selected roots. In **debug** builds only, either adapter can
+/// instead be redirected to a synthetic profile via `LORE_DEV_CLAUDE_ROOT` /
 /// `LORE_DEV_CODEX_ROOT` so `cargo tauri dev` can run against generated fixtures
 /// (see `lore_core::synthetic`) instead of real history. Release builds ignore
 /// these variables entirely, so shipped Lore never takes an env-driven root.
-fn dev_config() -> DiscoveryConfig {
-    #[allow(unused_mut)]
-    let mut config = DiscoveryConfig::new();
+fn app_config(
+    conn: &Connection,
+    registry: &AdapterRegistry,
+) -> lore_core::source_roots::Result<DiscoveryConfig> {
+    let mut config = lore_core::source_roots::discovery_config(conn, registry)?;
     #[cfg(debug_assertions)]
     {
         use lore_core::adapters::DiscoveryRoots;
@@ -366,7 +428,7 @@ fn dev_config() -> DiscoveryConfig {
             }
         }
     }
-    config
+    Ok(config)
 }
 
 /// Open (creating if needed) the archive under the app data directory, build the
@@ -384,7 +446,8 @@ fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     let db_path = data_dir.join("lore.db");
     let conn = lore_core::storage::open(&db_path)?;
     let blobs = BlobStore::open(data_dir.join("blobs"))?;
-    let config = dev_config();
+    let registry = AdapterRegistry::v0();
+    let config = app_config(&conn, &registry)?;
 
     // Run an automatic backup at launch if one is due per the user's schedule
     // (a no-op when off or not yet due). Best-effort: a backup failure must never
@@ -422,8 +485,8 @@ fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     Ok(AppState {
         db: Mutex::new(conn),
         blobs,
-        registry: AdapterRegistry::v0(),
-        config,
+        registry,
+        config: Mutex::new(config),
         worker: Mutex::new(Some(handle)),
         archive_dir: data_dir,
     })
@@ -432,6 +495,7 @@ fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
 /// Build and run the desktop application.
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = init_state(app.handle())?;
             app.manage(state);
@@ -459,6 +523,8 @@ pub fn run() {
             get_backup_schedule,
             set_backup_schedule,
             backup_now,
+            add_agent_root,
+            remove_agent_root,
             rescan
         ])
         .build(tauri::generate_context!());

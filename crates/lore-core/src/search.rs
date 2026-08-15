@@ -90,24 +90,29 @@ pub fn search_page(
     let limit = limit.clamp(1, MAX_LIMIT);
     let cursor = cursor.and_then(Cursor::decode);
 
-    // Inner query computes the ranked, filtered candidate set; the FTS auxiliary
-    // functions (bm25/snippet) are only valid alongside the MATCH, so they live
-    // here. The outer query applies the keyset predicate and ordering on the
-    // exposed `rank`/`sa`/`did` aliases. Params are appended in SQL text order.
+    // Rank and page the candidates on (search_fts + search_document) ALONE, then
+    // join agent_session only for the page's rows. `started_at` and `agent_id`
+    // are denormalized onto search_document (migration 0007), so the sort key and
+    // the agent filter no longer force a join over every match — cutting the
+    // worst-case common-term query ~40% at scale (SEARCH.md §6). The FTS
+    // auxiliary functions (bm25/snippet) are only valid alongside the MATCH, so
+    // they live in the innermost `m` subquery; `p` applies the keyset predicate,
+    // ordering, and LIMIT on the exposed `rank`/`sa`/`did` aliases (before the
+    // join); the outer query joins `title` and re-sorts the page. Params are
+    // appended in SQL text order.
     let mut sql = String::from(
-        "SELECT session_id, source_kind, source_id, field, snip, rank,
-                title, agent_id, sa, did
+        "SELECT p.session_id, p.source_kind, p.source_id, p.field, p.snip, p.rank,
+                s.title AS title, p.agent_id, p.sa, p.did
          FROM (
-           SELECT sd.session_id AS session_id, sd.source_kind AS source_kind,
-                  sd.source_id AS source_id, sd.field AS field,
-                  snippet(search_fts, 0, ?, ?, '…', 12) AS snip,
-                  bm25(search_fts) AS rank,
-                  s.title AS title, s.agent_id AS agent_id,
-                  s.started_at AS sa, sd.id AS did
-           FROM search_fts
-           JOIN search_document sd ON sd.id = search_fts.rowid
-           JOIN agent_session s ON s.id = sd.session_id
-           WHERE search_fts MATCH ?",
+           SELECT * FROM (
+             SELECT sd.session_id AS session_id, sd.source_kind AS source_kind,
+                    sd.source_id AS source_id, sd.field AS field,
+                    snippet(search_fts, 0, ?, ?, '…', 12) AS snip,
+                    bm25(search_fts) AS rank,
+                    sd.agent_id AS agent_id, sd.started_at AS sa, sd.id AS did
+             FROM search_fts
+             JOIN search_document sd ON sd.id = search_fts.rowid
+             WHERE search_fts MATCH ?",
     );
     let mut params: Vec<Value> = vec![
         Value::Text(HIGHLIGHT_START.to_string()),
@@ -116,26 +121,26 @@ pub fn search_page(
     ];
 
     if let Some(agent) = &query.agent {
-        sql.push_str(" AND s.agent_id = ?");
+        sql.push_str(" AND sd.agent_id = ?");
         params.push(Value::Text(agent.clone()));
     }
     if query.has_error {
         sql.push_str(
             " AND EXISTS (SELECT 1 FROM tool_call tc
-                          WHERE tc.session_id = s.id AND tc.is_error = 1)",
+                          WHERE tc.session_id = sd.session_id AND tc.is_error = 1)",
         );
     }
     if let Some(path) = &query.path {
         sql.push_str(
             " AND EXISTS (SELECT 1 FROM file_event fe
-                          WHERE fe.session_id = s.id AND fe.path LIKE ?)",
+                          WHERE fe.session_id = sd.session_id AND fe.path LIKE ?)",
         );
         params.push(Value::Text(format!("{path}%")));
     }
-    sql.push(')');
+    sql.push_str(") m");
 
     // Keyset predicate: keep only rows strictly after the cursor in the chosen
-    // total order.
+    // total order. Applied in `p`, before the agent_session join.
     let (keyset_sql, keyset_params) = keyset(sort, &cursor);
     sql.push_str(&keyset_sql);
     params.extend(keyset_params);
@@ -148,6 +153,15 @@ pub fn search_page(
         SortOrder::Oldest => " ORDER BY (sa IS NULL), sa ASC, did LIMIT ?",
     });
     params.push(Value::Integer(limit));
+
+    // Join the display title for just the page's rows, then re-establish the page
+    // order (a join does not preserve the subquery's ordering).
+    sql.push_str(") p JOIN agent_session s ON s.id = p.session_id");
+    sql.push_str(match sort {
+        SortOrder::Relevance => " ORDER BY p.rank, p.sa DESC, p.did",
+        SortOrder::Newest => " ORDER BY (p.sa IS NULL), p.sa DESC, p.did",
+        SortOrder::Oldest => " ORDER BY (p.sa IS NULL), p.sa ASC, p.did",
+    });
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt

@@ -7,4 +7,9 @@ import type { SessionSummary } from "./SessionSummary";
 /**
  * The full read of one session in context. Payload of `get_session`.
  */
-export type SessionDetail = { summary: SessionSummary, segments: Array<SegmentDto>, messages: Array<MessageDto>, file_events: Array<FileEventDto>, };
+export type SessionDetail = { summary: SessionSummary, 
+/**
+ * Bounded, content-free parser diagnostic. Detail-only so list pages stay
+ * compact while the opened session can explain partial/failed parsing.
+ */
+parse_note: string | null, segments: Array<SegmentDto>, messages: Array<MessageDto>, file_events: Array<FileEventDto>, };

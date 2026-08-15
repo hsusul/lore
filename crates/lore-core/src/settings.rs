@@ -2,8 +2,8 @@
 //!
 //! Values are stored as JSON text (`value_json`) so a setting can hold any
 //! shape; the helpers here cover the common raw-string and boolean cases.
-//! Settings are Lore-owned archive state — they live in `lore.db` and are
-//! cleared by "forget everything" like any other content.
+//! Settings are Lore-owned application state in `lore.db`; clearing archived
+//! content preserves them so preferences and configured source roots remain.
 
 use rusqlite::{Connection, OptionalExtension};
 

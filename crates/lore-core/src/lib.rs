@@ -32,6 +32,7 @@ pub mod recovery;
 pub mod search;
 pub mod secrets;
 pub mod settings;
+pub mod source_roots;
 pub mod storage;
 pub mod synthetic;
 pub mod watcher;

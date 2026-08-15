@@ -20,4 +20,12 @@ version: string | null,
 /**
  * Sessions ingested for this agent so far.
  */
-session_count: number, };
+session_count: number, 
+/**
+ * Effective local folders Lore checks for this adapter.
+ */
+roots: Array<string>, 
+/**
+ * User-selected folders within `roots`; these may be removed in Settings.
+ */
+custom_roots: Array<string>, };

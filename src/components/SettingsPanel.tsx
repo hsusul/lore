@@ -11,11 +11,17 @@ import type { DetectedAgent } from "../ipc";
 export default function SettingsPanel({
   open,
   agents,
+  rootBusy,
+  onAddAgentRoot,
+  onRemoveAgentRoot,
   onForgetEverything,
   onClose,
 }: {
   open: boolean;
   agents: DetectedAgent[];
+  rootBusy: string | null;
+  onAddAgentRoot: (agentId: string, displayName: string) => void;
+  onRemoveAgentRoot: (agentId: string, path: string) => void;
   onForgetEverything: () => void;
   onClose: () => void;
 }) {
@@ -83,16 +89,62 @@ export default function SettingsPanel({
           <h3 id="agents-heading" className="section-title">
             Agents
           </h3>
+          <p className="empty">
+            Lore checks these folders read-only. Add another location if your agent history lives
+            somewhere else.
+          </p>
           {agents.length === 0 ? (
-            <p className="empty">No agents ingested yet.</p>
+            <p className="empty">Agent status is unavailable.</p>
           ) : (
             <ul className="settings__agents">
-              {agents.map((agent) => (
-                <li key={agent.id}>
-                  <span>{agent.display_name}</span>
-                  <span className="nav-item__count">{agent.session_count} sessions</span>
-                </li>
-              ))}
+              {agents.map((agent) => {
+                const busy = rootBusy === agent.id;
+                return (
+                  <li key={agent.id}>
+                    <div className="settings__agent-head">
+                      <strong>{agent.display_name}</strong>
+                      <span className={`settings__agent-status${agent.installed ? " is-detected" : ""}`}>
+                        {agent.installed ? "detected" : "not detected"}
+                      </span>
+                      <span className="nav-item__count">{agent.session_count} sessions</span>
+                    </div>
+                    <ul className="settings__roots">
+                      {agent.roots.map((root) => {
+                        const custom = agent.custom_roots.includes(root);
+                        return (
+                          <li key={root}>
+                            <code title={root}>{root}</code>
+                            {custom ? (
+                              <>
+                                <span className="settings__root-kind">custom</span>
+                                <button
+                                  className="btn--ghost settings__root-remove"
+                                  type="button"
+                                  aria-label={`Remove ${root} from ${agent.display_name}`}
+                                  disabled={busy}
+                                  onClick={() => onRemoveAgentRoot(agent.id, root)}
+                                >
+                                  Remove
+                                </button>
+                              </>
+                            ) : (
+                              <span className="settings__root-kind">default</span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <button
+                      className="btn--ghost settings__add-root"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onAddAgentRoot(agent.id, agent.display_name)}
+                    >
+                      {busy ? "Updating folders…" : `Add another ${agent.display_name} folder`}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

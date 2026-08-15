@@ -48,6 +48,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "job_error_kind",
         sql: include_str!("../../migrations/0006_job_error_kind.sql"),
     },
+    Migration {
+        version: 7,
+        name: "search_document_sort_keys",
+        sql: include_str!("../../migrations/0007_search_document_sort_keys.sql"),
+    },
 ];
 
 /// Apply all pending migrations. Idempotent.

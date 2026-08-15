@@ -189,11 +189,19 @@ impl Worker {
 }
 
 /// A control signal to the background worker thread.
+struct Reconfiguration {
+    config: DiscoveryConfig,
+    watcher: Option<SessionWatcher>,
+}
+
 enum Signal {
     /// Run a full discovery→ingest scan (e.g. the app's manual "Rescan").
     Rescan,
     /// Wake up now and process any pending watcher/queue work.
     Wake,
+    /// Replace the discovery roots and watcher, then scan the new roots. This
+    /// lets the desktop add/remove custom folders without restarting Lore.
+    Reconfigure(Box<Reconfiguration>),
     /// Stop after the current bounded step and let the thread exit.
     Shutdown,
 }
@@ -215,6 +223,16 @@ impl WorkerHandle {
     /// its next idle tick. Non-blocking.
     pub fn wake(&self) {
         let _ = self.tx.send(Signal::Wake);
+    }
+
+    /// Replace the worker's discovery roots and live watcher, then run an
+    /// incremental scan. Non-blocking; progress uses the normal content-free
+    /// events and all source access remains read-only.
+    pub fn reconfigure(&self, config: DiscoveryConfig, watcher: Option<SessionWatcher>) {
+        let _ = self.tx.send(Signal::Reconfigure(Box::new(Reconfiguration {
+            config,
+            watcher,
+        })));
     }
 
     /// Stop the worker and join its thread. Deterministic: the worker finishes
@@ -248,7 +266,7 @@ impl Drop for WorkerHandle {
 /// Errors from any single step are swallowed so one failure never tears down
 /// the whole worker; per-source failures are already recorded durably by the
 /// pipeline, and infrastructure errors surface on the next pass.
-pub fn spawn<S>(worker: Worker, mut watcher: Option<SessionWatcher>, sink: S) -> WorkerHandle
+pub fn spawn<S>(mut worker: Worker, mut watcher: Option<SessionWatcher>, sink: S) -> WorkerHandle
 where
     S: ProgressSink + Send + 'static,
 {
@@ -264,6 +282,15 @@ where
             match signal {
                 Ok(Signal::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(Signal::Rescan) => {
+                    let _ = worker.scan(&sink);
+                }
+                Ok(Signal::Reconfigure(next)) => {
+                    let Reconfiguration {
+                        config,
+                        watcher: next_watcher,
+                    } = *next;
+                    worker.config = config;
+                    watcher = next_watcher;
                     let _ = worker.scan(&sink);
                 }
                 Ok(Signal::Wake) | Err(RecvTimeoutError::Timeout) => {}

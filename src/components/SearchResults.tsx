@@ -1,7 +1,8 @@
-import { forwardRef, Fragment, useEffect, useRef, useState } from "react";
+import { forwardRef, Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import { agentLabel } from "../format";
 import { HIGHLIGHT_END, HIGHLIGHT_START, type SearchHit } from "../ipc";
+import { useWindowing } from "../virtual";
 
 /** Split a snippet on the highlight markers into plain/highlighted runs. */
 function Snippet({ text }: { text: string }) {
@@ -61,7 +62,7 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
   // row, Home/End jump to the ends, Enter opens it. Hooks run unconditionally
   // (before the early returns below) to satisfy the Rules of Hooks.
   const [navigation, setNavigation] = useState({ query, index: 0 });
-  const activeRef = useRef<HTMLLIElement>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
   const last = hits.length - 1;
   const active =
     navigation.query === query
@@ -70,13 +71,31 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
   const selectedIndex =
     selectedId === null ? -1 : hits.findIndex((hit) => hit.session_id === selectedId);
 
-  // Keep the active row visible during keyboard navigation. `block: "nearest"`
-  // scrolls the results pane minimally and copes with variable-height rows
-  // (snippets wrap), so no fixed-height windowing is assumed.
+  // Window the (potentially large, "Load more"-accumulated) result list so only
+  // the visible rows are in the DOM — rows are fixed-height (the snippet is
+  // clamped in CSS), so the same primitive as SessionList applies. In test
+  // environments without layout it degrades to rendering every row.
+  const { startIndex, endIndex, padTop, padBottom, scrollToIndex } = useWindowing(
+    listRef,
+    hits.length,
+  );
+
+  // Expose the list element to the parent (App focuses it on ArrowDown) while
+  // still holding a local ref for windowing/measurement.
+  const setListRef = useCallback(
+    (el: HTMLUListElement | null) => {
+      listRef.current = el;
+      if (typeof forwardedRef === "function") forwardedRef(el);
+      else if (forwardedRef) forwardedRef.current = el;
+    },
+    [forwardedRef],
+  );
+
+  // Keep the active row visible during keyboard navigation. Driving the scroll
+  // by index works even when the active row is outside the rendered window.
   useEffect(() => {
-    // Optional call: scrollIntoView is absent in some test environments (jsdom).
-    activeRef.current?.scrollIntoView?.({ block: "nearest" });
-  }, [active, hits.length]);
+    scrollToIndex(active);
+  }, [active, scrollToIndex]);
 
   function onKeyDown(event: React.KeyboardEvent<HTMLUListElement>) {
     if (event.key === "ArrowDown" || event.key === "j") {
@@ -116,7 +135,7 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
   return (
     <>
       <ul
-        ref={forwardedRef}
+        ref={setListRef}
         className="results"
         role="listbox"
         aria-label="search results"
@@ -124,29 +143,34 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
         aria-activedescendant={`search-result-${active}`}
         onKeyDown={onKeyDown}
       >
-        {hits.map((hit, index) => (
-          <li
-            key={`${hit.source_kind}-${hit.source_id}-${hit.field}`}
-            id={`search-result-${index}`}
-            ref={index === active ? activeRef : undefined}
-            role="option"
-            aria-selected={index === selectedIndex}
-            aria-setsize={hits.length}
-            aria-posinset={index + 1}
-            className={`results__item${index === active ? " is-active" : ""}`}
-            onClick={() => {
-              setNavigation({ query, index });
-              onOpen(hit.session_id);
-            }}
-          >
-            <div className="results__meta">
-              <span className="results__title">{hit.title ?? "(untitled)"}</span>
-              <span className="chip chip--agent">{agentLabel(hit.agent_id)}</span>
-              <span className="results__field">{FIELD_LABEL[hit.field] ?? hit.field}</span>
-            </div>
-            <Snippet text={hit.snippet} />
-          </li>
-        ))}
+        {padTop > 0 && <li aria-hidden="true" style={{ height: padTop }} />}
+        {hits.slice(startIndex, endIndex).map((hit, offset) => {
+          const index = startIndex + offset;
+          return (
+            <li
+              key={`${hit.source_kind}-${hit.source_id}-${hit.field}`}
+              id={`search-result-${index}`}
+              data-vrow
+              role="option"
+              aria-selected={index === selectedIndex}
+              aria-setsize={hits.length}
+              aria-posinset={index + 1}
+              className={`results__item${index === active ? " is-active" : ""}`}
+              onClick={() => {
+                setNavigation({ query, index });
+                onOpen(hit.session_id);
+              }}
+            >
+              <div className="results__meta">
+                <span className="results__title">{hit.title ?? "(untitled)"}</span>
+                <span className="chip chip--agent">{agentLabel(hit.agent_id)}</span>
+                <span className="results__field">{FIELD_LABEL[hit.field] ?? hit.field}</span>
+              </div>
+              <Snippet text={hit.snippet} />
+            </li>
+          );
+        })}
+        {padBottom > 0 && <li aria-hidden="true" style={{ height: padBottom }} />}
       </ul>
       {hasMore ? (
         <button

@@ -9,6 +9,8 @@ import SessionView from "./components/SessionView";
 import SettingsPanel from "./components/SettingsPanel";
 import { agentLabel } from "./format";
 import {
+  addAgentRoot,
+  chooseAgentRootDirectory,
   exportSessionMarkdown,
   forgetSession,
   getFilePatch,
@@ -22,6 +24,7 @@ import {
   onScanProgress,
   forgetEverything,
   rescan,
+  removeAgentRoot,
   searchPage,
   setSetting,
   sessionSecretCount,
@@ -68,8 +71,8 @@ function toggleTheme() {
           ? "light"
           : "dark";
   root.dataset.theme = next;
-  // Persist so the choice survives a restart (Lore-owned; cleared by "forget
-  // everything"). Fire-and-forget: a failed write must not break the toggle.
+  // Persist so the choice survives restarts and archive clearing. Fire-and-forget:
+  // a failed write must not break the toggle.
   void setSetting("theme", JSON.stringify(next)).catch(() => {});
 }
 
@@ -116,6 +119,7 @@ export default function App() {
   const [secretCount, setSecretCount] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rootBusy, setRootBusy] = useState<string | null>(null);
 
   const loadSessions = useCallback(async (repo: string | null, showPending = false) => {
     const request = ++sessionsRequestRef.current;
@@ -411,6 +415,42 @@ export default function App() {
     }
   }, [refresh]);
 
+  const handleAddAgentRoot = useCallback(
+    async (agentId: string, displayName: string) => {
+      setRootBusy(agentId);
+      setError(null);
+      try {
+        const selected = await chooseAgentRootDirectory(displayName);
+        if (selected === null) return;
+        await addAgentRoot(agentId, selected);
+        setNotice(`${displayName} folder added. Lore is scanning it now.`);
+        await refresh();
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setRootBusy(null);
+      }
+    },
+    [refresh],
+  );
+
+  const handleRemoveAgentRoot = useCallback(
+    async (agentId: string, path: string) => {
+      setRootBusy(agentId);
+      setError(null);
+      try {
+        await removeAgentRoot(agentId, path);
+        setNotice("Custom folder removed. Already archived sessions are unchanged.");
+        await refresh();
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setRootBusy(null);
+      }
+    },
+    [refresh],
+  );
+
   const searchPaletteArchive = useCallback(
     async (rawQuery: string): Promise<Command[]> => {
       const page = await searchPage(rawQuery, SEARCH_PAGE);
@@ -436,6 +476,13 @@ export default function App() {
     const actions: Command[] = [
       { id: "cmd-rescan", group: "Action", label: "Rescan", run: () => void handleRescan() },
       { id: "cmd-all", group: "Action", label: "All sessions", run: () => void selectRepo(null) },
+      {
+        id: "cmd-agent-folders",
+        group: "Action",
+        label: "Manage agent folders",
+        hint: "Settings",
+        run: () => setSettingsOpen(true),
+      },
     ];
     const repoCommands: Command[] = repositories.map((repo) => ({
       id: `cmd-repo-${repo.id}`,
@@ -600,7 +647,11 @@ export default function App() {
             <ArchiveOnboarding
               agents={agents}
               scanning={scanning}
+              rootBusy={rootBusy}
               onScan={() => void handleRescan()}
+              onAddAgentRoot={(agentId, displayName) =>
+                void handleAddAgentRoot(agentId, displayName)
+              }
               onOpenSettings={() => setSettingsOpen(true)}
             />
           ) : sessionPendingRequestRef.current !== null ? (
@@ -630,6 +681,11 @@ export default function App() {
       <SettingsPanel
         open={settingsOpen}
         agents={agents}
+        rootBusy={rootBusy}
+        onAddAgentRoot={(agentId, displayName) =>
+          void handleAddAgentRoot(agentId, displayName)
+        }
+        onRemoveAgentRoot={(agentId, path) => void handleRemoveAgentRoot(agentId, path)}
         onForgetEverything={handleForgetEverything}
         onClose={() => setSettingsOpen(false)}
       />

@@ -16,6 +16,7 @@ const detail: SessionDetail = {
     primary_model: "gpt-x",
     parse_status: "partial",
   },
+  parse_note: "1 parser note(s); first: unknown event_msg: brand_new_event",
   segments: [],
   messages: [
     {
@@ -96,6 +97,37 @@ describe("SessionView", () => {
     expect(screen.getByText("partial")).toBeTruthy();
   });
 
+  it("explains what a partial parse recovered and why it degraded", () => {
+    render(<SessionView detail={detail} git={git} />);
+
+    expect(
+      screen.getByRole("heading", { name: "This session was only partially read" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/unknown event_msg: brand_new_event/i)).toBeTruthy();
+    expect(screen.getByText("2", { selector: ".parse-notice__metric-value" })).toBeTruthy();
+    expect(screen.getByText("Messages recovered")).toBeTruthy();
+    expect(screen.getByText("Git context recovered")).toBeTruthy();
+    expect(screen.getByText(/original agent log is untouched/i)).toBeTruthy();
+  });
+
+  it("uses a safe fallback when a failed parse has no diagnostic", () => {
+    render(
+      <SessionView
+        detail={{
+          ...detail,
+          summary: { ...detail.summary, parse_status: "failed" },
+          parse_note: null,
+        }}
+        git={[]}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "This session could not be fully read" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/could not safely normalize this source format/i)).toBeTruthy();
+  });
+
   it("labels git observations by provenance and flags a missing commit", () => {
     render(<SessionView detail={detail} git={git} />);
     expect(screen.getByText("recorded by agent")).toBeTruthy();
@@ -148,6 +180,33 @@ describe("SessionView", () => {
     expect(document.querySelectorAll(".msg")).toHaveLength(200);
     fireEvent.click(screen.getByRole("button", { name: /show more messages \(200 of 205\)/i }));
     expect(document.querySelectorAll(".msg")).toHaveLength(205);
+  });
+
+  it("resets the bounded timeline immediately when a different session opens", () => {
+    const messages = Array.from({ length: 205 }, (_, seq) => ({
+      ...detail.messages[0],
+      id: `message-${seq}`,
+      seq,
+    }));
+    const { rerender } = render(
+      <SessionView detail={{ ...detail, messages }} git={[]} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /show more messages/i }));
+    expect(document.querySelectorAll(".msg")).toHaveLength(205);
+
+    rerender(
+      <SessionView
+        detail={{
+          ...detail,
+          summary: { ...detail.summary, id: "s2" },
+          messages: messages.map((message) => ({ ...message, id: `next-${message.id}` })),
+        }}
+        git={[]}
+      />,
+    );
+
+    expect(document.querySelectorAll(".msg")).toHaveLength(200);
+    expect(screen.getByRole("button", { name: /show more messages \(200 of 205\)/i })).toBeTruthy();
   });
 
   it("shows a flagged-secret badge and wires export/forget", () => {

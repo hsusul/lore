@@ -28,7 +28,10 @@ impl DiscoveryConfig {
         self.roots.insert(agent_id.into(), roots);
     }
 
-    fn roots_for(&self, agent_id: &str) -> DiscoveryRoots {
+    /// Configured roots for one adapter. An empty value asks the adapter to use
+    /// its documented defaults.
+    #[must_use]
+    pub fn roots_for(&self, agent_id: &str) -> DiscoveryRoots {
         self.roots.get(agent_id).cloned().unwrap_or_default()
     }
 }

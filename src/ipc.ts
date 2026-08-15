@@ -4,6 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import type { DetectedAgent } from "../crates/lore-ipc/bindings/DetectedAgent";
 import type { FileEventDto } from "../crates/lore-ipc/bindings/FileEventDto";
@@ -46,6 +47,25 @@ export const HIGHLIGHT_END = "\u{e001}";
 /** The agents Lore knows about, with ingested-session counts. */
 export function listDetectedAgents(): Promise<DetectedAgent[]> {
   return invoke<DetectedAgent[]>("list_detected_agents");
+}
+
+/** Open the OS folder picker. No filesystem API is exposed to the webview. */
+export function chooseAgentRootDirectory(displayName: string): Promise<string | null> {
+  return open({
+    directory: true,
+    multiple: false,
+    title: `Choose ${displayName} session folder`,
+  });
+}
+
+/** Add a user-selected read-only source folder and scan it in the background. */
+export function addAgentRoot(agentId: string, path: string): Promise<void> {
+  return invoke<void>("add_agent_root", { agentId, path });
+}
+
+/** Stop scanning a user-selected folder; archived sessions remain intact. */
+export function removeAgentRoot(agentId: string, path: string): Promise<void> {
+  return invoke<void>("remove_agent_root", { agentId, path });
 }
 
 /** The most recent sessions, newest first, capped at `limit`. */

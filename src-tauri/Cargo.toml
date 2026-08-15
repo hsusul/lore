@@ -25,6 +25,7 @@ lore-ipc = { path = "../crates/lore-ipc" }
 # across the graph; lore-core already enables the bundled SQLite).
 rusqlite = "0.32"
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

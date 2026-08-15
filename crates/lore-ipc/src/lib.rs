@@ -29,6 +29,10 @@ pub struct DetectedAgent {
     /// Sessions ingested for this agent so far.
     #[ts(type = "number")]
     pub session_count: i64,
+    /// Effective local folders Lore checks for this adapter.
+    pub roots: Vec<String>,
+    /// User-selected folders within `roots`; these may be removed in Settings.
+    pub custom_roots: Vec<String>,
 }
 
 /// A repository grouping for the Repositories view. Payload element of
@@ -190,6 +194,9 @@ pub struct GitObservationDto {
 #[ts(export)]
 pub struct SessionDetail {
     pub summary: SessionSummary,
+    /// Bounded, content-free parser diagnostic. Detail-only so list pages stay
+    /// compact while the opened session can explain partial/failed parsing.
+    pub parse_note: Option<String>,
     pub segments: Vec<SegmentDto>,
     pub messages: Vec<MessageDto>,
     pub file_events: Vec<FileEventDto>,
@@ -296,6 +303,8 @@ mod tests {
             installed: true,
             version: None,
             session_count: 3,
+            roots: vec!["/Users/example/.codex/sessions".into()],
+            custom_roots: vec![],
         };
         let json = serde_json::to_string(&agent).unwrap();
         assert_eq!(serde_json::from_str::<DetectedAgent>(&json).unwrap(), agent);

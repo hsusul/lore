@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal core permissions for the main window. No updater, no filesystem, no shell, no network plugins.",
+  "description": "Minimal core permissions plus user-initiated folder selection. No updater, filesystem API, shell, or network plugins.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }

@@ -143,7 +143,8 @@ fn desktop_flow_launch_scan_live_update_browse_search_export_forget() {
 
     // --- Act 3: the read surface every Tauri command wraps. ---
     // list_detected_agents
-    let agents = lore_core::query::list_agents(&ui).unwrap();
+    let agents =
+        lore_core::source_roots::detected_agents(&ui, &AdapterRegistry::v0(), &config).unwrap();
     assert_eq!(agents.len(), 2, "both native adapters are present");
     assert!(agents.iter().all(|a| a.installed && a.session_count > 0));
 

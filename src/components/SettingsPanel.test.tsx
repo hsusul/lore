@@ -12,33 +12,117 @@ import SettingsPanel from "./SettingsPanel";
 import type { DetectedAgent } from "../ipc";
 
 const agents: DetectedAgent[] = [
-  { id: "codex", display_name: "Codex", installed: true, version: null, session_count: 12 },
+  {
+    id: "codex",
+    display_name: "Codex",
+    installed: true,
+    version: null,
+    session_count: 12,
+    roots: ["/Users/dev/.codex/sessions", "/Volumes/archive/codex"],
+    custom_roots: ["/Volumes/archive/codex"],
+  },
 ];
+
+const rootProps = {
+  rootBusy: null,
+  onAddAgentRoot: vi.fn(),
+  onRemoveAgentRoot: vi.fn(),
+};
 
 describe("SettingsPanel", () => {
   it("renders nothing when closed", () => {
     const { container } = render(
-      <SettingsPanel open={false} agents={agents} onForgetEverything={() => {}} onClose={() => {}} />,
+      <SettingsPanel
+        open={false}
+        agents={agents}
+        onForgetEverything={() => {}}
+        onClose={() => {}}
+        {...rootProps}
+      />,
     );
     expect(container.firstChild).toBeNull();
   });
 
   it("states the honest privacy posture and lists agents", () => {
     render(
-      <SettingsPanel open agents={agents} onForgetEverything={() => {}} onClose={() => {}} />,
+      <SettingsPanel
+        open
+        agents={agents}
+        onForgetEverything={() => {}}
+        onClose={() => {}}
+        {...rootProps}
+      />,
     );
     expect(screen.getByRole("dialog", { name: /settings/i })).toBeTruthy();
     expect(screen.getByText(/no network connection by default/i)).toBeTruthy();
     expect(screen.getByText(/not a guarantee/i)).toBeTruthy();
     expect(screen.getByText(/not encryption/i)).toBeTruthy();
     expect(screen.getByText("Codex")).toBeTruthy();
+    expect(screen.getByText("/Users/dev/.codex/sessions")).toBeTruthy();
+    expect(screen.getByText("/Volumes/archive/codex")).toBeTruthy();
+    expect(screen.getByText("detected")).toBeTruthy();
+  });
+
+  it("adds and removes custom agent folders without hiding the default root", () => {
+    const onAddAgentRoot = vi.fn();
+    const onRemoveAgentRoot = vi.fn();
+    render(
+      <SettingsPanel
+        open
+        agents={agents}
+        rootBusy={null}
+        onAddAgentRoot={onAddAgentRoot}
+        onRemoveAgentRoot={onRemoveAgentRoot}
+        onForgetEverything={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add another Codex folder" }));
+    expect(onAddAgentRoot).toHaveBeenCalledWith("codex", "Codex");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove /Volumes/archive/codex from Codex" }),
+    );
+    expect(onRemoveAgentRoot).toHaveBeenCalledWith("codex", "/Volumes/archive/codex");
+  });
+
+  it("disables folder mutations while that agent is updating", () => {
+    render(
+      <SettingsPanel
+        open
+        agents={agents}
+        rootBusy="codex"
+        onAddAgentRoot={() => {}}
+        onRemoveAgentRoot={() => {}}
+        onForgetEverything={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(
+      (screen.getByRole("button", { name: "Updating folders…" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Remove /Volumes/archive/codex from Codex",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
   });
 
   it("triggers forget-everything and closes on Escape", () => {
     const onForget = vi.fn();
     const onClose = vi.fn();
     render(
-      <SettingsPanel open agents={agents} onForgetEverything={onForget} onClose={onClose} />,
+      <SettingsPanel
+        open
+        agents={agents}
+        onForgetEverything={onForget}
+        onClose={onClose}
+        {...rootProps}
+      />,
     );
     fireEvent.click(screen.getByRole("button", { name: /forget everything/i }));
     expect(onForget).toHaveBeenCalled();
@@ -52,7 +136,12 @@ describe("SettingsPanel", () => {
     trigger.focus();
     expect(document.activeElement).toBe(trigger);
 
-    const props = { agents, onForgetEverything: () => {}, onClose: () => {} };
+    const props = {
+      agents,
+      onForgetEverything: () => {},
+      onClose: () => {},
+      ...rootProps,
+    };
     const { rerender } = render(<SettingsPanel open={false} {...props} />);
 
     // Opening moves focus into the dialog…
@@ -68,7 +157,15 @@ describe("SettingsPanel", () => {
   });
 
   it("traps Tab focus inside the dialog", () => {
-    render(<SettingsPanel open agents={agents} onForgetEverything={() => {}} onClose={() => {}} />);
+    render(
+      <SettingsPanel
+        open
+        agents={agents}
+        onForgetEverything={() => {}}
+        onClose={() => {}}
+        {...rootProps}
+      />,
+    );
     const dialog = screen.getByRole("dialog");
     const buttons = screen.getAllByRole("button");
     const first = buttons[0];

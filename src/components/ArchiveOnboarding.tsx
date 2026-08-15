@@ -17,12 +17,16 @@ function detectionLabel(agent: DetectedAgent | undefined) {
 export default function ArchiveOnboarding({
   agents,
   scanning,
+  rootBusy,
   onScan,
+  onAddAgentRoot,
   onOpenSettings,
 }: {
   agents: DetectedAgent[];
   scanning: boolean;
+  rootBusy: string | null;
   onScan: () => void;
+  onAddAgentRoot: (agentId: string, displayName: string) => void;
   onOpenSettings: () => void;
 }) {
   return (
@@ -46,15 +50,32 @@ export default function ArchiveOnboarding({
             {SUPPORTED_SOURCES.map((source) => {
               const agent = agents.find((candidate) => candidate.id === source.id);
               const status = detectionLabel(agent);
+              const preferredRoot =
+                agent && agent.custom_roots.length > 0
+                  ? agent.custom_roots[agent.custom_roots.length - 1]
+                  : (agent?.roots[0] ?? source.path);
+              const otherRootCount = Math.max(0, (agent?.roots.length ?? 1) - 1);
+              const displayRoot =
+                otherRootCount > 0 ? `${preferredRoot} + ${otherRootCount} more` : preferredRoot;
+              const rootTitle = agent?.roots.join("\n") ?? source.path;
+              const busy = rootBusy === source.id;
               return (
                 <li key={source.id}>
                   <span className="onboarding__source-name">{source.name}</span>
-                  <code>{source.path}</code>
+                  <code title={rootTitle}>{displayRoot}</code>
                   <span
                     className={`onboarding__source-status${agent?.installed ? " is-detected" : ""}`}
                   >
                     {status}
                   </span>
+                  <button
+                    className="btn--ghost onboarding__choose"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onAddAgentRoot(source.id, source.name)}
+                  >
+                    {busy ? "Adding folder…" : `Choose ${source.name} folder`}
+                  </button>
                 </li>
               );
             })}

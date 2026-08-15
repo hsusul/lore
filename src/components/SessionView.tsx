@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { agentLabel, formatRelative, formatTime } from "../format";
 import type {
@@ -95,9 +95,16 @@ function GitRail({ observations }: { observations: GitObservationDto[] }) {
   }
   return (
     <ul className="git-rail">
-      {observations.map((observation, index) => (
+      {observations.map((observation) => (
         <li
-          key={`${observation.source}-${index}`}
+          key={[
+            observation.segment_id ?? "session",
+            observation.source,
+            observation.event_ts ?? "no-event",
+            observation.observed_at,
+            observation.commit_sha ?? "no-commit",
+            observation.branch ?? "no-branch",
+          ].join(":")}
           className={`git-obs git-obs--${observation.source}`}
         >
           <span className="dot" aria-hidden />
@@ -118,6 +125,62 @@ function GitRail({ observations }: { observations: GitObservationDto[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function ParseNotice({
+  detail,
+  git,
+}: {
+  detail: SessionDetail;
+  git: GitObservationDto[];
+}) {
+  const { summary, file_events, parse_note } = detail;
+  if (summary.parse_status === "ok") return null;
+
+  const failed = summary.parse_status === "failed";
+  const heading = failed
+    ? "This session could not be fully read"
+    : "This session was only partially read";
+  const diagnostic =
+    parse_note ??
+    (failed
+      ? "Lore could not safely normalize this source format."
+      : "Lore skipped one or more records it could not safely normalize.");
+  const metrics = [
+    ["Messages recovered", summary.message_count],
+    ["Tool calls recovered", summary.tool_call_count],
+    ["File changes recovered", file_events.length],
+    ["Git context recovered", git.length > 0 ? "Yes" : "None"],
+  ] as const;
+
+  return (
+    <section
+      className={`parse-notice parse-notice--${failed ? "failed" : "partial"}`}
+      aria-labelledby="parse-notice-heading"
+    >
+      <p className="parse-notice__eyebrow">Recovered with limits</p>
+      <h3 id="parse-notice-heading">{heading}</h3>
+      <p className="parse-notice__intro">
+        Lore kept every normalized part it could safely recover.
+      </p>
+      <dl className="parse-notice__metrics">
+        {metrics.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd className="parse-notice__metric-value">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="parse-notice__diagnostic">
+        <span>Parser note</span>
+        <code>{diagnostic}</code>
+      </p>
+      <p className="parse-notice__reassurance">
+        Your original agent log is untouched. Lore can re-read it after parser support
+        improves.
+      </p>
+    </section>
   );
 }
 
@@ -163,35 +226,28 @@ function FileEventRow({
   );
 }
 
-export default function SessionView({
-  detail,
-  git,
-  loadPatch,
-  secretCount = 0,
-  onExport,
-  onForget,
-}: {
+type SessionViewProps = {
   detail: SessionDetail | null;
   git: GitObservationDto[];
   loadPatch?: (id: string) => Promise<string | null>;
   secretCount?: number;
   onExport?: () => void;
   onForget?: () => void;
-}) {
-  const sessionId = detail?.summary.id ?? null;
+};
+
+type SessionContentProps = Omit<SessionViewProps, "detail"> & {
+  detail: SessionDetail;
+};
+
+function SessionContent({
+  detail,
+  git,
+  loadPatch,
+  secretCount = 0,
+  onExport,
+  onForget,
+}: SessionContentProps) {
   const [visibleMessages, setVisibleMessages] = useState(TIMELINE_PAGE);
-
-  useEffect(() => {
-    setVisibleMessages(TIMELINE_PAGE);
-  }, [sessionId]);
-
-  if (!detail) {
-    return (
-      <section className="session session--empty" aria-label="session">
-        <p>Select a session to read it.</p>
-      </section>
-    );
-  }
 
   const { summary, segments, messages, file_events } = detail;
   return (
@@ -237,6 +293,8 @@ export default function SessionView({
         )}
       </header>
 
+      <ParseNotice detail={detail} git={git} />
+
       <section aria-labelledby="git-heading">
         <h3 id="git-heading" className="section-title">
           Git
@@ -250,12 +308,8 @@ export default function SessionView({
             Files
           </h3>
           <ul className="files">
-            {file_events.map((fileEvent, index) => (
-              <FileEventRow
-                key={`${fileEvent.id}-${index}`}
-                fileEvent={fileEvent}
-                loadPatch={loadPatch}
-              />
+            {file_events.map((fileEvent) => (
+              <FileEventRow key={fileEvent.id} fileEvent={fileEvent} loadPatch={loadPatch} />
             ))}
           </ul>
         </section>
@@ -281,4 +335,16 @@ export default function SessionView({
       </section>
     </section>
   );
+}
+
+export default function SessionView({ detail, ...props }: SessionViewProps) {
+  if (!detail) {
+    return (
+      <section className="session session--empty" aria-label="session">
+        <p>Select a session to read it.</p>
+      </section>
+    );
+  }
+
+  return <SessionContent key={detail.summary.id} detail={detail} {...props} />;
 }

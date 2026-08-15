@@ -2,21 +2,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const listen = vi.fn();
+const open = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listen(...a) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => open(...a) }));
 
 import {
+  addAgentRoot,
+  chooseAgentRootDirectory,
   listDetectedAgents,
   listRepositorySessionsPage,
   listSessions,
   listSessionsPage,
   onScanProgress,
+  removeAgentRoot,
   rescan,
 } from "./ipc";
 
 beforeEach(() => {
   invoke.mockReset();
   listen.mockReset();
+  open.mockReset();
 });
 
 describe("ipc contract", () => {
@@ -24,6 +30,33 @@ describe("ipc contract", () => {
     invoke.mockResolvedValue([]);
     await listDetectedAgents();
     expect(invoke).toHaveBeenCalledWith("list_detected_agents");
+  });
+
+  it("agent-root commands preserve the selected local path", async () => {
+    invoke.mockResolvedValue(undefined);
+    await addAgentRoot("codex", "/Volumes/archive/codex");
+    await removeAgentRoot("codex", "/Volumes/archive/codex");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "add_agent_root", {
+      agentId: "codex",
+      path: "/Volumes/archive/codex",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "remove_agent_root", {
+      agentId: "codex",
+      path: "/Volumes/archive/codex",
+    });
+  });
+
+  it("folder selection uses a single-directory native dialog", async () => {
+    open.mockResolvedValue("/Volumes/archive/codex");
+    await expect(chooseAgentRootDirectory("Codex")).resolves.toBe(
+      "/Volumes/archive/codex",
+    );
+    expect(open).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      title: "Choose Codex session folder",
+    });
   });
 
   it("list_sessions passes the limit argument", async () => {
