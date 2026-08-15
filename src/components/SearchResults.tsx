@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { forwardRef, Fragment, useEffect, useRef, useState } from "react";
 
 import { agentLabel } from "../format";
 import { HIGHLIGHT_END, HIGHLIGHT_START, type SearchHit } from "../ipc";
@@ -34,37 +34,110 @@ const FIELD_LABEL: Record<string, string> = {
   content_json: "tool",
 };
 
-export default function SearchResults({
-  hits,
-  query,
-  selectedId,
-  onOpen,
-  hasMore,
-  loadingMore,
-  onLoadMore,
-}: {
+interface SearchResultsProps {
   hits: SearchHit[];
   query: string;
   selectedId: string | null;
   onOpen: (id: string) => void;
+  searching: boolean;
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
-}) {
+  onExitUp?: () => void;
+}
+
+const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function SearchResults({
+  hits,
+  query,
+  selectedId,
+  onOpen,
+  searching,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+  onExitUp,
+}, forwardedRef) {
+  // Keyboard-navigable listbox, mirroring SessionList: Arrow/j/k move the active
+  // row, Home/End jump to the ends, Enter opens it. Hooks run unconditionally
+  // (before the early returns below) to satisfy the Rules of Hooks.
+  const [navigation, setNavigation] = useState({ query, index: 0 });
+  const activeRef = useRef<HTMLLIElement>(null);
+  const last = hits.length - 1;
+  const active =
+    navigation.query === query
+      ? Math.min(navigation.index, Math.max(last, 0))
+      : 0;
+  const selectedIndex =
+    selectedId === null ? -1 : hits.findIndex((hit) => hit.session_id === selectedId);
+
+  // Keep the active row visible during keyboard navigation. `block: "nearest"`
+  // scrolls the results pane minimally and copes with variable-height rows
+  // (snippets wrap), so no fixed-height windowing is assumed.
+  useEffect(() => {
+    // Optional call: scrollIntoView is absent in some test environments (jsdom).
+    activeRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [active, hits.length]);
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLUListElement>) {
+    if (event.key === "ArrowDown" || event.key === "j") {
+      event.preventDefault();
+      setNavigation({ query, index: Math.min(active + 1, last) });
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (active === 0 && onExitUp) onExitUp();
+      else setNavigation({ query, index: Math.max(active - 1, 0) });
+    } else if (event.key === "k") {
+      event.preventDefault();
+      setNavigation({ query, index: Math.max(active - 1, 0) });
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setNavigation({ query, index: 0 });
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setNavigation({ query, index: Math.max(last, 0) });
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const hit = hits[active];
+      if (hit) onOpen(hit.session_id);
+    }
+  }
+
   if (query.trim() === "") return null;
+  if (searching && hits.length === 0) {
+    return (
+      <p className="sessions__empty" role="status">
+        Searching…
+      </p>
+    );
+  }
   if (hits.length === 0) {
     return <p className="sessions__empty">No matches for “{query.trim()}”.</p>;
   }
   return (
     <>
-      <ul className="results" role="listbox" aria-label="search results">
+      <ul
+        ref={forwardedRef}
+        className="results"
+        role="listbox"
+        aria-label="search results"
+        tabIndex={0}
+        aria-activedescendant={`search-result-${active}`}
+        onKeyDown={onKeyDown}
+      >
         {hits.map((hit, index) => (
           <li
-            key={`${hit.source_id}-${index}`}
+            key={`${hit.source_kind}-${hit.source_id}-${hit.field}`}
+            id={`search-result-${index}`}
+            ref={index === active ? activeRef : undefined}
             role="option"
-            aria-selected={hit.session_id === selectedId}
-            className={`results__item${hit.session_id === selectedId ? " is-active" : ""}`}
-            onClick={() => onOpen(hit.session_id)}
+            aria-selected={index === selectedIndex}
+            aria-setsize={hits.length}
+            aria-posinset={index + 1}
+            className={`results__item${index === active ? " is-active" : ""}`}
+            onClick={() => {
+              setNavigation({ query, index });
+              onOpen(hit.session_id);
+            }}
           >
             <div className="results__meta">
               <span className="results__title">{hit.title ?? "(untitled)"}</span>
@@ -87,4 +160,6 @@ export default function SearchResults({
       ) : null}
     </>
   );
-}
+});
+
+export default SearchResults;

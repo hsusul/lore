@@ -17,7 +17,7 @@ use lore_core::watcher::SessionWatcher;
 use lore_core::worker::{self, WorkerConfig, WorkerHandle};
 use lore_ipc::{
     BackupScheduleDto, DetectedAgent, ForgetReport, GitObservationDto, RepositorySummary,
-    RescanResult, ScanProgress, SearchHit, SearchPage, SessionDetail, SessionSummary,
+    RescanResult, ScanProgress, SearchHit, SearchPage, SessionDetail, SessionPage, SessionSummary,
 };
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
@@ -104,6 +104,18 @@ fn list_sessions(state: State<'_, AppState>, limit: i64) -> Result<Vec<SessionSu
     lore_core::query::list_sessions(&conn, limit.clamp(1, 10_000)).map_err(|e| e.to_string())
 }
 
+/// List one newest-first page of sessions using an opaque keyset cursor.
+#[tauri::command]
+fn list_sessions_page(
+    state: State<'_, AppState>,
+    limit: i64,
+    cursor: Option<String>,
+) -> Result<SessionPage, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::query::list_sessions_page(&conn, limit.clamp(1, 10_000), cursor.as_deref())
+        .map_err(|e| e.to_string())
+}
+
 /// List the repositories resolved by git enrichment.
 #[tauri::command]
 fn list_repositories(state: State<'_, AppState>) -> Result<Vec<RepositorySummary>, String> {
@@ -121,6 +133,24 @@ fn list_repository_sessions(
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::query::list_repository_sessions(&conn, &id, limit.clamp(1, 10_000))
         .map_err(|e| e.to_string())
+}
+
+/// List one newest-first page of sessions that touched a repository.
+#[tauri::command]
+fn list_repository_sessions_page(
+    state: State<'_, AppState>,
+    id: String,
+    limit: i64,
+    cursor: Option<String>,
+) -> Result<SessionPage, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::query::list_repository_sessions_page(
+        &conn,
+        &id,
+        limit.clamp(1, 10_000),
+        cursor.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Read one session in context (header, segments, ordered-part timeline, files).
@@ -411,8 +441,10 @@ pub fn run() {
             core_version,
             list_detected_agents,
             list_sessions,
+            list_sessions_page,
             list_repositories,
             list_repository_sessions,
+            list_repository_sessions_page,
             get_session,
             get_git_snapshot,
             get_file_patch,

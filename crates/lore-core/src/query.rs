@@ -10,8 +10,9 @@ use std::collections::HashMap;
 
 use lore_ipc::{
     DetectedAgent, FileEventDto, GitObservationDto, MessageDto, MessagePartDto, RepositorySummary,
-    SegmentDto, SessionDetail, SessionSummary,
+    SegmentDto, SessionDetail, SessionPage, SessionSummary,
 };
+use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::storage::blob::BlobStore;
@@ -68,6 +69,49 @@ pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary
     Ok(rows)
 }
 
+/// List one stable newest-first page of sessions. The opaque cursor stores the
+/// final row's `(started_at, id)` key, so later pages do not pay an OFFSET cost
+/// and cannot repeat or skip rows in an unchanged archive. Missing timestamps
+/// sort after timestamped sessions, matching [`list_sessions`]. A malformed
+/// cursor safely degrades to the first page.
+pub fn list_sessions_page(
+    conn: &Connection,
+    limit: i64,
+    cursor: Option<&str>,
+) -> Result<SessionPage> {
+    let limit = limit.clamp(1, 10_000);
+    let cursor = cursor.and_then(SessionCursor::decode);
+    let mut sql = String::from(
+        "SELECT id, agent_id, title, started_at, ended_at, message_count,
+                tool_call_count, primary_model, parse_status
+         FROM agent_session",
+    );
+    let mut params = Vec::new();
+    if let Some(cursor) = &cursor {
+        match cursor.started_at {
+            Some(started_at) => {
+                sql.push_str(
+                    " WHERE started_at < ?
+                         OR started_at IS NULL
+                         OR (started_at = ? AND id < ?)",
+                );
+                params.extend([
+                    Value::Integer(started_at),
+                    Value::Integer(started_at),
+                    Value::Text(cursor.id.clone()),
+                ]);
+            }
+            None => {
+                sql.push_str(" WHERE started_at IS NULL AND id < ?");
+                params.push(Value::Text(cursor.id.clone()));
+            }
+        }
+    }
+    sql.push_str(" ORDER BY started_at DESC, id DESC LIMIT ?");
+    params.push(Value::Integer(limit + 1));
+    query_session_page(conn, &sql, params, limit)
+}
+
 /// The most recent sessions that touched `repository_id` (newest first), capped
 /// at `limit`. A session qualifies if any of its segments resolved to the repo.
 pub fn list_repository_sessions(
@@ -102,6 +146,127 @@ pub fn list_repository_sessions(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Paginated counterpart of [`list_repository_sessions`], using the same
+/// newest-first total order and opaque keyset cursor as [`list_sessions_page`].
+pub fn list_repository_sessions_page(
+    conn: &Connection,
+    repository_id: &str,
+    limit: i64,
+    cursor: Option<&str>,
+) -> Result<SessionPage> {
+    let limit = limit.clamp(1, 10_000);
+    let cursor = cursor.and_then(SessionCursor::decode);
+    let mut sql = String::from(
+        "SELECT s.id, s.agent_id, s.title, s.started_at, s.ended_at, s.message_count,
+                s.tool_call_count, s.primary_model, s.parse_status
+         FROM agent_session s
+         WHERE EXISTS (
+             SELECT 1 FROM session_segment sg
+             WHERE sg.session_id = s.id AND sg.repository_id = ?
+         )",
+    );
+    let mut params = vec![Value::Text(repository_id.to_string())];
+    if let Some(cursor) = &cursor {
+        match cursor.started_at {
+            Some(started_at) => {
+                sql.push_str(
+                    " AND (s.started_at < ?
+                           OR s.started_at IS NULL
+                           OR (s.started_at = ? AND s.id < ?))",
+                );
+                params.extend([
+                    Value::Integer(started_at),
+                    Value::Integer(started_at),
+                    Value::Text(cursor.id.clone()),
+                ]);
+            }
+            None => {
+                sql.push_str(" AND s.started_at IS NULL AND s.id < ?");
+                params.push(Value::Text(cursor.id.clone()));
+            }
+        }
+    }
+    sql.push_str(" ORDER BY s.started_at DESC, s.id DESC LIMIT ?");
+    params.push(Value::Integer(limit + 1));
+    query_session_page(conn, &sql, params, limit)
+}
+
+fn query_session_page(
+    conn: &Connection,
+    sql: &str,
+    params: Vec<Value>,
+    limit: i64,
+) -> Result<SessionPage> {
+    let mut stmt = conn.prepare(sql)?;
+    let mut sessions = stmt
+        .query_map(rusqlite::params_from_iter(params), |row| {
+            Ok(SessionSummary {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                title: row.get(2)?,
+                started_at: row.get(3)?,
+                ended_at: row.get(4)?,
+                message_count: row.get(5)?,
+                tool_call_count: row.get(6)?,
+                primary_model: row.get(7)?,
+                parse_status: row.get(8)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let has_more = sessions.len() > limit as usize;
+    sessions.truncate(limit as usize);
+    let next_cursor = has_more
+        .then(|| sessions.last().map(SessionCursor::from_row))
+        .flatten()
+        .map(|cursor| cursor.encode());
+    Ok(SessionPage {
+        sessions,
+        next_cursor,
+    })
+}
+
+/// Opaque keyset cursor for the browse order. Session ids are percent-escaped
+/// so the cursor remains safely round-trippable even if an adapter supplies a
+/// native id containing the `:` separator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionCursor {
+    started_at: Option<i64>,
+    id: String,
+}
+
+impl SessionCursor {
+    fn from_row(session: &SessionSummary) -> Self {
+        Self {
+            started_at: session.started_at,
+            id: session.id.clone(),
+        }
+    }
+
+    fn encode(&self) -> String {
+        let started_at = self
+            .started_at
+            .map_or_else(|| "n".to_string(), |value| value.to_string());
+        let id = self.id.replace('%', "%25").replace(':', "%3A");
+        format!("{started_at}:{id}")
+    }
+
+    fn decode(raw: &str) -> Option<Self> {
+        if raw.len() > 2_048 {
+            return None;
+        }
+        let (started_at, encoded_id) = raw.split_once(':')?;
+        if encoded_id.is_empty() || encoded_id.contains(':') {
+            return None;
+        }
+        let started_at = match started_at {
+            "n" => None,
+            value => Some(value.parse().ok()?),
+        };
+        let id = encoded_id.replace("%3A", ":").replace("%25", "%");
+        Some(Self { started_at, id })
+    }
 }
 
 /// The full read of one session: header, context segments, the ordered-part
@@ -419,6 +584,120 @@ mod tests {
         assert_eq!(sessions[0].agent_id, "claude-code");
         assert_eq!(sessions[0].message_count, 2);
         assert_eq!(sessions[0].parse_status, "ok");
+    }
+
+    #[test]
+    fn session_cursor_round_trips_timestamp_and_escaped_id() {
+        for started_at in [Some(1_723_372_800_000), None, Some(-1)] {
+            let cursor = SessionCursor {
+                started_at,
+                id: "native:id%3Awith-percent".into(),
+            };
+            assert_eq!(SessionCursor::decode(&cursor.encode()), Some(cursor));
+        }
+        for malformed in ["", "missing-separator", "n:", "not-a-time:id", "n:id:extra"] {
+            assert!(SessionCursor::decode(malformed).is_none());
+        }
+    }
+
+    #[test]
+    fn session_pages_reproduce_the_full_stable_order() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+        for i in 0..5 {
+            let content = format!(
+                "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:0{i}.000Z\",\"payload\":{{\"id\":\"cx{i}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}}}\n"
+            );
+            let parsed = CodexAdapter::new().parse_str(&content, &format!("cx{i}"));
+            persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+        }
+        // Claude fixture has no timestamp, exercising the trailing NULL block.
+        seed(&conn);
+
+        let expected: Vec<String> = list_sessions(&conn, 100)
+            .unwrap()
+            .into_iter()
+            .map(|session| session.id)
+            .collect();
+        assert_eq!(expected.len(), 6);
+
+        let mut actual = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = list_sessions_page(&conn, 2, cursor.as_deref()).unwrap();
+            actual.extend(page.sessions.into_iter().map(|session| session.id));
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        assert_eq!(actual, expected);
+        let unique: std::collections::HashSet<_> = actual.iter().collect();
+        assert_eq!(
+            unique.len(),
+            actual.len(),
+            "no session repeats across pages"
+        );
+
+        let first = list_sessions_page(&conn, 2, None).unwrap();
+        let malformed = list_sessions_page(&conn, 2, Some("not-a-cursor")).unwrap();
+        assert_eq!(malformed, first, "a malformed cursor degrades to page one");
+    }
+
+    #[test]
+    fn repository_session_pages_stay_scoped_and_stable() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+        conn.execute(
+            "INSERT INTO repository
+                (id, identity_key, display_name, identity_confidence, created_at, updated_at)
+             VALUES ('repo-a', 'repo-a', 'Repo A', 'confirmed', 1, 1)",
+            [],
+        )
+        .unwrap();
+
+        for i in 0..5 {
+            let content = format!(
+                concat!(
+                    "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:0{i}.000Z\",\"payload\":{{\"id\":\"repo-cx{i}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}}}\n",
+                    "{{\"type\":\"turn_context\",\"timestamp\":\"2026-08-11T10:00:0{i}.000Z\",\"payload\":{{\"cwd\":\"/p\",\"model\":\"gpt-x\",\"turn_id\":\"t{i}\"}}}}\n",
+                    "{{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:0{i}.000Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":\"hello\"}}}}\n"
+                ),
+                i = i,
+            );
+            let parsed = CodexAdapter::new().parse_str(&content, &format!("repo-cx{i}"));
+            let id = persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+            if i != 2 {
+                conn.execute(
+                    "UPDATE session_segment SET repository_id = 'repo-a' WHERE session_id = ?1",
+                    [&id],
+                )
+                .unwrap();
+            }
+        }
+
+        let expected: Vec<String> = list_repository_sessions(&conn, "repo-a", 100)
+            .unwrap()
+            .into_iter()
+            .map(|session| session.id)
+            .collect();
+        assert_eq!(expected.len(), 4, "one unlinked session is excluded");
+
+        let first = list_repository_sessions_page(&conn, "repo-a", 2, None).unwrap();
+        assert_eq!(first.sessions.len(), 2);
+        let second =
+            list_repository_sessions_page(&conn, "repo-a", 2, first.next_cursor.as_deref())
+                .unwrap();
+        let actual: Vec<String> = first
+            .sessions
+            .into_iter()
+            .chain(second.sessions)
+            .map(|session| session.id)
+            .collect();
+        assert_eq!(actual, expected);
+        assert!(second.next_cursor.is_none());
     }
 
     #[test]

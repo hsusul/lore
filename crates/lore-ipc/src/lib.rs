@@ -72,6 +72,16 @@ pub struct SessionSummary {
     pub parse_status: String,
 }
 
+/// One stable newest-first page for the repository/session browser. The
+/// cursor is opaque to the UI and must be passed back unchanged. Payload of
+/// `list_sessions_page` / `list_repository_sessions_page`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SessionPage {
+    pub sessions: Vec<SessionSummary>,
+    pub next_cursor: Option<String>,
+}
+
 /// One ordered content block within a message. Opaque/encrypted blocks carry no
 /// readable content (`text`/`content_json` are null) and are never rendered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

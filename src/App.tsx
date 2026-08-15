@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import CommandPalette, { type Command } from "./components/CommandPalette";
+import ArchiveOnboarding from "./components/ArchiveOnboarding";
 import RepositoryList from "./components/RepositoryList";
 import SearchResults from "./components/SearchResults";
 import SessionList from "./components/SessionList";
@@ -16,8 +17,8 @@ import {
   getSetting,
   listDetectedAgents,
   listRepositories,
-  listRepositorySessions,
-  listSessions,
+  listRepositorySessionsPage,
+  listSessionsPage,
   onScanProgress,
   forgetEverything,
   rescan,
@@ -33,9 +34,12 @@ import {
   type SessionSummary,
 } from "./ipc";
 
-const SESSION_LIMIT = 500;
+/** Sessions fetched per browse page. Initial navigation stays bounded. */
+const SESSION_PAGE = 100;
 /** Search results fetched per page; "Load more" appends another page. */
 const SEARCH_PAGE = 50;
+/** Coalesce rapid typing before crossing the Tauri/SQLite boundary. */
+const SEARCH_DEBOUNCE_MS = 180;
 
 /** A small commit-graph mark. */
 function Mark() {
@@ -53,14 +57,36 @@ function Mark() {
   );
 }
 
+function toggleTheme() {
+  const root = document.documentElement;
+  const next =
+    root.dataset.theme === "dark"
+      ? "light"
+      : root.dataset.theme === "light"
+        ? "dark"
+        : matchMedia("(prefers-color-scheme: dark)").matches
+          ? "light"
+          : "dark";
+  root.dataset.theme = next;
+  // Persist so the choice survives a restart (Lore-owned; cleared by "forget
+  // everything"). Fire-and-forget: a failed write must not break the toggle.
+  void setSetting("theme", JSON.stringify(next)).catch(() => {});
+}
+
 /**
  * The M5 three-pane shell: repositories (left), the sessions list (middle), and
  * the session reader with its git rail (right). Under active development.
  */
 export default function App() {
+  const [archiveStatus, setArchiveStatus] = useState<"loading" | "ready" | "failed">(
+    "loading",
+  );
   const [agents, setAgents] = useState<DetectedAgent[]>([]);
   const [repositories, setRepositories] = useState<RepositorySummary[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionCursor, setSessionCursor] = useState<string | null>(null);
+  const [loadingMoreSessionsRequest, setLoadingMoreSessionsRequest] = useState<number | null>(null);
+  const loadingMoreSessions = loadingMoreSessionsRequest !== null;
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
@@ -70,32 +96,84 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<SearchHit[]>([]);
+  // `null` is the pending state; an array (including empty) is settled. Keeping
+  // those mutually exclusive avoids a separate flag drifting from the results.
+  const [hits, setHits] = useState<SearchHit[] | null>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   // Always holds the latest query so an in-flight page can tell it has been
   // superseded by newer typing and drop its (stale) results.
   const queryRef = useRef("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchResultsRef = useRef<HTMLUListElement>(null);
+  const selectedRepoRef = useRef<string | null>(null);
+  const refreshRequestRef = useRef(0);
+  const sessionsRequestRef = useRef(0);
+  const sessionsPendingRequestRef = useRef<number | null>(null);
+  const loadedSessionCountRef = useRef(0);
+  const sessionRequestRef = useRef(0);
+  const sessionPendingRequestRef = useRef<number | null>(null);
   const [secretCount, setSecretCount] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const loadSessions = useCallback(async (repo: string | null) => {
-    const rows = repo
-      ? await listRepositorySessions(repo, SESSION_LIMIT)
-      : await listSessions(SESSION_LIMIT);
-    setSessions(rows);
+  const loadSessions = useCallback(async (repo: string | null, showPending = false) => {
+    const request = ++sessionsRequestRef.current;
+    setLoadingMoreSessionsRequest(null);
+    const limit = showPending
+      ? SESSION_PAGE
+      : Math.max(SESSION_PAGE, loadedSessionCountRef.current);
+    if (showPending) {
+      sessionsPendingRequestRef.current = request;
+      loadedSessionCountRef.current = 0;
+      setSessions([]);
+      setSessionCursor(null);
+    }
+    try {
+      const page = repo
+        ? await listRepositorySessionsPage(repo, limit, null)
+        : await listSessionsPage(limit, null);
+      if (request === sessionsRequestRef.current) {
+        // The newest request owns the pane and also settles any pending marker
+        // inherited from a manual load that it superseded.
+        sessionsPendingRequestRef.current = null;
+        loadedSessionCountRef.current = page.sessions.length;
+        setSessions(page.sessions);
+        setSessionCursor(page.next_cursor);
+      }
+    } catch (e) {
+      if (request !== sessionsRequestRef.current) return;
+      sessionsPendingRequestRef.current = null;
+      loadedSessionCountRef.current = 0;
+      setSessions([]);
+      setSessionCursor(null);
+      throw e;
+    }
   }, []);
 
   const refresh = useCallback(async () => {
+    const request = ++refreshRequestRef.current;
+    const repo = selectedRepoRef.current;
     try {
-      setAgents(await listDetectedAgents());
-      setRepositories(await listRepositories());
-      await loadSessions(selectedRepo);
+      const nextAgents = await listDetectedAgents();
+      if (request !== refreshRequestRef.current) return;
+      setAgents(nextAgents);
+      const nextRepositories = await listRepositories();
+      if (request !== refreshRequestRef.current) return;
+      setRepositories(nextRepositories);
+      // A manual repository change owns its own load. Do not duplicate or
+      // supersede it if the selection changed while this refresh was running.
+      if (repo === selectedRepoRef.current) await loadSessions(repo);
+      if (request === refreshRequestRef.current) setArchiveStatus("ready");
     } catch (e) {
-      setError(String(e));
+      if (request === refreshRequestRef.current) {
+        setError(String(e));
+        // A later background failure must not erase a previously successful
+        // archive load, but a failed first load is never an "empty archive".
+        setArchiveStatus((current) => (current === "ready" ? current : "failed"));
+      }
     }
-  }, [loadSessions, selectedRepo]);
+  }, [loadSessions]);
 
   useEffect(() => {
     void refresh();
@@ -145,32 +223,53 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  async function selectRepo(repo: string | null) {
+  useEffect(() => {
+    if (query.trim() === "") {
+      return;
+    }
+
+    const forQuery = query;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void searchPage(forQuery, SEARCH_PAGE)
+        .then((page) => {
+          if (cancelled || queryRef.current !== forQuery) return;
+          setHits(page.hits);
+          setCursor(page.next_cursor);
+        })
+        .catch((e: unknown) => {
+          if (!cancelled && queryRef.current === forQuery) {
+            setHits([]);
+            setError(String(e));
+          }
+        });
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
+
+  const selectRepo = useCallback(async (repo: string | null) => {
+    selectedRepoRef.current = repo;
     setSelectedRepo(repo);
     setError(null);
     try {
-      await loadSessions(repo);
+      await loadSessions(repo, true);
     } catch (e) {
       setError(String(e));
     }
-  }
+  }, [loadSessions]);
 
-  async function runSearch(next: string) {
+  function updateSearch(next: string) {
+    // Batch the query and its visible state so snippets from the previous query
+    // cannot paint under the new text while the debounce effect is pending.
     setQuery(next);
     queryRef.current = next;
-    if (next.trim() === "") {
-      setHits([]);
-      setCursor(null);
-      return;
-    }
-    try {
-      const page = await searchPage(next, SEARCH_PAGE);
-      if (queryRef.current !== next) return; // superseded by newer typing
-      setHits(page.hits);
-      setCursor(page.next_cursor);
-    } catch (e) {
-      setError(String(e));
-    }
+    setHits(next.trim() === "" ? [] : null);
+    setCursor(null);
+    setError(null);
   }
 
   async function loadMore() {
@@ -180,7 +279,7 @@ export default function App() {
     try {
       const page = await searchPage(forQuery, SEARCH_PAGE, cursor);
       if (queryRef.current !== forQuery) return; // query changed mid-flight
-      setHits((prev) => [...prev, ...page.hits]);
+      setHits((prev) => [...(prev ?? []), ...page.hits]);
       setCursor(page.next_cursor);
     } catch (e) {
       setError(String(e));
@@ -189,7 +288,38 @@ export default function App() {
     }
   }
 
-  async function openSession(id: string) {
+  async function loadOlderSessions() {
+    if (sessionCursor === null || loadingMoreSessions) return;
+    const request = ++sessionsRequestRef.current;
+    const repo = selectedRepoRef.current;
+    const forCursor = sessionCursor;
+    setLoadingMoreSessionsRequest(request);
+    setError(null);
+    try {
+      const page = repo
+        ? await listRepositorySessionsPage(repo, SESSION_PAGE, forCursor)
+        : await listSessionsPage(SESSION_PAGE, forCursor);
+      if (request !== sessionsRequestRef.current || repo !== selectedRepoRef.current) return;
+      // A cursor page should be disjoint, but deduping at the UI boundary keeps
+      // a concurrent archive refresh from ever painting a duplicate.
+      const seen = new Set(sessions.map((session) => session.id));
+      const merged = [
+        ...sessions,
+        ...page.sessions.filter((session) => !seen.has(session.id)),
+      ];
+      loadedSessionCountRef.current = merged.length;
+      setSessions(merged);
+      setSessionCursor(page.next_cursor);
+    } catch (e) {
+      if (request === sessionsRequestRef.current) setError(String(e));
+    } finally {
+      setLoadingMoreSessionsRequest((current) => (current === request ? null : current));
+    }
+  }
+
+  const openSession = useCallback(async (id: string) => {
+    const request = ++sessionRequestRef.current;
+    sessionPendingRequestRef.current = request;
     setSelectedSession(id);
     setError(null);
     setNotice(null);
@@ -199,13 +329,19 @@ export default function App() {
         getGitSnapshot(id),
         sessionSecretCount(id),
       ]);
+      if (request !== sessionRequestRef.current) return;
+      sessionPendingRequestRef.current = null;
       setDetail(loaded);
       setGit(snapshot);
       setSecretCount(secrets);
     } catch (e) {
+      if (request !== sessionRequestRef.current) return;
+      sessionPendingRequestRef.current = null;
+      setSelectedSession(null);
+      setDetail(null);
       setError(String(e));
     }
-  }
+  }, []);
 
   async function handleExport() {
     if (!selectedSession) return;
@@ -225,6 +361,8 @@ export default function App() {
       return;
     }
     try {
+      sessionRequestRef.current += 1;
+      sessionPendingRequestRef.current = null;
       const report = await forgetSession(selectedSession);
       setDetail(null);
       setSelectedSession(null);
@@ -248,6 +386,8 @@ export default function App() {
       return;
     }
     try {
+      sessionRequestRef.current += 1;
+      sessionPendingRequestRef.current = null;
       const report = await forgetEverything();
       setDetail(null);
       setSelectedSession(null);
@@ -259,7 +399,7 @@ export default function App() {
     }
   }
 
-  async function handleRescan() {
+  const handleRescan = useCallback(async () => {
     setScanning(true);
     setError(null);
     try {
@@ -269,23 +409,28 @@ export default function App() {
       setError(String(e));
       setScanning(false);
     }
-  }
+  }, [refresh]);
 
-  function toggleTheme() {
-    const root = document.documentElement;
-    const next =
-      root.dataset.theme === "dark"
-        ? "light"
-        : root.dataset.theme === "light"
-          ? "dark"
-          : matchMedia("(prefers-color-scheme: dark)").matches
-            ? "light"
-            : "dark";
-    root.dataset.theme = next;
-    // Persist so the choice survives a restart (Lore-owned; cleared by "forget
-    // everything"). Fire-and-forget: a failed write must not break the toggle.
-    void setSetting("theme", JSON.stringify(next)).catch(() => {});
-  }
+  const searchPaletteArchive = useCallback(
+    async (rawQuery: string): Promise<Command[]> => {
+      const page = await searchPage(rawQuery, SEARCH_PAGE);
+      const seen = new Set<string>();
+      const commands: Command[] = [];
+      for (const hit of page.hits) {
+        if (seen.has(hit.session_id)) continue;
+        seen.add(hit.session_id);
+        commands.push({
+          id: `cmd-sess-${hit.session_id}`,
+          group: "Archive",
+          label: hit.title ?? "(untitled session)",
+          hint: `${agentLabel(hit.agent_id)} · archive match`,
+          run: () => void openSession(hit.session_id),
+        });
+      }
+      return commands;
+    },
+    [openSession],
+  );
 
   const commands = useMemo<Command[]>(() => {
     const actions: Command[] = [
@@ -307,9 +452,14 @@ export default function App() {
       run: () => void openSession(session.id),
     }));
     return [...actions, ...repoCommands, ...sessionCommands];
-    // Handlers are stable across renders; rebuild only when the data changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repositories, sessions]);
+  }, [handleRescan, openSession, repositories, selectRepo, sessions]);
+
+  const archiveEmpty =
+    archiveStatus === "ready" &&
+    selectedRepo === null &&
+    repositories.length === 0 &&
+    sessions.length === 0 &&
+    agents.every((agent) => agent.session_count === 0);
 
   return (
     <div className="shell">
@@ -384,49 +534,99 @@ export default function App() {
 
         <section className="pane pane--sessions" aria-label="sessions">
           <input
+            ref={searchInputRef}
             className="search-box"
             type="search"
             placeholder="Search… (e.g. retryBackoff agent:codex path:auth/)"
             aria-label="search"
             value={query}
-            onChange={(event) => void runSearch(event.target.value)}
+            onChange={(event) => updateSearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown" && hits !== null && hits.length > 0) {
+                event.preventDefault();
+                searchResultsRef.current?.focus();
+              }
+            }}
           />
           {query.trim() ? (
             <SearchResults
-              hits={hits}
+              ref={searchResultsRef}
+              hits={hits ?? []}
               query={query}
               selectedId={selectedSession}
               onOpen={openSession}
+              searching={hits === null}
               hasMore={cursor !== null}
               loadingMore={loadingMore}
               onLoadMore={() => void loadMore()}
+              onExitUp={() => searchInputRef.current?.focus()}
             />
           ) : (
-            <SessionList
-              sessions={sessions}
-              selectedId={selectedSession}
-              onOpen={openSession}
-            />
+            archiveStatus === "loading" || sessionsPendingRequestRef.current !== null ? (
+              <div className="sessions__empty" role="status">
+                <p>Loading sessions…</p>
+              </div>
+            ) : archiveStatus === "failed" ? (
+              <div className="sessions__empty" role="status">
+                <p>Sessions unavailable.</p>
+                <p className="empty">Fix the error above, then try Rescan.</p>
+              </div>
+            ) : (
+              <SessionList
+                sessions={sessions}
+                selectedId={selectedSession}
+                onOpen={openSession}
+                hasMore={sessionCursor !== null}
+                loadingMore={loadingMoreSessions}
+                onLoadMore={() => void loadOlderSessions()}
+              />
+            )
           )}
         </section>
 
         <section className="pane pane--detail">
-          <SessionView
-            detail={detail}
-            git={git}
-            loadPatch={getFilePatch}
-            secretCount={secretCount}
-            onExport={handleExport}
-            onForget={handleForget}
-          />
+          {archiveStatus === "loading" ? (
+            <section className="session session--empty" aria-label="session">
+              <p role="status">Loading archive…</p>
+            </section>
+          ) : archiveStatus === "failed" ? (
+            <section className="session session--empty" aria-label="session">
+              <div role="status">
+                <p>Archive unavailable.</p>
+                <p className="empty">No local agent logs were changed. Retry with Rescan.</p>
+              </div>
+            </section>
+          ) : archiveEmpty ? (
+            <ArchiveOnboarding
+              agents={agents}
+              scanning={scanning}
+              onScan={() => void handleRescan()}
+              onOpenSettings={() => setSettingsOpen(true)}
+            />
+          ) : sessionPendingRequestRef.current !== null ? (
+            <section className="session session--empty" aria-label="session">
+              <p role="status">Loading session…</p>
+            </section>
+          ) : (
+            <SessionView
+              detail={detail}
+              git={git}
+              loadPatch={getFilePatch}
+              secretCount={secretCount}
+              onExport={handleExport}
+              onForget={handleForget}
+            />
+          )}
         </section>
       </div>
 
-      <CommandPalette
-        items={commands}
-        open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-      />
+      {paletteOpen && (
+        <CommandPalette
+          items={commands}
+          search={searchPaletteArchive}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
       <SettingsPanel
         open={settingsOpen}
         agents={agents}

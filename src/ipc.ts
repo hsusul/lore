@@ -19,6 +19,7 @@ import type { SearchHit } from "../crates/lore-ipc/bindings/SearchHit";
 import type { SearchPage } from "../crates/lore-ipc/bindings/SearchPage";
 import type { SegmentDto } from "../crates/lore-ipc/bindings/SegmentDto";
 import type { SessionDetail } from "../crates/lore-ipc/bindings/SessionDetail";
+import type { SessionPage } from "../crates/lore-ipc/bindings/SessionPage";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 
 export type {
@@ -34,6 +35,7 @@ export type {
   SearchHit,
   SegmentDto,
   SessionDetail,
+  SessionPage,
   SessionSummary,
 };
 
@@ -51,6 +53,14 @@ export function listSessions(limit: number): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("list_sessions", { limit });
 }
 
+/** One newest-first session page. Pass the returned cursor back unchanged. */
+export function listSessionsPage(
+  limit: number,
+  cursor: string | null = null,
+): Promise<SessionPage> {
+  return invoke<SessionPage>("list_sessions_page", { limit, cursor });
+}
+
 /** The repositories resolved by git enrichment. */
 export function listRepositories(): Promise<RepositorySummary[]> {
   return invoke<RepositorySummary[]>("list_repositories");
@@ -62,6 +72,15 @@ export function listRepositorySessions(
   limit: number,
 ): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("list_repository_sessions", { id, limit });
+}
+
+/** One newest-first page of sessions that touched a repository. */
+export function listRepositorySessionsPage(
+  id: string,
+  limit: number,
+  cursor: string | null = null,
+): Promise<SessionPage> {
+  return invoke<SessionPage>("list_repository_sessions_page", { id, limit, cursor });
 }
 
 /** Read one session in context, or null when it is unknown. */

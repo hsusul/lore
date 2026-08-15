@@ -19,27 +19,47 @@ function hit(overrides: Partial<SearchHit> = {}): SearchHit {
   };
 }
 
-const noPaging = { hasMore: false, loadingMore: false, onLoadMore: () => {} };
+const idle = {
+  searching: false,
+  hasMore: false,
+  loadingMore: false,
+  onLoadMore: () => {},
+};
 
 describe("SearchResults", () => {
   it("renders nothing for an empty query", () => {
     const { container } = render(
-      <SearchResults hits={[]} query="   " selectedId={null} onOpen={() => {}} {...noPaging} />,
+      <SearchResults hits={[]} query="   " selectedId={null} onOpen={() => {}} {...idle} />,
     );
     expect(container.firstChild).toBeNull();
   });
 
   it("shows an empty state when a query has no matches", () => {
     render(
-      <SearchResults hits={[]} query="zzz" selectedId={null} onOpen={() => {}} {...noPaging} />,
+      <SearchResults hits={[]} query="zzz" selectedId={null} onOpen={() => {}} {...idle} />,
     );
     expect(screen.getByText(/no matches/i)).toBeTruthy();
+  });
+
+  it("announces an in-flight search instead of showing a false empty state", () => {
+    render(
+      <SearchResults
+        hits={[]}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+        searching
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("Searching");
+    expect(screen.queryByText(/no matches/i)).toBeNull();
   });
 
   it("highlights matched terms and opens the session on click", () => {
     const onOpen = vi.fn();
     render(
-      <SearchResults hits={[hit()]} query="retry" selectedId={null} onOpen={onOpen} {...noPaging} />,
+      <SearchResults hits={[hit()]} query="retry" selectedId={null} onOpen={onOpen} {...idle} />,
     );
 
     // The matched term is wrapped in <mark>, and the markers themselves are gone.
@@ -55,7 +75,7 @@ describe("SearchResults", () => {
   it("shows a Load more control only when more pages exist and fires it on click", () => {
     const onLoadMore = vi.fn();
     const { rerender } = render(
-      <SearchResults hits={[hit()]} query="retry" selectedId={null} onOpen={() => {}} {...noPaging} />,
+      <SearchResults hits={[hit()]} query="retry" selectedId={null} onOpen={() => {}} {...idle} />,
     );
     // No further pages: no button.
     expect(screen.queryByRole("button", { name: /load more/i })).toBeNull();
@@ -67,6 +87,7 @@ describe("SearchResults", () => {
         query="retry"
         selectedId={null}
         onOpen={() => {}}
+        searching={false}
         hasMore
         loadingMore={false}
         onLoadMore={onLoadMore}
@@ -82,11 +103,105 @@ describe("SearchResults", () => {
         query="retry"
         selectedId={null}
         onOpen={() => {}}
+        searching={false}
         hasMore
         loadingMore
         onLoadMore={onLoadMore}
       />,
     );
     expect(screen.getByRole("button", { name: /loading/i }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("exposes a keyboard-operable listbox with a roving active option", () => {
+    render(
+      <SearchResults
+        hits={[hit({ session_id: "a", source_id: "pa", title: "Alpha" }), hit({ session_id: "b", source_id: "pb", title: "Beta" })]}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    // The listbox is focusable and the ARIA listbox pattern is complete.
+    const listbox = screen.getByRole("listbox", { name: /search results/i });
+    expect(listbox.getAttribute("tabindex")).toBe("0");
+    // First option is active by default.
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+    const options = screen.getAllByRole("option");
+    expect(options[0].getAttribute("aria-posinset")).toBe("1");
+    expect(options[0].getAttribute("aria-setsize")).toBe("2");
+    expect(options[0].className).toContain("is-active");
+
+    // ArrowDown/Up move the roving active option (aria-activedescendant tracks it).
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+    expect(screen.getAllByRole("option")[1].className).toContain("is-active");
+    fireEvent.keyDown(listbox, { key: "ArrowUp" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+
+    // Home/End jump to the ends; movement is clamped at the boundaries.
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+    fireEvent.keyDown(listbox, { key: "Home" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+  });
+
+  it("opens the active result on Enter", () => {
+    const onOpen = vi.fn();
+    render(
+      <SearchResults
+        hits={[hit({ session_id: "a", source_id: "pa" }), hit({ session_id: "b", source_id: "pb" })]}
+        query="retry"
+        selectedId={null}
+        onOpen={onOpen}
+        {...idle}
+      />,
+    );
+    const listbox = screen.getByRole("listbox", { name: /search results/i });
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onOpen).toHaveBeenCalledWith("b");
+  });
+
+  it("resets the active option to the top when the query changes", () => {
+    const hits = [
+      hit({ session_id: "a", source_id: "pa" }),
+      hit({ session_id: "b", source_id: "pb" }),
+    ];
+    const { rerender } = render(
+      <SearchResults hits={hits} query="retry" selectedId={null} onOpen={() => {}} {...idle} />,
+    );
+    const listbox = screen.getByRole("listbox", { name: /search results/i });
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+    // A new query is a fresh context: the active option returns to the top.
+    rerender(
+      <SearchResults hits={hits} query="deploy" selectedId={null} onOpen={() => {}} {...idle} />,
+    );
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+  });
+
+  it("marks the opened session as selected without moving keyboard focus", () => {
+    render(
+      <SearchResults
+        hits={[
+          hit({ session_id: "a", source_id: "pa" }),
+          hit({ session_id: "b", source_id: "pb" }),
+          hit({ session_id: "b", source_id: "pb2" }),
+        ]}
+        query="retry"
+        selectedId="b"
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    const options = screen.getAllByRole("option");
+    // Selection (opened session) is independent of the roving active row.
+    expect(options[1].getAttribute("aria-selected")).toBe("true");
+    expect(options[0].getAttribute("aria-selected")).toBe("false");
+    expect(options[2].getAttribute("aria-selected")).toBe("false");
+    expect(options[0].className).toContain("is-active");
   });
 });

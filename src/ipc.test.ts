@@ -5,7 +5,14 @@ const listen = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listen(...a) }));
 
-import { listDetectedAgents, listSessions, onScanProgress, rescan } from "./ipc";
+import {
+  listDetectedAgents,
+  listRepositorySessionsPage,
+  listSessions,
+  listSessionsPage,
+  onScanProgress,
+  rescan,
+} from "./ipc";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -23,6 +30,22 @@ describe("ipc contract", () => {
     invoke.mockResolvedValue([]);
     await listSessions(50);
     expect(invoke).toHaveBeenCalledWith("list_sessions", { limit: 50 });
+  });
+
+  it("session page commands pass opaque cursors unchanged", async () => {
+    invoke.mockResolvedValue({ sessions: [], next_cursor: null });
+    await listSessionsPage(100, "all-cursor");
+    await listRepositorySessionsPage("repo-a", 100, "repo-cursor");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "list_sessions_page", {
+      limit: 100,
+      cursor: "all-cursor",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "list_repository_sessions_page", {
+      id: "repo-a",
+      limit: 100,
+      cursor: "repo-cursor",
+    });
   });
 
   it("rescan invokes its command and returns the tally", async () => {

@@ -76,4 +76,41 @@ describe("SessionList", () => {
     fireEvent.click(screen.getByText("first"));
     expect(onOpen).toHaveBeenCalledWith("a");
   });
+
+  it("loads older sessions without putting a button inside the listbox", () => {
+    const onLoadMore = vi.fn();
+    render(
+      <SessionList
+        sessions={sessions}
+        selectedId={null}
+        onOpen={() => {}}
+        hasMore
+        loadingMore={false}
+        onLoadMore={onLoadMore}
+      />,
+    );
+
+    const listbox = screen.getByRole("listbox", { name: /sessions/i });
+    const button = screen.getByRole("button", { name: /load older sessions/i });
+    expect(listbox.contains(button)).toBe(false);
+    fireEvent.click(button);
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces and disables an older-session request in flight", () => {
+    render(
+      <SessionList
+        sessions={sessions}
+        selectedId={null}
+        onOpen={() => {}}
+        hasMore
+        loadingMore
+        onLoadMore={() => {}}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: /loading older sessions/i });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain("Loading older sessions");
+  });
 });
