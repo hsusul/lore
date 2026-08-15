@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1280" viewBox="0 0 1280 1280">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2723"/>
+      <stop offset="1" stop-color="#151210"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="1280" fill="url(#bg)"/>
+  <g transform="translate(282.15 465.2) scale(2.6)" fill="none" stroke="#f4f1ea" stroke-linecap="round">
+    <circle cx="90" cy="48" r="30" stroke-width="7" stroke-dasharray="176.98 11.52" transform="rotate(191 90 48)"/>
+    <circle cx="64" cy="48" r="20" stroke-width="7" stroke-dasharray="117.98 7.68" transform="rotate(191 64 48)"/>
+    <circle cx="28" cy="48" r="7" fill="#f4f1ea" stroke="none"/>
+  </g>
+  <text x="645" y="648" fill="#f4f1ea"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+    font-size="150" font-weight="500" letter-spacing="-3">lore</text>
+  <text x="640" y="770" fill="#b0a897" text-anchor="middle"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+    font-size="34" font-weight="400" letter-spacing="0.5">git memory for coding agents</text>
+</svg>

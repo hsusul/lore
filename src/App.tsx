@@ -606,6 +606,15 @@ export default function App() {
       { id: "cmd-rescan", group: "Action", label: "Rescan", run: () => void handleRescan() },
       { id: "cmd-all", group: "Action", label: "All sessions", run: () => void selectRepo(null) },
       {
+        id: "cmd-new-folder",
+        group: "Action",
+        label: "New folder…",
+        run: () => {
+          const name = window.prompt("New folder name");
+          if (name && name.trim()) void handleCreateFolder(name);
+        },
+      },
+      {
         id: "cmd-agent-folders",
         group: "Action",
         label: "Manage agent folders",
@@ -613,6 +622,13 @@ export default function App() {
         run: () => setSettingsOpen(true),
       },
     ];
+    const folderCommands: Command[] = folders.map((folder) => ({
+      id: `cmd-folder-${folder.id}`,
+      group: "Folder",
+      label: folder.name,
+      hint: `${folder.session_count} threads`,
+      run: () => void selectFolder(folder.id),
+    }));
     const repoCommands: Command[] = repositories.map((repo) => ({
       id: `cmd-repo-${repo.id}`,
       group: "Repository",
@@ -627,8 +643,17 @@ export default function App() {
       hint: agentLabel(session.agent_id),
       run: () => void openSession(session.id),
     }));
-    return [...actions, ...repoCommands, ...sessionCommands];
-  }, [handleRescan, openSession, repositories, selectRepo, sessions]);
+    return [...actions, ...folderCommands, ...repoCommands, ...sessionCommands];
+  }, [
+    folders,
+    handleCreateFolder,
+    handleRescan,
+    openSession,
+    repositories,
+    selectFolder,
+    selectRepo,
+    sessions,
+  ]);
 
   const archiveEmpty =
     archiveStatus === "ready" &&
