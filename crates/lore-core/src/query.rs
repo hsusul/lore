@@ -55,6 +55,33 @@ pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary
     Ok(rows)
 }
 
+/// The keyset predicate body (no leading `WHERE`/`AND`) keeping only rows
+/// strictly after `cursor` in the newest-first `(started_at DESC, id DESC)`
+/// total order. `prefix` qualifies the columns (`""` or `"s."`). Missing
+/// timestamps sort last, so a null-`started_at` cursor is confined to that
+/// trailing block. Shared by [`list_sessions_page`] and
+/// [`list_repository_sessions_page`] so the two pages cannot drift apart.
+fn keyset_after(cursor: &SessionCursor, prefix: &str) -> (String, Vec<Value>) {
+    match cursor.started_at {
+        Some(started_at) => (
+            format!(
+                "{prefix}started_at < ? \
+                 OR {prefix}started_at IS NULL \
+                 OR ({prefix}started_at = ? AND {prefix}id < ?)"
+            ),
+            vec![
+                Value::Integer(started_at),
+                Value::Integer(started_at),
+                Value::Text(cursor.id.clone()),
+            ],
+        ),
+        None => (
+            format!("{prefix}started_at IS NULL AND {prefix}id < ?"),
+            vec![Value::Text(cursor.id.clone())],
+        ),
+    }
+}
+
 /// List one stable newest-first page of sessions. The opaque cursor stores the
 /// final row's `(started_at, id)` key, so later pages do not pay an OFFSET cost
 /// and cannot repeat or skip rows in an unchanged archive. Missing timestamps
@@ -74,24 +101,10 @@ pub fn list_sessions_page(
     );
     let mut params = Vec::new();
     if let Some(cursor) = &cursor {
-        match cursor.started_at {
-            Some(started_at) => {
-                sql.push_str(
-                    " WHERE started_at < ?
-                         OR started_at IS NULL
-                         OR (started_at = ? AND id < ?)",
-                );
-                params.extend([
-                    Value::Integer(started_at),
-                    Value::Integer(started_at),
-                    Value::Text(cursor.id.clone()),
-                ]);
-            }
-            None => {
-                sql.push_str(" WHERE started_at IS NULL AND id < ?");
-                params.push(Value::Text(cursor.id.clone()));
-            }
-        }
+        let (body, keyset_params) = keyset_after(cursor, "");
+        sql.push_str(" WHERE ");
+        sql.push_str(&body);
+        params.extend(keyset_params);
     }
     sql.push_str(" ORDER BY started_at DESC, id DESC LIMIT ?");
     params.push(Value::Integer(limit + 1));
@@ -155,24 +168,11 @@ pub fn list_repository_sessions_page(
     );
     let mut params = vec![Value::Text(repository_id.to_string())];
     if let Some(cursor) = &cursor {
-        match cursor.started_at {
-            Some(started_at) => {
-                sql.push_str(
-                    " AND (s.started_at < ?
-                           OR s.started_at IS NULL
-                           OR (s.started_at = ? AND s.id < ?))",
-                );
-                params.extend([
-                    Value::Integer(started_at),
-                    Value::Integer(started_at),
-                    Value::Text(cursor.id.clone()),
-                ]);
-            }
-            None => {
-                sql.push_str(" AND s.started_at IS NULL AND s.id < ?");
-                params.push(Value::Text(cursor.id.clone()));
-            }
-        }
+        let (body, keyset_params) = keyset_after(cursor, "s.");
+        sql.push_str(" AND (");
+        sql.push_str(&body);
+        sql.push(')');
+        params.extend(keyset_params);
     }
     sql.push_str(" ORDER BY s.started_at DESC, s.id DESC LIMIT ?");
     params.push(Value::Integer(limit + 1));
