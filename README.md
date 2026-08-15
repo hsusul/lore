@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/lore-mark-light.svg">
+    <img alt="Lore" src="assets/brand/lore-mark-dark.svg" width="88">
+  </picture>
+</p>
+
 # Lore
 
 Lore is a local desktop app for browsing and searching your coding-agent history.

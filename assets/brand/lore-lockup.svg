@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="310" height="96" viewBox="0 0 310 96" role="img" aria-label="Lore">
+  <circle cx="90" cy="48" r="30" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="176.98 11.52" transform="rotate(191 90 48)"/>
+  <circle cx="64" cy="48" r="20" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="117.98 7.68" transform="rotate(191 64 48)"/>
+  <circle cx="28" cy="48" r="7" fill="currentColor"/>
+  <text x="150" y="63" fill="currentColor"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+    font-size="46" font-weight="500" letter-spacing="-1">lore</text>
+</svg>
