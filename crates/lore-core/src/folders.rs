@@ -56,6 +56,7 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<FolderSummary>> {
 /// reflects any normalization.
 pub fn create_folder(conn: &Connection, name: &str) -> Result<FolderSummary> {
     let name = clean_name(name);
+    let _write = crate::storage::write_lock();
     let position: i64 =
         conn.query_row("SELECT COALESCE(MAX(position), -1) + 1 FROM folder", [], |r| {
             r.get(0)
@@ -78,6 +79,7 @@ pub fn create_folder(conn: &Connection, name: &str) -> Result<FolderSummary> {
 
 /// Rename a folder. Unknown ids are a no-op.
 pub fn rename_folder(conn: &Connection, id: &str, name: &str) -> Result<()> {
+    let _write = crate::storage::write_lock();
     conn.execute(
         "UPDATE folder SET name = ?2, updated_at = unixepoch('now') * 1000 WHERE id = ?1",
         rusqlite::params![id, clean_name(name)],
@@ -88,6 +90,7 @@ pub fn rename_folder(conn: &Connection, id: &str, name: &str) -> Result<()> {
 /// Delete a folder. Its memberships cascade away; the threads themselves are
 /// untouched and simply become unfiled. Unknown ids are a no-op.
 pub fn delete_folder(conn: &Connection, id: &str) -> Result<()> {
+    let _write = crate::storage::write_lock();
     conn.execute("DELETE FROM folder WHERE id = ?1", [id])?;
     Ok(())
 }
@@ -100,6 +103,7 @@ pub fn set_session_folder(
     session_id: &str,
     folder_id: Option<&str>,
 ) -> Result<()> {
+    let _write = crate::storage::write_lock();
     match folder_id {
         Some(folder_id) => {
             conn.execute(

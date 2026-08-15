@@ -54,6 +54,7 @@ pub fn enrich_session(conn: &Connection, session_id: &str) -> Result<usize> {
         return Ok(0);
     }
 
+    let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
     let mut enriched = 0;
     for (segment_id, facts) in &resolved {
@@ -91,6 +92,7 @@ pub fn reverify_session(conn: &Connection, session_id: &str) -> Result<usize> {
         })
         .collect();
 
+    let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
     for outcome in &outcomes {
         let obs_id = det_id(

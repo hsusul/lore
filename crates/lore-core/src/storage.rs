@@ -65,8 +65,26 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA temp_store = MEMORY;\n\
          PRAGMA mmap_size = 268435456;",
     )?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
     Ok(())
+}
+
+/// Process-wide write serialization for the archive database.
+///
+/// The UI and the background ingest worker each hold their own SQLite connection
+/// to the same WAL database. Two independent writers otherwise collide on
+/// SQLite's single write lock and, once the busy-timeout is exceeded, surface
+/// `SQLITE_BUSY` ("database is locked"). Every archive write path takes this lock
+/// first, so writers serialize in-process and never contend at the SQLite layer.
+/// Readers are unaffected — WAL readers never block on a writer.
+///
+/// Hold the guard only around the write transaction itself (stage blobs and
+/// parse first), and never take it re-entrantly within a single call chain.
+pub fn write_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]

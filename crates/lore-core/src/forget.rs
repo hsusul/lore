@@ -37,6 +37,7 @@ pub fn forget_session(
     conn.execute_batch("PRAGMA secure_delete = ON;")?;
 
     let orphans = {
+        let _write = crate::storage::write_lock();
         let tx = conn.unchecked_transaction()?;
         // Delete projections first so the FTS external-content delete trigger
         // fires (an FK cascade would not), then cascade the rest.
@@ -76,6 +77,7 @@ pub fn forget_session(
 pub fn forget_all(conn: &Connection, blobs: &BlobStore) -> Result<ForgetReport> {
     conn.execute_batch("PRAGMA secure_delete = ON;")?;
     let orphans = {
+        let _write = crate::storage::write_lock();
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
         // Delete projections first so the FTS external-content trigger fires.

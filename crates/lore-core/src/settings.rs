@@ -22,6 +22,7 @@ pub fn get(conn: &Connection, key: &str) -> Result<Option<String>> {
 
 /// Upsert a setting to a raw JSON value, stamping `updated_at` (epoch millis).
 pub fn set(conn: &Connection, key: &str, value_json: &str) -> Result<()> {
+    let _write = crate::storage::write_lock();
     conn.execute(
         "INSERT INTO setting (key, value_json, updated_at)
          VALUES (?1, ?2, unixepoch('now') * 1000)
