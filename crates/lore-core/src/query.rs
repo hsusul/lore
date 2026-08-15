@@ -38,21 +38,26 @@ pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary
          LIMIT ?1",
     )?;
     let rows = stmt
-        .query_map([limit], |row| {
-            Ok(SessionSummary {
-                id: row.get(0)?,
-                agent_id: row.get(1)?,
-                title: row.get(2)?,
-                started_at: row.get(3)?,
-                ended_at: row.get(4)?,
-                message_count: row.get(5)?,
-                tool_call_count: row.get(6)?,
-                primary_model: row.get(7)?,
-                parse_status: row.get(8)?,
-            })
-        })?
+        .query_map([limit], session_summary_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Map the standard nine-column session-summary projection (columns 0..=8, in
+/// the field order every `SELECT` in this module uses). Shared so the column
+/// order lives in exactly one place.
+fn session_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSummary> {
+    Ok(SessionSummary {
+        id: row.get(0)?,
+        agent_id: row.get(1)?,
+        title: row.get(2)?,
+        started_at: row.get(3)?,
+        ended_at: row.get(4)?,
+        message_count: row.get(5)?,
+        tool_call_count: row.get(6)?,
+        primary_model: row.get(7)?,
+        parse_status: row.get(8)?,
+    })
 }
 
 /// The keyset predicate body (no leading `WHERE`/`AND`) keeping only rows
@@ -130,19 +135,7 @@ pub fn list_repository_sessions(
          LIMIT ?2",
     )?;
     let rows = stmt
-        .query_map(rusqlite::params![repository_id, limit], |row| {
-            Ok(SessionSummary {
-                id: row.get(0)?,
-                agent_id: row.get(1)?,
-                title: row.get(2)?,
-                started_at: row.get(3)?,
-                ended_at: row.get(4)?,
-                message_count: row.get(5)?,
-                tool_call_count: row.get(6)?,
-                primary_model: row.get(7)?,
-                parse_status: row.get(8)?,
-            })
-        })?
+        .query_map(rusqlite::params![repository_id, limit], session_summary_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -187,19 +180,7 @@ fn query_session_page(
 ) -> Result<SessionPage> {
     let mut stmt = conn.prepare(sql)?;
     let mut sessions = stmt
-        .query_map(rusqlite::params_from_iter(params), |row| {
-            Ok(SessionSummary {
-                id: row.get(0)?,
-                agent_id: row.get(1)?,
-                title: row.get(2)?,
-                started_at: row.get(3)?,
-                ended_at: row.get(4)?,
-                message_count: row.get(5)?,
-                tool_call_count: row.get(6)?,
-                primary_model: row.get(7)?,
-                parse_status: row.get(8)?,
-            })
-        })?
+        .query_map(rusqlite::params_from_iter(params), session_summary_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let has_more = sessions.len() > limit as usize;
     sessions.truncate(limit as usize);
@@ -284,22 +265,7 @@ fn session_summary(
                 tool_call_count, primary_model, parse_status, parse_note
          FROM agent_session WHERE id = ?1",
         [session_id],
-        |row| {
-            Ok((
-                SessionSummary {
-                    id: row.get(0)?,
-                    agent_id: row.get(1)?,
-                    title: row.get(2)?,
-                    started_at: row.get(3)?,
-                    ended_at: row.get(4)?,
-                    message_count: row.get(5)?,
-                    tool_call_count: row.get(6)?,
-                    primary_model: row.get(7)?,
-                    parse_status: row.get(8)?,
-                },
-                row.get(9)?,
-            ))
-        },
+        |row| Ok((session_summary_row(row)?, row.get(9)?)),
     )
     .optional()
     .map_err(Into::into)
