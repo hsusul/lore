@@ -44,18 +44,31 @@ const SEARCH_PAGE = 50;
 /** Coalesce rapid typing before crossing the Tauri/SQLite boundary. */
 const SEARCH_DEBOUNCE_MS = 180;
 
-/** A small commit-graph mark. */
+/** The Lore mark: a node linked to two overlapping rings. */
 function Mark() {
   return (
-    <svg className="shell__mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="4" cy="4" r="2" fill="currentColor" />
-      <circle cx="4" cy="12" r="2" fill="currentColor" />
-      <circle cx="12" cy="8" r="2" fill="currentColor" />
-      <path
-        d="M4 6v4M5.7 5 10.3 7.2M5.7 11 10.3 8.8"
+    <svg className="shell__mark" viewBox="0 0 140 96" fill="none" aria-hidden="true">
+      <circle
+        cx="90"
+        cy="48"
+        r="30"
         stroke="currentColor"
-        strokeWidth="1.3"
+        strokeWidth="7"
+        strokeLinecap="round"
+        strokeDasharray="176.98 11.52"
+        transform="rotate(191 90 48)"
       />
+      <circle
+        cx="64"
+        cy="48"
+        r="20"
+        stroke="currentColor"
+        strokeWidth="7"
+        strokeLinecap="round"
+        strokeDasharray="117.98 7.68"
+        transform="rotate(191 64 48)"
+      />
+      <circle cx="28" cy="48" r="7" fill="currentColor" />
     </svg>
   );
 }

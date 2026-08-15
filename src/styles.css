@@ -4,15 +4,15 @@
 
 :root {
   /* Light theme (default) */
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --surface-2: #eef0f3;
-  --surface-hover: rgba(0, 0, 0, 0.04);
-  --border: rgba(0, 0, 0, 0.09);
-  --border-strong: rgba(0, 0, 0, 0.16);
-  --text: #17181d;
-  --text-2: #565a6b;
-  --text-3: #8b8f9e;
+  --bg: #f2efe8;
+  --surface: #faf8f3;
+  --surface-2: #e9e4d8;
+  --surface-hover: rgba(33, 31, 28, 0.05);
+  --border: rgba(33, 31, 28, 0.10);
+  --border-strong: rgba(33, 31, 28, 0.17);
+  --text: #211f1c;
+  --text-2: #5c574e;
+  --text-3: #8e8676;
   --accent: #5b5bd6;
   --accent-fg: #ffffff;
   --accent-weak: rgba(91, 91, 214, 0.12);
@@ -34,7 +34,7 @@
   --r-sm: 4px;
   --r: 6px;
   --r-lg: 10px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow: 0 1px 2px rgba(40, 33, 20, 0.07), 0 8px 24px rgba(40, 33, 20, 0.1);
 
   color-scheme: light dark;
   font-family: var(--font-ui);
@@ -44,15 +44,15 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0c0d11;
-    --surface: #15161c;
-    --surface-2: #1c1e26;
-    --surface-hover: rgba(255, 255, 255, 0.05);
-    --border: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.15);
-    --text: #e6e8ef;
-    --text-2: #9ca1b3;
-    --text-3: #676c7e;
+    --bg: #17130f;
+    --surface: #201b16;
+    --surface-2: #2a241d;
+    --surface-hover: rgba(244, 241, 234, 0.055);
+    --border: rgba(244, 241, 234, 0.09);
+    --border-strong: rgba(244, 241, 234, 0.16);
+    --text: #f0ece2;
+    --text-2: #b1a996;
+    --text-3: #7d7666;
     --accent: #7c82f0;
     --accent-fg: #ffffff;
     --accent-weak: rgba(124, 130, 240, 0.18);
@@ -78,15 +78,15 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0c0d11;
-  --surface: #15161c;
-  --surface-2: #1c1e26;
-  --surface-hover: rgba(255, 255, 255, 0.05);
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.15);
-  --text: #e6e8ef;
-  --text-2: #9ca1b3;
-  --text-3: #676c7e;
+  --bg: #17130f;
+  --surface: #201b16;
+  --surface-2: #2a241d;
+  --surface-hover: rgba(244, 241, 234, 0.055);
+  --border: rgba(244, 241, 234, 0.09);
+  --border-strong: rgba(244, 241, 234, 0.16);
+  --text: #f0ece2;
+  --text-2: #b1a996;
+  --text-3: #7d7666;
   --accent: #7c82f0;
   --accent-weak: rgba(124, 130, 240, 0.18);
   --success: #51cf66;
@@ -151,9 +151,9 @@ pre,
 }
 
 .shell__mark {
-  width: 16px;
+  width: 23px;
   height: 16px;
-  color: var(--accent);
+  color: var(--text);
   flex: none;
 }
 
