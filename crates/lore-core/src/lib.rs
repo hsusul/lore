@@ -21,6 +21,7 @@ pub mod backup;
 pub mod discovery;
 pub mod enrich;
 pub mod export;
+pub mod folders;
 pub mod forget;
 pub mod git;
 pub mod ingest;

@@ -16,8 +16,9 @@ use lore_core::storage::blob::BlobStore;
 use lore_core::watcher::SessionWatcher;
 use lore_core::worker::{self, WorkerConfig, WorkerHandle};
 use lore_ipc::{
-    BackupScheduleDto, DetectedAgent, ForgetReport, GitObservationDto, RepositorySummary,
-    RescanResult, ScanProgress, SearchHit, SearchPage, SessionDetail, SessionPage, SessionSummary,
+    BackupScheduleDto, DetectedAgent, FolderSummary, ForgetReport, GitObservationDto,
+    RepositorySummary, RescanResult, ScanProgress, SearchHit, SearchPage, SessionDetail,
+    SessionPage, SessionSummary,
 };
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
@@ -259,6 +260,61 @@ fn search_page(
 }
 
 /// Read a persisted setting's raw JSON value, or `null` when it is unset.
+/// List the user-defined folders with their thread counts.
+#[tauri::command]
+fn list_folders(state: State<'_, AppState>) -> Result<Vec<FolderSummary>, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::folders::list_folders(&conn).map_err(|e| e.to_string())
+}
+
+/// Create a folder and return it (name is trimmed and length-capped).
+#[tauri::command]
+fn create_folder(state: State<'_, AppState>, name: String) -> Result<FolderSummary, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::folders::create_folder(&conn, &name).map_err(|e| e.to_string())
+}
+
+/// Rename a folder.
+#[tauri::command]
+fn rename_folder(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::folders::rename_folder(&conn, &id, &name).map_err(|e| e.to_string())
+}
+
+/// Delete a folder; its threads become unfiled but are not removed from Lore.
+#[tauri::command]
+fn delete_folder(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::folders::delete_folder(&conn, &id).map_err(|e| e.to_string())
+}
+
+/// File a thread into a folder, replacing any prior membership. A `null`
+/// `folderId` unfiles the thread.
+#[tauri::command]
+fn set_session_folder(
+    state: State<'_, AppState>,
+    session_id: String,
+    folder_id: Option<String>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::folders::set_session_folder(&conn, &session_id, folder_id.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// List one newest-first page of the threads filed in a folder.
+#[tauri::command]
+fn list_folder_sessions_page(
+    state: State<'_, AppState>,
+    id: String,
+    limit: i64,
+    cursor: Option<String>,
+) -> Result<SessionPage, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::query::list_folder_sessions_page(&conn, &id, limit.clamp(1, 10_000), cursor.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// Read a setting's raw JSON value.
 #[tauri::command]
 fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -518,6 +574,12 @@ pub fn run() {
             forget_everything,
             search,
             search_page,
+            list_folders,
+            create_folder,
+            rename_folder,
+            delete_folder,
+            set_session_folder,
+            list_folder_sessions_page,
             get_setting,
             set_setting,
             get_backup_schedule,

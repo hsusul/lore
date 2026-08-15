@@ -54,6 +54,20 @@ pub struct RepositorySummary {
     pub worktree_count: i64,
 }
 
+/// A user-defined folder for organizing threads. Payload element of
+/// `list_folders`. `session_count` is how many threads are filed in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FolderSummary {
+    pub id: String,
+    pub name: String,
+    #[ts(type = "number")]
+    pub session_count: i64,
+    /// User ordering key; the list is sorted by this then name.
+    #[ts(type = "number")]
+    pub position: i64,
+}
+
 /// A one-line session for list views. Payload element of `list_sessions`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

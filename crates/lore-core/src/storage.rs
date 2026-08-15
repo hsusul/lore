@@ -85,7 +85,7 @@ mod tests {
         let applied: i64 = conn
             .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(applied, 7, "all migrations should be recorded");
+        assert_eq!(applied, 8, "all migrations should be recorded");
         assert!(foreign_keys_on(&conn), "foreign_keys must be enforced");
         // Infra tables exist.
         for t in ["setting", "job"] {
@@ -143,7 +143,7 @@ mod tests {
         let applied: i64 = conn
             .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(applied, 7, "re-running migrations must not duplicate rows");
+        assert_eq!(applied, 8, "re-running migrations must not duplicate rows");
     }
 
     #[test]

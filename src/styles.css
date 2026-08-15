@@ -601,6 +601,104 @@ kbd {
   font-size: 0.75rem;
 }
 
+/* ── Folders ───────────────────────────────────────────────────────────── */
+
+.folders {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nav-heading__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-heading__add {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 0 0.4rem;
+  margin-right: 0.35rem;
+  border-radius: var(--r-sm);
+}
+.nav-heading__add:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.folder-row {
+  display: flex;
+  align-items: center;
+}
+
+.folder__item {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder__delete {
+  opacity: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.78rem;
+  border-radius: var(--r-sm);
+}
+.folder-row:hover .folder__delete,
+.folder__delete:focus-visible {
+  opacity: 1;
+}
+.folder__delete:hover {
+  color: var(--danger);
+  background: var(--surface-hover);
+}
+
+/* A folder (or All sessions) lit up as a live drop target during a thread drag. */
+.folder-row.is-dragover,
+.nav-item.is-dragover {
+  background: var(--accent-weak);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: var(--r);
+}
+.folder-row.is-dragover .nav-item {
+  background: transparent;
+}
+
+.dot--folder {
+  background: var(--text-2);
+}
+
+.folder__field {
+  width: calc(100% - 1rem);
+  margin: 2px 0.5rem;
+  padding: 0.28rem 0.45rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+}
+.folder__field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-weak);
+}
+
+.folders__empty {
+  margin: 0.2rem 0.5rem;
+  color: var(--text-3);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
 /* ── Sessions listbox ──────────────────────────────────────────────────── */
 
 .sessions {

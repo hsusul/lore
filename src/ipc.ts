@@ -8,6 +8,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import type { DetectedAgent } from "../crates/lore-ipc/bindings/DetectedAgent";
 import type { FileEventDto } from "../crates/lore-ipc/bindings/FileEventDto";
+import type { FolderSummary } from "../crates/lore-ipc/bindings/FolderSummary";
 import type { ForgetReport } from "../crates/lore-ipc/bindings/ForgetReport";
 import type { GitObservationDto } from "../crates/lore-ipc/bindings/GitObservationDto";
 import type { MessageDto } from "../crates/lore-ipc/bindings/MessageDto";
@@ -26,6 +27,7 @@ import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary"
 export type {
   DetectedAgent,
   FileEventDto,
+  FolderSummary,
   ForgetReport,
   GitObservationDto,
   MessageDto,
@@ -106,6 +108,40 @@ export function listRepositorySessionsPage(
 /** Read one session in context, or null when it is unknown. */
 export function getSession(id: string): Promise<SessionDetail | null> {
   return invoke<SessionDetail | null>("get_session", { id });
+}
+
+/** The user-defined folders, with thread counts. */
+export function listFolders(): Promise<FolderSummary[]> {
+  return invoke<FolderSummary[]>("list_folders");
+}
+
+/** Create a folder and return it (the name is trimmed and length-capped). */
+export function createFolder(name: string): Promise<FolderSummary> {
+  return invoke<FolderSummary>("create_folder", { name });
+}
+
+/** Rename a folder. */
+export function renameFolder(id: string, name: string): Promise<void> {
+  return invoke<void>("rename_folder", { id, name });
+}
+
+/** Delete a folder; its threads become unfiled but are not removed. */
+export function deleteFolder(id: string): Promise<void> {
+  return invoke<void>("delete_folder", { id });
+}
+
+/** File a thread into a folder, or unfile it when `folderId` is null. */
+export function setSessionFolder(sessionId: string, folderId: string | null): Promise<void> {
+  return invoke<void>("set_session_folder", { sessionId, folderId });
+}
+
+/** One newest-first page of the threads filed in a folder. */
+export function listFolderSessionsPage(
+  id: string,
+  limit: number,
+  cursor: string | null,
+): Promise<SessionPage> {
+  return invoke<SessionPage>("list_folder_sessions_page", { id, limit, cursor });
 }
 
 /** Read the provenance-labeled git observations for a session. */

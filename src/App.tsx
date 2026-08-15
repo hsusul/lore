@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import CommandPalette, { type Command } from "./components/CommandPalette";
 import ArchiveOnboarding from "./components/ArchiveOnboarding";
+import FolderList from "./components/FolderList";
 import RepositoryList from "./components/RepositoryList";
 import SearchResults from "./components/SearchResults";
 import SessionList from "./components/SessionList";
@@ -11,6 +12,8 @@ import { agentLabel } from "./format";
 import {
   addAgentRoot,
   chooseAgentRootDirectory,
+  createFolder,
+  deleteFolder,
   exportSessionMarkdown,
   forgetSession,
   getFilePatch,
@@ -18,17 +21,22 @@ import {
   getSession,
   getSetting,
   listDetectedAgents,
+  listFolders,
+  listFolderSessionsPage,
   listRepositories,
   listRepositorySessionsPage,
   listSessionsPage,
   onScanProgress,
   forgetEverything,
+  renameFolder,
   rescan,
   removeAgentRoot,
   searchPage,
+  setSessionFolder,
   setSetting,
   sessionSecretCount,
   type DetectedAgent,
+  type FolderSummary,
   type GitObservationDto,
   type RepositorySummary,
   type ScanProgress,
@@ -104,6 +112,8 @@ export default function App() {
   const [loadingMoreSessionsRequest, setLoadingMoreSessionsRequest] = useState<number | null>(null);
   const loadingMoreSessions = loadingMoreSessionsRequest !== null;
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
+  const [folders, setFolders] = useState<FolderSummary[]>([]);
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [git, setGit] = useState<GitObservationDto[]>([]);
@@ -123,6 +133,7 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchResultsRef = useRef<HTMLUListElement>(null);
   const selectedRepoRef = useRef<string | null>(null);
+  const selectedFolderRef = useRef<string | null>(null);
   const refreshRequestRef = useRef(0);
   const sessionsRequestRef = useRef(0);
   const sessionsPendingRequestRef = useRef<number | null>(null);
@@ -134,7 +145,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [rootBusy, setRootBusy] = useState<string | null>(null);
 
-  const loadSessions = useCallback(async (repo: string | null, showPending = false) => {
+  const loadSessions = useCallback(
+    async (repo: string | null, folder: string | null, showPending = false) => {
     const request = ++sessionsRequestRef.current;
     setLoadingMoreSessionsRequest(null);
     const limit = showPending
@@ -147,9 +159,11 @@ export default function App() {
       setSessionCursor(null);
     }
     try {
-      const page = repo
-        ? await listRepositorySessionsPage(repo, limit, null)
-        : await listSessionsPage(limit, null);
+      const page = folder
+        ? await listFolderSessionsPage(folder, limit, null)
+        : repo
+          ? await listRepositorySessionsPage(repo, limit, null)
+          : await listSessionsPage(limit, null);
       if (request === sessionsRequestRef.current) {
         // The newest request owns the pane and also settles any pending marker
         // inherited from a manual load that it superseded.
@@ -171,6 +185,7 @@ export default function App() {
   const refresh = useCallback(async () => {
     const request = ++refreshRequestRef.current;
     const repo = selectedRepoRef.current;
+    const folder = selectedFolderRef.current;
     try {
       const nextAgents = await listDetectedAgents();
       if (request !== refreshRequestRef.current) return;
@@ -178,9 +193,13 @@ export default function App() {
       const nextRepositories = await listRepositories();
       if (request !== refreshRequestRef.current) return;
       setRepositories(nextRepositories);
-      // A manual repository change owns its own load. Do not duplicate or
+      const nextFolders = await listFolders();
+      if (request !== refreshRequestRef.current) return;
+      setFolders(nextFolders);
+      // A manual repository/folder change owns its own load. Do not duplicate or
       // supersede it if the selection changed while this refresh was running.
-      if (repo === selectedRepoRef.current) await loadSessions(repo);
+      if (repo === selectedRepoRef.current && folder === selectedFolderRef.current)
+        await loadSessions(repo, folder);
       if (request === refreshRequestRef.current) setArchiveStatus("ready");
     } catch (e) {
       if (request === refreshRequestRef.current) {
@@ -270,14 +289,103 @@ export default function App() {
 
   const selectRepo = useCallback(async (repo: string | null) => {
     selectedRepoRef.current = repo;
+    selectedFolderRef.current = null;
     setSelectedRepo(repo);
+    setSelectedFolder(null);
     setError(null);
     try {
-      await loadSessions(repo, true);
+      await loadSessions(repo, null, true);
     } catch (e) {
       setError(String(e));
     }
   }, [loadSessions]);
+
+  const selectFolder = useCallback(async (folderId: string) => {
+    selectedFolderRef.current = folderId;
+    selectedRepoRef.current = null;
+    setSelectedFolder(folderId);
+    setSelectedRepo(null);
+    setError(null);
+    try {
+      await loadSessions(null, folderId, true);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [loadSessions]);
+
+  const refreshFolders = useCallback(async () => {
+    try {
+      setFolders(await listFolders());
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  const handleCreateFolder = useCallback(
+    async (name: string) => {
+      setError(null);
+      try {
+        await createFolder(name);
+        await refreshFolders();
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [refreshFolders],
+  );
+
+  const handleRenameFolder = useCallback(
+    async (id: string, name: string) => {
+      try {
+        await renameFolder(id, name);
+        await refreshFolders();
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [refreshFolders],
+  );
+
+  const handleDeleteFolder = useCallback(
+    async (id: string) => {
+      if (!window.confirm("Delete this folder? Its threads stay in Lore, just unfiled.")) {
+        return;
+      }
+      try {
+        await deleteFolder(id);
+        // Leaving a now-deleted folder view falls back to All sessions.
+        if (selectedFolderRef.current === id) {
+          await selectRepo(null);
+        }
+        await refreshFolders();
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [refreshFolders, selectRepo],
+  );
+
+  // File a thread into a folder (or unfile it when `folderId` is null), then
+  // refresh folder counts and the current pane so membership changes show at once.
+  const fileSession = useCallback(
+    async (sessionId: string, folderId: string | null) => {
+      setError(null);
+      try {
+        await setSessionFolder(sessionId, folderId);
+        await refreshFolders();
+        await loadSessions(selectedRepoRef.current, selectedFolderRef.current);
+        const target = folders.find((f) => f.id === folderId);
+        setNotice(
+          folderId
+            ? `Filed thread in “${target?.name ?? "folder"}”.`
+            : "Removed thread from its folder.",
+        );
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [folders, loadSessions, refreshFolders],
+  );
 
   function updateSearch(next: string) {
     // Batch the query and its visible state so snippets from the previous query
@@ -309,14 +417,22 @@ export default function App() {
     if (sessionCursor === null || loadingMoreSessions) return;
     const request = ++sessionsRequestRef.current;
     const repo = selectedRepoRef.current;
+    const folder = selectedFolderRef.current;
     const forCursor = sessionCursor;
     setLoadingMoreSessionsRequest(request);
     setError(null);
     try {
-      const page = repo
-        ? await listRepositorySessionsPage(repo, SESSION_PAGE, forCursor)
-        : await listSessionsPage(SESSION_PAGE, forCursor);
-      if (request !== sessionsRequestRef.current || repo !== selectedRepoRef.current) return;
+      const page = folder
+        ? await listFolderSessionsPage(folder, SESSION_PAGE, forCursor)
+        : repo
+          ? await listRepositorySessionsPage(repo, SESSION_PAGE, forCursor)
+          : await listSessionsPage(SESSION_PAGE, forCursor);
+      if (
+        request !== sessionsRequestRef.current ||
+        repo !== selectedRepoRef.current ||
+        folder !== selectedFolderRef.current
+      )
+        return;
       // A cursor page should be disjoint, but deduping at the UI boundary keeps
       // a concurrent archive refresh from ever painting a duplicate.
       const seen = new Set(sessions.map((session) => session.id));
@@ -583,7 +699,18 @@ export default function App() {
           <RepositoryList
             repositories={repositories}
             selectedId={selectedRepo}
+            allSelected={selectedRepo === null && selectedFolder === null}
             onSelect={selectRepo}
+            onUnfileSession={(id) => void fileSession(id, null)}
+          />
+          <FolderList
+            folders={folders}
+            selectedId={selectedFolder}
+            onSelect={(id) => void selectFolder(id)}
+            onCreate={(name) => void handleCreateFolder(name)}
+            onRename={(id, name) => void handleRenameFolder(id, name)}
+            onDelete={(id) => void handleDeleteFolder(id)}
+            onDropSession={(folderId, sessionId) => void fileSession(sessionId, folderId)}
           />
           {agents.length > 0 && (
             <p className="pane__agents">

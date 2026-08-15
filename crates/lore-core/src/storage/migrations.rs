@@ -53,6 +53,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "search_document_sort_keys",
         sql: include_str!("../../migrations/0007_search_document_sort_keys.sql"),
     },
+    Migration {
+        version: 8,
+        name: "folders",
+        sql: include_str!("../../migrations/0008_folders.sql"),
+    },
 ];
 
 /// Apply all pending migrations. Idempotent.

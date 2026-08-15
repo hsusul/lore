@@ -172,6 +172,37 @@ pub fn list_repository_sessions_page(
     query_session_page(conn, &sql, params, limit)
 }
 
+/// Paginated listing of the threads filed in one folder, newest-first, using
+/// the same total order and opaque keyset cursor as [`list_sessions_page`].
+/// Folder membership lives in `session_folder` (see [`crate::folders`]).
+pub fn list_folder_sessions_page(
+    conn: &Connection,
+    folder_id: &str,
+    limit: i64,
+    cursor: Option<&str>,
+) -> Result<SessionPage> {
+    let limit = limit.clamp(1, 10_000);
+    let cursor = cursor.and_then(SessionCursor::decode);
+    let mut sql = String::from(
+        "SELECT s.id, s.agent_id, s.title, s.started_at, s.ended_at, s.message_count,
+                s.tool_call_count, s.primary_model, s.parse_status
+         FROM agent_session s
+         JOIN session_folder sf ON sf.session_id = s.id
+         WHERE sf.folder_id = ?",
+    );
+    let mut params = vec![Value::Text(folder_id.to_string())];
+    if let Some(cursor) = &cursor {
+        let (body, keyset_params) = keyset_after(cursor, "s.");
+        sql.push_str(" AND (");
+        sql.push_str(&body);
+        sql.push(')');
+        params.extend(keyset_params);
+    }
+    sql.push_str(" ORDER BY s.started_at DESC, s.id DESC LIMIT ?");
+    params.push(Value::Integer(limit + 1));
+    query_session_page(conn, &sql, params, limit)
+}
+
 fn query_session_page(
     conn: &Connection,
     sql: &str,

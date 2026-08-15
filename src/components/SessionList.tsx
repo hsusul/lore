@@ -4,6 +4,9 @@ import { agentLabel, formatRelative } from "../format";
 import type { SessionSummary } from "../ipc";
 import { useWindowing } from "../virtual";
 
+/** Drag payload MIME for filing a thread into a folder via drag-and-drop. */
+export const SESSION_DND_MIME = "application/x-lore-session";
+
 /**
  * A keyboard-navigable session list (listbox pattern): Arrow/j/k move the active
  * row, Home/End jump to the ends, Enter opens it, click selects and opens.
@@ -100,6 +103,11 @@ export default function SessionList({
               aria-setsize={sessions.length}
               aria-posinset={index + 1}
               className={`sessions__item${index === active ? " is-active" : ""}`}
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData(SESSION_DND_MIME, session.id);
+                event.dataTransfer.effectAllowed = "move";
+              }}
               onClick={() => {
                 setNavigation({ listKey, index });
                 onOpen(session.id);
