@@ -203,7 +203,32 @@ pub fn scan(text: &str) -> Result<Vec<Finding>> {
     if FAIL_SCANS_FOR_TEST.with(|armed| armed.get()) {
         return Err(ScanError::Failed);
     }
-    std::panic::catch_unwind(AssertUnwindSafe(|| scan_inner(text))).map_err(|_| ScanError::Failed)
+    let findings = std::panic::catch_unwind(AssertUnwindSafe(|| scan_inner(text)))
+        .map_err(|_| ScanError::Failed)?;
+    // Enforce that every finding is an in-bounds, char-aligned sub-slice of
+    // `text`. Downstream `Finding::fingerprint` and `redact` slice `text` by
+    // these offsets *outside* any panic guard (during ingest and export), so a
+    // scanner defect that produced an unsafe span would otherwise panic the
+    // worker thread and wedge ingestion. Quarantining the field here (Err →
+    // no findings recorded, no projection) keeps the pipeline fail-secure
+    // (SECRET_SCANNING.md §6). This never triggers for the current scanners,
+    // whose spans are always ASCII-anchored token boundaries.
+    if !findings_sliceable(text, &findings) {
+        return Err(ScanError::Failed);
+    }
+    Ok(findings)
+}
+
+/// True when every finding's byte span is in-bounds, non-inverted, and aligned
+/// to UTF-8 char boundaries — the precondition for slicing `text` by it without
+/// a panic.
+fn findings_sliceable(text: &str, findings: &[Finding]) -> bool {
+    findings.iter().all(|f| {
+        f.start <= f.end
+            && f.end <= text.len()
+            && text.is_char_boundary(f.start)
+            && text.is_char_boundary(f.end)
+    })
 }
 
 /// The infallible detector pass; wrapped by [`scan`] so any panic on untrusted
@@ -644,6 +669,33 @@ mod tests {
         let mut r: Vec<&'static str> = scan_ok(text).into_iter().map(|f| f.rule).collect();
         r.sort_unstable();
         r
+    }
+
+    #[test]
+    fn only_char_aligned_in_bounds_spans_are_sliceable() {
+        // "héllo": é occupies bytes 1..3, so byte 2 is mid-character.
+        let text = "héllo";
+        let fin = |start, end| Finding {
+            rule: "test",
+            start,
+            end,
+            severity: Severity::Low,
+        };
+        // Valid, char-aligned spans slice safely.
+        assert!(findings_sliceable(text, &[fin(0, 1)]));
+        assert!(findings_sliceable(text, &[fin(3, 6)]));
+        // These would otherwise panic Finding::fingerprint / redact on the ingest
+        // worker thread, so scan() must quarantine the field instead.
+        assert!(!findings_sliceable(text, &[fin(1, 2)]), "end mid-character");
+        assert!(
+            !findings_sliceable(text, &[fin(2, 3)]),
+            "start mid-character"
+        );
+        assert!(
+            !findings_sliceable(text, &[fin(0, 999)]),
+            "end out of bounds"
+        );
+        assert!(!findings_sliceable(text, &[fin(4, 1)]), "inverted span");
     }
 
     fn scan_ok(text: &str) -> Vec<Finding> {
