@@ -805,6 +805,26 @@ mod tests {
     }
 
     #[test]
+    fn redaction_is_correct_when_secret_is_surrounded_by_multibyte_text() {
+        // Real sessions contain emoji/accented text; a token flanked by multibyte
+        // characters must still be found, masked, and leave the surrounding
+        // multibyte context intact — with the span offsets landing on char
+        // boundaries so the byte slicing never panics.
+        let secret = t("ghp", "_0123456789abcdefghijklmnopqrstuvwxyz");
+        let text = format!("café 🔑 deploy {secret} 日本語 done");
+        let findings = scan_ok(&text);
+        assert!(
+            findings.iter().any(|f| f.rule == "github-token"),
+            "token adjacent to multibyte text must still be detected"
+        );
+        let redacted = redact(&text, &findings);
+        assert!(!redacted.contains(&secret), "raw secret must not survive");
+        assert!(redacted.contains("café 🔑 deploy "));
+        assert!(redacted.contains(" 日本語 done"));
+        assert!(redacted.contains("«redacted:github-token»"));
+    }
+
+    #[test]
     fn fingerprint_is_stable_and_not_the_value() {
         let text = t("sk", "_live_0123456789abcdefABCD");
         let finding = &scan_ok(&text)[0];
