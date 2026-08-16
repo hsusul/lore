@@ -59,8 +59,11 @@ pub struct Detection { pub installed: bool, pub version: Option<String>, pub roo
 
 pub struct SessionRef { pub agent: AgentId, pub path: PathBuf, pub mtime: Option<SystemTime>, pub size: u64, pub native_id: Option<String> }
 
-/// Content-free adapter error (never embeds file content).
+/// Content-free adapter error (never embeds file content or paths).
 pub enum AdapterError { Io, Unreadable }
+
+/// Registry construction error when duplicate adapter IDs are registered.
+pub enum RegistryError { DuplicateId(&'static str) }
 
 /// The normalized, DB-agnostic parse result (see DATA_MODEL.md).
 pub struct ParsedSession { /* agent_session, segments, messages, parts, tool_calls, file_events, git observations, parse_status */ }

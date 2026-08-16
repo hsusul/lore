@@ -3500,6 +3500,22 @@
   2. *UX & accessibility:* Audit session view badge contrast.
   3. *Security/input validation:* Audit regex boundaries.
 
+## Iteration 234
+- **Lens:** Docs accuracy vs code
+- **Change:** Document `RegistryError::DuplicateId` diagnostic in `docs/architecture/AGENT_ADAPTERS.md` §2.
+- **Critique:**
+  - `AGENT_ADAPTERS.md` §2 listed `AdapterError` but did not document `RegistryError` for registry construction validation.
+  - Fix: Updated `docs/architecture/AGENT_ADAPTERS.md` §2 to include `RegistryError`.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit session view badge contrast.
+  2. *Security/input validation:* Audit regex boundaries.
+  3. *Dead code & duplication:* Audit redundant styles.
+
+
 
 
 
