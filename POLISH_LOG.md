@@ -917,6 +917,22 @@
   2. *Missing tests/edge cases:* Add test for setting invalid backup retention values.
   3. *Error handling:* Verify error handling when restoring non-sqlite files.
 
+## Iteration 61
+- **Lens:** Correctness bugs
+- **Change:** Filter zero-width byte-order marks (`\u{feff}`) in folder name sanitization (`crates/lore-core/src/folders.rs`).
+- **Critique:**
+  - `clean_name` filtered ASCII control characters and collapsed whitespace, but did not filter zero-width non-breaking space / byte-order marks (`\u{feff}`), allowing visually empty folder names to bypass the default `"New folder"` fallback.
+  - Fix: Filtered `*c != '\u{feff}'` in `clean_name` and added regression test coverage.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test `list_folder_sessions_page` pagination edge cases (cursor out of bounds).
+  2. *Error handling:* Check SQLite foreign key violations on folder deletion cascade.
+  3. *Performance/allocations:* Profile folder query preparation in hot loops.
+
+
 
 
 
