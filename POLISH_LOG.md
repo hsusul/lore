@@ -3590,6 +3590,22 @@
   2. *Correctness bugs:* Audit empty search string handling.
   3. *Missing tests/edge cases:* Audit virtual scroll window edges.
 
+## Iteration 240
+- **Lens:** Dependency/build hygiene
+- **Change:** Audit Cargo workspace package manifests, rustfmt formatting, and npm dependencies.
+- **Critique:**
+  - Verified `Cargo.toml`, workspace member configs, npm script configurations, and rustfmt clean formatting across all crates.
+  - Fix: Audited and verified all toolchain and build configs clean.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (118 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit empty search string handling.
+  2. *Missing tests/edge cases:* Audit virtual scroll window edges.
+  3. *Error handling:* Audit error boundary responses.
+
+
 
 
 
