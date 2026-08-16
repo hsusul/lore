@@ -355,3 +355,34 @@ fn list_backups_ignores_subdirectories_matching_backup_naming_pattern() {
     let result = lore_core::backup::list_backups(&backup_dir).unwrap();
     assert!(result.is_empty(), "directories matching backup naming must be ignored");
 }
+
+#[test]
+fn backup_schedule_read_clamping_and_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, _) = archive(dir.path());
+
+    // 1. Unset settings fall back to default schedule (Off, DEFAULT_BACKUP_RETENTION)
+    let s = read_schedule(&conn).unwrap();
+    assert_eq!(s.interval, BackupInterval::Off);
+    assert_eq!(s.keep, DEFAULT_BACKUP_RETENTION);
+
+    // 2. Corrupt/unparseable JSON in interval setting safely degrades to Off
+    lore_core::settings::set(&conn, "backup.interval", "not-valid-json").unwrap();
+    let s = read_schedule(&conn).unwrap();
+    assert_eq!(s.interval, BackupInterval::Off);
+
+    // 3. Unknown interval string safely falls back to Off
+    lore_core::settings::set(&conn, "backup.interval", "\"every-second\"").unwrap();
+    let s = read_schedule(&conn).unwrap();
+    assert_eq!(s.interval, BackupInterval::Off);
+
+    // 4. Zero keep is clamped to 1
+    lore_core::settings::set(&conn, "backup.keep", "0").unwrap();
+    let s = read_schedule(&conn).unwrap();
+    assert_eq!(s.keep, 1);
+
+    // 5. Oversized keep is clamped to 100
+    lore_core::settings::set(&conn, "backup.keep", "5000").unwrap();
+    let s = read_schedule(&conn).unwrap();
+    assert_eq!(s.keep, 100);
+}

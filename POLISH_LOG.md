@@ -1112,6 +1112,22 @@
   2. *Error handling:* Validate SQLite error conversions across repository queries.
   3. *Performance/allocations:* Check string buffer allocations in export markdown.
 
+## Iteration 74
+- **Lens:** Missing tests/edge cases
+- **Change:** Add unit and integration tests for backup schedule settings fallback and keep clamping (`crates/lore-core/tests/backup.rs`).
+- **Critique:**
+  - `crates/lore-core/tests/backup.rs` lacked tests verifying fallback when interval/retention settings contained corrupted JSON, unknown interval strings, or out-of-range bounds (e.g. 0 or >100).
+  - Fix: Added `backup_schedule_read_clamping_and_fallback` testing default fallback, unparseable JSON degradation, unknown interval strings, and retention clamping.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Verify error handling when writing invalid JSON settings.
+  2. *Performance/allocations:* Check string buffer allocations in export markdown.
+  3. *API & DTO ergonomics:* Audit DTO docstrings in lore-ipc.
+
+
 
 
 
