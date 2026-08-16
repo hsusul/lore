@@ -178,6 +178,22 @@
   2. *Correctness bugs:* Test pagination behavior when consecutive sessions share exact same millisecond timestamp.
   3. *Error handling:* Safe parsing of malformed JSON strings in `set_setting` IPC command.
 
+## Iteration 12
+- **Lens:** Dependency/build hygiene
+- **Change:** Inherit workspace package metadata (`*.workspace = true`) in `src-tauri/Cargo.toml` (`src-tauri/Cargo.toml`).
+- **Critique:**
+  - `src-tauri/Cargo.toml` hardcoded duplicate `version`, `edition`, `rust-version`, `license`, `repository`, and `authors` fields instead of inheriting from `[workspace.package]` like the other workspace members (`lore-core`, `lore-ipc`).
+  - Fix: Changed `src-tauri/Cargo.toml` package metadata to inherit workspace fields consistently.
+- **Validation Results:**
+  - `cargo test --workspace`: 77 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Verify keyset pagination edge case when consecutive sessions have identical millisecond timestamps and ensure strict tie-breaking.
+  2. *Missing tests/edge cases:* Query pagination with null timestamps boundary conditions.
+  3. *Error handling:* Parse safety on malformed JSON payload strings in `set_setting` IPC command.
+
+
 
 
 

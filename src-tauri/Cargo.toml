@@ -4,12 +4,12 @@
 [package]
 name = "lore-app"
 description = "Lore desktop shell (Tauri 2). Thin binary over lore-core; no archive logic lives here."
-version = "0.0.0"
-edition = "2021"
-rust-version = "1.90"
-license = "Apache-2.0"
-repository = "https://github.com/hsusul/lore"
-authors = ["Lore contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [lib]
 name = "lore_app_lib"
