@@ -11,6 +11,9 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
 [lib]
 name = "lore_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

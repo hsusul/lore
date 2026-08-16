@@ -362,6 +362,22 @@
   2. *Correctness bugs:* Inspect token total aggregation overflow handling in Codex adapter.
   3. *Missing tests/edge cases:* Test `get_setting` behavior when reading a key that was overwritten multiple times.
 
+## Iteration 24
+- **Lens:** Dependency/build hygiene
+- **Change:** Add explicit clippy lints configuration to `src-tauri/Cargo.toml` (`src-tauri/Cargo.toml`).
+- **Critique:**
+  - `src-tauri/Cargo.toml` lacked an explicit `[lints.clippy]` table, leaving the desktop shell crate without explicitly configured workspace clippy warning levels.
+  - Fix: Added `[lints.clippy] all = { level = "warn", priority = -1 }` to `src-tauri/Cargo.toml`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit token total parsing and non-negative assertions in `CodexAdapter`.
+  2. *Missing tests/edge cases:* Keyset pagination tests for folder views when folder contains only 1 session.
+  3. *Error handling:* Verify graceful UI message when database lock error occurs during backup.
+
+
 
 
 
