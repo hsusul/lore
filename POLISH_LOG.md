@@ -812,6 +812,22 @@
   2. *UX & accessibility:* Check focus return when closing SettingsPanel via Escape.
   3. *Security/input validation:* Check `delete_folder` folder ID validation.
 
+## Iteration 54
+- **Lens:** Docs accuracy vs code
+- **Change:** Document relevance and chronological keyset pagination tuples in `docs/architecture/SEARCH.md` §6.
+- **Critique:**
+  - `docs/architecture/SEARCH.md` §6 detailed BM25 relevance keyset sorting without noting that chronological `Newest` and `Oldest` modes page over `(started_at, search_document.id)` with NULLs-last handling.
+  - Fix: Updated `docs/architecture/SEARCH.md` §6 to specify both relevance and chronological keyset sorting schemes.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit keyboard navigation and focus restoration in SettingsPanel.
+  2. *Security/input validation:* Check folder ID argument format in IPC folder commands.
+  3. *Dead code & duplication:* Consolidate redundant CSS button classes.
+
+
 
 
 
