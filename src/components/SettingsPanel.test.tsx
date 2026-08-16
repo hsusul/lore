@@ -23,10 +23,13 @@ const agents: DetectedAgent[] = [
   },
 ];
 
-const rootProps = {
+const baseProps = {
+  agents,
   rootBusy: null,
   onAddAgentRoot: vi.fn(),
   onRemoveAgentRoot: vi.fn(),
+  onForgetEverything: vi.fn(),
+  onClose: vi.fn(),
 };
 
 describe("SettingsPanel", () => {
@@ -34,10 +37,7 @@ describe("SettingsPanel", () => {
     const { container } = render(
       <SettingsPanel
         open={false}
-        agents={agents}
-        onForgetEverything={() => {}}
-        onClose={() => {}}
-        {...rootProps}
+        {...baseProps}
       />,
     );
     expect(container.firstChild).toBeNull();
@@ -47,10 +47,7 @@ describe("SettingsPanel", () => {
     render(
       <SettingsPanel
         open
-        agents={agents}
-        onForgetEverything={() => {}}
-        onClose={() => {}}
-        {...rootProps}
+        {...baseProps}
       />,
     );
     expect(screen.getByRole("dialog", { name: /settings/i })).toBeTruthy();
@@ -69,12 +66,9 @@ describe("SettingsPanel", () => {
     render(
       <SettingsPanel
         open
-        agents={agents}
-        rootBusy={null}
+        {...baseProps}
         onAddAgentRoot={onAddAgentRoot}
         onRemoveAgentRoot={onRemoveAgentRoot}
-        onForgetEverything={() => {}}
-        onClose={() => {}}
       />,
     );
 
@@ -91,12 +85,8 @@ describe("SettingsPanel", () => {
     render(
       <SettingsPanel
         open
-        agents={agents}
+        {...baseProps}
         rootBusy="codex"
-        onAddAgentRoot={() => {}}
-        onRemoveAgentRoot={() => {}}
-        onForgetEverything={() => {}}
-        onClose={() => {}}
       />,
     );
 
@@ -118,10 +108,9 @@ describe("SettingsPanel", () => {
     render(
       <SettingsPanel
         open
-        agents={agents}
+        {...baseProps}
         onForgetEverything={onForget}
         onClose={onClose}
-        {...rootProps}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /forget everything/i }));
@@ -136,21 +125,15 @@ describe("SettingsPanel", () => {
     trigger.focus();
     expect(document.activeElement).toBe(trigger);
 
-    const props = {
-      agents,
-      onForgetEverything: () => {},
-      onClose: () => {},
-      ...rootProps,
-    };
-    const { rerender } = render(<SettingsPanel open={false} {...props} />);
+    const { rerender } = render(<SettingsPanel open={false} {...baseProps} />);
 
     // Opening moves focus into the dialog…
-    rerender(<SettingsPanel open {...props} />);
+    rerender(<SettingsPanel open {...baseProps} />);
     const dialog = screen.getByRole("dialog");
     expect(dialog.contains(document.activeElement)).toBe(true);
 
     // …and closing returns it to the element that had focus before.
-    rerender(<SettingsPanel open={false} {...props} />);
+    rerender(<SettingsPanel open={false} {...baseProps} />);
     expect(document.activeElement).toBe(trigger);
 
     trigger.remove();
@@ -160,10 +143,7 @@ describe("SettingsPanel", () => {
     render(
       <SettingsPanel
         open
-        agents={agents}
-        onForgetEverything={() => {}}
-        onClose={() => {}}
-        {...rootProps}
+        {...baseProps}
       />,
     );
     const dialog = screen.getByRole("dialog");

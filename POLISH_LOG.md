@@ -497,6 +497,22 @@
   2. *Naming/consistency:* Reconcile CSS class naming for modal buttons vs sidebar buttons.
   3. *ROADMAP progression:* Verify M6 search performance benchmark suite documentation.
 
+## Iteration 33
+- **Lens:** Dead code & duplication
+- **Change:** Consolidate shared `baseProps` fixture in `SettingsPanel.test.tsx` (`src/components/SettingsPanel.test.tsx`).
+- **Critique:**
+  - `SettingsPanel.test.tsx` repeated inline dummy mock callbacks across every test case instead of reusing a clean base properties object.
+  - Fix: Defined and reused `baseProps` across all render calls in `SettingsPanel.test.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (89 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Reconcile CSS modal backdrop and animation class names.
+  2. *ROADMAP progression:* Check M6 performance benchmark targets in `docs/architecture/SEARCH.md`.
+  3. *Dependency/build hygiene:* Audit Cargo.lock and npm package-lock for clean dependency graphs.
+
+
 
 
 
