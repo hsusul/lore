@@ -452,6 +452,22 @@
   2. *UX & accessibility:* Verify keyboard focus trapping during delete-folder confirmation dialog.
   3. *Security/input validation:* Check that search term sanitization handles null bytes safely.
 
+## Iteration 30
+- **Lens:** Docs accuracy vs code
+- **Change:** Document structured JSON part export formatting and secret masking in security architecture (`docs/architecture/SECURITY.md`).
+- **Critique:**
+  - `docs/architecture/SECURITY.md` §4 listed general text masking for session export but did not explicitly document that structured JSON parts are preserved in fenced code blocks and subject to the same scanning and redaction rules.
+  - Fix: Updated `docs/architecture/SECURITY.md` §4 to specify that structured JSON message parts in exports are formatted in fenced code blocks and redacted by default.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Verify delete folder button keyboard accessibility and confirmation dialog focus.
+  2. *Security/input validation:* Test search query input validation for special control characters.
+  3. *Dead code & duplication:* Audit redundant imports across `src/components/`.
+
+
 
 
 
