@@ -168,4 +168,34 @@ describe("CommandPalette", () => {
       vi.useRealTimers();
     }
   });
+
+  it("closes when clicking the backdrop", () => {
+    const { props, container } = renderPalette();
+    const backdrop = container.querySelector(".palette__backdrop");
+    expect(backdrop).toBeTruthy();
+    if (backdrop) fireEvent.click(backdrop);
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("executes an option and closes when clicked directly", () => {
+    const items = makeItems();
+    const onClose = vi.fn();
+    renderPalette({ items, onClose });
+
+    const option = screen.getByText("Add webhook");
+    fireEvent.click(option);
+    expect(items[1].run).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates active option on mouse enter", () => {
+    const items = makeItems();
+    renderPalette({ items });
+
+    const option = screen.getByText("Refactor retry").closest("li");
+    expect(option).toBeTruthy();
+    if (option) fireEvent.mouseEnter(option);
+
+    expect(option?.className).toContain("is-active");
+  });
 });

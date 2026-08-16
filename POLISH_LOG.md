@@ -2177,6 +2177,22 @@
   2. *Error handling:* Audit settings JSON serialization fallback in write_schedule.
   3. *Performance/allocations:* Review regex matching in git commit SHA verification.
 
+## Iteration 146
+- **Lens:** Missing tests/edge cases
+- **Change:** Add pointer interaction unit tests to `CommandPalette.test.tsx` (`src/components/CommandPalette.test.tsx`).
+- **Critique:**
+  - `CommandPalette.test.tsx` tested keyboard navigation but lacked tests for backdrop dismissal, option clicks, and mouseEnter activation.
+  - Fix: Added unit tests verifying backdrop click calls `onClose`, direct option click runs command and closes palette, and `mouseEnter` updates active option state.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Audit settings JSON serialization fallback in write_schedule.
+  2. *Performance/allocations:* Review regex matching in git commit SHA verification.
+  3. *API & DTO ergonomics:* Audit ErrorDto error representation.
+
+
 
 
 
