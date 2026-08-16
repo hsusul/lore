@@ -83,10 +83,10 @@ export default function ArchiveOnboarding({
         </section>
 
         <div className="onboarding__actions">
-          <button className="btn--primary" onClick={onScan} disabled={scanning}>
+          <button type="button" className="btn--primary" onClick={onScan} disabled={scanning}>
             {scanning ? "Scanning agent history…" : "Scan agent history"}
           </button>
-          <button className="btn--ghost" onClick={onOpenSettings}>
+          <button type="button" className="btn--ghost" onClick={onOpenSettings}>
             Review privacy and agents
           </button>
         </div>

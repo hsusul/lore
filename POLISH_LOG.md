@@ -1937,6 +1937,22 @@
   2. *ROADMAP progression:* Audit milestone verification checklists.
   3. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
 
+## Iteration 130
+- **Lens:** Naming/consistency
+- **Change:** Add explicit `type="button"` attributes to action buttons in `ArchiveOnboarding.tsx` (`src/components/ArchiveOnboarding.tsx`).
+- **Critique:**
+  - In `ArchiveOnboarding.tsx`, the primary "Scan agent history" and "Review privacy and agents" action buttons omitted `type="button"`.
+  - Fix: Added `type="button"` to both action buttons.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit milestone verification checklists.
+  2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  3. *Correctness bugs:* Audit FTS5 snippet highlight marker escaping.
+
+
 
 
 
