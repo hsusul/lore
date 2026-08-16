@@ -3155,6 +3155,22 @@
   2. *Security/input validation:* Audit regex and path escapes.
   3. *Dead code & duplication:* Audit unused CSS helper classes.
 
+## Iteration 211
+- **Lens:** UX & accessibility
+- **Change:** Connect `SettingsPanel` dialog to its title via `aria-labelledby="settings-title"` (`src/components/SettingsPanel.tsx`).
+- **Critique:**
+  - `SettingsPanel` used static `aria-label="Settings"` on the dialog rather than linking directly to the existing `<h2>` header via `aria-labelledby`.
+  - Fix: Assigned `id="settings-title"` to the header and linked `aria-labelledby="settings-title"` on the dialog container.
+- **Validation Results:**
+  - `cargo test --workspace`: 97 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Audit regex and path escapes.
+  2. *Dead code & duplication:* Audit unused CSS helper classes.
+  3. *Naming/consistency:* Audit test naming conventions.
+
+
 
 
 

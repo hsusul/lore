@@ -60,12 +60,12 @@ export default function SettingsPanel({
         className="settings"
         role="dialog"
         aria-modal="true"
-        aria-label="Settings"
+        aria-labelledby="settings-title"
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="settings__head">
-          <h2>Settings</h2>
+          <h2 id="settings-title">Settings</h2>
           <button type="button" className="icon-btn" aria-label="Close settings" onClick={onClose}>
             ✕
           </button>
