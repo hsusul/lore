@@ -2374,6 +2374,22 @@
   2. *Performance/allocations:* Review SQL query plans on session folder join listings.
   3. *API & DTO ergonomics:* Audit TypeScript helper functions in `src/ipc.ts`.
 
+## Iteration 159
+- **Lens:** Error handling
+- **Change:** Consolidate unified `is_invalid_text_token` boundary validator and apply control and zero-width rejection across all query and management IPC handlers (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `src-tauri/src/lib.rs` repeated ad-hoc ID and path length / character checks across commands, with several handlers checking control characters but failing to reject zero-width Unicode codepoints (`\u{feff}`, `\u{200b}`, `\u{200c}`, `\u{200d}`, `\u{2060}`).
+  - Fix: Introduced unified `is_invalid_text_token` validator in `src-tauri/src/lib.rs` and applied it consistently to repository, session, event, root path, setting key, and backup interval handlers.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (110 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Review SQL query plans on session folder join listings.
+  2. *API & DTO ergonomics:* Audit TypeScript helper functions in `src/ipc.ts`.
+  3. *Docs accuracy vs code:* Verify docstrings match consolidated validation bounds.
+
+
 
 
 

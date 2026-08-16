@@ -127,6 +127,12 @@ fn list_repositories(state: State<'_, AppState>) -> Result<Vec<RepositorySummary
     lore_core::query::list_repositories(&conn).map_err(|e| e.to_string())
 }
 
+fn is_invalid_text_token(s: &str, max_len: usize) -> bool {
+    s.is_empty()
+        || s.len() > max_len
+        || s.chars().any(|c| c.is_control() || lore_core::is_zero_width(c))
+}
+
 /// List the most recent sessions that touched `repository_id` (newest first).
 #[tauri::command]
 fn list_repository_sessions(
@@ -134,7 +140,7 @@ fn list_repository_sessions(
     id: String,
     limit: i64,
 ) -> Result<Vec<SessionSummary>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid repository id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -150,7 +156,7 @@ fn list_repository_sessions_page(
     limit: i64,
     cursor: Option<String>,
 ) -> Result<SessionPage, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid repository id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -166,7 +172,7 @@ fn list_repository_sessions_page(
 /// Read one session in context (header, segments, ordered-part timeline, files).
 #[tauri::command]
 fn get_session(state: State<'_, AppState>, id: String) -> Result<Option<SessionDetail>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -178,7 +184,7 @@ fn get_session(state: State<'_, AppState>, id: String) -> Result<Option<SessionD
 /// completed, so its content stays unavailable — SECRET_SCANNING.md §6).
 #[tauri::command]
 fn get_file_patch(state: State<'_, AppState>, id: String) -> Result<Option<String>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid event id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -191,7 +197,7 @@ fn get_git_snapshot(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Vec<GitObservationDto>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -201,7 +207,7 @@ fn get_git_snapshot(
 /// How many secrets were flagged in a session (all redacted from derived surfaces).
 #[tauri::command]
 fn session_secret_count(state: State<'_, AppState>, id: String) -> Result<i64, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -216,7 +222,7 @@ fn export_session_markdown(
     id: String,
     include_secrets: bool,
 ) -> Result<Option<String>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -227,7 +233,7 @@ fn export_session_markdown(
 /// Forget a session: remove its rows, projections, findings, and orphan blobs.
 #[tauri::command]
 fn forget_session(state: State<'_, AppState>, id: String) -> Result<ForgetReport, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -349,7 +355,7 @@ fn set_session_folder(
     session_id: String,
     folder_id: Option<String>,
 ) -> Result<(), String> {
-    if session_id.is_empty() || session_id.len() > 256 || session_id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&session_id, 256) {
         return Err("invalid session id".to_string());
     }
     if let Some(ref fid) = folder_id {
@@ -379,9 +385,7 @@ fn list_folder_sessions_page(
 }
 
 fn is_invalid_setting_key(key: &str) -> bool {
-    key.is_empty()
-        || key.len() > 128
-        || key.chars().any(|c| c.is_control() || lore_core::is_zero_width(c))
+    is_invalid_text_token(key, 128)
 }
 
 /// Read a setting's raw JSON value.
@@ -430,9 +434,7 @@ fn set_backup_schedule(
     interval: String,
     keep: i64,
 ) -> Result<(), String> {
-    if interval.len() > 64
-        || interval.chars().any(|c| c.is_control() || lore_core::is_zero_width(c))
-    {
+    if is_invalid_text_token(&interval, 64) {
         return Err("invalid backup interval".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -484,10 +486,10 @@ fn add_agent_root(
     agent_id: String,
     path: String,
 ) -> Result<(), String> {
-    if agent_id.is_empty() || agent_id.len() > 64 || agent_id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&agent_id, 64) {
         return Err("invalid agent id".to_string());
     }
-    if path.is_empty() || path.len() > 4096 || path.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&path, 4096) {
         return Err("invalid root path".to_string());
     }
     let config = {
@@ -507,10 +509,10 @@ fn remove_agent_root(
     agent_id: String,
     path: String,
 ) -> Result<(), String> {
-    if agent_id.is_empty() || agent_id.len() > 64 || agent_id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&agent_id, 64) {
         return Err("invalid agent id".to_string());
     }
-    if path.is_empty() || path.len() > 4096 || path.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&path, 4096) {
         return Err("invalid root path".to_string());
     }
     let config = {
