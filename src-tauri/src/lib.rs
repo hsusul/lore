@@ -295,7 +295,6 @@ fn search_page(
     .map_err(|e| e.to_string())
 }
 
-/// Read a persisted setting's raw JSON value, or `null` when it is unset.
 /// List the user-defined folders with their thread counts.
 #[tauri::command]
 fn list_folders(state: State<'_, AppState>) -> Result<Vec<FolderSummary>, String> {

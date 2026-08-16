@@ -2102,6 +2102,22 @@
   2. *Naming/consistency:* Audit CSS custom property prefixing.
   3. *ROADMAP progression:* Audit M7 verification entries.
 
+## Iteration 141
+- **Lens:** Dead code & duplication
+- **Change:** Remove stray duplicate setting doc comment above `list_folders` in `src-tauri/src/lib.rs` (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `src-tauri/src/lib.rs` had a duplicated setting doc comment directly above `list_folders`, misrepresenting the command's documentation.
+  - Fix: Removed the duplicate comment line.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit CSS custom property prefixing.
+  2. *ROADMAP progression:* Audit M7 verification entries.
+  3. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+
+
 
 
 
