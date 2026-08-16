@@ -437,6 +437,22 @@
   2. *Docs accuracy vs code:* Reconcile any newly covered export behaviors in architecture documentation.
   3. *UX & accessibility:* Verify keyboard tab navigation in settings panel backup cadence selector.
 
+## Iteration 29
+- **Lens:** API & DTO ergonomics
+- **Change:** Add default `limit = 50` parameters across frontend IPC query and search functions (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - `listSessions`, `listSessionsPage`, `listRepositorySessions`, `listRepositorySessionsPage`, `listFolderSessionsPage`, `search`, and `searchPage` previously required mandatory limit parameters, forcing UI components to repeat magic numbers.
+  - Fix: Added default `limit: number = 50` across all list and search IPC wrappers and added tests in `src/ipc.test.ts`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify that `docs/architecture/SECURITY.md` notes structured JSON part export masking.
+  2. *UX & accessibility:* Verify keyboard focus trapping during delete-folder confirmation dialog.
+  3. *Security/input validation:* Check that search term sanitization handles null bytes safely.
+
+
 
 
 

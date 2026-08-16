@@ -60,10 +60,13 @@ describe("ipc contract", () => {
     });
   });
 
-  it("list_sessions passes the limit argument", async () => {
+  it("list_sessions defaults limit to 50", async () => {
     invoke.mockResolvedValue([]);
-    await listSessions(50);
+    await listSessions();
     expect(invoke).toHaveBeenCalledWith("list_sessions", { limit: 50 });
+
+    await listSessions(10);
+    expect(invoke).toHaveBeenCalledWith("list_sessions", { limit: 10 });
   });
 
   it("session page commands pass opaque cursors unchanged", async () => {

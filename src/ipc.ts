@@ -72,13 +72,13 @@ export function removeAgentRoot(agentId: string, path: string): Promise<void> {
 }
 
 /** The most recent sessions, newest first, capped at `limit`. */
-export function listSessions(limit: number): Promise<SessionSummary[]> {
+export function listSessions(limit: number = 50): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("list_sessions", { limit });
 }
 
 /** One newest-first session page. Pass the returned cursor back unchanged. */
 export function listSessionsPage(
-  limit: number,
+  limit: number = 50,
   cursor: string | null = null,
 ): Promise<SessionPage> {
   return invoke<SessionPage>("list_sessions_page", { limit, cursor });
@@ -92,7 +92,7 @@ export function listRepositories(): Promise<RepositorySummary[]> {
 /** The most recent sessions that touched a repository, capped at `limit`. */
 export function listRepositorySessions(
   id: string,
-  limit: number,
+  limit: number = 50,
 ): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("list_repository_sessions", { id, limit });
 }
@@ -100,7 +100,7 @@ export function listRepositorySessions(
 /** One newest-first page of sessions that touched a repository. */
 export function listRepositorySessionsPage(
   id: string,
-  limit: number,
+  limit: number = 50,
   cursor: string | null = null,
 ): Promise<SessionPage> {
   return invoke<SessionPage>("list_repository_sessions_page", { id, limit, cursor });
@@ -139,7 +139,7 @@ export function setSessionFolder(sessionId: string, folderId: string | null): Pr
 /** One newest-first page of the threads filed in a folder. */
 export function listFolderSessionsPage(
   id: string,
-  limit: number,
+  limit: number = 50,
   cursor: string | null = null,
 ): Promise<SessionPage> {
   return invoke<SessionPage>("list_folder_sessions_page", { id, limit, cursor });
@@ -156,7 +156,7 @@ export function getFilePatch(id: string): Promise<string | null> {
 }
 
 /** Full-text search over the redacted projections. Secret-safe by construction. */
-export function search(query: string, limit: number): Promise<SearchHit[]> {
+export function search(query: string, limit: number = 50): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("search", { query, limit });
 }
 
@@ -171,7 +171,7 @@ export type SearchSort = "relevance" | "newest" | "oldest";
  */
 export function searchPage(
   query: string,
-  limit: number,
+  limit: number = 50,
   cursor: string | null = null,
   sort: SearchSort = "relevance",
 ): Promise<SearchPage> {
