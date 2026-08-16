@@ -107,12 +107,13 @@ pub fn list_sessions_page(
 ) -> Result<SessionPage> {
     let limit = limit.clamp(1, 10_000);
     let cursor = cursor.and_then(SessionCursor::decode);
-    let mut sql = String::from(
+    let mut sql = String::with_capacity(384);
+    sql.push_str(
         "SELECT id, agent_id, title, started_at, ended_at, message_count,
                 tool_call_count, primary_model, parse_status
          FROM agent_session",
     );
-    let mut params = Vec::new();
+    let mut params = Vec::with_capacity(8);
     if let Some(cursor) = &cursor {
         let (body, keyset_params) = keyset_after(cursor, "");
         sql.push_str(" WHERE ");
@@ -158,7 +159,8 @@ pub fn list_repository_sessions_page(
 ) -> Result<SessionPage> {
     let limit = limit.clamp(1, 10_000);
     let cursor = cursor.and_then(SessionCursor::decode);
-    let mut sql = String::from(
+    let mut sql = String::with_capacity(512);
+    sql.push_str(
         "SELECT s.id, s.agent_id, s.title, s.started_at, s.ended_at, s.message_count,
                 s.tool_call_count, s.primary_model, s.parse_status
          FROM agent_session s
@@ -167,7 +169,8 @@ pub fn list_repository_sessions_page(
              WHERE sg.session_id = s.id AND sg.repository_id = ?
          )",
     );
-    let mut params = vec![Value::Text(repository_id.to_string())];
+    let mut params = Vec::with_capacity(8);
+    params.push(Value::Text(repository_id.to_string()));
     if let Some(cursor) = &cursor {
         let (body, keyset_params) = keyset_after(cursor, "s.");
         sql.push_str(" AND (");
@@ -191,14 +194,16 @@ pub fn list_folder_sessions_page(
 ) -> Result<SessionPage> {
     let limit = limit.clamp(1, 10_000);
     let cursor = cursor.and_then(SessionCursor::decode);
-    let mut sql = String::from(
+    let mut sql = String::with_capacity(512);
+    sql.push_str(
         "SELECT s.id, s.agent_id, s.title, s.started_at, s.ended_at, s.message_count,
                 s.tool_call_count, s.primary_model, s.parse_status
          FROM agent_session s
          JOIN session_folder sf ON sf.session_id = s.id
          WHERE sf.folder_id = ?",
     );
-    let mut params = vec![Value::Text(folder_id.to_string())];
+    let mut params = Vec::with_capacity(8);
+    params.push(Value::Text(folder_id.to_string()));
     if let Some(cursor) = &cursor {
         let (body, keyset_params) = keyset_after(cursor, "s.");
         sql.push_str(" AND (");

@@ -962,6 +962,22 @@
   2. *API & DTO ergonomics:* Ensure consistent naming for folder DTO conversions.
   3. *Docs accuracy vs code:* Verify recovery documentation in `SECURITY.md`.
 
+## Iteration 64
+- **Lens:** Performance/allocations
+- **Change:** Pre-allocate query string and params vector capacity in paginated session queries (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `list_sessions_page`, `list_repository_sessions_page`, and `list_folder_sessions_page` created un-sized SQL strings and parameter vectors, incurring unnecessary reallocations as WHERE/AND clauses and parameters were appended.
+  - Fix: Pre-allocated `String::with_capacity` (384/512 bytes) and `Vec::with_capacity(8)` for query builder buffers in `query.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit IPC FolderSummary serialization and field comments.
+  2. *Docs accuracy vs code:* Reconcile recovery documentation in `SECURITY.md`.
+  3. *UX & accessibility:* Verify focus indicators on folder action buttons.
+
+
 
 
 
