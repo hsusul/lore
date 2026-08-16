@@ -37,6 +37,14 @@ describe("computeWindow", () => {
     expect(bottom.padBottom).toBe(0);
   });
 
+  it("handles negative scrollTop from rubber-band bounce", () => {
+    // Negative scroll position during bounce should behave like scrollTop = 0.
+    const bounce = computeWindow(1000, -50, 400, 40, 2);
+    expect(bounce.startIndex).toBe(0);
+    expect(bounce.endIndex).toBe(12); // ceil(400/40) + 2
+    expect(bounce.padTop).toBe(0);
+  });
+
   it("handles an empty list", () => {
     expect(computeWindow(0, 0, 400, 40, 8)).toEqual({
       startIndex: 0,

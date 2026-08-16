@@ -34,8 +34,9 @@ export function computeWindow(
   if (count === 0 || viewportHeight <= 0 || rowHeight <= 0) {
     return { startIndex: 0, endIndex: count, padTop: 0, padBottom: 0 };
   }
-  const first = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const last = Math.min(count, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan);
+  const safeScrollTop = Math.max(0, scrollTop);
+  const first = Math.max(0, Math.floor(safeScrollTop / rowHeight) - overscan);
+  const last = Math.min(count, Math.ceil((safeScrollTop + viewportHeight) / rowHeight) + overscan);
   return {
     startIndex: first,
     endIndex: last,

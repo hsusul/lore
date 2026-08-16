@@ -1622,6 +1622,22 @@
   2. *Missing tests/edge cases:* Add unit test for empty folder pagination query.
   3. *Error handling:* Verify error message propagation on empty folder queries.
 
+## Iteration 109
+- **Lens:** Correctness bugs
+- **Change:** Clamp negative `scrollTop` in `computeWindow` (`src/virtual.ts`).
+- **Critique:**
+  - On macOS trackpad rubber-band bounce, negative `scrollTop` caused `(scrollTop + viewportHeight) / rowHeight` to underestimate `endIndex`, rendering fewer items than needed during the bounce animation.
+  - Fix: Added `const safeScrollTop = Math.max(0, scrollTop);` and added a unit test for negative scroll position.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Add unit test for empty folder pagination query.
+  2. *Error handling:* Verify error message propagation on empty folder queries.
+  3. *Performance/allocations:* Audit CSS selector complexity in timeline rows.
+
+
 
 
 
