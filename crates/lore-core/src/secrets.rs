@@ -266,6 +266,9 @@ pub type Result<T> = std::result::Result<T, ScanError>;
 /// stays searchable; the raw span never appears.
 #[must_use]
 pub fn redact(text: &str, findings: &[Finding]) -> String {
+    if findings.is_empty() {
+        return text.to_string();
+    }
     let mut out = String::with_capacity(text.len());
     let mut cursor = 0usize;
     let mut ordered = findings.to_vec();
@@ -275,16 +278,13 @@ pub fn redact(text: &str, findings: &[Finding]) -> String {
             continue; // overlap guard
         }
         out.push_str(&text[cursor..finding.start]);
-        out.push_str(&mask(finding.rule));
+        out.push_str("«redacted:");
+        out.push_str(finding.rule);
+        out.push('»');
         cursor = finding.end;
     }
     out.push_str(&text[cursor..]);
     out
-}
-
-/// The mask written in place of a flagged span.
-fn mask(rule: &str) -> String {
-    format!("«redacted:{rule}»")
 }
 
 fn scan_prefix_rules(bytes: &[u8], out: &mut Vec<Finding>) {
