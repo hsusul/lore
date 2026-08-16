@@ -27,8 +27,9 @@ export default function RepositoryList({
     event.dataTransfer.types.includes(SESSION_DND_MIME);
 
   return (
-    <nav className="repos" aria-label="repositories">
+    <nav className="repos" aria-label="Repositories">
       <button
+        type="button"
         className={`nav-item${unfileHover ? " is-dragover" : ""}`}
         aria-pressed={isAll}
         onClick={() => onSelect(null)}
@@ -59,6 +60,7 @@ export default function RepositoryList({
           {repositories.map((repo) => (
             <li key={repo.id}>
               <button
+                type="button"
                 className="nav-item"
                 aria-pressed={selectedId === repo.id}
                 onClick={() => onSelect(repo.id)}

@@ -1007,6 +1007,22 @@
   2. *Security/input validation:* Check IPC repository command argument length limits.
   3. *Dead code & duplication:* Consolidate test helper assertions across integration tests.
 
+## Iteration 67
+- **Lens:** UX & accessibility
+- **Change:** Add explicit `type="button"` attributes and capitalize landmark `aria-label` in `RepositoryList.tsx` (`src/components/RepositoryList.tsx`).
+- **Critique:**
+  - "All sessions" and repository buttons lacked explicit `type="button"`, and the landmark had lowercase `aria-label="repositories"`.
+  - Fix: Added `type="button"` to buttons and set `aria-label="Repositories"` in `src/components/RepositoryList.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Check IPC repository command argument length limits in `lib.rs`.
+  2. *Dead code & duplication:* Consolidate test helper assertions across integration tests.
+  3. *Naming/consistency:* Audit aria-labels across left navigation panes.
+
+
 
 
 
