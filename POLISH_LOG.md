@@ -1952,6 +1952,22 @@
   2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
   3. *Correctness bugs:* Audit FTS5 snippet highlight marker escaping.
 
+## Iteration 131
+- **Lens:** ROADMAP progression
+- **Change:** Document folder management and drag-and-drop filing in M5 tasks/tests (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `ROADMAP.md` M5 listed repository browsing and virtualization, but omitted user-defined folders, thread grouping, and drag-and-drop filing capabilities implemented in the UI and IPC core.
+  - Fix: Updated M5 tasks and tests in `ROADMAP.md` to reference folder management and session categorization.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  2. *Correctness bugs:* Audit FTS5 snippet highlight marker escaping.
+  3. *Missing tests/edge cases:* Test drag-and-drop folder drop effect styling.
+
+
 
 
 

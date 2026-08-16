@@ -74,9 +74,9 @@ Ship the **git-anchored searchable archive** (the wedge, fully local, no LLM) en
 
 ## M5 — Repository & session UI
 - **Goal:** the app is usable: browse repos, read sessions in context.
-- **Tasks:** three-pane shell; Repositories view with identity confidence; virtualized Sessions list; ordered-part timeline; recorded/captured/reverified Git labels and observation times; inline recorded patches; command palette; onboarding + error states; theming.
-- **Modules:** UI + IPC commands (`list_repositories/list_sessions/get_session/get_git_snapshot`).
-- **Tests:** UI/component tests; virtualization at 10k rows; keyboard nav; partial-parse + missing-repo states render (Wireframes §10).
+- **Tasks:** three-pane shell; Repositories view with identity confidence; user-defined folders and drag-and-drop thread filing; virtualized Sessions list; ordered-part timeline; recorded/captured/reverified Git labels and observation times; inline recorded patches; command palette; onboarding + error states; theming.
+- **Modules:** UI + IPC commands (`list_repositories/list_sessions/get_session/get_git_snapshot/list_folders/create_folder/rename_folder/delete_folder/set_session_folder`).
+- **Tests:** UI/component tests; virtualization at 10k rows; keyboard nav; folder CRUD and pagination; partial-parse + missing-repo states render (Wireframes §10).
 - **Done-when:** a user can go launch→scan→browse repo→read a session with git context, keyboard-only.
 - **Risks:** webview perf on huge lists → virtualize; keep heavy work in Rust.
 
