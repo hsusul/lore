@@ -1247,6 +1247,22 @@
   2. *Dependency/build hygiene:* Audit Cargo workspace metadata tags.
   3. *Correctness bugs:* Audit FTS5 rank score serialization in search results.
 
+## Iteration 83
+- **Lens:** ROADMAP progression
+- **Change:** Update M7 boundary validation scope across table and next build sequence in `ROADMAP.md` (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `docs/product/ROADMAP.md` M7 description previously only noted boundary validation for settings and folders, omitting session, repository, search, and backup schedule commands.
+  - Fix: Updated `ROADMAP.md` M7 summary and build sequence notes to reflect complete boundary validation across all IPC commands.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit Cargo workspace metadata tags and authors list.
+  2. *Correctness bugs:* Audit FTS5 rank score serialization in search results.
+  3. *Missing tests/edge cases:* Add test for invalid session folder input combinations.
+
+
 
 
 
