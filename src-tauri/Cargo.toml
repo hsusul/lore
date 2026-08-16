@@ -15,6 +15,13 @@ authors = ["Lore contributors"]
 name = "lore_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# The binary is named "Lore" (not the package name "lore-app") so the running
+# process — and the macOS dock label in dev — reads "Lore". Kept in sync with
+# `mainBinaryName` in tauri.conf.json.
+[[bin]]
+name = "Lore"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
