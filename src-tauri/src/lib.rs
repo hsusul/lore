@@ -373,10 +373,19 @@ fn list_folder_sessions_page(
         .map_err(|e| e.to_string())
 }
 
+fn is_invalid_setting_key(key: &str) -> bool {
+    key.is_empty()
+        || key.len() > 128
+        || key.chars().any(|c| {
+            c.is_control()
+                || matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
+        })
+}
+
 /// Read a setting's raw JSON value.
 #[tauri::command]
 fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
-    if key.is_empty() || key.len() > 128 || key.chars().any(|c| c.is_control()) {
+    if is_invalid_setting_key(&key) {
         return Ok(None);
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -386,7 +395,7 @@ fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>
 /// Persist a setting's raw JSON value (Lore-owned; archive clearing preserves it).
 #[tauri::command]
 fn set_setting(state: State<'_, AppState>, key: String, value_json: String) -> Result<(), String> {
-    if key.is_empty() || key.len() > 128 || key.chars().any(|c| c.is_control()) {
+    if is_invalid_setting_key(&key) {
         return Err("invalid setting key".to_string());
     }
     if key.starts_with("agent_roots.") {

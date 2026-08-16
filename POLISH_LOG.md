@@ -1727,6 +1727,22 @@
   2. *Dead code & duplication:* Inspect unused CSS styles or imports.
   3. *Naming/consistency:* Review CSS class naming consistency in settings components.
 
+## Iteration 116
+- **Lens:** Security/input validation
+- **Change:** Reject zero-width characters in setting key validations (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `get_setting` and `set_setting` IPC handlers in `src-tauri/src/lib.rs` checked for control characters in `key`, but did not reject zero-width characters (`\u{feff}`, `\u{200b}`, `\u{200c}`, `\u{200d}`, `\u{2060}`).
+  - Fix: Added `is_invalid_setting_key` helper to validate length and reject control/zero-width Unicode characters.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Inspect unused CSS styles or imports.
+  2. *Naming/consistency:* Review CSS class naming consistency in settings components.
+  3. *ROADMAP progression:* Audit status markings in docs/product/ROADMAP.md.
+
+
 
 
 
