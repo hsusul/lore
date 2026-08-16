@@ -166,6 +166,9 @@ fn list_repository_sessions_page(
 /// Read one session in context (header, segments, ordered-part timeline, files).
 #[tauri::command]
 fn get_session(state: State<'_, AppState>, id: String) -> Result<Option<SessionDetail>, String> {
+    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid session id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::query::get_session(&conn, &id).map_err(|e| e.to_string())
 }
@@ -175,6 +178,9 @@ fn get_session(state: State<'_, AppState>, id: String) -> Result<Option<SessionD
 /// completed, so its content stays unavailable — SECRET_SCANNING.md §6).
 #[tauri::command]
 fn get_file_patch(state: State<'_, AppState>, id: String) -> Result<Option<String>, String> {
+    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid event id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::query::file_patch_text(&conn, &state.blobs, &id).map_err(|e| e.to_string())
 }
@@ -185,6 +191,9 @@ fn get_git_snapshot(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Vec<GitObservationDto>, String> {
+    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid session id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::query::get_git_snapshot(&conn, &id).map_err(|e| e.to_string())
 }
@@ -192,6 +201,9 @@ fn get_git_snapshot(
 /// How many secrets were flagged in a session (all redacted from derived surfaces).
 #[tauri::command]
 fn session_secret_count(state: State<'_, AppState>, id: String) -> Result<i64, String> {
+    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid session id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::query::secret_count(&conn, &id).map_err(|e| e.to_string())
 }
@@ -204,6 +216,9 @@ fn export_session_markdown(
     id: String,
     include_secrets: bool,
 ) -> Result<Option<String>, String> {
+    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid session id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::export::export_session_markdown(&conn, &id, include_secrets)
         .map_err(|e| e.to_string())
@@ -212,6 +227,9 @@ fn export_session_markdown(
 /// Forget a session: remove its rows, projections, findings, and orphan blobs.
 #[tauri::command]
 fn forget_session(state: State<'_, AppState>, id: String) -> Result<ForgetReport, String> {
+    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid session id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     let report =
         lore_core::forget::forget_session(&conn, &state.blobs, &id).map_err(|e| e.to_string())?;
@@ -380,6 +398,9 @@ fn set_backup_schedule(
     interval: String,
     keep: i64,
 ) -> Result<(), String> {
+    if interval.len() > 64 || interval.chars().any(|c| c.is_control()) {
+        return Err("invalid backup interval".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::backup::write_schedule(
         &conn,
@@ -428,6 +449,9 @@ fn add_agent_root(
     agent_id: String,
     path: String,
 ) -> Result<(), String> {
+    if agent_id.is_empty() || agent_id.len() > 64 || agent_id.chars().any(|c| c.is_control()) {
+        return Err("invalid agent id".to_string());
+    }
     let config = {
         let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
         lore_core::source_roots::add_custom_root(&conn, &state.registry, &agent_id, &path)
@@ -445,6 +469,9 @@ fn remove_agent_root(
     agent_id: String,
     path: String,
 ) -> Result<(), String> {
+    if agent_id.is_empty() || agent_id.len() > 64 || agent_id.chars().any(|c| c.is_control()) {
+        return Err("invalid agent id".to_string());
+    }
     let config = {
         let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
         lore_core::source_roots::remove_custom_root(&conn, &state.registry, &agent_id, &path)

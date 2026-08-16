@@ -1127,6 +1127,22 @@
   2. *Performance/allocations:* Check string buffer allocations in export markdown.
   3. *API & DTO ergonomics:* Audit DTO docstrings in lore-ipc.
 
+## Iteration 75
+- **Lens:** Error handling
+- **Change:** Validate ID lengths and control characters across session, export, backup, and agent root IPC commands (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `get_session`, `get_file_patch`, `get_git_snapshot`, `session_secret_count`, `export_session_markdown`, `forget_session`, `set_backup_schedule`, `add_agent_root`, and `remove_agent_root` passed unvalidated ID strings directly into SQLite queries and lock acquisition paths.
+  - Fix: Added early boundary validation checking bounds and rejecting control characters on all session, backup schedule, and root IPC commands.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Pre-allocate string capacity in `export_session_markdown`.
+  2. *API & DTO ergonomics:* Document and audit DTO field comments in lore-ipc.
+  3. *Docs accuracy vs code:* Verify IPC command list in ARCHITECTURE.md §5.
+
+
 
 
 
