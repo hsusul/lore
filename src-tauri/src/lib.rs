@@ -747,4 +747,17 @@ mod tests {
         assert!(is_invalid_text_token("invalid\u{200C}", 64));
         assert!(is_invalid_text_token(&"x".repeat(65), 64));
     }
+
+    #[test]
+    fn test_is_invalid_setting_key_and_folder_id() {
+        assert!(!is_invalid_setting_key("ui.theme"));
+        assert!(is_invalid_setting_key(""));
+        assert!(is_invalid_setting_key("ui\0theme"));
+        assert!(is_invalid_setting_key(&"k".repeat(129)));
+
+        assert!(!is_invalid_folder_id("0123456789abcdef0123456789abcdef"));
+        assert!(is_invalid_folder_id(""));
+        assert!(is_invalid_folder_id("0123\u{200d}456"));
+        assert!(is_invalid_folder_id(&"f".repeat(65)));
+    }
 }

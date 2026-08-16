@@ -3350,6 +3350,22 @@
   2. *Dead code & duplication:* Audit duplicate CSS properties.
   3. *Naming/consistency:* Audit test naming conventions.
 
+## Iteration 224
+- **Lens:** Security/input validation
+- **Change:** Add setting key and folder ID boundary validation unit tests in `src-tauri/src/lib.rs`.
+- **Critique:**
+  - `src-tauri` tested folder name and generic text token validation, but lacked explicit test coverage for `is_invalid_setting_key` (length bounds, control chars) and `is_invalid_folder_id` (length bounds, zero-width chars).
+  - Fix: Added `test_is_invalid_setting_key_and_folder_id` unit test.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit duplicate CSS properties.
+  2. *Naming/consistency:* Audit test naming conventions.
+  3. *ROADMAP progression:* Audit status alignment.
+
+
 
 
 
