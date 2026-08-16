@@ -83,7 +83,7 @@ pub type Result<T> = std::result::Result<T, BackupError>;
 /// blocks the worker or UI connections beyond SQLite's own short read-lock
 /// window.
 pub fn create_backup(conn: &Connection, backup_dir: &Path, keep: usize) -> Result<BackupInfo> {
-    std::fs::create_dir_all(backup_dir).map_err(|_| BackupError::Io)?;
+    std::fs::create_dir_all(backup_dir)?;
     let path = backup_path(backup_dir);
 
     let mut dst = Connection::open(&path).map_err(|_| BackupError::Io)?;
@@ -264,7 +264,7 @@ fn prune(backup_dir: &Path, keep: usize) -> Result<()> {
     }
     let drop_count = backups.len() - keep;
     for old in backups.into_iter().take(drop_count) {
-        std::fs::remove_file(&old).map_err(|_| BackupError::Io)?;
+        std::fs::remove_file(&old)?;
     }
     Ok(())
 }
@@ -277,8 +277,7 @@ pub fn list_backups(backup_dir: &Path) -> Result<Vec<PathBuf>> {
     if !backup_dir.exists() {
         return Ok(Vec::new());
     }
-    let mut backups: Vec<PathBuf> = std::fs::read_dir(backup_dir)
-        .map_err(|_| BackupError::Io)?
+    let mut backups: Vec<PathBuf> = std::fs::read_dir(backup_dir)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|path| is_backup_file(path))
@@ -323,8 +322,8 @@ fn is_backup_file(path: &Path) -> bool {
 #[cfg(unix)]
 fn set_private(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|_| BackupError::Io)
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
 }
 
 #[cfg(not(unix))]

@@ -1832,6 +1832,22 @@
   2. *Performance/allocations:* Review SQL parameter allocation in search filters.
   3. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
 
+## Iteration 123
+- **Lens:** Error handling
+- **Change:** Leverage `From<std::io::Error>` via `?` across filesystem calls in `backup.rs` (`crates/lore-core/src/backup.rs`).
+- **Critique:**
+  - `backup.rs` used verbose `.map_err(|_| BackupError::Io)` on filesystem operations despite `From<std::io::Error>` being implemented.
+  - Fix: Replaced manual conversions with `?` in `create_backup`, `prune`, `list_backups`, and `set_private`.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Review SQL parameter allocation in search filters.
+  2. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
+  3. *Docs accuracy vs code:* Verify setting key validation docstrings.
+
+
 
 
 
