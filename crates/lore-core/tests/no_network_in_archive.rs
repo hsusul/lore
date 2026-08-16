@@ -21,6 +21,7 @@ const FORBIDDEN: &[&str] = &[
     "reqwest::",
     "reqwest ",
     "hyper::",
+    "hyper ",
     "ureq::",
     "isahc::",
     "curl::",
@@ -28,6 +29,8 @@ const FORBIDDEN: &[&str] = &[
     "attohttpc::",
     "surf::",
     "wreq::",
+    "native_tls",
+    "rustls",
 ];
 
 fn scan_dir(dir: &Path, violations: &mut Vec<String>) {

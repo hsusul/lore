@@ -1082,6 +1082,22 @@
   2. *Correctness bugs:* Check SQLite index usage on session listing queries.
   3. *Missing tests/edge cases:* Add test for invalid backup intervals in IPC handlers.
 
+## Iteration 72
+- **Lens:** Dependency/build hygiene
+- **Change:** Expand forbidden networking and TLS symbols list in static archive test (`crates/lore-core/tests/no_network_in_archive.rs`).
+- **Critique:**
+  - `FORBIDDEN` symbols omitted TLS libraries (`native_tls`, `rustls`) and space-delimited `hyper `, leaving static guard coverage slightly narrower than all possible transport boundaries.
+  - Fix: Added `native_tls`, `rustls`, and `hyper ` to `FORBIDDEN` array in `crates/lore-core/tests/no_network_in_archive.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Check SQLite index coverage on session folders and segments.
+  2. *Missing tests/edge cases:* Add test for setting invalid backup intervals in IPC handlers.
+  3. *Error handling:* Validate SQLite error conversions across repository queries.
+
+
 
 
 
