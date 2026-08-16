@@ -692,6 +692,22 @@
   2. *ROADMAP progression:* Audit M7 forget-everything test coverage.
   3. *Dependency/build hygiene:* Check unused dev dependencies in root and crates.
 
+## Iteration 46
+- **Lens:** Naming/consistency
+- **Change:** Add `--accent-fg: #ffffff;` token to manual `[data-theme="dark"]` override in `src/styles.css`.
+- **Critique:**
+  - `[data-theme="dark"]` in `src/styles.css` omitted the explicit `--accent-fg` declaration present in the `@media (prefers-color-scheme: dark)` block, creating a token discrepancy between manual and OS dark themes.
+  - Fix: Added `--accent-fg: #ffffff;` to `[data-theme="dark"]`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit M7 forget-everything test coverage.
+  2. *Dependency/build hygiene:* Check unused dev dependencies in root and crates.
+  3. *Correctness bugs:* Audit SQLite index integrity on all v0 tables.
+
+
 
 
 
