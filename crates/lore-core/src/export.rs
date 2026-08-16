@@ -71,7 +71,13 @@ pub fn export_session_markdown(
                     if let Some(text) = &part.text {
                         let _ = writeln!(out, "{}\n", render(text));
                     } else if let Some(json) = &part.content_json {
-                        let _ = writeln!(out, "```json\n{}\n```\n", render(json));
+                        let rendered_json = render(json);
+                        let fence = if rendered_json.contains("```") {
+                            "````"
+                        } else {
+                            "```"
+                        };
+                        let _ = writeln!(out, "{fence}json\n{rendered_json}\n{fence}\n");
                     }
                 }
             }
@@ -206,5 +212,21 @@ mod tests {
             .unwrap();
         assert!(!md.contains("`src/`malicious`.rs`"));
         assert!(md.contains("`src/'malicious'.rs`"));
+    }
+
+    #[test]
+    fn export_uses_four_backticks_when_json_contains_code_fence() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"explain\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"echo ```nested```\"}}]}}\n"
+        );
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+        assert!(md.contains("````json\n"));
+        assert!(md.contains("echo ```nested```"));
+        assert!(md.contains("\n````\n"));
     }
 }
