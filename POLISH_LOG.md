@@ -3320,6 +3320,22 @@
   2. *UX & accessibility:* Audit command palette search clear button.
   3. *Security/input validation:* Audit regex and path escapes.
 
+## Iteration 222
+- **Lens:** Docs accuracy vs code
+- **Change:** Document keyset cursor non-positive rowid validation and zero-width term filtering in `docs/architecture/SEARCH.md` §6.
+- **Critique:**
+  - `SEARCH.md` §6 documented keyset pagination ordering but did not specify that non-positive rowids in cursors safely degrade to the first page, or that zero-width search terms are filtered.
+  - Fix: Updated `docs/architecture/SEARCH.md` §6 with keyset rowid and zero-width filtering details.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit command palette search clear button.
+  2. *Security/input validation:* Audit regex and path escapes.
+  3. *Dead code & duplication:* Audit duplicate CSS properties.
+
+
 
 
 
