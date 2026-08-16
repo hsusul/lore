@@ -1202,6 +1202,22 @@
   2. *Dead code & duplication:* Check duplicate color definitions in styles.css.
   3. *Naming/consistency:* Audit error messages across IPC boundary commands.
 
+## Iteration 80
+- **Lens:** Security/input validation
+- **Change:** Enforce query length bounds and limit clamping in `search` and `search_page` IPC commands (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `search` and `search_page` did not clamp limits and did not enforce a maximum query length limit before invoking FTS compilation and SQLite queries.
+  - Fix: Added `query.len() <= 10_000` length bounding and `limit.clamp(1, 10_000)` clamping to search IPC commands.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Check duplicate color definitions in styles.css.
+  2. *Naming/consistency:* Audit error messages across IPC boundary commands.
+  3. *ROADMAP progression:* Review M7 release packaging verification gates in ROADMAP.
+
+
 
 
 
