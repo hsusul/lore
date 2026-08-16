@@ -216,7 +216,7 @@ function FileEventRow({
           {FILE_SOURCE_LABEL[fileEvent.source] ?? fileEvent.source}
         </span>
         {fileEvent.has_patch && (
-          <button className="file__toggle" onClick={toggle}>
+          <button type="button" className="file__toggle" onClick={toggle}>
             {open ? "Hide patch" : "View patch"}
           </button>
         )}
@@ -251,7 +251,7 @@ function SessionContent({
 
   const { summary, segments, messages, file_events } = detail;
   return (
-    <section className="session" aria-label="session">
+    <section className="session" aria-label="Session detail">
       <header className="session__header">
         <h2>{summary.title ?? "(untitled session)"}</h2>
         <p className="session__meta">
@@ -280,12 +280,12 @@ function SessionContent({
         {(onExport || onForget) && (
           <div className="session__actions">
             {onExport && (
-              <button className="btn--ghost" onClick={onExport}>
+              <button type="button" className="btn--ghost" onClick={onExport}>
                 Export
               </button>
             )}
             {onForget && (
-              <button className="btn--ghost session__forget" onClick={onForget}>
+              <button type="button" className="btn--ghost session__forget" onClick={onForget}>
                 Forget
               </button>
             )}
@@ -326,6 +326,7 @@ function SessionContent({
         </div>
         {visibleMessages < messages.length && (
           <button
+            type="button"
             className="timeline__more btn--ghost"
             onClick={() => setVisibleMessages((count) => count + TIMELINE_PAGE)}
           >
@@ -340,7 +341,7 @@ function SessionContent({
 export default function SessionView({ detail, ...props }: SessionViewProps) {
   if (!detail) {
     return (
-      <section className="session session--empty" aria-label="session">
+      <section className="session session--empty" aria-label="Session detail">
         <p>Select a session to read it.</p>
       </section>
     );

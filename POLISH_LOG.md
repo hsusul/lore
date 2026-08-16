@@ -1187,6 +1187,22 @@
   2. *Security/input validation:* Check boundary parameters in search_page IPC handler.
   3. *Dead code & duplication:* Check duplicate color definitions in styles.css.
 
+## Iteration 79
+- **Lens:** UX & accessibility
+- **Change:** Add explicit `type="button"` attributes to actions and patch toggles and standardize section landmark names in `SessionView.tsx` (`src/components/SessionView.tsx`).
+- **Critique:**
+  - In `SessionView.tsx`, interactive buttons ("Export", "Forget", "Show more messages", and "View patch") lacked explicit `type="button"`, and landmarks used lowercase `"session"` rather than descriptive `"Session detail"`.
+  - Fix: Added `type="button"` attributes to all buttons and set `aria-label="Session detail"` on main and empty session detail containers.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Check boundary parameters in search_page IPC handler in `src-tauri/src/lib.rs`.
+  2. *Dead code & duplication:* Check duplicate color definitions in styles.css.
+  3. *Naming/consistency:* Audit error messages across IPC boundary commands.
+
+
 
 
 
