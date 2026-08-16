@@ -2253,6 +2253,22 @@
   2. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
   3. *Dead code & duplication:* Audit redundant imports in frontend component files.
 
+## Iteration 151
+- **Lens:** UX & accessibility
+- **Change:** Add `aria-describedby` associations across Settings sections and Danger button (`src/components/SettingsPanel.tsx`, `src/components/BackupSettings.tsx`).
+- **Critique:**
+  - `SettingsPanel.tsx` and `BackupSettings.tsx` contained explanatory paragraphs for Agents, Backups, and Data sections, but assistive technologies did not associate these explanations with the respective sections or the destructive "Forget everything" button.
+  - Fix: Linked `aria-describedby` on Agents, Backups, and Data sections and on the "Forget everything" button.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
+  2. *Dead code & duplication:* Audit redundant utility classes in CSS stylesheet.
+  3. *Naming/consistency:* Audit CSS token naming across component selectors.
+
+
 
 
 

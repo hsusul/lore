@@ -65,11 +65,11 @@ export default function BackupSettings() {
   }
 
   return (
-    <section aria-labelledby="backups-heading">
+    <section aria-labelledby="backups-heading" aria-describedby="backups-desc">
       <h3 id="backups-heading" className="section-title">
         Backups
       </h3>
-      <p className="empty">
+      <p id="backups-desc" className="empty">
         Local, Lore-owned snapshots of your archive, kept private on this machine and removed by
         "Forget everything".
       </p>
