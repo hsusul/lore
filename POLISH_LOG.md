@@ -163,6 +163,22 @@
   2. *Dependency/build hygiene:* Clean up any unused cargo profile flags or unnecessary dependencies.
   3. *Correctness bugs:* Verify keyset pagination edge case when all items have identical timestamps.
 
+## Iteration 11
+- **Lens:** ROADMAP progression
+- **Change:** Reconcile `ROADMAP.md` milestone status with user folder management (M5) and backup schedule/settings UI (M7) (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `docs/product/ROADMAP.md` implementation status table and build sequence lagged behind merged capabilities, omitting user folders (`FolderList`, drag-and-drop thread filing, keyset pagination) and user-visible backup schedule UI (`BackupSettings`, interval and retention settings, manual trigger).
+  - Fix: Updated `ROADMAP.md` M5 and M7 entries to reflect built capabilities accurately.
+- **Validation Results:**
+  - `cargo test --workspace`: 77 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace Cargo.toml files for unused or outdated dependencies.
+  2. *Correctness bugs:* Test pagination behavior when consecutive sessions share exact same millisecond timestamp.
+  3. *Error handling:* Safe parsing of malformed JSON strings in `set_setting` IPC command.
+
+
 
 
 
