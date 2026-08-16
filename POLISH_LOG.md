@@ -2222,6 +2222,23 @@
   2. *Docs accuracy vs code:* Verify backup settings descriptions in architecture docs.
   3. *UX & accessibility:* Audit keyboard focus order on Settings modal tabs/sections.
 
+## Iteration 149
+- **Lens:** API & DTO ergonomics
+- **Change:** Strictly type `BackupInterval` and provide default `keep = 7` in `setBackupSchedule` (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - `setBackupSchedule` accepted `BackupInterval | string` in its signature, diluting the TypeScript type safety of `BackupInterval`.
+  - `keep` parameter was required without a default argument matching the canonical 7-snapshot retention.
+  - Fix: Restricted signature to `BackupInterval`, defaulted `keep = 7`, and added unit tests in `src/ipc.test.ts`.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify backup schedule setting defaults in `docs/architecture/DATA_MODEL.md` and `docs/architecture/ARCHITECTURE.md`.
+  2. *UX & accessibility:* Audit keyboard focus order on Settings modal tabs/sections.
+  3. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
+
+
 
 
 

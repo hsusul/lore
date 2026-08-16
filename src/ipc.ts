@@ -227,8 +227,8 @@ export function getBackupSchedule(): Promise<BackupScheduleDto> {
 
 /** Persist the automatic-backup schedule. `interval` is "off" | "daily" | "weekly". */
 export function setBackupSchedule(
-  interval: BackupInterval | string,
-  keep: number,
+  interval: BackupInterval,
+  keep: number = 7,
 ): Promise<void> {
   return invoke<void>("set_backup_schedule", { interval, keep });
 }

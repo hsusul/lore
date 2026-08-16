@@ -144,13 +144,19 @@ describe("ipc contract", () => {
     });
   });
 
-  it("setBackupSchedule passes interval and keep count", async () => {
+  it("setBackupSchedule passes interval and keep count, defaulting keep to 7", async () => {
     invoke.mockResolvedValue(undefined);
     const interval: import("./ipc").BackupInterval = "weekly";
     await (await import("./ipc")).setBackupSchedule(interval, 14);
-    expect(invoke).toHaveBeenCalledWith("set_backup_schedule", {
+    expect(invoke).toHaveBeenNthCalledWith(1, "set_backup_schedule", {
       interval: "weekly",
       keep: 14,
+    });
+
+    await (await import("./ipc")).setBackupSchedule("daily");
+    expect(invoke).toHaveBeenNthCalledWith(2, "set_backup_schedule", {
+      interval: "daily",
+      keep: 7,
     });
   });
 
