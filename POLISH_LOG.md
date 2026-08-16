@@ -542,6 +542,22 @@
   2. *Correctness bugs:* Verify session duration string formatting for sub-minute sessions.
   3. *Missing tests/edge cases:* Test sort order switching in frontend search UI.
 
+## Iteration 36
+- **Lens:** Dependency/build hygiene
+- **Change:** Add `test:watch` script in `package.json` for interactive local test execution (`package.json`).
+- **Critique:**
+  - `package.json` had single-run `"test": "vitest run"` but lacked an interactive `"test:watch": "vitest"` script for developers running local TDD loops.
+  - Fix: Added `"test:watch": "vitest"` to `package.json`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (89 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit date format edge cases in session duration formatting.
+  2. *Missing tests/edge cases:* Test sort order switching in frontend search UI.
+  3. *Error handling:* Validate folder name trim handling for empty strings on rename.
+
+
 
 
 
