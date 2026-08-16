@@ -121,11 +121,11 @@ pub(crate) fn non_negative_int_field(obj: &serde_json::Value, key: &str) -> Opti
         .filter(|&v| v >= 0)
 }
 
-/// Neutralize path traversal and drive prefixes so a recorded
-/// `FileEvent.path` can never represent an escape (`../` or `C:\`). Produces
-/// a clean relative path.
+/// Neutralize path traversal, drive prefixes, control characters, and zero-width
+/// bytes so a recorded `FileEvent.path` can never represent an escape (`../` or
+/// `C:\`) or terminal/filesystem poison. Produces a clean relative path.
 pub(crate) fn sanitize_path(raw: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
     for seg in raw.split(['/', '\\']) {
         let clean_seg = if seg.len() == 2
             && seg.as_bytes()[1] == b':'
@@ -135,12 +135,16 @@ pub(crate) fn sanitize_path(raw: &str) -> String {
         } else {
             seg
         };
-        match clean_seg {
+        let filtered: String = clean_seg
+            .chars()
+            .filter(|c| !c.is_control() && !crate::is_zero_width(*c))
+            .collect();
+        match filtered.as_str() {
             "" | "." => {}
             ".." => {
                 parts.pop();
             }
-            other => parts.push(other),
+            _ => parts.push(filtered),
         }
     }
     parts.join("/")
@@ -208,6 +212,10 @@ mod tests {
         assert_eq!(
             sanitize_path(r"d:/project/src/index.js"),
             "project/src/index.js"
+        );
+        assert_eq!(
+            sanitize_path("src/\0poison\r/app\u{200b}.ts"),
+            "src/poison/app.ts"
         );
     }
 

@@ -3170,6 +3170,22 @@
   2. *Dead code & duplication:* Audit unused CSS helper classes.
   3. *Naming/consistency:* Audit test naming conventions.
 
+## Iteration 212
+- **Lens:** Security/input validation
+- **Change:** Neutralize control and zero-width characters in `sanitize_path` with unit tests (`crates/lore-core/src/adapters/common.rs`).
+- **Critique:**
+  - `sanitize_path` stripped path traversal and drive letters but did not filter ASCII control characters (`\0`, `\r`, `\n`) or zero-width invisible characters.
+  - Fix: Filtered `!c.is_control() && !crate::is_zero_width(*c)` per segment and added unit tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 97 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit unused CSS helper classes.
+  2. *Naming/consistency:* Audit test naming conventions.
+  3. *ROADMAP progression:* Audit status alignment.
+
+
 
 
 
