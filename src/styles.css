@@ -494,11 +494,17 @@ button:disabled {
   border-radius: var(--r-sm);
   color: var(--text-2);
   line-height: 0;
+  cursor: pointer;
 }
 
-.icon-btn:hover {
+.icon-btn:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .chip {

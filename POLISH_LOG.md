@@ -2614,6 +2614,22 @@
   2. *Security/input validation:* Check path sanitization against windows drive letter escapes.
   3. *Dead code & duplication:* Remove unused styles or selectors in SettingsPanel styles.
 
+## Iteration 175
+- **Lens:** UX & accessibility
+- **Change:** Add explicit pointer cursor and disabled state handling for `.icon-btn` interactive elements (`src/styles.css`).
+- **Critique:**
+  - `.icon-btn` had no explicit `cursor: pointer` or disabled styling, and its `:hover` state lacked `:not(:disabled)` protection.
+  - Fix: Added `cursor: pointer`, guarded `:hover:not(:disabled)`, and added explicit `:disabled` opacity/cursor styling.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Check path sanitization against windows drive letter escapes.
+  2. *Dead code & duplication:* Remove unused styles or selectors in SettingsPanel styles.
+  3. *Naming/consistency:* Audit error diagnostic text consistency in Rust core.
+
+
 
 
 
