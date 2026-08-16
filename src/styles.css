@@ -693,6 +693,10 @@ kbd {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-weak);
 }
+.folder__field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 
 .folders__empty {
   margin: 0.2rem 0.5rem;

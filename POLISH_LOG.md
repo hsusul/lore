@@ -1892,6 +1892,22 @@
   2. *Security/input validation:* Check setting size boundaries.
   3. *Dead code & duplication:* Audit unused CSS properties in theme tokens.
 
+## Iteration 127
+- **Lens:** UX & accessibility
+- **Change:** Add explicit `:focus-visible` outline for `.folder__field` in `src/styles.css` (`src/styles.css`).
+- **Critique:**
+  - `.folder__field:focus` used `outline: none` and relied solely on `box-shadow`, which is suppressed in high-contrast assistive display modes.
+  - Fix: Added `.folder__field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }`.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Check setting size boundaries.
+  2. *Dead code & duplication:* Audit unused CSS properties in theme tokens.
+  3. *Naming/consistency:* Review button type attributes in modal dialogs.
+
+
 
 
 
