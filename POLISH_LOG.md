@@ -2207,6 +2207,22 @@
   2. *API & DTO ergonomics:* Audit ErrorDto error representation.
   3. *Docs accuracy vs code:* Verify backup settings descriptions.
 
+## Iteration 148
+- **Lens:** Performance/allocations
+- **Change:** Direct `gix::ObjectId` comparison in `reverify` to eliminate intermediate hex string allocation (`crates/lore-core/src/git.rs`).
+- **Critique:**
+  - `reverify` in `git.rs` previously formatted the peeled branch target commit to a hex string (`id.to_hex().to_string()`), allocating an intermediate heap `String` on every branch verification check.
+  - Fix: Re-used `parsed_oid` directly with `id.detach() == target` to compare 20-byte object IDs directly without intermediate string formatting or heap allocation.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit `ErrorDto` in lore-ipc for structured error variants.
+  2. *Docs accuracy vs code:* Verify backup settings descriptions in architecture docs.
+  3. *UX & accessibility:* Audit keyboard focus order on Settings modal tabs/sections.
+
+
 
 
 
