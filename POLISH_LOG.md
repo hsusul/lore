@@ -3335,6 +3335,22 @@
   2. *Security/input validation:* Audit regex and path escapes.
   3. *Dead code & duplication:* Audit duplicate CSS properties.
 
+## Iteration 223
+- **Lens:** UX & accessibility
+- **Change:** Add `role="status"` and `aria-live="polite"` to `CommandPalette` empty matches state (`src/components/CommandPalette.tsx`).
+- **Critique:**
+  - `CommandPalette` marked the "No matches" list item with `role="presentation"`, which was invisible to screen reader announcements when a query yielded zero matches.
+  - Fix: Changed `role="presentation"` to `role="status"` with `aria-live="polite"` so zero-result states are announced.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Audit regex and path escapes.
+  2. *Dead code & duplication:* Audit duplicate CSS properties.
+  3. *Naming/consistency:* Audit test naming conventions.
+
+
 
 
 

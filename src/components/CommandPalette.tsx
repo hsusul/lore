@@ -247,7 +247,9 @@ export default function CommandPalette({
           aria-busy={archiveLoading}
         >
           {filtered.length === 0 && !archiveLoading ? (
-            <li className="palette__empty" role="presentation">No matches</li>
+            <li className="palette__empty" role="status" aria-live="polite">
+              No matches
+            </li>
           ) : (
             filtered.map((command, index) => (
               <li
