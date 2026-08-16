@@ -160,6 +160,14 @@ pub struct Tokens {
     pub cache: Option<i64>,
 }
 
+impl Tokens {
+    /// True when no token counts are recorded.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.input.is_none() && self.output.is_none() && self.cache.is_none()
+    }
+}
+
 /// One ordered content block within a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedPart {
@@ -332,5 +340,29 @@ mod tests {
         s.note_partial("another");
         assert_eq!(s.status, ParseStatus::Partial);
         assert_eq!(s.notes.len(), 2);
+    }
+
+    #[test]
+    fn tokens_is_empty_checks_all_fields() {
+        let empty = Tokens::default();
+        assert!(empty.is_empty());
+
+        let with_input = Tokens {
+            input: Some(10),
+            ..Default::default()
+        };
+        assert!(!with_input.is_empty());
+
+        let with_output = Tokens {
+            output: Some(5),
+            ..Default::default()
+        };
+        assert!(!with_output.is_empty());
+
+        let with_cache = Tokens {
+            cache: Some(20),
+            ..Default::default()
+        };
+        assert!(!with_cache.is_empty());
     }
 }
