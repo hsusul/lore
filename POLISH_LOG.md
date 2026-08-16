@@ -1427,6 +1427,22 @@
   2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
   3. *Correctness bugs:* Audit FTS5 rank score formatting in search results.
 
+## Iteration 95
+- **Lens:** ROADMAP progression
+- **Change:** Update `no_network_in_archive.rs` test path references in `TESTING.md` (`docs/development/TESTING.md`).
+- **Critique:**
+  - `docs/development/TESTING.md` referenced `tests/no_network_in_archive.rs` instead of its workspace location `crates/lore-core/tests/no_network_in_archive.rs`.
+  - Fix: Corrected the test file paths in §1 (test pyramid) and §7 (security guard tests).
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  2. *Correctness bugs:* Audit FTS5 rank score formatting in search results.
+  3. *Missing tests/edge cases:* Add test for malformed keyset cursor decoding.
+
+
 
 
 
