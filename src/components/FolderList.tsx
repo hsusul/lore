@@ -92,6 +92,7 @@ export default function FolderList({
 
       {creating && (
         <input
+          type="text"
           className="folder__field"
           autoFocus
           placeholder="Folder name"
@@ -140,6 +141,7 @@ export default function FolderList({
             >
               {editingId === folder.id ? (
                 <input
+                  type="text"
                   className="folder__field"
                   autoFocus
                   aria-label={`Rename folder ${folder.name}`}

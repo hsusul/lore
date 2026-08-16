@@ -2117,6 +2117,22 @@
   2. *ROADMAP progression:* Audit M7 verification entries.
   3. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
 
+## Iteration 142
+- **Lens:** Naming/consistency
+- **Change:** Add explicit `type="text"` to input elements in `CommandPalette.tsx` and `FolderList.tsx` (`src/components/CommandPalette.tsx`, `src/components/FolderList.tsx`).
+- **Critique:**
+  - `<input>` elements in `CommandPalette.tsx` and `FolderList.tsx` omitted `type="text"`, relying on implicit browser defaults.
+  - Fix: Added explicit `type="text"` attributes across all input controls.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit M7 verification entries.
+  2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  3. *Correctness bugs:* Audit SearchResults escape key handling.
+
+
 
 
 

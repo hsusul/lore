@@ -221,6 +221,7 @@ export default function CommandPalette({
       >
         <input
           ref={inputRef}
+          type="text"
           className="palette__input"
           placeholder="Search actions, repositories, and sessions…"
           value={query}
