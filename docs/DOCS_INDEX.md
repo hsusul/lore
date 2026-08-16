@@ -16,7 +16,7 @@
 | **Git identity evidence, worktrees, observation provenance, lifecycle** | [architecture/GIT_INTEGRATION.md](architecture/GIT_INTEGRATION.md) |
 | Search (FTS5 → hybrid), tokenizer, ranking, filters | [architecture/SEARCH.md](architecture/SEARCH.md) |
 | **Skill/knowledge extraction (git-evidenced, privacy modes)** | [architecture/SKILL_EXTRACTION.md](architecture/SKILL_EXTRACTION.md) |
-| Threat model, secrets, privacy contract | [architecture/SECURITY.md](architecture/SECURITY.md) |
+| Threat model, secrets, privacy contract, local backups, and recovery | [architecture/SECURITY.md](architecture/SECURITY.md) |
 | **Secret-scanner ruleset (patterns, entropy, redaction, tests)** | [architecture/SECRET_SCANNING.md](architecture/SECRET_SCANNING.md) |
 | Local-first constraints & the network-boundary | [architecture/LOCAL_FIRST.md](architecture/LOCAL_FIRST.md) |
 | Visual/interaction language, tokens, keyboard model | [design/DESIGN_SYSTEM.md](design/DESIGN_SYSTEM.md) |

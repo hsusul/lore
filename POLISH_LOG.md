@@ -1592,6 +1592,22 @@
   2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
   3. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
 
+## Iteration 107
+- **Lens:** ROADMAP progression
+- **Change:** Update `SECURITY.md` canonical description in `DOCS_INDEX.md` (`docs/DOCS_INDEX.md`).
+- **Critique:**
+  - `DOCS_INDEX.md` summarized `architecture/SECURITY.md` as "Threat model, secrets, privacy contract", omitting the local backups, recovery, and deletion threat contracts added in M7.
+  - Fix: Updated entry to "Threat model, secrets, privacy contract, local backups, and recovery".
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  2. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
+  3. *Missing tests/edge cases:* Add unit test for empty folder pagination query.
+
+
 
 ## Iteration 105
 - **Lens:** Dead code & duplication
