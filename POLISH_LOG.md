@@ -2809,6 +2809,22 @@
   2. *Dead code & duplication:* Audit unused imports in test files.
   3. *Naming/consistency:* Audit enum display implementations.
 
+## Iteration 188
+- **Lens:** Security/input validation
+- **Change:** Reject control characters in folder names in `create_folder` and `rename_folder` and consolidate `is_invalid_folder_id` with `is_invalid_text_token` (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `create_folder` and `rename_folder` checked length bounds (`len() > 256`), but did not guard against control characters at the Tauri command boundary before delegating to core.
+  - Fix: Added `name.chars().any(|c| c.is_control())` check and consolidated `is_invalid_folder_id` to delegate to `is_invalid_text_token(id, 64)`.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit unused imports in test files.
+  2. *Naming/consistency:* Audit enum display implementations.
+  3. *ROADMAP progression:* Audit milestone tracker status.
+
+
 
 
 
