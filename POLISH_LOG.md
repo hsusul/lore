@@ -3560,6 +3560,22 @@
   2. *ROADMAP progression:* Audit milestone descriptions.
   3. *Dependency/build hygiene:* Audit Cargo workspace.
 
+## Iteration 238
+- **Lens:** Naming/consistency
+- **Change:** Add JSON serialization and roundtrip test coverage for `FolderSummary` and `RepositorySummary` in `crates/lore-ipc/src/lib.rs`.
+- **Critique:**
+  - `lore-ipc` tested JSON roundtrips for search, backup, and report DTOs, but lacked explicit assertions for `FolderSummary` and `RepositorySummary`.
+  - Fix: Added `FolderSummary` and `RepositorySummary` roundtrip tests in `crates/lore-ipc`.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (118 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit milestone descriptions.
+  2. *Dependency/build hygiene:* Audit Cargo workspace.
+  3. *Correctness bugs:* Audit empty search string handling.
+
+
 
 
 

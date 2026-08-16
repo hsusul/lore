@@ -408,5 +408,32 @@ mod tests {
             serde_json::from_str::<RescanResult>(&rescan_json).unwrap(),
             rescan
         );
+
+        let folder = FolderSummary {
+            id: "f1".into(),
+            name: "My Folder".into(),
+            session_count: 3,
+            position: 0,
+        };
+        let folder_json = serde_json::to_string(&folder).unwrap();
+        assert_eq!(
+            serde_json::from_str::<FolderSummary>(&folder_json).unwrap(),
+            folder
+        );
+
+        let repo = RepositorySummary {
+            id: "repo1".into(),
+            display_name: "lore".into(),
+            identity_confidence: "confirmed".into(),
+            primary_path: Some("/Users/dev/lore".into()),
+            is_missing: false,
+            session_count: 12,
+            worktree_count: 2,
+        };
+        let repo_json = serde_json::to_string(&repo).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RepositorySummary>(&repo_json).unwrap(),
+            repo
+        );
     }
 }
