@@ -3140,6 +3140,22 @@
   2. *UX & accessibility:* Audit settings modal keyboard traps.
   3. *Security/input validation:* Audit regex and path escapes.
 
+## Iteration 210
+- **Lens:** Docs accuracy vs code
+- **Change:** Document zero-width and control character validation on folder creation/renaming in `docs/architecture/DATA_MODEL.md`.
+- **Critique:**
+  - `DATA_MODEL.md` described character normalization for the `Folder` entity but did not mention rejection of zero-width characters and 256-byte boundary length limits.
+  - Fix: Updated `DATA_MODEL.md` Folder entity documentation to accurately reflect boundary validation behavior.
+- **Validation Results:**
+  - `cargo test --workspace`: 97 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit settings modal keyboard traps.
+  2. *Security/input validation:* Audit regex and path escapes.
+  3. *Dead code & duplication:* Audit unused CSS helper classes.
+
+
 
 
 

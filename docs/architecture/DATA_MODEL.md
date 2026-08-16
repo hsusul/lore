@@ -46,7 +46,7 @@ Values remain local and contain no session content. Clearing archived content pr
 
 ### Folder and SessionFolder — Lore-owned organization
 
-`Folder(id TEXT PK, name TEXT, position INT, created_at INT, updated_at INT)` stores user-defined folders for organizing sessions. `id` is a 128-bit hex string. Folder names are normalized on entry: unprintable ASCII control characters are mapped to whitespace, whitespace is collapsed and trimmed, length is capped at 100 characters, and blank input defaults to `"New folder"`.
+`Folder(id TEXT PK, name TEXT, position INT, created_at INT, updated_at INT)` stores user-defined folders for organizing sessions. `id` is a 128-bit hex string. Folder names are validated and normalized on entry: unprintable ASCII control characters and invisible zero-width characters are rejected, whitespace is collapsed and trimmed, length is capped at 100 characters in storage (and 256 bytes at the IPC boundary), and blank input defaults to `"New folder"`.
 
 `SessionFolder(session_id TEXT PK REFERENCES AgentSession(id), folder_id TEXT REFERENCES Folder(id), added_at INT)` tracks thread folder membership. Membership is mutually exclusive: `session_id` is the primary key so filing replaces any prior folder assignment. Deleting a folder unfiles its sessions (cascades) without deleting the session.
 
