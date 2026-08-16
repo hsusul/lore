@@ -2779,6 +2779,22 @@
   2. *UX & accessibility:* Audit aria-expanded attributes on dialogs.
   3. *Security/input validation:* Audit regex sanitization in search.
 
+## Iteration 186
+- **Lens:** Docs accuracy vs code
+- **Change:** Reconcile default backup retention setting of 7 in `DATA_MODEL.md` §11 decision notes (`docs/architecture/DATA_MODEL.md`).
+- **Critique:**
+  - `docs/architecture/DATA_MODEL.md` §11 recorded the M7 backup decision without explicitly noting the canonical default retention value (7).
+  - Fix: Updated `DATA_MODEL.md` §11 to document default retention of 7 (`backup.keep 1..100, default 7`).
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit aria-expanded attributes on dialogs.
+  2. *Security/input validation:* Audit regex sanitization in search.
+  3. *Dead code & duplication:* Audit unused imports in test files.
+
+
 
 
 
