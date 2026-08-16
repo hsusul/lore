@@ -45,9 +45,7 @@ dist-ssr/
 !CLAUDE.md
 !RESEARCH_SUMMARY.md
 !POLISH_LOG.md
-!docs/
-!docs/**
-!docs/**/*.md
+/docs/
 
 # Local agent instructions and design previews
 /.claude/

@@ -448,7 +448,7 @@ fn sanitize_env(cmd: &mut Command) {
 /// Read up to `OUTPUT_CAP` bytes; keep draining past the cap (discarding) so the
 /// child never blocks on a full pipe, but never buffer more than the cap.
 fn read_capped(reader: &mut impl Read) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(4096.min(OUTPUT_CAP));
     let mut chunk = [0u8; 8192];
     loop {
         match reader.read(&mut chunk) {
