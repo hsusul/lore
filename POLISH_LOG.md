@@ -2434,6 +2434,22 @@
   2. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
   3. *Dead code & duplication:* Audit redundant utility classes in CSS stylesheet.
 
+## Iteration 163
+- **Lens:** UX & accessibility
+- **Change:** Add explicit `aria-label` to command palette listbox and `role="presentation"` to empty state placeholder (`src/components/CommandPalette.tsx`).
+- **Critique:**
+  - In `CommandPalette.tsx`, the `ul[role="listbox"]` container lacked an explicit accessible name (`aria-label`), and the empty state placeholder `<li className="palette__empty">` was rendered without `role="presentation"`.
+  - Fix: Added `aria-label="Commands and search results"` to the listbox and `role="presentation"` to the empty state item.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
+  2. *Dead code & duplication:* Audit redundant utility classes in CSS stylesheet.
+  3. *Naming/consistency:* Audit CSS class name conventions across modal components.
+
+
 
 
 

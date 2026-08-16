@@ -238,10 +238,11 @@ export default function CommandPalette({
           id="palette-list"
           className="palette__list"
           role="listbox"
+          aria-label="Commands and search results"
           aria-busy={archiveLoading}
         >
           {filtered.length === 0 && !archiveLoading ? (
-            <li className="palette__empty">No matches</li>
+            <li className="palette__empty" role="presentation">No matches</li>
           ) : (
             filtered.map((command, index) => (
               <li
