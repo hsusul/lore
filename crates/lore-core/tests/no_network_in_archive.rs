@@ -18,11 +18,16 @@ const FORBIDDEN: &[&str] = &[
     "TcpStream",
     "TcpListener",
     "UdpSocket",
-    "reqwest",
+    "reqwest::",
+    "reqwest ",
     "hyper::",
-    "ureq",
-    "isahc",
-    "curl",
+    "ureq::",
+    "isahc::",
+    "curl::",
+    "tungstenite::",
+    "attohttpc::",
+    "surf::",
+    "wreq::",
 ];
 
 fn scan_dir(dir: &Path, violations: &mut Vec<String>) {

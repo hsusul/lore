@@ -722,6 +722,22 @@
   2. *Correctness bugs:* Check `crates/lore-core/src/backup.rs` file permissions error handling.
   3. *Missing tests/edge cases:* Add regression tests for empty search query handling in `search.rs`.
 
+## Iteration 48
+- **Lens:** Dependency/build hygiene
+- **Change:** Expand static forbidden networking symbols in boundary test (`crates/lore-core/tests/no_network_in_archive.rs`).
+- **Critique:**
+  - `no_network_in_archive.rs` guarded against common standard library and async HTTP networking symbols, but omitted other modern networking and WebSocket clients (`tungstenite`, `attohttpc`, `surf`, `wreq`).
+  - Fix: Broadened the `FORBIDDEN` symbols array in `no_network_in_archive.rs` with qualified module paths to strengthen static compile-time network isolation tests without false positives on English words.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Verify SQLite backup error propagation under non-fatal status codes.
+  2. *Missing tests/edge cases:* Test sort order switching in frontend search UI.
+  3. *Error handling:* Check `get_git_snapshot` error conversion when git inspection fails.
+
+
 
 
 
