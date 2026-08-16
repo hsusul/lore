@@ -6,6 +6,9 @@ import { useWindowing } from "../virtual";
 
 /** Split a snippet on the highlight markers into plain/highlighted runs. */
 function Snippet({ text }: { text: string }) {
+  if (!text.includes(HIGHLIGHT_START)) {
+    return <span className="hit__snippet">{text}</span>;
+  }
   const nodes: React.ReactNode[] = [];
   let rest = text;
   let key = 0;

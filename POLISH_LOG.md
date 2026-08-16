@@ -2749,6 +2749,22 @@
   2. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
   3. *Docs accuracy vs code:* Verify IPC command docstrings in src/ipc.ts.
 
+## Iteration 184
+- **Lens:** Performance/allocations
+- **Change:** Fast-path unhighlighted search result snippets to eliminate parser loops and intermediate React Fragment allocations (`src/components/SearchResults.tsx`).
+- **Critique:**
+  - `Snippet` parsed every snippet through a while loop allocating React `<Fragment>`s and string slices even when no highlight markers were present.
+  - Fix: Added an early return `if (!text.includes(HIGHLIGHT_START)) return <span className="hit__snippet">{text}</span>;`.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
+  2. *Docs accuracy vs code:* Verify IPC command docstrings in src/ipc.ts.
+  3. *UX & accessibility:* Audit aria-expanded attributes on dialogs.
+
+
 
 
 
