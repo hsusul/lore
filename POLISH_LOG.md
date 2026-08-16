@@ -2042,6 +2042,22 @@
   2. *Docs accuracy vs code:* Verify backup interval parsing in settings documentation.
   3. *UX & accessibility:* Review color-mix contrast in high-contrast themes.
 
+## Iteration 137
+- **Lens:** API & DTO ergonomics
+- **Change:** Add field docstrings to `ScanProgress` and `RescanResult` DTOs (`crates/lore-ipc/src/lib.rs`).
+- **Critique:**
+  - `ScanProgress` and `RescanResult` counter fields lacked docstrings explaining their semantics, producing bare TypeScript interface properties.
+  - Fix: Documented each metric field in `crates/lore-ipc/src/lib.rs` and regenerated TypeScript definitions.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify backup interval parsing in settings documentation.
+  2. *UX & accessibility:* Review color-mix contrast in high-contrast themes.
+  3. *Security/input validation:* Check setting size boundaries.
+
+
 
 
 

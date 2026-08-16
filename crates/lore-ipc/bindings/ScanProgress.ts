@@ -4,7 +4,27 @@
  * Content-free progress for a running scan. Payload of the `scan_progress`
  * event — counts only, never session content.
  */
-export type ScanProgress = { discovered: number, ingested: number, skipped: number, failed: number, enriched: number, 
+export type ScanProgress = { 
+/**
+ * Number of candidate session files discovered across all roots.
+ */
+discovered: number, 
+/**
+ * Number of new or modified sessions successfully parsed and ingested.
+ */
+ingested: number, 
+/**
+ * Number of sessions skipped because they were unchanged since prior ingest.
+ */
+skipped: number, 
+/**
+ * Number of sessions that failed to parse or ingest cleanly.
+ */
+failed: number, 
+/**
+ * Number of segments enriched with Git evidence.
+ */
+enriched: number, 
 /**
  * The scan pass has finished.
  */

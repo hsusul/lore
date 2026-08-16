@@ -221,14 +221,19 @@ pub struct SessionDetail {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ScanProgress {
+    /// Number of candidate session files discovered across all roots.
     #[ts(type = "number")]
     pub discovered: i64,
+    /// Number of new or modified sessions successfully parsed and ingested.
     #[ts(type = "number")]
     pub ingested: i64,
+    /// Number of sessions skipped because they were unchanged since prior ingest.
     #[ts(type = "number")]
     pub skipped: i64,
+    /// Number of sessions that failed to parse or ingest cleanly.
     #[ts(type = "number")]
     pub failed: i64,
+    /// Number of segments enriched with Git evidence.
     #[ts(type = "number")]
     pub enriched: i64,
     /// The scan pass has finished.
@@ -290,18 +295,23 @@ pub struct ForgetReport {
     pub source_paths: Vec<String>,
 }
 
-/// Final tally returned by the `rescan` command.
+/// Final tally returned by the `rescan` command. Content-free counters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct RescanResult {
+    /// Number of candidate session files discovered across all roots.
     #[ts(type = "number")]
     pub discovered: i64,
+    /// Number of new or modified sessions successfully parsed and ingested.
     #[ts(type = "number")]
     pub ingested: i64,
+    /// Number of sessions skipped because they were unchanged since prior ingest.
     #[ts(type = "number")]
     pub skipped: i64,
+    /// Number of sessions that failed to parse or ingest cleanly.
     #[ts(type = "number")]
     pub failed: i64,
+    /// Number of segments enriched with Git evidence.
     #[ts(type = "number")]
     pub enriched: i64,
 }
