@@ -1532,6 +1532,22 @@
   2. *UX & accessibility:* Check active state styling for search pagination buttons.
   3. *Security/input validation:* Check pagination limit clamp across all command handlers.
 
+## Iteration 102
+- **Lens:** Docs accuracy vs code
+- **Change:** Update static network test path reference in `SECURITY.md` (`docs/architecture/SECURITY.md`).
+- **Critique:**
+  - `SECURITY.md` referenced `tests/no_network_in_archive.rs` instead of its workspace crate path `crates/lore-core/tests/no_network_in_archive.rs`.
+  - Fix: Updated the test path reference in §1 (V0 privacy contract).
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Check active state styling for search pagination buttons.
+  2. *Security/input validation:* Check pagination limit clamp across all command handlers.
+  3. *Dead code & duplication:* Inspect unused CSS styles or imports.
+
+
 
 
 
