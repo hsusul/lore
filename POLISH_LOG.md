@@ -302,6 +302,22 @@
   2. *Dead code & duplication:* Consolidate temporary directory creation test fixtures.
   3. *Naming/consistency:* Audit error type naming across storage and backup modules.
 
+## Iteration 20
+- **Lens:** Security/input validation
+- **Change:** Harden `safe_relpath` against Windows backslash traversal and drive letter prefixes in blob storage (`crates/lore-core/src/storage/blob.rs`).
+- **Critique:**
+  - `safe_relpath` in `blob.rs` previously split only on `'/'`. On Windows systems or with mixed path syntax, backslashes (`'\\'`) or drive-letter prefixes (such as `..\..\file` or `C:\file`) were not properly segmented, leaving potential directory traversal risk outside `blobs/`.
+  - Fix: Updated `safe_relpath` to split on `['/', '\\']` and reject any empty segment, `..`, `.`, or `:` drive prefix, with full regression assertions.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Consolidate `test_dir` / temp store creation across core integration test suites.
+  2. *Naming/consistency:* Ensure uniform test fixture naming across parser modules.
+  3. *ROADMAP progression:* Audit milestone tracker for M6/M7 verification notes.
+
+
 
 
 

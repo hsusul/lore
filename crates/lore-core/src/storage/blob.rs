@@ -162,7 +162,11 @@ impl BlobStore {
 
 /// A relpath is safe when no segment escapes the store root.
 fn safe_relpath(relpath: &str) -> bool {
-    !relpath.split('/').any(|seg| seg == ".." || seg.is_empty())
+    let segments: Vec<&str> = relpath.split(['/', '\\']).collect();
+    !segments.is_empty()
+        && !segments
+            .iter()
+            .any(|seg| seg.is_empty() || *seg == ".." || *seg == "." || seg.contains(':'))
 }
 
 /// Write `bytes` to `path` and flush to disk before returning.
@@ -269,5 +273,11 @@ mod tests {
     fn read_rejects_path_traversal() {
         let (_dir, store) = store();
         assert!(store.read("../escape").is_err());
+        assert!(store.read("..\\escape").is_err());
+        assert!(store.read("shard/../../escape").is_err());
+        assert!(store.read("C:\\escape").is_err());
+        assert!(store.read("/escape").is_err());
+        assert!(store.read("").is_err());
+        assert!(store.read("./escape").is_err());
     }
 }
