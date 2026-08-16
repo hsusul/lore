@@ -149,3 +149,19 @@ fn recover_archive_without_a_backup_preserves_the_corrupt_archive() {
         "no fabricated replacement for the lost archive"
     );
 }
+
+#[test]
+fn recover_archive_handles_unopenable_database_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    // Write a completely invalid 4-byte file that fails SQLite header parsing at open
+    std::fs::write(dir.path().join("lore.db"), b"\xff\xff\xff\xff").unwrap();
+
+    let outcome = recover_archive(dir.path(), &backups).unwrap();
+    let quarantine_path = match outcome {
+        RecoveryOutcome::QuarantinedOnly { quarantine_path } => quarantine_path,
+        other => panic!("expected QuarantinedOnly, got {other:?}"),
+    };
+    assert_eq!(std::fs::read(&quarantine_path).unwrap(), b"\xff\xff\xff\xff");
+}

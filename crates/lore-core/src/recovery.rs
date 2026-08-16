@@ -67,7 +67,7 @@ pub fn recover_archive(archive_dir: &Path, backup_dir: &Path) -> Result<Recovery
     if !db_path.exists() {
         return Ok(RecoveryOutcome::Absent);
     }
-    if integrity_ok(&db_path)? {
+    if integrity_ok(&db_path) {
         return Ok(RecoveryOutcome::Healthy);
     }
 
@@ -92,12 +92,13 @@ pub fn recover_archive(archive_dir: &Path, backup_dir: &Path) -> Result<Recovery
 
 /// Does the database at `db_path` open cleanly and pass `PRAGMA
 /// integrity_check`? A missing/corrupt file or a non-"ok" result is not intact.
-fn integrity_ok(db_path: &Path) -> Result<bool> {
-    let conn = Connection::open(db_path).map_err(|_| RecoveryError::Io)?;
-    Ok(conn
-        .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+fn integrity_ok(db_path: &Path) -> bool {
+    let Ok(conn) = Connection::open(db_path) else {
+        return false;
+    };
+    conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
         .map(|result| result == "ok")
-        .unwrap_or(false))
+        .unwrap_or(false)
 }
 
 /// Preserve the corrupt archive (and any WAL/SHM sidecars) under a fresh

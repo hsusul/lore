@@ -147,6 +147,23 @@
   2. *ROADMAP progression:* Cross-check ROADMAP acceptance gate documentation with recent tests.
   3. *Dependency/build hygiene:* Unused dependencies or dev-dependencies in Cargo.toml manifests.
 
+## Iteration 10
+- **Lens:** Naming/consistency
+- **Change:** Make `integrity_ok` return a direct boolean and treat unopenable SQLite files as not intact for automatic quarantine and recovery (`crates/lore-core/src/recovery.rs`, `crates/lore-core/tests/recovery.rs`).
+- **Critique:**
+  - `integrity_ok` returned `Result<bool>` and mapped `Connection::open` failures to `Err(RecoveryError::Io)`, causing severely corrupted databases that failed at open time to error out instead of evaluating as not intact (`false`).
+  - As a consequence, unopenable corrupted archives failed `recover_archive` instead of being preserved under `quarantine/` and restored from backup.
+  - Fix: Changed `integrity_ok` to return `bool` directly (returning `false` on any open or integrity check failure), removed unnecessary error propagation, and added regression test coverage.
+- **Validation Results:**
+  - `cargo test --workspace`: 77 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Cross-check ROADMAP acceptance gate documentation with current test pass status.
+  2. *Dependency/build hygiene:* Clean up any unused cargo profile flags or unnecessary dependencies.
+  3. *Correctness bugs:* Verify keyset pagination edge case when all items have identical timestamps.
+
+
 
 
 
