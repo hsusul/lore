@@ -796,6 +796,15 @@ mod tests {
         let conn = crate::storage::open_in_memory().unwrap();
         assert!(list_sessions(&conn, 10).unwrap().is_empty());
         assert!(list_repositories(&conn).unwrap().is_empty());
+        let page = list_sessions_page(&conn, 10, None).unwrap();
+        assert!(page.sessions.is_empty());
+        assert!(page.next_cursor.is_none());
+        let repo_page = list_repository_sessions_page(&conn, "nonexistent-repo", 10, None).unwrap();
+        assert!(repo_page.sessions.is_empty());
+        assert!(repo_page.next_cursor.is_none());
+        let folder_page = list_folder_sessions_page(&conn, "nonexistent-folder", 10, None).unwrap();
+        assert!(folder_page.sessions.is_empty());
+        assert!(folder_page.next_cursor.is_none());
     }
 
     #[test]

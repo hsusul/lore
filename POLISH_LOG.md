@@ -1637,6 +1637,22 @@
   2. *Error handling:* Verify error message propagation on empty folder queries.
   3. *Performance/allocations:* Audit CSS selector complexity in timeline rows.
 
+## Iteration 110
+- **Lens:** Missing tests/edge cases
+- **Change:** Expand `empty_database_lists_nothing` test to cover paginated queries in `query.rs` (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `empty_database_lists_nothing` tested unpaginated queries, but omitted verifying that `list_sessions_page`, `list_repository_sessions_page`, and `list_folder_sessions_page` return empty pages with `next_cursor: None` on empty archives.
+  - Fix: Added assertions covering paginated session, repository, and folder endpoints on an empty database.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Verify error message propagation on empty folder queries.
+  2. *Performance/allocations:* Audit CSS selector complexity in timeline rows.
+  3. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
+
+
 
 
 
