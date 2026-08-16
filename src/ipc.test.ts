@@ -146,9 +146,10 @@ describe("ipc contract", () => {
 
   it("setBackupSchedule passes interval and keep count", async () => {
     invoke.mockResolvedValue(undefined);
-    await (await import("./ipc")).setBackupSchedule("daily", 14);
+    const interval: import("./ipc").BackupInterval = "weekly";
+    await (await import("./ipc")).setBackupSchedule(interval, 14);
     expect(invoke).toHaveBeenCalledWith("set_backup_schedule", {
-      interval: "daily",
+      interval: "weekly",
       keep: 14,
     });
   });

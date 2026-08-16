@@ -617,6 +617,22 @@
   2. *Docs accuracy vs code:* Audit `docs/architecture/DATA_MODEL.md` for `folder` and `session_folder` table schema.
   3. *UX & accessibility:* Test keyboard focus return after closing modals.
 
+## Iteration 41
+- **Lens:** API & DTO ergonomics
+- **Change:** Export `BackupInterval` union type at the top of the IPC module (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - `src/ipc.ts` had a loose type declaration in the middle of function implementations rather than exporting `BackupInterval` alongside primary DTOs.
+  - Fix: Grouped and exported `BackupInterval = "off" | "daily" | "weekly"` with the top-level IPC types and added type verification in `src/ipc.test.ts`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 11 test files passed (98 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Audit `docs/architecture/DATA_MODEL.md` for `folder` and `session_folder` table schema.
+  2. *UX & accessibility:* Audit focus restoration on modal dismiss in SettingsPanel.
+  3. *Security/input validation:* Check setting key validation against non-printable ASCII or control characters.
+
+
 
 
 

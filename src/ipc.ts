@@ -24,6 +24,8 @@ import type { SessionDetail } from "../crates/lore-ipc/bindings/SessionDetail";
 import type { SessionPage } from "../crates/lore-ipc/bindings/SessionPage";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 
+export type BackupInterval = "off" | "daily" | "weekly";
+
 export type {
   BackupScheduleDto,
   DetectedAgent,
@@ -182,8 +184,6 @@ export function searchPage(
 export function sessionSecretCount(id: string): Promise<number> {
   return invoke<number>("session_secret_count", { id });
 }
-
-export type BackupInterval = "off" | "daily" | "weekly";
 
 /** Export a session as Markdown; `includeSecrets` (default false) masks flagged spans. */
 export function exportSessionMarkdown(
