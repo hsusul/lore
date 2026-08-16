@@ -97,7 +97,10 @@ pub fn recover_archive(archive_dir: &Path, backup_dir: &Path) -> Result<Recovery
 /// Does the database at `db_path` open cleanly and pass `PRAGMA
 /// integrity_check`? A missing/corrupt file or a non-"ok" result is not intact.
 fn integrity_ok(db_path: &Path) -> bool {
-    let Ok(conn) = Connection::open(db_path) else {
+    let Ok(conn) = Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
         return false;
     };
     conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))

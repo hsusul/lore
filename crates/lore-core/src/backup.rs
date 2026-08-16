@@ -39,7 +39,7 @@ const PAUSE_BETWEEN_STEPS: Duration = Duration::from_millis(10);
 /// Default number of Lore-owned backups to keep on disk. Bounded and
 /// user-visible (SECURITY.md §6); the exact cadence/retention remains a
 /// settings decision (DATA_MODEL.md §11) — this is only the mechanism's bound.
-pub const DEFAULT_BACKUP_RETENTION: usize = 5;
+pub const DEFAULT_BACKUP_RETENTION: usize = 7;
 
 /// Per-process counter so backups created within the same millisecond never
 /// collide; names remain lexicographically sortable (== chronological).

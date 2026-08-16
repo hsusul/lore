@@ -2524,6 +2524,22 @@
   2. *Missing tests/edge cases:* Test recovery when corrupted DB is completely 0-byte or unreadable.
   3. *Error handling:* Audit unwrap/expect in non-test test utilities or benchmark harnesses.
 
+## Iteration 169
+- **Lens:** Correctness bugs
+- **Change:** Set `DEFAULT_BACKUP_RETENTION` to 7 in lore-core and open database in read-only mode during recovery integrity checks (`crates/lore-core/src/backup.rs`, `crates/lore-core/src/recovery.rs`).
+- **Critique:**
+  - `crates/lore-core/src/backup.rs` had `pub const DEFAULT_BACKUP_RETENTION: usize = 5;`, diverging from `src-tauri` and `src/ipc.ts` which expected 7. Furthermore, `integrity_ok` in `recovery.rs` used `Connection::open` (default read-write-create), which could touch or mutate a corrupted file during an integrity probe.
+  - Fix: Updated `DEFAULT_BACKUP_RETENTION` to 7 in `backup.rs` and updated `integrity_ok` in `recovery.rs` to open SQLite strictly with `SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX`.
+- **Validation Results:**
+  - `cargo test --workspace`: 89 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test recovery when corrupted DB is completely 0-byte or unreadable.
+  2. *Error handling:* Audit unwrap/expect in non-test test utilities or benchmark harnesses.
+  3. *Performance/allocations:* Stream file path normalizations in session detail rendering.
+
+
 
 
 
