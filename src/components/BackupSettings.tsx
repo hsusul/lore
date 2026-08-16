@@ -71,7 +71,7 @@ export default function BackupSettings() {
       </h3>
       <p className="empty">
         Local, Lore-owned snapshots of your archive, kept private on this machine and removed by
-        “Forget everything”.
+        "Forget everything".
       </p>
       <div className="settings__row">
         <label htmlFor="backup-interval">Automatic backups</label>

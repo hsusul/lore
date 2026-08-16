@@ -1757,6 +1757,22 @@
   2. *ROADMAP progression:* Audit status markings in docs/product/ROADMAP.md.
   3. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
 
+## Iteration 118
+- **Lens:** Naming/consistency
+- **Change:** Use standard straight quotes for "Forget everything" in `BackupSettings.tsx` (`src/components/BackupSettings.tsx`).
+- **Critique:**
+  - `BackupSettings.tsx` used curly quotation marks `“Forget everything”` whereas `SettingsPanel.tsx` and other UI dialogs use straight quotation marks `"Forget everything"`.
+  - Fix: Normalized quotation marks in `src/components/BackupSettings.tsx` to match the rest of the application copy.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit status markings in docs/product/ROADMAP.md.
+  2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  3. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
+
+
 
 
 
