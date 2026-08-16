@@ -2914,6 +2914,22 @@
   2. *Performance/allocations:* Audit string allocations in virtualizer.
   3. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
 
+## Iteration 195
+- **Lens:** Error handling
+- **Change:** Ensure non-essential WAL/SHM sidecar rename failures do not abort corrupted archive recovery quarantine (`crates/lore-core/src/recovery.rs`).
+- **Critique:**
+  - In `quarantine()`, if renaming a transient `-wal` or `-shm` sidecar failed after moving the main db file, recovery returned an error, potentially halting backup restoration even after the main corrupt file was moved.
+  - Fix: Made sidecar renaming best-effort with a cleanup attempt (`remove_file`), ensuring the authoritative main database quarantine succeeds reliably.
+- **Validation Results:**
+  - `cargo test --workspace`: 91 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (114 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Audit string allocations in virtualizer.
+  2. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
+  3. *Docs accuracy vs code:* Verify IPC command docstrings in src/ipc.ts.
+
+
 
 
 

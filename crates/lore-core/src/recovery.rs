@@ -138,9 +138,11 @@ fn quarantine(db_path: &Path, archive_dir: &Path) -> Result<PathBuf> {
             continue;
         }
         let dst = quarantine_dir.join(format!("lore-{stamp:020}-{seq:04}{suffix}"));
-        std::fs::rename(&src, &dst).map_err(|_| RecoveryError::Io)?;
         if suffix.is_empty() {
+            std::fs::rename(&src, &dst).map_err(|_| RecoveryError::Io)?;
             main_dst = Some(dst);
+        } else if std::fs::rename(&src, &dst).is_err() {
+            let _ = std::fs::remove_file(&src);
         }
     }
     main_dst.ok_or(RecoveryError::Io)
