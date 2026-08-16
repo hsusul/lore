@@ -1877,6 +1877,22 @@
   2. *UX & accessibility:* Review focus outline contrast on folder rename inputs.
   3. *Security/input validation:* Check setting size boundaries.
 
+## Iteration 126
+- **Lens:** Docs accuracy vs code
+- **Change:** Detail input boundary defense specifications in `ARCHITECTURE.md` §5 (`docs/architecture/ARCHITECTURE.md`).
+- **Critique:**
+  - `ARCHITECTURE.md` §5 noted general input validation, but did not explicitly enumerate the length bounds, limit clamping, control-character/zero-width rejection, and setting size constraints implemented in `src-tauri/src/lib.rs`.
+  - Fix: Clarified boundary validation specifications in §5.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Review focus outline contrast on folder rename inputs.
+  2. *Security/input validation:* Check setting size boundaries.
+  3. *Dead code & duplication:* Audit unused CSS properties in theme tokens.
+
+
 
 
 
