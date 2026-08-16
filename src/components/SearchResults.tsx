@@ -130,7 +130,11 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
     );
   }
   if (hits.length === 0) {
-    return <p className="sessions__empty">No matches for “{query.trim()}”.</p>;
+    return (
+      <p className="sessions__empty" role="status">
+        No matches for “{query.trim()}”.
+      </p>
+    );
   }
   return (
     <>
@@ -138,7 +142,7 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
         ref={setListRef}
         className="results"
         role="listbox"
-        aria-label="search results"
+        aria-label="Search results"
         tabIndex={0}
         aria-activedescendant={`search-result-${active}`}
         onKeyDown={onKeyDown}
@@ -173,14 +177,16 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
         {padBottom > 0 && <li aria-hidden="true" style={{ height: padBottom }} />}
       </ul>
       {hasMore ? (
-        <button
-          type="button"
-          className="results__more"
-          onClick={onLoadMore}
-          disabled={loadingMore}
-        >
-          {loadingMore ? "Loading…" : "Load more results"}
-        </button>
+        <div className="sessions__pagination" role="status" aria-live="polite">
+          <button
+            type="button"
+            className="results__more"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore ? "Loading…" : "Load more results"}
+          </button>
+        </div>
       ) : null}
     </>
   );

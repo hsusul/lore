@@ -39,6 +39,7 @@ describe("SearchResults", () => {
       <SearchResults hits={[]} query="zzz" selectedId={null} onOpen={() => {}} {...idle} />,
     );
     expect(screen.getByText(/no matches/i)).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("No matches");
   });
 
   it("announces an in-flight search instead of showing a false empty state", () => {

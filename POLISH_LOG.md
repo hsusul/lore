@@ -100,6 +100,23 @@
   2. *Security/input validation:* Repository identity evidence validator edge cases.
   3. *Dead code & duplication:* Inactive or redundant utility functions in test fixtures.
 
+## Iteration 7
+- **Lens:** UX & accessibility
+- **Change:** Add `role="status"` to empty search results announcement and polite status wrapper to search pagination in `SearchResults` (`src/components/SearchResults.tsx`, `src/components/SearchResults.test.tsx`).
+- **Critique:**
+  - In `src/components/SearchResults.tsx`, the zero-match search message lacked `role="status"`, preventing screen readers from announcing when a live search completed without matches (in contrast with the loading state which had `role="status"`).
+  - The "Load more results" pagination control was not enclosed in a polite live region matching `SessionList`.
+  - Fix: Added `role="status"` to the empty search message, normalized `aria-label` casing, wrapped pagination in a polite live status region, and added test verification.
+- **Validation Results:**
+  - `cargo test --workspace`: 76 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Hostile Git configuration or shell escape validation in git observation queries.
+  2. *Dead code & duplication:* Inactive or redundant utility functions in adapter test helpers.
+  3. *Naming/consistency:* Uniform error kind string constants across adapters and jobs.
+
+
 
 
 
