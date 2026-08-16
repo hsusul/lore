@@ -1457,6 +1457,22 @@
   2. *Missing tests/edge cases:* Add test for malformed keyset cursor decoding.
   3. *Error handling:* Verify query parameter bounds on keyset search cursor parsing.
 
+## Iteration 97
+- **Lens:** Correctness bugs
+- **Change:** Require finite `rank` (`rank.is_finite()`) in `Cursor::decode` (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `Cursor::decode` parsed hex bits into `f64` without checking whether the value was finite. Non-finite values (`NaN` or `inf`) could bypass decoding and cause invalid floating-point comparisons in SQLite queries.
+  - Fix: Added `if !rank.is_finite() { return None; }` check and added unit test cases for `NaN` and `inf` encodings.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Add test for search query sorting with multiple identical rank scores.
+  2. *Error handling:* Verify query parameter bounds on keyset search cursor parsing.
+  3. *Performance/allocations:* Audit SQL parameter allocations in search pagination queries.
+
+
 
 
 

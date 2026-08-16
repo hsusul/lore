@@ -290,6 +290,9 @@ impl Cursor {
     fn decode(s: &str) -> Option<Cursor> {
         let mut parts = s.split(':');
         let rank = f64::from_bits(u64::from_str_radix(parts.next()?, 16).ok()?);
+        if !rank.is_finite() {
+            return None;
+        }
         let started_at = match parts.next()? {
             "n" => None,
             v => Some(v.parse::<i64>().ok()?),
@@ -450,7 +453,17 @@ mod tests {
 
     #[test]
     fn malformed_cursor_decodes_to_none() {
-        for bad in ["", "garbage", "zz:1:2", "abc:notanint:2", "1:2", "1:2:3:4"] {
+        for bad in [
+            "",
+            "garbage",
+            "zz:1:2",
+            "abc:notanint:2",
+            "1:2",
+            "1:2:3:4",
+            "7ff8000000000000:1:2", // NaN
+            "7ff0000000000000:1:2", // +Infinity
+            "fff0000000000000:1:2", // -Infinity
+        ] {
             assert!(Cursor::decode(bad).is_none(), "{bad:?} should be rejected");
         }
     }
