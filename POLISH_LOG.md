@@ -3019,6 +3019,22 @@
   2. *ROADMAP progression:* Audit milestone tracker status.
   3. *Dependency/build hygiene:* Audit workspace Cargo.toml metadata.
 
+## Iteration 202
+- **Lens:** Naming/consistency
+- **Change:** Implement `as_str` and `std::fmt::Display` for `SortOrder` in `crates/lore-core/src/search.rs`.
+- **Critique:**
+  - `SortOrder` provided a `parse()` method but lacked `as_str()` and `std::fmt::Display` implementations, differing from domain enums.
+  - Fix: Added `as_str()` and implemented `std::fmt::Display for SortOrder` with roundtrip unit tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 94 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit milestone tracker status.
+  2. *Dependency/build hygiene:* Audit workspace Cargo.toml metadata.
+  3. *Correctness bugs:* Audit cursor decoding edge cases.
+
+
 
 
 

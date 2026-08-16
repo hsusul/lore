@@ -36,6 +36,15 @@ pub enum SortOrder {
 }
 
 impl SortOrder {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Relevance => "relevance",
+            Self::Newest => "newest",
+            Self::Oldest => "oldest",
+        }
+    }
+
     /// Parse the wire value (`"newest"` / `"oldest"`); anything else — including
     /// `None` or an unknown string — is `Relevance`.
     #[must_use]
@@ -45,6 +54,12 @@ impl SortOrder {
             Some("oldest") => Self::Oldest,
             _ => Self::Relevance,
         }
+    }
+}
+
+impl std::fmt::Display for SortOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -500,5 +515,15 @@ mod tests {
             "world".to_string(),
         ];
         assert_eq!(fts_match(&mixed), Some("\"hello\" \"world\"".to_string()));
+    }
+
+    #[test]
+    fn sort_order_display_and_parse_roundtrip() {
+        for order in [SortOrder::Relevance, SortOrder::Newest, SortOrder::Oldest] {
+            assert_eq!(order.as_str(), format!("{order}"));
+            assert_eq!(SortOrder::parse(Some(order.as_str())), order);
+        }
+        assert_eq!(SortOrder::parse(None), SortOrder::Relevance);
+        assert_eq!(SortOrder::parse(Some("invalid")), SortOrder::Relevance);
     }
 }
