@@ -2554,6 +2554,22 @@
   2. *Performance/allocations:* Stream file path normalizations in session detail rendering.
   3. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
 
+## Iteration 171
+- **Lens:** Error handling
+- **Change:** Use `saturating_add` in `unified_diff_line_counts` to guard against numeric overflow on oversized diff streams (`crates/lore-core/src/adapters/common.rs`).
+- **Critique:**
+  - `unified_diff_line_counts` used direct `+= 1` integer addition on `i64` line counters when parsing diff streams.
+  - Fix: Upgraded to `saturating_add(1)` for added and removed line counters.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Stream file path normalizations in session detail rendering.
+  2. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
+  3. *Docs accuracy vs code:* Verify error handling docstrings in adapters module.
+
+
 
 
 

@@ -120,8 +120,8 @@ pub(crate) fn unified_diff_line_counts(diff: &str) -> Option<(i64, i64)> {
             continue;
         }
         match line.as_bytes().first() {
-            Some(b'+') => added += 1,
-            Some(b'-') => removed += 1,
+            Some(b'+') => added = added.saturating_add(1),
+            Some(b'-') => removed = removed.saturating_add(1),
             _ => {}
         }
     }
