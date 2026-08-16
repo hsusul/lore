@@ -116,6 +116,23 @@
   2. *Dead code & duplication:* Inactive or redundant utility functions in adapter test helpers.
   3. *Naming/consistency:* Uniform error kind string constants across adapters and jobs.
 
+## Iteration 8
+- **Lens:** Security/input validation
+- **Change:** Reject embedded control characters, null bytes, and internal whitespace in `normalize_remote_url` (`crates/lore-core/src/git.rs`).
+- **Critique:**
+  - `normalize_remote_url` trimmed external whitespace but allowed embedded newlines (`\r`, `\n`), null bytes (`\0`), or ASCII whitespace inside raw remote URL strings.
+  - Malformed or poisoned agent session inputs could inject unescaped control characters into canonical normalized repository identity evidence and database fields (`git_observation.remote_url_norm`).
+  - Fix: Checked `raw.chars().any(|c| c.is_ascii_control() || c.is_ascii_whitespace())` to immediately reject malformed URLs with `None`, and added regression tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 76 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Inactive or redundant test helper functions across test suites.
+  2. *Naming/consistency:* Consistent error message styling in storage recovery and backups.
+  3. *ROADMAP progression:* Review V0 acceptance criteria status and verification coverage.
+
+
 
 
 

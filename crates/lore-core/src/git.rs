@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 #[must_use]
 pub fn normalize_remote_url(raw: &str) -> Option<String> {
     let raw = raw.trim();
-    if raw.is_empty() {
+    if raw.is_empty() || raw.chars().any(|c| c.is_ascii_control() || c.is_ascii_whitespace()) {
         return None;
     }
 
@@ -526,6 +526,9 @@ mod tests {
     fn empty_input_is_none() {
         assert!(normalize_remote_url("").is_none());
         assert!(normalize_remote_url("   ").is_none());
+        assert!(normalize_remote_url("https://github.com/org/repo\n/bad").is_none());
+        assert!(normalize_remote_url("https://github.com/org/repo with space").is_none());
+        assert!(normalize_remote_url("https://github.com/org/repo\0evil").is_none());
     }
 
     #[test]
