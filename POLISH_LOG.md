@@ -2584,6 +2584,22 @@
   2. *Docs accuracy vs code:* Verify error handling docstrings in adapters module.
   3. *UX & accessibility:* Audit keyboard focus outlines on interactive buttons in Settings.
 
+## Iteration 173
+- **Lens:** API & DTO ergonomics
+- **Change:** Export strongly typed union types `ParseStatus`, `IdentityConfidence`, `GitTemporalConfidence`, and `FileChangeKind` in TypeScript IPC contract (`src/ipc.ts`).
+- **Critique:**
+  - Status strings (such as parse statuses, confidence levels, and change kinds) were exposed as plain `string` fields in generated DTOs without exported union types for UI callers.
+  - Fix: Exported `ParseStatus`, `IdentityConfidence`, `GitTemporalConfidence`, and `FileChangeKind` in `src/ipc.ts`.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify error handling docstrings in adapters module.
+  2. *UX & accessibility:* Audit keyboard focus outlines on interactive buttons in Settings.
+  3. *Security/input validation:* Check path sanitization against windows drive letter escapes.
+
+
 
 
 
