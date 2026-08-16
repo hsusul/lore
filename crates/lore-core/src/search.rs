@@ -316,7 +316,7 @@ impl Cursor {
             v => Some(v.parse::<i64>().ok()?),
         };
         let id = parts.next()?.parse::<i64>().ok()?;
-        if parts.next().is_some() {
+        if id <= 0 || parts.next().is_some() {
             return None;
         }
         Some(Cursor {
@@ -494,6 +494,8 @@ mod tests {
             "abc:notanint:2",
             "1:2",
             "1:2:3:4",
+            "0:1:0",
+            "0:1:-5",
             "7ff8000000000000:1:2", // NaN
             "7ff0000000000000:1:2", // +Infinity
             "fff0000000000000:1:2", // -Infinity

@@ -3245,6 +3245,22 @@
   2. *Missing tests/edge cases:* Audit query cursor decoding boundary tests.
   3. *Error handling:* Audit database lock recovery.
 
+## Iteration 217
+- **Lens:** Correctness bugs
+- **Change:** Reject non-positive rowids (`id <= 0`) in `Cursor::decode` with unit tests (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `Cursor::decode` parsed `id` as `i64` without validating that `id > 0` (SQLite rowids/SearchDocument ids are strictly positive), allowing malformed negative/zero ids into keyset predicates.
+  - Fix: Added `if id <= 0 { return None; }` and unit tests for `0:1:0` and `0:1:-5`.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Audit query cursor decoding boundary tests.
+  2. *Error handling:* Audit database lock recovery.
+  3. *Performance/allocations:* Audit string allocations in query builders.
+
+
 
 
 
