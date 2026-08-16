@@ -507,3 +507,25 @@ fn search_page_with_only_zero_width_characters_returns_empty_page() {
     assert!(res.hits.is_empty());
     assert!(res.next_cursor.is_none());
 }
+
+#[test]
+fn search_page_sanitizes_structured_filters_with_zero_width_chars() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let id = persist_claude(
+        &conn,
+        &blobs,
+        &user_message("c1", "/p", "feature verification logic"),
+        "c1",
+    );
+
+    // Agent filter containing zero-width characters should be sanitized and match
+    let res = search(&conn, "agent:\u{200b}claude-code\u{200c} verification", 10).unwrap();
+    assert_eq!(res.len(), 1);
+    assert_eq!(res[0].session_id, id);
+
+    // Purely zero-width agent filter is ignored and falls back to term match
+    let res_fallback = search(&conn, "agent:\u{200b}\u{200c} verification", 10).unwrap();
+    assert_eq!(res_fallback.len(), 1);
+    assert_eq!(res_fallback[0].session_id, id);
+}

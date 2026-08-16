@@ -3440,6 +3440,22 @@
   2. *Error handling:* Audit database lock poison error formatting.
   3. *Performance/allocations:* Audit string allocation in query filters.
 
+## Iteration 230
+- **Lens:** Missing tests/edge cases
+- **Change:** Add integration test coverage for structured search filters with zero-width characters (`crates/lore-core/tests/search.rs`).
+- **Critique:**
+  - `tests/search.rs` tested plain zero-width term handling, but lacked end-to-end integration tests verifying that structured filters (`agent:`, `path:`) containing zero-width characters match correctly against ingested sessions.
+  - Fix: Added `search_page_sanitizes_structured_filters_with_zero_width_chars` integration test.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Audit database lock poison error formatting.
+  2. *Performance/allocations:* Audit string allocation in query filters.
+  3. *API & DTO ergonomics:* Audit session detail response helpers.
+
+
 
 
 
