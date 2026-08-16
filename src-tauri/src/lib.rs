@@ -428,7 +428,12 @@ fn set_backup_schedule(
     interval: String,
     keep: i64,
 ) -> Result<(), String> {
-    if interval.len() > 64 || interval.chars().any(|c| c.is_control()) {
+    if interval.len() > 64
+        || interval.chars().any(|c| {
+            c.is_control()
+                || matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
+        })
+    {
         return Err("invalid backup interval".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -436,7 +441,8 @@ fn set_backup_schedule(
         &conn,
         lore_core::backup::BackupSchedule {
             interval: lore_core::backup::BackupInterval::parse(&interval),
-            keep: usize::try_from(keep).unwrap_or(lore_core::backup::DEFAULT_BACKUP_RETENTION),
+            keep: usize::try_from(keep.clamp(1, 100))
+                .unwrap_or(lore_core::backup::DEFAULT_BACKUP_RETENTION),
         },
     )
     .map_err(|e| e.to_string())

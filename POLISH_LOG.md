@@ -1907,6 +1907,22 @@
   2. *Dead code & duplication:* Audit unused CSS properties in theme tokens.
   3. *Naming/consistency:* Review button type attributes in modal dialogs.
 
+## Iteration 128
+- **Lens:** Security/input validation
+- **Change:** Reject zero-width characters and clamp retention in `set_backup_schedule` (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `set_backup_schedule` checked for control characters in `interval`, but did not reject zero-width Unicode characters (`\u{feff}`, `\u{200b}`, `\u{200c}`, `\u{200d}`, `\u{2060}`), and did not clamp `keep` at the IPC handler layer.
+  - Fix: Added zero-width character rejection and pre-clamped `keep` to `1..=100`.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit unused CSS properties in theme tokens.
+  2. *Naming/consistency:* Review button type attributes in modal dialogs.
+  3. *ROADMAP progression:* Audit milestone verification checklists.
+
+
 
 
 
