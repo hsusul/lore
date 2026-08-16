@@ -1982,6 +1982,22 @@
   2. *Missing tests/edge cases:* Test drag-and-drop folder drop effect styling.
   3. *Error handling:* Verify graceful UI error banner dismissal.
 
+## Iteration 133
+- **Lens:** Correctness bugs
+- **Change:** Format far-future timestamps as dates instead of "just now" in `formatRelative` (`src/format.ts`).
+- **Critique:**
+  - `formatRelative` returned `"just now"` for all future timestamps because `Date.now() - ms <= 45_000` is unconditionally true for negative numbers.
+  - Fix: Added `if (diff < -60_000)` check to format far-future timestamps as date strings, preserving `"just now"` only for minor clock skew (< 1 min).
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test drag-and-drop folder drop effect styling.
+  2. *Error handling:* Verify graceful UI error banner dismissal.
+  3. *Performance/allocations:* Review regex compilation in secret scanner.
+
+
 
 
 

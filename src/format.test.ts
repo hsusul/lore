@@ -36,6 +36,9 @@ describe("format helpers", () => {
       const now = Date.now();
       expect(formatRelative(now + 10_000)).toBe("just now");
       expect(formatRelative(now + 60_000)).toBe("just now");
+      const futureDate = formatRelative(now + 100 * 24 * 60 * 60 * 1000);
+      expect(futureDate).not.toBe("just now");
+      expect(futureDate.length).toBeGreaterThan(0);
     });
 
     it("formats recent seconds as 'just now'", () => {

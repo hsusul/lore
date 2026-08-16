@@ -26,6 +26,12 @@ export function formatTime(ms: number | null): string {
 export function formatRelative(ms: number | null): string {
   if (ms == null) return "";
   const diff = Date.now() - ms;
+  if (diff < -60_000) {
+    return new Date(ms).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+  }
   if (diff <= 45_000) return "just now";
   const seconds = Math.round(diff / 1000);
   const minutes = Math.round(seconds / 60);
