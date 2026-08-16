@@ -572,6 +572,22 @@
   2. *Error handling:* Verify error handling when renaming a folder to an empty string.
   3. *Performance/allocations:* Audit CSS animations for GPU acceleration properties.
 
+## Iteration 38
+- **Lens:** Missing tests/edge cases
+- **Change:** Add test coverage for `onExitUp` focus escape and `j`/`k` Vim navigation keys in `SearchResults.test.tsx` (`src/components/SearchResults.test.tsx`).
+- **Critique:**
+  - `SearchResults.test.tsx` tested mouse selection and Arrow navigation, but omitted coverage for the `onExitUp` callback (invoked when navigating up from the first result to return focus to the search box) and `j`/`k` Vim navigation keys.
+  - Fix: Added test cases covering `onExitUp` and `j`/`k` key navigation.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 11 test files passed (98 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Validate folder name trim handling for empty strings on rename.
+  2. *Performance/allocations:* Audit CSS transitions for will-change or hardware acceleration where helpful.
+  3. *API & DTO ergonomics:* Audit return types of `createFolder` and `renameFolder`.
+
+
 
 
 

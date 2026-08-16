@@ -140,6 +140,12 @@ describe("SearchResults", () => {
     fireEvent.keyDown(listbox, { key: "ArrowUp" });
     expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
 
+    // j and k also navigate down and up.
+    fireEvent.keyDown(listbox, { key: "j" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+    fireEvent.keyDown(listbox, { key: "k" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+
     // Home/End jump to the ends; movement is clamped at the boundaries.
     fireEvent.keyDown(listbox, { key: "End" });
     expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
@@ -147,6 +153,23 @@ describe("SearchResults", () => {
     expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
     fireEvent.keyDown(listbox, { key: "Home" });
     expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+  });
+
+  it("calls onExitUp when pressing ArrowUp on the first result", () => {
+    const onExitUp = vi.fn();
+    render(
+      <SearchResults
+        hits={[hit({ session_id: "a", source_id: "pa" })]}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        onExitUp={onExitUp}
+        {...idle}
+      />,
+    );
+    const listbox = screen.getByRole("listbox", { name: /search results/i });
+    fireEvent.keyDown(listbox, { key: "ArrowUp" });
+    expect(onExitUp).toHaveBeenCalledTimes(1);
   });
 
   it("opens the active result on Enter", () => {
