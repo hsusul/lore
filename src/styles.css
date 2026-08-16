@@ -1592,14 +1592,15 @@ kbd {
   white-space: nowrap;
 }
 
-.settings__root-remove,
-.settings__add-root {
+.settings__root-remove {
   padding: 0.3rem 0.5rem;
   font-size: 0.72rem;
 }
 
 .settings__add-root {
   margin-top: 0.55rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
 }
 
 .settings__row {

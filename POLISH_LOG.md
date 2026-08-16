@@ -2644,6 +2644,22 @@
   2. *Naming/consistency:* Audit error diagnostic text consistency in Rust core.
   3. *ROADMAP progression:* Update M7 status notes in ROADMAP.md.
 
+## Iteration 177
+- **Lens:** Dead code & duplication
+- **Change:** Consolidate redundant selector rules for settings root buttons (`src/styles.css`).
+- **Critique:**
+  - `.settings__add-root` had duplicate rules across lines 1596 and 1601 in `src/styles.css`.
+  - Fix: Consolidated `.settings__root-remove` and `.settings__add-root` styling into distinct, non-duplicated rule blocks.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit error diagnostic text consistency in Rust core.
+  2. *ROADMAP progression:* Update M7 status notes in ROADMAP.md.
+  3. *Dependency/build hygiene:* Audit workspace Cargo dependencies for duplicate features.
+
+
 
 
 
