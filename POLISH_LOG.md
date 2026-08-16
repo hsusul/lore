@@ -3034,6 +3034,22 @@
   2. *Dependency/build hygiene:* Audit workspace Cargo.toml metadata.
   3. *Correctness bugs:* Audit cursor decoding edge cases.
 
+## Iteration 203
+- **Lens:** ROADMAP progression
+- **Change:** Record folder delete shortcut support and virtualizer non-finite protection in M5/M7 status tables (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `ROADMAP.md` did not document `FolderList` `Cmd+Backspace` / `Ctrl+Backspace` shortcut support, `useWindowing` memoization & non-finite protection, or best-effort sidecar quarantine.
+  - Fix: Updated `docs/product/ROADMAP.md` M5 and M7 current state entries.
+- **Validation Results:**
+  - `cargo test --workspace`: 94 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace Cargo.toml metadata.
+  2. *Correctness bugs:* Audit cursor decoding edge cases.
+  3. *Missing tests/edge cases:* Audit null handling in search queries.
+
+
 
 
 
