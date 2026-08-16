@@ -3515,6 +3515,22 @@
   2. *Security/input validation:* Audit regex boundaries.
   3. *Dead code & duplication:* Audit redundant styles.
 
+## Iteration 235
+- **Lens:** UX & accessibility
+- **Change:** Add `aria-busy` attribute to `SearchResults` load more pagination button (`src/components/SearchResults.tsx`, `src/components/SearchResults.test.tsx`).
+- **Critique:**
+  - In `SearchResults`, the "Load more results" button toggled disabled state on `loadingMore`, but lacked an explicit `aria-busy` attribute to communicate async loading state to assistive technologies.
+  - Fix: Added `aria-busy={loadingMore}` and unit test coverage.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (116 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Audit regex boundaries.
+  2. *Dead code & duplication:* Audit redundant styles.
+  3. *Naming/consistency:* Audit test assertions.
+
+
 
 
 

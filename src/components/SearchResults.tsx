@@ -183,6 +183,7 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
             className="results__more"
             onClick={onLoadMore}
             disabled={loadingMore}
+            aria-busy={loadingMore}
           >
             {loadingMore ? "Loading…" : "Load more results"}
           </button>

@@ -265,4 +265,45 @@ describe("SearchResults", () => {
     expect(options[2].getAttribute("aria-selected")).toBe("false");
     expect(options[0].className).toContain("is-active");
   });
+
+  it("renders load more button with aria-busy and handles clicks", () => {
+    const onLoadMore = vi.fn();
+    const hits = [hit({ session_id: "a" })];
+    const { rerender } = render(
+      <SearchResults
+        hits={hits}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+        hasMore
+        loadingMore={false}
+        onLoadMore={onLoadMore}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: /load more results/i });
+    expect(button.getAttribute("aria-busy")).toBe("false");
+    expect(button.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(button);
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <SearchResults
+        hits={hits}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+        hasMore
+        loadingMore
+        onLoadMore={onLoadMore}
+      />,
+    );
+
+    const busyButton = screen.getByRole("button", { name: /loading/i });
+    expect(busyButton.getAttribute("aria-busy")).toBe("true");
+    expect(busyButton.hasAttribute("disabled")).toBe(true);
+  });
 });
