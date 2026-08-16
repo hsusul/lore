@@ -3080,6 +3080,22 @@
   2. *Error handling:* Audit unwrap/expect in test utilities.
   3. *Performance/allocations:* Audit string allocations in query builders.
 
+## Iteration 206
+- **Lens:** Missing tests/edge cases
+- **Change:** Add unit tests for `redact` handling adjacent secrets of differing rule types and empty inputs (`crates/lore-core/src/secrets.rs`).
+- **Critique:**
+  - `secrets::redact` lacked explicit test assertions validating adjacent multi-secret masking and empty string handling.
+  - Fix: Added `redaction_handles_adjacent_secrets_and_empty_inputs` unit test in `secrets.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 96 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Audit unwrap/expect in test utilities.
+  2. *Performance/allocations:* Audit string allocations in query builders.
+  3. *API & DTO ergonomics:* Audit IPC client result helpers.
+
+
 
 
 

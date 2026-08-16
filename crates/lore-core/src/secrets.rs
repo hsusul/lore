@@ -861,4 +861,20 @@ mod tests {
         );
         assert!(scan_ok("id 550e8400-e29b-41d4-a716-446655440000").is_empty());
     }
+
+    #[test]
+    fn redaction_handles_adjacent_secrets_and_empty_inputs() {
+        assert_eq!(redact("", &[]), "");
+        assert_eq!(redact("no secrets here", &[]), "no secrets here");
+
+        let s1 = t("ghp", "_0123456789abcdefghijklmnopqrstuvwxyz");
+        let s2 = t("sk", "_live_0123456789abcdefABCD");
+        let combined = format!("{s1} {s2}");
+        let findings = scan_ok(&combined);
+        assert_eq!(findings.len(), 2);
+        let redacted = redact(&combined, &findings);
+        assert!(!redacted.contains(&s1));
+        assert!(!redacted.contains(&s2));
+        assert_eq!(redacted, "«redacted:github-token» «redacted:stripe-key»");
+    }
 }
