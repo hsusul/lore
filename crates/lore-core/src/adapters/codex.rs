@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::common::{
-    bounded, epoch_ms, fallback_title, resolve_file_event_segments, sanitize_path,
+    bounded, epoch_ms, fallback_title, resolve_file_event_segments, sanitize_path, str_field,
     unified_diff_line_counts,
 };
 use super::{
@@ -649,10 +649,6 @@ fn json_text(v: Option<&Value>) -> Option<String> {
     } else {
         serde_json::to_string(v).ok()
     }
-}
-
-fn str_field(obj: &Value, key: &str) -> Option<String> {
-    obj.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 impl AgentAdapter for CodexAdapter {

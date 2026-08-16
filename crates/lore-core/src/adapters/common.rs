@@ -73,6 +73,11 @@ pub(crate) fn bounded(s: &str) -> String {
     s.chars().take(40).collect()
 }
 
+/// Extract an optional string field from a JSON object.
+pub(crate) fn str_field(obj: &serde_json::Value, key: &str) -> Option<String> {
+    obj.get(key).and_then(serde_json::Value::as_str).map(str::to_string)
+}
+
 /// Neutralize path traversal so a recorded `FileEvent.path` can never represent
 /// an escape (`../`). Produces a clean relative path.
 pub(crate) fn sanitize_path(raw: &str) -> String {

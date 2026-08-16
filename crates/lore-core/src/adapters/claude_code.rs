@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::common::{bounded, epoch_ms, fallback_title, sanitize_path};
+use super::common::{bounded, epoch_ms, fallback_title, sanitize_path, str_field};
 use super::{
     AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
 };
@@ -422,10 +422,6 @@ fn event_kind_for(event_type: &str) -> EventKind {
         "pr-link" => EventKind::PrLink,
         _ => EventKind::Message,
     }
-}
-
-fn str_field(obj: &Value, key: &str) -> Option<String> {
-    obj.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 fn json_field(obj: &Value, key: &str) -> Option<String> {

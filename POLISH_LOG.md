@@ -132,6 +132,22 @@
   2. *Naming/consistency:* Consistent error message styling in storage recovery and backups.
   3. *ROADMAP progression:* Review V0 acceptance criteria status and verification coverage.
 
+## Iteration 9
+- **Lens:** Dead code & duplication
+- **Change:** Centralize `str_field` JSON value extractor in `crates/lore-core/src/adapters/common.rs` and reuse across Claude Code and Codex adapters (`crates/lore-core/src/adapters/common.rs`, `crates/lore-core/src/adapters/claude_code.rs`, `crates/lore-core/src/adapters/codex.rs`).
+- **Critique:**
+  - `str_field` helper was duplicated verbatim across `claude_code.rs` and `codex.rs`.
+  - Fix: Moved `str_field` to `adapters::common`, updated imports in both adapters, and removed duplicate private definitions.
+- **Validation Results:**
+  - `cargo test --workspace`: 76 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Uniform error kinds in database quarantine / recovery operations.
+  2. *ROADMAP progression:* Cross-check ROADMAP acceptance gate documentation with recent tests.
+  3. *Dependency/build hygiene:* Unused dependencies or dev-dependencies in Cargo.toml manifests.
+
+
 
 
 
