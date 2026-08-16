@@ -2329,6 +2329,22 @@
   2. *Correctness bugs:* Audit virtual scroll offset calculations when item height fluctuates.
   3. *Missing tests/edge cases:* Add test for zero-width character handling in settings keys.
 
+## Iteration 156
+- **Lens:** Dependency/build hygiene
+- **Change:** Scope root markdown ignore patterns to root directory (`/*.md`) in `.gitignore` (`.gitignore`).
+- **Critique:**
+  - `.gitignore` used unanchored `*.md` which matched markdown files in all subdirectories, requiring brittle nested exclusion rules (`!docs/`, `!docs/**`, `!docs/**/*.md`).
+  - Fix: Replaced with root-anchored `/*.md` and explicit root exclusions (`!/README.md`, `!/AGENTS.md`, `!/CLAUDE.md`, `!/RESEARCH_SUMMARY.md`, `!/POLISH_LOG.md`), keeping subdirectories naturally tracked.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit virtual scroll offset calculations when item height fluctuates.
+  2. *Missing tests/edge cases:* Add test for zero-width character handling in settings keys.
+  3. *Error handling:* Verify error message formatting when JSON parse error occurs in set_setting.
+
+
 
 
 

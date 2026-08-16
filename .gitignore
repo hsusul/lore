@@ -38,16 +38,13 @@ dist-ssr/
 *.p12
 *.provisionprofile
 
-# Local project documentation
-*.md
-!README.md
-!AGENTS.md
-!CLAUDE.md
-!RESEARCH_SUMMARY.md
-!POLISH_LOG.md
-!docs/
-!docs/**
-!docs/**/*.md
+# Root project documentation (allow documented root files only)
+/*.md
+!/README.md
+!/AGENTS.md
+!/CLAUDE.md
+!/RESEARCH_SUMMARY.md
+!/POLISH_LOG.md
 
 # Local agent instructions and design previews
 /.claude/
