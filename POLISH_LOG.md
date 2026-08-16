@@ -1397,6 +1397,22 @@
   2. *Naming/consistency:* Audit error message formatting in settings operations.
   3. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
 
+## Iteration 93
+- **Lens:** Dead code & duplication
+- **Change:** Add explicit `type="button"` attributes to omnibar, theme toggle, settings, and rescan controls in `App.tsx` (`src/App.tsx`).
+- **Critique:**
+  - `App.tsx` header buttons lacked explicit `type="button"` attributes, causing inconsistency with child component button standards.
+  - Fix: Added `type="button"` attributes to all shell header action buttons.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit error message formatting in settings operations.
+  2. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
+  3. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+
+
 
 
 

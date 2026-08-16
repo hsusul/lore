@@ -678,6 +678,7 @@ export default function App() {
         <h1>Lore</h1>
         <span className="shell__tagline">git memory for coding agents</span>
         <button
+          type="button"
           className="omnibar"
           onClick={() => setPaletteOpen(true)}
           aria-label="Open command palette"
@@ -690,6 +691,7 @@ export default function App() {
         </button>
         <span className="shell__dev">preview build</span>
         <button
+          type="button"
           className="icon-btn"
           onClick={toggleTheme}
           aria-label="Toggle theme"
@@ -698,6 +700,7 @@ export default function App() {
           ◐
         </button>
         <button
+          type="button"
           className="icon-btn"
           onClick={() => setSettingsOpen(true)}
           aria-label="Settings"
@@ -705,7 +708,12 @@ export default function App() {
         >
           ⚙
         </button>
-        <button className="btn--primary" onClick={handleRescan} disabled={scanning}>
+        <button
+          type="button"
+          className="btn--primary"
+          onClick={handleRescan}
+          disabled={scanning}
+        >
           {scanning ? "Scanning…" : "Rescan"}
         </button>
       </header>
