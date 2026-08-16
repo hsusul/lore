@@ -131,6 +131,26 @@ describe("CommandPalette", () => {
     }
   });
 
+  it("handles synchronous search failure gracefully without throwing", async () => {
+    const search = vi.fn(() => {
+      throw new Error("sync failure");
+    });
+    vi.useFakeTimers();
+
+    try {
+      render(<CommandPalette items={[]} search={search} onClose={() => {}} />);
+      const input = screen.getByRole("combobox");
+      fireEvent.change(input, { target: { value: "error-query" } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(search).toHaveBeenCalledWith("error-query");
+      expect(screen.getByText(/archive search unavailable/i)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores archive results from a superseded query", async () => {
     const alpha = deferred<Command[]>();
     const beta = deferred<Command[]>();

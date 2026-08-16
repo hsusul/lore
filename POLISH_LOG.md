@@ -2884,6 +2884,22 @@
   2. *Missing tests/edge cases:* Test null handling in relative time formatting.
   3. *Error handling:* Audit unwrap/expect in test utilities.
 
+## Iteration 193
+- **Lens:** Correctness bugs
+- **Change:** Safely catch synchronous and asynchronous search errors in `CommandPalette` archive query debounce (`src/components/CommandPalette.tsx`, `src/components/CommandPalette.test.tsx`).
+- **Critique:**
+  - If a custom `search` callback threw synchronously rather than returning a rejected Promise, the exception would escape the timer callback uncaught.
+  - Fix: Wrapped search dispatch in `Promise.resolve` and a `try/catch` block that marks status as `"failed"`, with an accompanying unit test.
+- **Validation Results:**
+  - `cargo test --workspace`: 91 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (113 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test null handling in relative time formatting.
+  2. *Error handling:* Audit unwrap/expect in test utilities.
+  3. *Performance/allocations:* Audit string allocations in virtualizer.
+
+
 
 
 

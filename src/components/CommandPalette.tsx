@@ -174,16 +174,21 @@ export default function CommandPalette({
     setArchive({ query: normalized, items: [], status: "loading" });
     archiveTimerRef.current = setTimeout(() => {
       archiveTimerRef.current = null;
-      void searchRef.current?.(normalized).then(
-        (nextItems) => {
-          if (request !== archiveRequestRef.current) return;
-          setArchive({ query: normalized, items: nextItems, status: "settled" });
-        },
-        () => {
-          if (request !== archiveRequestRef.current) return;
-          setArchive({ query: normalized, items: [], status: "failed" });
-        },
-      );
+      try {
+        void Promise.resolve(searchRef.current?.(normalized)).then(
+          (nextItems) => {
+            if (request !== archiveRequestRef.current) return;
+            setArchive({ query: normalized, items: nextItems ?? [], status: "settled" });
+          },
+          () => {
+            if (request !== archiveRequestRef.current) return;
+            setArchive({ query: normalized, items: [], status: "failed" });
+          },
+        );
+      } catch {
+        if (request !== archiveRequestRef.current) return;
+        setArchive({ query: normalized, items: [], status: "failed" });
+      }
     }, ARCHIVE_SEARCH_DEBOUNCE_MS);
   }
 
