@@ -1442,6 +1442,22 @@
   2. *Correctness bugs:* Audit FTS5 rank score formatting in search results.
   3. *Missing tests/edge cases:* Add test for malformed keyset cursor decoding.
 
+## Iteration 96
+- **Lens:** Dependency/build hygiene
+- **Change:** Add `license` and `homepage` package metadata to `package.json` (`package.json`).
+- **Critique:**
+  - `package.json` omitted `license` and `homepage` fields, diverging from workspace Cargo package declarations.
+  - Fix: Added `license: "Apache-2.0"` and `homepage: "https://github.com/hsusul/lore"`.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit FTS5 rank score formatting in search results.
+  2. *Missing tests/edge cases:* Add test for malformed keyset cursor decoding.
+  3. *Error handling:* Verify query parameter bounds on keyset search cursor parsing.
+
+
 
 
 
