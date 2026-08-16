@@ -1262,6 +1262,22 @@
   2. *Correctness bugs:* Audit FTS5 rank score serialization in search results.
   3. *Missing tests/edge cases:* Add test for invalid session folder input combinations.
 
+## Iteration 84
+- **Lens:** Dependency/build hygiene
+- **Change:** Add `homepage` metadata to `[workspace.package]` and inherit across member crates in Cargo configurations (`Cargo.toml`, `crates/lore-core/Cargo.toml`, `crates/lore-ipc/Cargo.toml`, `src-tauri/Cargo.toml`).
+- **Critique:**
+  - Cargo manifests lacked `homepage` in `[workspace.package]`, and member crates did not inherit homepage URLs.
+  - Fix: Defined `homepage = "https://github.com/hsusul/lore"` in workspace package and set `homepage.workspace = true` in all crate manifests.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit FTS5 rank score serialization in search results.
+  2. *Missing tests/edge cases:* Add test for invalid session folder input combinations.
+  3. *Error handling:* Verify SQLite connection timeout configurations.
+
+
 
 
 

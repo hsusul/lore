@@ -12,6 +12,7 @@ edition = "2021"
 rust-version = "1.90"
 license = "Apache-2.0"
 repository = "https://github.com/hsusul/lore"
+homepage = "https://github.com/hsusul/lore"
 authors = ["Lore contributors"]
 
 # Shared lints. Archive code must degrade on bad input, never panic on it.
