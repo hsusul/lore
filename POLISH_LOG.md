@@ -2764,6 +2764,22 @@
   2. *Docs accuracy vs code:* Verify IPC command docstrings in src/ipc.ts.
   3. *UX & accessibility:* Audit aria-expanded attributes on dialogs.
 
+## Iteration 185
+- **Lens:** API & DTO ergonomics
+- **Change:** Export `MessageRole` and `MessagePartKind` union types in `src/ipc.ts`.
+- **Critique:**
+  - `MessageDto.role` and `MessagePartDto.kind` were exposed as plain `string` fields on DTOs without exported union types in `src/ipc.ts`.
+  - Fix: Exported `MessageRole` and `MessagePartKind` matching the Rust core domain enums `Role` and `PartKind`.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify IPC command docstrings in src/ipc.ts.
+  2. *UX & accessibility:* Audit aria-expanded attributes on dialogs.
+  3. *Security/input validation:* Audit regex sanitization in search.
+
+
 
 
 

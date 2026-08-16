@@ -41,6 +41,16 @@ export type FileChangeKind =
   | "move"
   | "read"
   | "patch";
+export type MessageRole = "user" | "assistant" | "system" | "tool" | "meta";
+export type MessagePartKind =
+  | "text"
+  | "thinking"
+  | "tool_use"
+  | "tool_result"
+  | "attachment"
+  | "summary"
+  | "opaque"
+  | "other";
 
 export type {
   BackupScheduleDto,
