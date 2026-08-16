@@ -235,4 +235,17 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, RegistryError::DuplicateId("claude-code"));
     }
+
+    #[test]
+    fn adapter_and_registry_errors_format_cleanly() {
+        assert_eq!(AdapterError::Io.to_string(), "io error reading source");
+        assert_eq!(
+            AdapterError::Unreadable.to_string(),
+            "source unreadable or unsupported"
+        );
+        assert_eq!(
+            RegistryError::DuplicateId("codex").to_string(),
+            "duplicate adapter id: codex"
+        );
+    }
 }

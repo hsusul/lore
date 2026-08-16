@@ -3455,6 +3455,22 @@
   2. *Performance/allocations:* Audit string allocation in query filters.
   3. *API & DTO ergonomics:* Audit session detail response helpers.
 
+## Iteration 231
+- **Lens:** Error handling
+- **Change:** Add unit test verification for `AdapterError` and `RegistryError` error string formatting (`crates/lore-core/src/adapters.rs`).
+- **Critique:**
+  - `lore-core` defined `AdapterError` and `RegistryError` with custom `#[error(...)]` messages, but lacked unit tests verifying their formatting and diagnostic message strings.
+  - Fix: Added `adapter_and_registry_errors_format_cleanly` unit test.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Audit string allocation in query filters.
+  2. *API & DTO ergonomics:* Audit session detail response helpers.
+  3. *Docs accuracy vs code:* Audit error documentation.
+
+
 
 
 
