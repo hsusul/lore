@@ -3260,6 +3260,22 @@
   2. *Error handling:* Audit database lock recovery.
   3. *Performance/allocations:* Audit string allocations in query builders.
 
+## Iteration 218
+- **Lens:** Missing tests/edge cases
+- **Change:** Add malformed input boundary test coverage for `SessionCursor::decode` in `crates/lore-core/src/query.rs`.
+- **Critique:**
+  - `SessionCursor` tested roundtripping of valid IDs, but lacked test coverage for boundary failure cases (empty string, missing colon, empty ID, non-integer timestamps, oversized string).
+  - Fix: Added `session_cursor_rejects_malformed_inputs` unit test.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Audit database lock recovery.
+  2. *Performance/allocations:* Audit string allocations in query builders.
+  3. *API & DTO ergonomics:* Audit IPC client result helpers.
+
+
 
 
 

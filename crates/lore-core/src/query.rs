@@ -832,6 +832,28 @@ mod tests {
     }
 
     #[test]
+    fn session_cursor_rejects_malformed_inputs() {
+        for bad in [
+            "",
+            "nocolon",
+            ":empty_time",
+            "100:",
+            "not_an_int:valid_id",
+            "100:id:with:colons",
+        ] {
+            assert!(
+                SessionCursor::decode(bad).is_none(),
+                "{bad:?} should be rejected"
+            );
+        }
+        let oversized = "100:".to_string() + &"x".repeat(3_000);
+        assert!(
+            SessionCursor::decode(&oversized).is_none(),
+            "oversized cursor should be rejected"
+        );
+    }
+
+    #[test]
     fn empty_database_lists_nothing() {
         let conn = crate::storage::open_in_memory().unwrap();
         assert!(list_sessions(&conn, 10).unwrap().is_empty());
