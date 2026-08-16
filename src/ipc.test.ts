@@ -211,5 +211,8 @@ describe("ipc contract", () => {
 
     const severity: import("./ipc").SecretSeverity = "critical";
     expect(severity).toBe("critical");
+
+    const sourceKind: import("./ipc").SearchSourceKind = "message_part";
+    expect(sourceKind).toBe("message_part");
   });
 });

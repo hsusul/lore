@@ -3305,6 +3305,22 @@
   2. *Docs accuracy vs code:* Audit IPC documentation.
   3. *UX & accessibility:* Audit command palette search clear button.
 
+## Iteration 221
+- **Lens:** API & DTO ergonomics
+- **Change:** Export `SearchSourceKind` union type in TypeScript IPC contract with unit test assertions (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - `src/ipc.ts` exported domain types for roles, confidences, and statuses, but lacked an exported `SearchSourceKind` union type (`"message_part" | "file_event" | "session"`) for `SearchHit.source_kind`.
+  - Fix: Added and exported `SearchSourceKind` in `src/ipc.ts` with unit test assertions.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Audit IPC documentation.
+  2. *UX & accessibility:* Audit command palette search clear button.
+  3. *Security/input validation:* Audit regex and path escapes.
+
+
 
 
 
