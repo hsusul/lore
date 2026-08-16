@@ -19,9 +19,19 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function renderPalette(props: Partial<Parameters<typeof CommandPalette>[0]> = {}) {
+  const finalProps = {
+    items: makeItems(),
+    onClose: vi.fn(),
+    ...props,
+  };
+  const result = render(<CommandPalette {...finalProps} />);
+  return { ...result, props: finalProps };
+}
+
 describe("CommandPalette", () => {
   it("focuses its search field when mounted", () => {
-    render(<CommandPalette items={makeItems()} onClose={() => {}} />);
+    renderPalette();
     expect(document.activeElement).toBe(
       screen.getByRole("combobox", { name: /search commands and sessions/i }),
     );
@@ -30,7 +40,7 @@ describe("CommandPalette", () => {
   it("filters as you type and runs the top match on Enter", () => {
     const items = makeItems();
     const onClose = vi.fn();
-    render(<CommandPalette items={items} onClose={onClose} />);
+    renderPalette({ items, onClose });
     const input = screen.getByRole("combobox");
 
     fireEvent.change(input, { target: { value: "refactor" } });
@@ -44,7 +54,7 @@ describe("CommandPalette", () => {
 
   it("finds loaded commands with an ordered fuzzy match", () => {
     const items = makeItems();
-    render(<CommandPalette items={items} onClose={() => {}} />);
+    renderPalette({ items });
     const input = screen.getByRole("combobox");
 
     fireEvent.change(input, { target: { value: "rfrr" } });
@@ -57,7 +67,7 @@ describe("CommandPalette", () => {
 
   it("navigates with arrow keys", () => {
     const items = makeItems();
-    render(<CommandPalette items={items} onClose={() => {}} />);
+    renderPalette({ items });
     const input = screen.getByRole("combobox");
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -66,7 +76,7 @@ describe("CommandPalette", () => {
 
   it("jumps to the first and last match with Home and End", () => {
     const items = makeItems();
-    render(<CommandPalette items={items} onClose={() => {}} />);
+    renderPalette({ items });
     const input = screen.getByRole("combobox");
 
     fireEvent.keyDown(input, { key: "End" });
@@ -75,14 +85,13 @@ describe("CommandPalette", () => {
   });
 
   it("closes on Escape", () => {
-    const onClose = vi.fn();
-    render(<CommandPalette items={makeItems()} onClose={onClose} />);
+    const { props } = renderPalette();
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("shows an empty state when nothing matches", () => {
-    render(<CommandPalette items={makeItems()} onClose={() => {}} />);
+    renderPalette();
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "zzzz" } });
     expect(screen.getByText(/no matches/i)).toBeTruthy();
   });
@@ -102,7 +111,7 @@ describe("CommandPalette", () => {
     vi.useFakeTimers();
 
     try {
-      render(<CommandPalette items={makeItems()} search={search} onClose={() => {}} />);
+      renderPalette({ search });
       const input = screen.getByRole("combobox");
       fireEvent.change(input, { target: { value: "backoff" } });
 

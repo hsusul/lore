@@ -677,6 +677,22 @@
   2. *Naming/consistency:* Audit color token naming in styles.css.
   3. *ROADMAP progression:* Audit M7 forget-everything test coverage.
 
+## Iteration 45
+- **Lens:** Dead code & duplication
+- **Change:** Add `renderPalette` test fixture helper in `CommandPalette.test.tsx` (`src/components/CommandPalette.test.tsx`).
+- **Critique:**
+  - `CommandPalette.test.tsx` repeated identical boilerplate render setups across nearly every test case.
+  - Fix: Created a consolidated `renderPalette` helper and streamlined test cases across `CommandPalette.test.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit color token naming in styles.css.
+  2. *ROADMAP progression:* Audit M7 forget-everything test coverage.
+  3. *Dependency/build hygiene:* Check unused dev dependencies in root and crates.
+
+
 
 
 
