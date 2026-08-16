@@ -271,4 +271,14 @@ mod tests {
         assert!(rename_folder(&conn, "nonexistent", "New Name").is_ok());
         assert!(delete_folder(&conn, "nonexistent").is_ok());
     }
+
+    #[test]
+    fn unfiling_an_already_unfiled_or_unknown_session_is_safe_noop() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let sid = seed_session(&conn, "s1");
+        // Unfiling a session that was never in a folder succeeds
+        assert!(set_session_folder(&conn, &sid, None).is_ok());
+        // Unfiling a nonexistent session ID also succeeds safely
+        assert!(set_session_folder(&conn, "nonexistent-session", None).is_ok());
+    }
 }
