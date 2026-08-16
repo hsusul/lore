@@ -60,7 +60,7 @@ pub enum BackupError {
     Sqlite(#[from] rusqlite::Error),
     #[error("io error while creating or pruning backup")]
     Io,
-    #[error("settings storage error")]
+    #[error(transparent)]
     Settings(#[from] crate::storage::StorageError),
 }
 

@@ -332,6 +332,22 @@
   2. *ROADMAP progression:* Review completed milestone verification entries in `docs/product/ROADMAP.md`.
   3. *Dependency/build hygiene:* Check for any unused cargo profile flags or unnecessary dependencies.
 
+## Iteration 22
+- **Lens:** Naming/consistency
+- **Change:** Annotate `BackupError::Settings` with `#[error(transparent)]` for consistent domain error delegation (`crates/lore-core/src/backup.rs`).
+- **Critique:**
+  - `BackupError::Settings` formatted storage errors with `#[error("settings storage error")]`, causing redundant nested prefixes (e.g. `"settings storage error: sqlite error: ..."`), while `SourceRootError::Storage` used `#[error(transparent)]`.
+  - Fix: Annotated `BackupError::Settings` with `#[error(transparent)]` to standardize transparent error propagation across core submodules.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit and verify M5/M6/M7 roadmap criteria in `ROADMAP.md`.
+  2. *Dependency/build hygiene:* Audit workspace Cargo.toml profiles and dev-dependencies.
+  3. *Correctness bugs:* Review token count overflow bounds in session summary aggregations.
+
+
 
 
 
