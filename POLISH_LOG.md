@@ -2027,6 +2027,22 @@
   2. *API & DTO ergonomics:* Audit error message serialization on IPC commands.
   3. *Docs accuracy vs code:* Verify backup interval parsing in settings documentation.
 
+## Iteration 136
+- **Lens:** Performance/allocations
+- **Change:** Implement zero-allocation `contains_ignore_ascii_case` in `is_allowlisted` (`crates/lore-core/src/secrets.rs`).
+- **Critique:**
+  - `is_allowlisted` called `value.to_ascii_lowercase()`, creating a heap allocation on every candidate secret inspection.
+  - Fix: Added `contains_ignore_ascii_case` via byte window matching to evaluate allowlist substrings without heap allocations.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit error message serialization on IPC commands.
+  2. *Docs accuracy vs code:* Verify backup interval parsing in settings documentation.
+  3. *UX & accessibility:* Review color-mix contrast in high-contrast themes.
+
+
 
 
 

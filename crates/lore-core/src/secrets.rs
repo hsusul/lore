@@ -526,17 +526,30 @@ fn de_overlap(mut findings: Vec<Finding>) -> Vec<Finding> {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let needle_bytes = needle.as_bytes();
+    if needle_bytes.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle_bytes.len())
+        .any(|window| window.eq_ignore_ascii_case(needle_bytes))
+}
+
 fn is_allowlisted(value: &str) -> bool {
     if ALLOWLIST_VALUES.contains(&value) {
         return true;
     }
     // Placeholder shapes: <...>, ${...}, all-x, common placeholders.
-    let lower = value.to_ascii_lowercase();
-    if lower.contains("example")
-        || lower.contains("your_")
-        || lower.contains("changeme")
-        || lower.contains("placeholder")
-        || lower.contains("xxxxxxxx")
+    if contains_ignore_ascii_case(value, "example")
+        || contains_ignore_ascii_case(value, "your_")
+        || contains_ignore_ascii_case(value, "changeme")
+        || contains_ignore_ascii_case(value, "placeholder")
+        || contains_ignore_ascii_case(value, "xxxxxxxx")
     {
         return true;
     }
