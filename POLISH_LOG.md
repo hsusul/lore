@@ -2359,6 +2359,22 @@
   2. *Error handling:* Verify error message consistency on malformed JSON payload in set_setting.
   3. *Performance/allocations:* Review SQL query plans on session folder join listings.
 
+## Iteration 158
+- **Lens:** Missing tests/edge cases
+- **Change:** Add unit test for structured JSON values and object persistence in settings module (`crates/lore-core/src/settings.rs`).
+- **Critique:**
+  - `settings.rs` tested raw strings and boolean flags, but lacked unit tests verifying structured JSON objects and nested arrays round-tripping through `set` and `get`.
+  - Fix: Added `structured_json_payloads_round_trip` unit test in `crates/lore-core/src/settings.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (110 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Verify error message consistency on malformed JSON payload in set_setting.
+  2. *Performance/allocations:* Review SQL query plans on session folder join listings.
+  3. *API & DTO ergonomics:* Audit TypeScript helper functions in `src/ipc.ts`.
+
+
 
 
 
