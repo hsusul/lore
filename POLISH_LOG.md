@@ -2147,6 +2147,22 @@
   2. *Correctness bugs:* Audit SearchResults escape key handling.
   3. *Missing tests/edge cases:* Test CommandPalette Escape key dismissal.
 
+## Iteration 144
+- **Lens:** Dependency/build hygiene
+- **Change:** Unignore canonical `RESEARCH_SUMMARY.md` in `.gitignore` (`.gitignore`).
+- **Critique:**
+  - `.gitignore` ignored all root `*.md` files with exceptions for README, AGENTS, CLAUDE, and POLISH_LOG, but omitted canonical root file `RESEARCH_SUMMARY.md`.
+  - Fix: Added `!RESEARCH_SUMMARY.md` to `.gitignore`.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit SearchResults escape key handling.
+  2. *Missing tests/edge cases:* Test CommandPalette Escape key dismissal.
+  3. *Error handling:* Audit settings JSON serialization fallback in write_schedule.
+
+
 
 
 
