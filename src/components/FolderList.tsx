@@ -80,6 +80,7 @@ export default function FolderList({
       <div className="nav-heading__row">
         <h2 className="nav-heading">Folders</h2>
         <button
+          type="button"
           className="nav-heading__add"
           aria-label="New folder"
           title="New folder"
@@ -158,6 +159,7 @@ export default function FolderList({
               ) : (
                 <>
                   <button
+                    type="button"
                     className="nav-item folder__item"
                     aria-pressed={selectedId === folder.id}
                     onClick={() => onSelect(folder.id)}
@@ -166,9 +168,12 @@ export default function FolderList({
                       if (event.key === "F2") {
                         event.preventDefault();
                         startEdit(folder);
+                      } else if (event.key === "Delete") {
+                        event.preventDefault();
+                        onDelete(folder.id);
                       }
                     }}
-                    title="Open folder (F2 or double-click to rename)"
+                    title="Open folder (F2 to rename, Delete to remove)"
                   >
                     <span className="dot dot--folder" aria-hidden />
                     <span className="nav-item__name">{folder.name}</span>
@@ -180,6 +185,7 @@ export default function FolderList({
                     </span>
                   </button>
                   <button
+                    type="button"
                     className="folder__delete"
                     aria-label={`Delete folder ${folder.name}`}
                     title="Delete folder"

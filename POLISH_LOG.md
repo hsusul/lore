@@ -467,6 +467,22 @@
   2. *Security/input validation:* Test search query input validation for special control characters.
   3. *Dead code & duplication:* Audit redundant imports across `src/components/`.
 
+## Iteration 31
+- **Lens:** UX & accessibility
+- **Change:** Add explicit `type="button"` attributes and `Delete` keyboard shortcut on folder list buttons (`src/components/FolderList.tsx`, `src/components/FolderList.test.tsx`).
+- **Critique:**
+  - `FolderList.tsx` buttons omitted explicit `type="button"` attributes and only supported folder deletion via mouse clicking the ✕ button, without a keyboard equivalent when the folder button was focused.
+  - Fix: Added `type="button"` to all buttons, added `Delete` key handler to delete focused folder, and added test in `FolderList.test.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (89 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Test search term sanitization for embedded null bytes or unicode format controls.
+  2. *Dead code & duplication:* Audit redundant test utilities across frontend test files.
+  3. *Naming/consistency:* Audit CSS class name conventions across sidebar navigation components.
+
+
 
 
 
