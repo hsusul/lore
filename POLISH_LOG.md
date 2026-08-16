@@ -223,6 +223,23 @@
   2. *Performance/allocations:* Optimize SQL query construction in `list_sessions_page`.
   3. *API & DTO ergonomics:* Ensure consistent naming for query filter options.
 
+## Iteration 15
+- **Lens:** Error handling
+- **Change:** Validate JSON syntax in `set_setting` IPC command before persisting to SQLite (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `set_setting` accepted arbitrary string payloads and inserted them directly into `setting.value_json` without checking if they parse as valid JSON.
+  - Invalid JSON strings would persist to the DB and cause subsequent typed setting deserializers (`read_schedule`, `get_bool`) to fail silently or corrupt state.
+  - Fix: Added `serde_json::from_str::<serde_json::Value>(&value_json)` validation returning an explicit error if the JSON is malformed.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Optimize SQL query string allocations in `list_sessions_page` and `list_folder_sessions_page`.
+  2. *API & DTO ergonomics:* Verify UI error message toasts when settings or root updates fail.
+  3. *Docs accuracy vs code:* Verify ADR-0005 egress test requirements match current codebase guards.
+
+
 
 
 
