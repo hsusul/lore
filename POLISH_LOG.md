@@ -3620,6 +3620,22 @@
   2. *Error handling:* Audit error boundary responses.
   3. *Performance/allocations:* Audit string allocations in timeline rendering.
 
+## Iteration 242
+- **Lens:** Missing tests/edge cases
+- **Change:** Add integration test coverage for search queries containing control characters (`crates/lore-core/tests/search.rs`).
+- **Critique:**
+  - `search.rs` integration tests tested zero-width character sanitization on structured filters, but lacked end-to-end assertions for queries containing control characters like `\u{0007}` and `\u{001f}`.
+  - Fix: Added end-to-end integration test asserting control character filtering in search queries.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (118 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Audit error boundary responses.
+  2. *Performance/allocations:* Audit string allocations in timeline rendering.
+  3. *API & DTO ergonomics:* Audit response builders.
+
+
 
 
 

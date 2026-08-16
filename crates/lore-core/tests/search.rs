@@ -528,4 +528,9 @@ fn search_page_sanitizes_structured_filters_with_zero_width_chars() {
     let res_fallback = search(&conn, "agent:\u{200b}\u{200c} verification", 10).unwrap();
     assert_eq!(res_fallback.len(), 1);
     assert_eq!(res_fallback[0].session_id, id);
+
+    // Search terms containing control characters are sanitized and matched
+    let res_ctrl = search(&conn, "ver\u{0007}ifi\u{001f}cation", 10).unwrap();
+    assert_eq!(res_ctrl.len(), 1);
+    assert_eq!(res_ctrl[0].session_id, id);
 }
