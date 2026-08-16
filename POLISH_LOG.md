@@ -1697,6 +1697,22 @@
   2. *UX & accessibility:* Audit keyboard navigation in folder row list items.
   3. *Security/input validation:* Check string size boundaries on setting keys.
 
+## Iteration 114
+- **Lens:** Docs accuracy vs code
+- **Change:** Document user-configured custom source roots in `CLAUDE_CODE.md` and `CODEX.md` (`docs/agents/CLAUDE_CODE.md`, `docs/agents/CODEX.md`).
+- **Critique:**
+  - Agent adapter docs detailed default directories and environment variables, but omitted noting custom source root discovery configured in Settings and stored in settings under `agent_roots.<agent_id>`.
+  - Fix: Added user-configured custom source root notes to §1 of both adapter documents.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit keyboard navigation in folder row list items.
+  2. *Security/input validation:* Check string size boundaries on setting keys.
+  3. *Dead code & duplication:* Inspect unused CSS styles or imports.
+
+
 
 
 
