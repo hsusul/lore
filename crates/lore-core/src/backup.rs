@@ -88,8 +88,14 @@ pub fn create_backup(conn: &Connection, backup_dir: &Path, keep: usize) -> Resul
     drop(backup);
     drop(dst);
 
-    set_private(&path)?;
-    verify(&path)?;
+    if let Err(e) = set_private(&path) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
+    if let Err(e) = verify(&path) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
     prune(backup_dir, keep)?;
 
     let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -256,6 +262,9 @@ fn prune(backup_dir: &Path, keep: usize) -> Result<()> {
 /// returned, never archive data. Enables the recovery flow to offer a restore
 /// from the newest local backup (SECURITY.md §6).
 pub fn list_backups(backup_dir: &Path) -> Result<Vec<PathBuf>> {
+    if !backup_dir.exists() {
+        return Ok(Vec::new());
+    }
     let mut backups: Vec<PathBuf> = std::fs::read_dir(backup_dir)
         .map_err(|_| BackupError::Io)?
         .filter_map(|entry| entry.ok())

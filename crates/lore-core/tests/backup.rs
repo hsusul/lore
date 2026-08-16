@@ -323,3 +323,11 @@ fn scheduled_backup_runs_only_when_due() {
         .is_some());
     assert_eq!(list_backups(&backup_dir).len(), 2);
 }
+
+#[test]
+fn list_backups_on_nonexistent_dir_returns_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing_dir = dir.path().join("does_not_exist_yet");
+    let result = lore_core::backup::list_backups(&missing_dir).unwrap();
+    assert!(result.is_empty(), "nonexistent backup directory returns empty list");
+}
