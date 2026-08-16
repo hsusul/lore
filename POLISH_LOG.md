@@ -2268,6 +2268,23 @@
   2. *Dead code & duplication:* Audit redundant utility classes in CSS stylesheet.
   3. *Naming/consistency:* Audit CSS token naming across component selectors.
 
+## Iteration 152
+- **Lens:** Security/input validation
+- **Change:** Sanitize newlines in session titles and backticks/newlines in file paths in Markdown exports (`crates/lore-core/src/export.rs`).
+- **Critique:**
+  - `export_session_markdown` rendered raw session titles directly following `# ` and file paths in `` `{}` `` without sanitizing embedded newlines or backticks.
+  - Malicious or adversarial session titles or file paths could break out of header / code formatting into injected Markdown blocks.
+  - Fix: Normalized `\r` and `\n` in titles to spaces, replaced backticks with single quotes in file paths, and added regression test.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit redundant utility classes in CSS stylesheet.
+  2. *Naming/consistency:* Audit CSS token naming across component selectors.
+  3. *ROADMAP progression:* Audit milestone tracker for M7 criteria.
+
+
 
 
 
