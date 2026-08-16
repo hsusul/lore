@@ -155,7 +155,7 @@ describe("SearchResults", () => {
     expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
   });
 
-  it("calls onExitUp when pressing ArrowUp on the first result", () => {
+  it("calls onExitUp when pressing ArrowUp or k on the first result", () => {
     const onExitUp = vi.fn();
     render(
       <SearchResults
@@ -170,6 +170,9 @@ describe("SearchResults", () => {
     const listbox = screen.getByRole("listbox", { name: /search results/i });
     fireEvent.keyDown(listbox, { key: "ArrowUp" });
     expect(onExitUp).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(listbox, { key: "k" });
+    expect(onExitUp).toHaveBeenCalledTimes(2);
   });
 
   it("opens the active result on Enter", () => {

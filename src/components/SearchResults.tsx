@@ -101,13 +101,10 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
     if (event.key === "ArrowDown" || event.key === "j") {
       event.preventDefault();
       setNavigation({ query, index: Math.min(active + 1, last) });
-    } else if (event.key === "ArrowUp") {
+    } else if (event.key === "ArrowUp" || event.key === "k") {
       event.preventDefault();
       if (active === 0 && onExitUp) onExitUp();
       else setNavigation({ query, index: Math.max(active - 1, 0) });
-    } else if (event.key === "k") {
-      event.preventDefault();
-      setNavigation({ query, index: Math.max(active - 1, 0) });
     } else if (event.key === "Home") {
       event.preventDefault();
       setNavigation({ query, index: 0 });

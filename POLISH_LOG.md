@@ -2162,6 +2162,22 @@
   2. *Missing tests/edge cases:* Test CommandPalette Escape key dismissal.
   3. *Error handling:* Audit settings JSON serialization fallback in write_schedule.
 
+## Iteration 145
+- **Lens:** Correctness bugs
+- **Change:** Support `onExitUp` when pressing `k` on the first result in `SearchResults.tsx` (`src/components/SearchResults.tsx`, `src/components/SearchResults.test.tsx`).
+- **Critique:**
+  - In `SearchResults.tsx`, pressing `ArrowUp` at index 0 called `onExitUp` to return focus to the search omnibar, but pressing `k` at index 0 did not trigger `onExitUp`.
+  - Fix: Combined `ArrowUp` and `k` handlers so both trigger `onExitUp` at index 0 and updated test coverage.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test CommandPalette Escape key dismissal.
+  2. *Error handling:* Audit settings JSON serialization fallback in write_schedule.
+  3. *Performance/allocations:* Review regex matching in git commit SHA verification.
+
+
 
 
 
