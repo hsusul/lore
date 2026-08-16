@@ -2464,6 +2464,22 @@
   2. *Naming/consistency:* Audit CSS class name conventions across modal components.
   3. *ROADMAP progression:* Review M7 acceptance criteria and egress test requirements.
 
+## Iteration 165
+- **Lens:** Dead code & duplication
+- **Change:** Upgrade prefers-reduced-motion media query to comprehensively reset transitions, animations, and smooth scrolling across pseudo-elements (`src/styles.css`).
+- **Critique:**
+  - `prefers-reduced-motion` in `styles.css` only set `transition: none !important` on `*`, omitting CSS keyframe animations, pseudo-elements (`::before`, `::after`), and smooth scroll behavior.
+  - Fix: Upgraded the media query to clamp `animation-duration`, `transition-duration`, and `scroll-behavior` across all elements and pseudo-elements.
+- **Validation Results:**
+  - `cargo test --workspace`: 89 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit CSS class name conventions across modal components.
+  2. *ROADMAP progression:* Review M7 acceptance criteria and egress test requirements.
+  3. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
+
+
 
 
 
