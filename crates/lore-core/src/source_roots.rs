@@ -126,10 +126,23 @@ pub fn remove_custom_root(
     if registry.get(agent_id).is_none() {
         return Err(SourceRootError::UnknownAgent);
     }
-    let selected = PathBuf::from(path);
+    let trimmed = path.trim_end_matches(std::path::is_separator);
+    let selected = PathBuf::from(trimmed);
+    let canonical = std::fs::canonicalize(Path::new(trimmed)).ok();
     let mut roots = custom_roots(conn, agent_id)?;
-    roots.retain(|root| root != &selected);
-    store_custom_roots(conn, agent_id, &roots)
+    let before = roots.len();
+    roots.retain(|root| {
+        let root_str = root.to_string_lossy();
+        let root_trimmed = root_str.trim_end_matches(std::path::is_separator);
+        root != &selected
+            && root != Path::new(path)
+            && root_trimmed != trimmed
+            && canonical.as_ref() != Some(root)
+    });
+    if roots.len() != before {
+        store_custom_roots(conn, agent_id, &roots)?;
+    }
+    Ok(())
 }
 
 /// Build the effective configuration: documented defaults plus persisted
@@ -210,6 +223,22 @@ mod tests {
         assert!(custom_roots(&conn, "codex").unwrap().is_empty());
         let reset = discovery_config(&conn, &registry).unwrap();
         assert_eq!(adapter.roots(&reset.roots_for("codex")), defaults);
+    }
+
+    #[test]
+    fn remove_custom_root_handles_trailing_slashes() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+        let selected = tempfile::tempdir().unwrap();
+        let path = selected.path().to_str().unwrap();
+
+        let canonical = add_custom_root(&conn, &registry, "codex", path).unwrap();
+        assert_eq!(custom_roots(&conn, "codex").unwrap(), vec![canonical]);
+
+        // Remove using a path string with a trailing slash
+        let path_with_slash = format!("{path}/");
+        remove_custom_root(&conn, &registry, "codex", &path_with_slash).unwrap();
+        assert!(custom_roots(&conn, "codex").unwrap().is_empty());
     }
 
     #[test]

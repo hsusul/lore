@@ -1097,6 +1097,22 @@
   2. *Missing tests/edge cases:* Add test for setting invalid backup intervals in IPC handlers.
   3. *Error handling:* Validate SQLite error conversions across repository queries.
 
+## Iteration 73
+- **Lens:** Correctness bugs
+- **Change:** Normalize trailing separators and match canonicalized paths in `remove_custom_root` (`crates/lore-core/src/source_roots.rs`).
+- **Critique:**
+  - `remove_custom_root` compared stored canonical paths directly against `PathBuf::from(path)` without trailing slash trimming or canonicalization, failing to remove roots when paths included trailing separators or symlink discrepancies.
+  - Fix: Added trailing separator trimming and `std::fs::canonicalize` fallback matching in `remove_custom_root` with unit test.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Add test for setting invalid backup intervals in IPC handlers.
+  2. *Error handling:* Validate SQLite error conversions across repository queries.
+  3. *Performance/allocations:* Check string buffer allocations in export markdown.
+
+
 
 
 
