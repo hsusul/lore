@@ -2404,6 +2404,22 @@
   2. *Docs accuracy vs code:* Verify docstrings match consolidated validation bounds.
   3. *UX & accessibility:* Audit aria labels and keyboard shortcuts in command palette.
 
+## Iteration 161
+- **Lens:** API & DTO ergonomics
+- **Change:** Add typed `getJsonSetting<T>` and `setJsonSetting<T>` helpers in IPC client (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - `getSetting` returned raw `string | null` and `setSetting` accepted serialized JSON strings, forcing frontend callers to duplicate `JSON.parse` try/catch blocks and `JSON.stringify` calls.
+  - Fix: Added `getJsonSetting<T>` and `setJsonSetting<T>` helper functions in `src/ipc.ts` with error-tolerant parse fallback, accompanied by comprehensive unit tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify docstrings match consolidated validation bounds.
+  2. *UX & accessibility:* Audit aria labels and keyboard shortcuts in command palette.
+  3. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
+
+
 
 
 

@@ -215,9 +215,25 @@ export function getSetting(key: string): Promise<string | null> {
   return invoke<string | null>("get_setting", { key });
 }
 
+/** Read and parse a typed setting value, or null when unset or malformed. */
+export async function getJsonSetting<T>(key: string): Promise<T | null> {
+  const raw = await getSetting(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** Persist a setting's raw JSON value (Lore-owned; cleared by "forget everything"). */
 export function setSetting(key: string, valueJson: string): Promise<void> {
   return invoke<void>("set_setting", { key, valueJson });
+}
+
+/** Serialize and persist a typed setting value. */
+export function setJsonSetting<T>(key: string, value: T): Promise<void> {
+  return setSetting(key, JSON.stringify(value));
 }
 
 /** Read the automatic-backup schedule (interval + retention). */

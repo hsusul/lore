@@ -172,4 +172,25 @@ describe("ipc contract", () => {
       sort: "newest",
     });
   });
+
+  it("getJsonSetting and setJsonSetting serialize and parse typed payloads", async () => {
+    const { getJsonSetting, setJsonSetting } = await import("./ipc");
+    invoke.mockResolvedValueOnce(JSON.stringify({ enabled: true, count: 42 }));
+    const parsed = await getJsonSetting<{ enabled: boolean; count: number }>("test.key");
+    expect(parsed).toEqual({ enabled: true, count: 42 });
+    expect(invoke).toHaveBeenCalledWith("get_setting", { key: "test.key" });
+
+    invoke.mockResolvedValueOnce(null);
+    expect(await getJsonSetting("missing.key")).toBeNull();
+
+    invoke.mockResolvedValueOnce("invalid json {{{");
+    expect(await getJsonSetting("malformed.key")).toBeNull();
+
+    invoke.mockResolvedValueOnce(undefined);
+    await setJsonSetting("test.key", { enabled: false });
+    expect(invoke).toHaveBeenCalledWith("set_setting", {
+      key: "test.key",
+      valueJson: JSON.stringify({ enabled: false }),
+    });
+  });
 });
