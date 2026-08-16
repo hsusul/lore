@@ -779,9 +779,7 @@ mod tests {
 
         // 6 sessions sharing the exact same millisecond timestamp
         for i in 0..6 {
-            let content = concat!(
-                "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"same-time-",
-            );
+            let content = "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"same-time-";
             let full_content = format!("{content}{i}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}\n");
             let parsed = CodexAdapter::new().parse_str(&full_content, &format!("same-time-{i}"));
             persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
