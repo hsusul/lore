@@ -21,7 +21,7 @@ const INTERVALS: { value: BackupInterval; label: string }[] = [
  */
 export default function BackupSettings() {
   const [interval, setIntervalValue] = useState<BackupInterval>("off");
-  const [keep, setKeep] = useState(5);
+  const [keep, setKeep] = useState(7);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 

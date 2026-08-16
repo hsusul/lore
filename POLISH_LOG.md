@@ -2479,6 +2479,22 @@
   2. *ROADMAP progression:* Review M7 acceptance criteria and egress test requirements.
   3. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
 
+## Iteration 166
+- **Lens:** Naming/consistency
+- **Change:** Align BackupSettings initial retention state and test mocks with DEFAULT_BACKUP_RETENTION (7) (`src/components/BackupSettings.tsx`, `src/components/SettingsPanel.test.tsx`, `src/App.test.tsx`).
+- **Critique:**
+  - `BackupSettings.tsx` initialized its local keep count to 5 before reading the schedule, while `lore-core` (`DEFAULT_BACKUP_RETENTION`), `lore-ipc`, and `src/ipc.ts` default to 7. Test suites in `SettingsPanel.test.tsx` and `App.test.tsx` also mocked retention with 5.
+  - Fix: Aligned initial state and test mocks to the canonical default retention of 7, eliminating state reconciliation mismatches and act warnings.
+- **Validation Results:**
+  - `cargo test --workspace`: 89 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Review M7 acceptance criteria and egress test requirements.
+  2. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
+  3. *Correctness bugs:* Audit error boundaries around asynchronous settings operations.
+
+
 
 
 

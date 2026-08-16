@@ -40,7 +40,7 @@ vi.mock("./ipc", () => ({
   searchPage: vi.fn().mockResolvedValue({ hits: [], next_cursor: null }),
   getSetting: vi.fn().mockResolvedValue(null),
   setSetting: vi.fn().mockResolvedValue(undefined),
-  getBackupSchedule: vi.fn().mockResolvedValue({ interval: "off", keep: 5 }),
+  getBackupSchedule: vi.fn().mockResolvedValue({ interval: "off", keep: 7 }),
   setBackupSchedule: vi.fn().mockResolvedValue(undefined),
   backupNow: vi.fn().mockResolvedValue(undefined),
   rescan: vi.fn().mockResolvedValue({}),
