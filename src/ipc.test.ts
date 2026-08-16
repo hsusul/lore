@@ -131,4 +131,22 @@ describe("ipc contract", () => {
     });
     expect(seen).toHaveLength(1);
   });
+
+  it("exportSessionMarkdown defaults includeSecrets to false", async () => {
+    invoke.mockResolvedValue("# Session");
+    await (await import("./ipc")).exportSessionMarkdown("s1");
+    expect(invoke).toHaveBeenCalledWith("export_session_markdown", {
+      id: "s1",
+      includeSecrets: false,
+    });
+  });
+
+  it("setBackupSchedule passes interval and keep count", async () => {
+    invoke.mockResolvedValue(undefined);
+    await (await import("./ipc")).setBackupSchedule("daily", 14);
+    expect(invoke).toHaveBeenCalledWith("set_backup_schedule", {
+      interval: "daily",
+      keep: 14,
+    });
+  });
 });

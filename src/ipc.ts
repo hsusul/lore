@@ -183,10 +183,12 @@ export function sessionSecretCount(id: string): Promise<number> {
   return invoke<number>("session_secret_count", { id });
 }
 
+export type BackupInterval = "off" | "daily" | "weekly";
+
 /** Export a session as Markdown; `includeSecrets` (default false) masks flagged spans. */
 export function exportSessionMarkdown(
   id: string,
-  includeSecrets: boolean,
+  includeSecrets: boolean = false,
 ): Promise<string | null> {
   return invoke<string | null>("export_session_markdown", {
     id,
@@ -225,7 +227,10 @@ export function getBackupSchedule(): Promise<BackupScheduleDto> {
 }
 
 /** Persist the automatic-backup schedule. `interval` is "off" | "daily" | "weekly". */
-export function setBackupSchedule(interval: string, keep: number): Promise<void> {
+export function setBackupSchedule(
+  interval: BackupInterval | string,
+  keep: number,
+): Promise<void> {
   return invoke<void>("set_backup_schedule", { interval, keep });
 }
 

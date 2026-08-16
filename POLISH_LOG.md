@@ -255,6 +255,23 @@
   2. *Docs accuracy vs code:* Check documentation of `keyset_after` and cursor encoding in `docs/architecture/DATA_MODEL.md`.
   3. *UX & accessibility:* Verify keyboard navigation focus trap and ESC handling on folder creation dialog.
 
+## Iteration 17
+- **Lens:** API & DTO ergonomics
+- **Change:** Add default parameter for `exportSessionMarkdown` and define strongly-typed `BackupInterval` union in frontend IPC contract (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - `exportSessionMarkdown` documented that `includeSecrets` defaulted to `false`, but the parameter was required without a TypeScript default parameter value.
+  - `setBackupSchedule` accepted an unconstrained `string` for `interval` rather than the canonical `"off" | "daily" | "weekly"` union.
+  - Fix: Added `includeSecrets: boolean = false`, defined/exported `BackupInterval`, and added tests in `src/ipc.test.ts`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (87 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify documentation of ADR-0005 egress guard tests.
+  2. *UX & accessibility:* Ensure focus returns to folder trigger after folder modal dismiss.
+  3. *Security/input validation:* Check path sanitization in blob store read operations.
+
+
 
 
 
