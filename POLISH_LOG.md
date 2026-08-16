@@ -3605,6 +3605,22 @@
   2. *Missing tests/edge cases:* Audit virtual scroll window edges.
   3. *Error handling:* Audit error boundary responses.
 
+## Iteration 241
+- **Lens:** Correctness bugs
+- **Change:** Filter all control characters in `fts_match` query construction (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `fts_match` previously checked `c != '\0'`, but did not filter general control characters (`!c.is_control()`), which could leave unprintable characters in MATCH queries.
+  - Fix: Updated character filtering in `fts_match` to check `!c.is_control() && !crate::is_zero_width(c)` with unit test coverage.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (118 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Audit virtual scroll window edges.
+  2. *Error handling:* Audit error boundary responses.
+  3. *Performance/allocations:* Audit string allocations in timeline rendering.
+
+
 
 
 

@@ -393,7 +393,7 @@ fn fts_match(terms: &[String]) -> Option<String> {
     for term in terms {
         let clean: String = term
             .chars()
-            .filter(|&c| c != '\0' && !crate::is_zero_width(c))
+            .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
             .collect();
         if clean.is_empty() {
             continue;
@@ -529,7 +529,7 @@ mod tests {
 
         let mixed = vec![
             "\u{200b}hello\u{200c}".to_string(),
-            "\0".to_string(),
+            "\0\u{0007}\u{001f}".to_string(),
             "world".to_string(),
         ];
         assert_eq!(fts_match(&mixed), Some("\"hello\" \"world\"".to_string()));
