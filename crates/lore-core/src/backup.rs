@@ -195,14 +195,12 @@ pub fn write_schedule(conn: &Connection, schedule: BackupSchedule) -> Result<()>
     crate::settings::set(
         conn,
         KEY_INTERVAL,
-        &serde_json::to_string(schedule.interval.as_str())
-            .unwrap_or_else(|_| "\"off\"".to_string()),
+        &format!("\"{}\"", schedule.interval.as_str()),
     )?;
     crate::settings::set(
         conn,
         KEY_KEEP,
-        &serde_json::to_string(&schedule.keep.clamp(1, 100))
-            .unwrap_or_else(|_| "5".to_string()),
+        &schedule.keep.clamp(1, 100).to_string(),
     )?;
     Ok(())
 }

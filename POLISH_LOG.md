@@ -2192,6 +2192,21 @@
   2. *Performance/allocations:* Review regex matching in git commit SHA verification.
   3. *API & DTO ergonomics:* Audit ErrorDto error representation.
 
+## Iteration 147
+- **Lens:** Error handling
+- **Change:** Simplify JSON formatting in `write_schedule` in `crates/lore-core/src/backup.rs` (`crates/lore-core/src/backup.rs`).
+- **Critique:**
+  - `write_schedule` used `serde_json::to_string` with `unwrap_or_else` fallback closures for static string and integer values.
+  - Fix: Replaced serialization with direct, infallible formatting.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Review regex matching in git commit SHA verification.
+  2. *API & DTO ergonomics:* Audit ErrorDto error representation.
+  3. *Docs accuracy vs code:* Verify backup settings descriptions.
+
 
 
 
