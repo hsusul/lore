@@ -2569,6 +2569,22 @@
   2. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
   3. *Docs accuracy vs code:* Verify error handling docstrings in adapters module.
 
+## Iteration 172
+- **Lens:** Performance/allocations
+- **Change:** Stream whitespace normalization and bounding during fallback title extraction without allocating intermediate vectors (`crates/lore-core/src/adapters/common.rs`).
+- **Critique:**
+  - `fallback_title` split words with `line.split_whitespace().collect::<Vec<_>>().join(" ")`, allocating a temporary heap `Vec` and intermediate `String` on every session title extraction.
+  - Fix: Rewrote title extraction to stream characters directly into the bounded `String` capacity without allocating an intermediate `Vec<&str>`.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
+  2. *Docs accuracy vs code:* Verify error handling docstrings in adapters module.
+  3. *UX & accessibility:* Audit keyboard focus outlines on interactive buttons in Settings.
+
+
 
 
 

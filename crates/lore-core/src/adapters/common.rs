@@ -52,10 +52,31 @@ fn title_from_text(text: &str) -> Option<String> {
         .map(|l| l.trim_start_matches('#').trim_start_matches(['-', '*']).trim())
         .find(|line| !line.is_empty() && !(line.starts_with('<') && line.ends_with('>')))?;
 
-    let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut chars = normalized.chars();
-    let title: String = chars.by_ref().take(TITLE_MAX_CHARS).collect();
-    if chars.next().is_some() {
+    let mut title = String::with_capacity(TITLE_MAX_CHARS + 4);
+    let mut count = 0;
+    let mut truncated = false;
+    for word in line.split_whitespace() {
+        if count > 0 {
+            if count >= TITLE_MAX_CHARS {
+                truncated = true;
+                break;
+            }
+            title.push(' ');
+            count += 1;
+        }
+        for c in word.chars() {
+            if count >= TITLE_MAX_CHARS {
+                truncated = true;
+                break;
+            }
+            title.push(c);
+            count += 1;
+        }
+        if truncated {
+            break;
+        }
+    }
+    if truncated {
         Some(format!("{}…", title.trim_end()))
     } else {
         Some(title)
