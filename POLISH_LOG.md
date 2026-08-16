@@ -2494,6 +2494,22 @@
   2. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
   3. *Correctness bugs:* Audit error boundaries around asynchronous settings operations.
 
+## Iteration 167
+- **Lens:** ROADMAP progression
+- **Change:** Document markdown export code fence protection and backup retention alignment in ROADMAP.md (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `ROADMAP.md` Milestone 7 status table and build sequence needed reconciliation with dynamic code fence adjustments (nested backtick prevention) and canonical backup retention alignment.
+  - Fix: Updated Milestone 7 status table and build sequence descriptions in `ROADMAP.md`.
+- **Validation Results:**
+  - `cargo test --workspace`: 89 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
+  2. *Correctness bugs:* Audit error boundaries around asynchronous settings operations.
+  3. *Missing tests/edge cases:* Test recovery when corrupted DB is completely 0-byte or unreadable.
+
+
 
 
 
