@@ -775,6 +775,11 @@ kbd {
   color: var(--text-3);
 }
 
+.sessions__more:hover:not(:disabled),
+.results__more:hover:not(:disabled) {
+  color: var(--text);
+}
+
 .sessions__empty,
 .repos__empty {
   color: var(--text-3);
