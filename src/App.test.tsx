@@ -217,7 +217,7 @@ describe("App shell", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("archive unavailable");
     expect(screen.getByText("Sessions unavailable.")).toBeTruthy();
     expect(screen.queryByText("No sessions yet.")).toBeNull();
-    fireEvent.change(screen.getByRole("searchbox", { name: "search" }), {
+    fireEvent.change(screen.getByRole("searchbox", { name: /search/i }), {
       target: { value: "retry" },
     });
 
@@ -319,7 +319,7 @@ describe("App shell", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Lore", level: 1 });
 
-    const search = screen.getByRole("searchbox", { name: "search" });
+    const search = screen.getByRole("searchbox", { name: /search/i });
     const searchPageMock = vi.mocked(searchPage);
     searchPageMock.mockClear();
     vi.useFakeTimers();
@@ -362,7 +362,7 @@ describe("App shell", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "Lore", level: 1 });
-    const search = screen.getByRole("searchbox", { name: "search" });
+    const search = screen.getByRole("searchbox", { name: /search/i });
     vi.useFakeTimers();
 
     try {
@@ -387,7 +387,7 @@ describe("App shell", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Lore", level: 1 });
 
-    const search = screen.getByRole("searchbox", { name: "search" });
+    const search = screen.getByRole("searchbox", { name: /search/i });
     const searchPageMock = vi.mocked(searchPage);
     searchPageMock.mockClear();
     searchPageMock.mockResolvedValueOnce({
@@ -429,7 +429,7 @@ describe("App shell", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Lore", level: 1 });
 
-    const search = screen.getByRole("searchbox", { name: "search" });
+    const search = screen.getByRole("searchbox", { name: /search/i });
     const searchPageMock = vi.mocked(searchPage);
     searchPageMock.mockClear();
     vi.useFakeTimers();

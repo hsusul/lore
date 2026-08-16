@@ -85,7 +85,7 @@ export default function SessionList({
         ref={listRef}
         className="sessions"
         role="listbox"
-        aria-label="sessions"
+        aria-label="Sessions"
         tabIndex={0}
         aria-activedescendant={sessions[active]?.id}
         onKeyDown={onKeyDown}

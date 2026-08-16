@@ -1052,6 +1052,22 @@
   2. *ROADMAP progression:* Reconcile M7 safety criteria across PRD and ROADMAP.
   3. *Dependency/build hygiene:* Audit dev-dependencies in lore-core Cargo.toml.
 
+## Iteration 70
+- **Lens:** Naming/consistency
+- **Change:** Standardize `aria-label` casing across `App.tsx` and `SessionList.tsx` (`src/App.tsx`, `src/components/SessionList.tsx`, `src/App.test.tsx`).
+- **Critique:**
+  - `App.tsx` and `SessionList.tsx` used lowercase `aria-label` strings (`"sessions"`, `"search"`), inconsistent with capitalized accessible names (`"Repositories"`, `"Folders"`, `"Settings"`, `"Command palette"`).
+  - Fix: Capitalized `aria-label` attributes to `"Sessions"` and `"Search"` and aligned test matcher regexes.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Reconcile M7 safety criteria across PRD and ROADMAP.
+  2. *Dependency/build hygiene:* Audit dev-dependencies in lore-core Cargo.toml.
+  3. *Correctness bugs:* Check SQLite index usage on session listing queries.
+
+
 
 
 

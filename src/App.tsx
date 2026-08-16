@@ -753,13 +753,13 @@ export default function App() {
           )}
         </aside>
 
-        <section className="pane pane--sessions" aria-label="sessions">
+        <section className="pane pane--sessions" aria-label="Sessions">
           <input
             ref={searchInputRef}
             className="search-box"
             type="search"
             placeholder="Search… (e.g. retryBackoff agent:codex path:auth/)"
-            aria-label="search"
+            aria-label="Search"
             value={query}
             onChange={(event) => updateSearch(event.target.value)}
             onKeyDown={(event) => {
