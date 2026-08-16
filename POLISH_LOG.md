@@ -3004,6 +3004,22 @@
   2. *Naming/consistency:* Audit enum display implementations.
   3. *ROADMAP progression:* Audit milestone tracker status.
 
+## Iteration 201
+- **Lens:** Dead code & duplication
+- **Change:** Deduplicate parameter vector construction in `keyset_after` in `crates/lore-core/src/query.rs`.
+- **Critique:**
+  - `keyset_after` duplicated identical parameter vector allocations across branches of a match expression.
+  - Fix: Extracted common parameter vector generation and simplified the SQL clause match arm selection.
+- **Validation Results:**
+  - `cargo test --workspace`: 93 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit enum display implementations.
+  2. *ROADMAP progression:* Audit milestone tracker status.
+  3. *Dependency/build hygiene:* Audit workspace Cargo.toml metadata.
+
+
 
 
 

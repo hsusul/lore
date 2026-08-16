@@ -68,32 +68,23 @@ fn session_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSumma
 /// [`list_repository_sessions_page`], and [`list_folder_sessions_page`] so the
 /// pages cannot drift apart.
 fn keyset_after(cursor: &SessionCursor, prefix: &str) -> (&'static str, Vec<Value>) {
-    match (cursor.started_at, prefix) {
-        (Some(started_at), "s.") => (
-            "s.started_at < ? OR s.started_at IS NULL OR (s.started_at = ? AND s.id < ?)",
-            vec![
-                Value::Integer(started_at),
-                Value::Integer(started_at),
-                Value::Text(cursor.id.clone()),
-            ],
-        ),
-        (Some(started_at), _) => (
-            "started_at < ? OR started_at IS NULL OR (started_at = ? AND id < ?)",
-            vec![
-                Value::Integer(started_at),
-                Value::Integer(started_at),
-                Value::Text(cursor.id.clone()),
-            ],
-        ),
-        (None, "s.") => (
-            "s.started_at IS NULL AND s.id < ?",
-            vec![Value::Text(cursor.id.clone())],
-        ),
-        (None, _) => (
-            "started_at IS NULL AND id < ?",
-            vec![Value::Text(cursor.id.clone())],
-        ),
-    }
+    let params = match cursor.started_at {
+        Some(started_at) => vec![
+            Value::Integer(started_at),
+            Value::Integer(started_at),
+            Value::Text(cursor.id.clone()),
+        ],
+        None => vec![Value::Text(cursor.id.clone())],
+    };
+    let clause = match (cursor.started_at.is_some(), prefix) {
+        (true, "s.") => {
+            "s.started_at < ? OR s.started_at IS NULL OR (s.started_at = ? AND s.id < ?)"
+        }
+        (true, _) => "started_at < ? OR started_at IS NULL OR (started_at = ? AND id < ?)",
+        (false, "s.") => "s.started_at IS NULL AND s.id < ?",
+        (false, _) => "started_at IS NULL AND id < ?",
+    };
+    (clause, params)
 }
 
 /// List one stable newest-first page of sessions. The opaque cursor stores the
