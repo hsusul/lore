@@ -3395,6 +3395,22 @@
   2. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
   3. *Correctness bugs:* Audit empty search string handling.
 
+## Iteration 227
+- **Lens:** ROADMAP progression
+- **Change:** Document `SearchSourceKind` TS export, `quarantine` cross-device fallback, keyset positive rowid enforcement, and accessible empty results in `docs/product/ROADMAP.md` M7.
+- **Critique:**
+  - `ROADMAP.md` M7 current state did not reflect recent polish deliverables: exported `SearchSourceKind` union type, resilient cross-device `move_or_copy` archive quarantine, positive keyset rowid enforcement, and live empty search announcements in `CommandPalette`.
+  - Fix: Updated `docs/product/ROADMAP.md` M7 milestone description.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
+  2. *Correctness bugs:* Audit empty search string handling.
+  3. *Missing tests/edge cases:* Audit search term escaping.
+
+
 
 
 
