@@ -63,6 +63,8 @@ export type MessageEventKind =
 export type FileEventSource = "agent_patch" | "agent_tool_input" | "lore_capture";
 export type GitObservationProvenance = "agent_recorded" | "lore_captured" | "lore_reverified";
 export type ResolutionConfidence = "high" | "medium" | "low" | "unresolved";
+export type SecretScanState = "clean" | "redacted" | "failed_quarantined";
+export type SecretSeverity = "low" | "medium" | "high" | "critical";
 
 export type {
   BackupScheduleDto,

@@ -205,5 +205,11 @@ describe("ipc contract", () => {
     const { HIGHLIGHT_START, HIGHLIGHT_END } = await import("./ipc");
     expect(HIGHLIGHT_START).toBe("\u{e000}");
     expect(HIGHLIGHT_END).toBe("\u{e001}");
+
+    const scanState: import("./ipc").SecretScanState = "failed_quarantined";
+    expect(scanState).toBe("failed_quarantined");
+
+    const severity: import("./ipc").SecretSeverity = "critical";
+    expect(severity).toBe("critical");
   });
 });

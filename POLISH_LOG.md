@@ -3125,6 +3125,22 @@
   2. *Docs accuracy vs code:* Audit IPC documentation.
   3. *UX & accessibility:* Audit settings modal keyboard traps.
 
+## Iteration 209
+- **Lens:** API & DTO ergonomics
+- **Change:** Export `SecretScanState` and `SecretSeverity` strongly typed union types in TypeScript IPC client with unit tests (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - `src/ipc.ts` exported domain union types for roles, parts, events, and confidences, but omitted `SecretScanState` and `SecretSeverity`.
+  - Fix: Added and exported `SecretScanState` and `SecretSeverity` with unit test assertions.
+- **Validation Results:**
+  - `cargo test --workspace`: 97 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Audit IPC documentation.
+  2. *UX & accessibility:* Audit settings modal keyboard traps.
+  3. *Security/input validation:* Audit regex and path escapes.
+
+
 
 
 
