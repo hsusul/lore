@@ -1802,6 +1802,22 @@
   2. *Missing tests/edge cases:* Add unit tests for zero-width character handling in search query sanitization.
   3. *Error handling:* Verify error handling when backup directory is read-only.
 
+## Iteration 121
+- **Lens:** Correctness bugs
+- **Change:** Filter zero-width characters in `fts_match` (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `fts_match` filtered out `\0` null bytes, but did not filter zero-width Unicode characters (`\u{feff}`, `\u{200b}`, `\u{200c}`, `\u{200d}`, `\u{2060}`). A search term composed entirely of zero-width characters produced an empty quoted token `""`, generating malformed FTS5 MATCH syntax that SQLite rejects.
+  - Fix: Filtered zero-width characters in `fts_match` and added a unit test verifying zero-width term elimination.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Add unit test for zero-width characters in path/agent search filters.
+  2. *Error handling:* Verify error handling when backup directory is read-only.
+  3. *Performance/allocations:* Review SQL parameter allocation in search filters.
+
+
 
 
 

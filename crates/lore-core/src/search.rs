@@ -363,7 +363,15 @@ fn fts_match(terms: &[String]) -> Option<String> {
     let mut out = String::with_capacity(terms.len() * 16);
     let mut first = true;
     for term in terms {
-        let clean: String = term.chars().filter(|&c| c != '\0').collect();
+        let clean: String = term
+            .chars()
+            .filter(|&c| {
+                !matches!(
+                    c,
+                    '\0' | '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}'
+                )
+            })
+            .collect();
         if clean.is_empty() {
             continue;
         }
@@ -484,5 +492,18 @@ mod tests {
         }
         let oversized = "0:0:0".to_string() + &"x".repeat(3_000);
         assert!(Cursor::decode(&oversized).is_none(), "oversized cursor should be rejected");
+    }
+
+    #[test]
+    fn fts_match_filters_zero_width_and_null_terms() {
+        let only_zero_width = vec!["\u{feff}\u{200b}\u{200c}\u{200d}\u{2060}".to_string()];
+        assert_eq!(fts_match(&only_zero_width), None);
+
+        let mixed = vec![
+            "\u{200b}hello\u{200c}".to_string(),
+            "\0".to_string(),
+            "world".to_string(),
+        ];
+        assert_eq!(fts_match(&mixed), Some("\"hello\" \"world\"".to_string()));
     }
 }
