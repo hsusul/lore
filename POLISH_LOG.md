@@ -1712,6 +1712,22 @@
   2. *Security/input validation:* Check string size boundaries on setting keys.
   3. *Dead code & duplication:* Inspect unused CSS styles or imports.
 
+## Iteration 115
+- **Lens:** UX & accessibility
+- **Change:** Set explicit `aria-hidden="true"` on decorative indicator dots across UI components (`src/components/FolderList.tsx`, `src/components/RepositoryList.tsx`, `src/components/SessionView.tsx`).
+- **Critique:**
+  - Indicator spans used bare boolean `aria-hidden` instead of canonical string `aria-hidden="true"`, creating minor inconsistencies with WAI-ARIA and focus-trap selector contracts.
+  - Fix: Updated all indicator dot elements to `aria-hidden="true"`.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Check string size boundaries on setting keys.
+  2. *Dead code & duplication:* Inspect unused CSS styles or imports.
+  3. *Naming/consistency:* Review CSS class naming consistency in settings components.
+
+
 
 
 

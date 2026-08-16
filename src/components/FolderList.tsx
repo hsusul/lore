@@ -175,7 +175,7 @@ export default function FolderList({
                     }}
                     title="Open folder (F2 to rename, Delete to remove)"
                   >
-                    <span className="dot dot--folder" aria-hidden />
+                    <span className="dot dot--folder" aria-hidden="true" />
                     <span className="nav-item__name">{folder.name}</span>
                     <span
                       className="nav-item__count"

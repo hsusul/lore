@@ -107,7 +107,7 @@ function GitRail({ observations }: { observations: GitObservationDto[] }) {
           ].join(":")}
           className={`git-obs git-obs--${observation.source}`}
         >
-          <span className="dot" aria-hidden />
+          <span className="dot" aria-hidden="true" />
           <span className="git-obs__label">
             {SOURCE_LABEL[observation.source] ?? observation.source}
           </span>

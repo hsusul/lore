@@ -48,7 +48,7 @@ export default function RepositoryList({
           if (sessionId) onUnfileSession(sessionId);
         }}
       >
-        <span className="dot dot--accent" aria-hidden />
+        <span className="dot dot--accent" aria-hidden="true" />
         <span className="nav-item__name">All sessions</span>
       </button>
 
@@ -67,6 +67,7 @@ export default function RepositoryList({
               >
                 <span
                   className={`dot dot--${repo.identity_confidence}`}
+                  aria-hidden="true"
                   aria-label={`${repo.identity_confidence} confidence`}
                   title={`${repo.identity_confidence} confidence`}
                 />
