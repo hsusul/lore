@@ -279,7 +279,8 @@ pub struct BackupScheduleDto {
     pub keep: i64,
 }
 
-/// Result of forgetting a session. Payload of `forget_session`.
+/// Result of forgetting sessions or entire archive content. Payload of `forget_session`
+/// and `forget_everything`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ForgetReport {

@@ -1157,6 +1157,22 @@
   2. *Docs accuracy vs code:* Verify IPC command list in ARCHITECTURE.md §5.
   3. *UX & accessibility:* Audit keyboard focus outlines on empty session placeholders.
 
+## Iteration 77
+- **Lens:** API & DTO ergonomics
+- **Change:** Document `forget_everything` in `ForgetReport` DTO docstring (`crates/lore-ipc/src/lib.rs`).
+- **Critique:**
+  - `ForgetReport` docstring only referenced `forget_session`, omitting `forget_everything` which also returns `ForgetReport`.
+  - Fix: Updated `ForgetReport` documentation to cite both `forget_session` and `forget_everything` and regenerated TypeScript bindings.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Reconcile IPC command catalog in ARCHITECTURE.md §5.
+  2. *UX & accessibility:* Audit keyboard focus outlines on empty session placeholders.
+  3. *Security/input validation:* Check boundary parameters in search_page IPC handler.
+
+
 
 
 
