@@ -2012,6 +2012,22 @@
   2. *Performance/allocations:* Review regex compilation in secret scanner.
   3. *API & DTO ergonomics:* Audit error message serialization on IPC commands.
 
+## Iteration 135
+- **Lens:** Error handling
+- **Change:** Add dismiss buttons to shell error and notice banners in `App.tsx` and `styles.css` (`src/App.tsx`, `src/styles.css`, `src/App.test.tsx`).
+- **Critique:**
+  - Transient error and notice banners lacked a manual dismiss action, forcing the banner to remain visible until superseded by another action.
+  - Fix: Added accessible dismiss buttons with hover styling and unit test in `App.test.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Review regex compilation in secret scanner.
+  2. *API & DTO ergonomics:* Audit error message serialization on IPC commands.
+  3. *Docs accuracy vs code:* Verify backup interval parsing in settings documentation.
+
+
 
 
 

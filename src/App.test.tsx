@@ -530,6 +530,17 @@ describe("App shell", () => {
     expect(screen.getByText("B session")).toBeTruthy();
   });
 
+  it("allows dismissing an active error banner", async () => {
+    vi.mocked(listRepositories).mockRejectedValueOnce(new Error("network failure"));
+    render(<App />);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toBeTruthy();
+    expect(screen.getByText("Error: network failure")).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Dismiss error"));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("settles repository loading when a background refresh supersedes it", async () => {
     vi.mocked(listRepositories).mockResolvedValue([repository("repo-a", "Repo A")]);
     const manual = deferred<SessionPage>();

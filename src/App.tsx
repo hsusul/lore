@@ -726,14 +726,30 @@ export default function App() {
         </p>
       )}
       {error && (
-        <p className="shell__error" role="alert">
-          {error}
-        </p>
+        <div className="shell__error" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="shell__banner-dismiss"
+            aria-label="Dismiss error"
+            onClick={() => setError(null)}
+          >
+            ✕
+          </button>
+        </div>
       )}
       {notice && (
-        <p className="shell__notice" role="status">
-          {notice}
-        </p>
+        <div className="shell__notice" role="status">
+          <span>{notice}</span>
+          <button
+            type="button"
+            className="shell__banner-dismiss"
+            aria-label="Dismiss notice"
+            onClick={() => setNotice(null)}
+          >
+            ✕
+          </button>
+        </div>
       )}
 
       <div className="shell__panes">
