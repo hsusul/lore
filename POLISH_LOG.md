@@ -1922,6 +1922,22 @@
   2. *Naming/consistency:* Review button type attributes in modal dialogs.
   3. *ROADMAP progression:* Audit milestone verification checklists.
 
+## Iteration 129
+- **Lens:** Dead code & duplication
+- **Change:** Alphabetize named imports from `./ipc` in `src/App.tsx` (`src/App.tsx`).
+- **Critique:**
+  - The named import list from `./ipc` in `src/App.tsx` had several misplaced entries (`forgetEverything`, `removeAgentRoot`, `sessionSecretCount`), making the import block disorganized.
+  - Fix: Re-sorted all named function and type imports alphabetically.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Review button type attributes in modal dialogs.
+  2. *ROADMAP progression:* Audit milestone verification checklists.
+  3. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+
+
 
 
 
