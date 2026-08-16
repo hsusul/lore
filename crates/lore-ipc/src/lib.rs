@@ -54,8 +54,8 @@ pub struct RepositorySummary {
     pub worktree_count: i64,
 }
 
-/// A user-defined folder for organizing threads. Payload element of
-/// `list_folders`. `session_count` is how many threads are filed in it.
+/// A user-defined folder for organizing threads. Payload of `create_folder`
+/// and element of `list_folders`. `session_count` is how many threads are filed in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct FolderSummary {

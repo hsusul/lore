@@ -1337,6 +1337,22 @@
   2. *Docs accuracy vs code:* Verify storage error description in DATA_MODEL.md.
   3. *UX & accessibility:* Check settings panel focus trap cleanup on unmount.
 
+## Iteration 89
+- **Lens:** API & DTO ergonomics
+- **Change:** Update `FolderSummary` docstring in `lore-ipc` (`crates/lore-ipc/src/lib.rs`) and regenerate TypeScript definitions.
+- **Critique:**
+  - `FolderSummary` docstring previously stated it was solely an element of `list_folders`, omitting that it is also the return payload of `create_folder`.
+  - Fix: Updated `FolderSummary` documentation and regenerated TypeScript types via `cargo test -p lore-ipc`.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify storage error description in DATA_MODEL.md.
+  2. *UX & accessibility:* Check settings panel focus trap cleanup on unmount.
+  3. *Security/input validation:* Check setting key allowed characters regex/bounds.
+
+
 
 
 
