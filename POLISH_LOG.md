@@ -422,6 +422,22 @@
   2. *API & DTO ergonomics:* Audit TypeScript type exports in `src/ipc.ts`.
   3. *Docs accuracy vs code:* Verify that `docs/architecture/SECURITY.md` notes structured JSON part export masking.
 
+## Iteration 28
+- **Lens:** Performance/allocations
+- **Change:** Eliminate intermediate vector pass and dummy allocations during `session_messages` construction (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `session_messages` previously allocated empty `Vec::new()` part vectors for every message row, followed by an additional full-vector `.into_iter().map(...).collect()` mutation pass to attach parts.
+  - Fix: Directly populate `parts_by_seq.remove(&seq).unwrap_or_default()` into `MessageDto` during the initial row query loop.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Ensure `BackupScheduleDto` and `FolderSummary` type exports are cleanly documented.
+  2. *Docs accuracy vs code:* Reconcile any newly covered export behaviors in architecture documentation.
+  3. *UX & accessibility:* Verify keyboard tab navigation in settings panel backup cadence selector.
+
+
 
 
 

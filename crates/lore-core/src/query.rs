@@ -363,29 +363,24 @@ fn session_messages(conn: &Connection, session_id: &str) -> Result<Vec<MessageDt
         "SELECT id, seq, role, event_kind, is_sidechain, ts, model
          FROM message WHERE session_id = ?1 ORDER BY seq",
     )?;
-    let rows = stmt
-        .query_map([session_id], |row| {
-            let seq: i64 = row.get(1)?;
-            Ok(MessageDto {
-                id: row.get(0)?,
-                seq,
-                role: row.get(2)?,
-                event_kind: row.get(3)?,
-                is_sidechain: row.get::<_, i64>(4)? != 0,
-                ts: row.get(5)?,
-                model: row.get(6)?,
-                parts: Vec::new(),
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut rows = stmt.query([session_id])?;
+    let mut messages = Vec::new();
+    while let Some(row) = rows.next()? {
+        let seq: i64 = row.get(1)?;
+        let parts = parts_by_seq.remove(&seq).unwrap_or_default();
+        messages.push(MessageDto {
+            id: row.get(0)?,
+            seq,
+            role: row.get(2)?,
+            event_kind: row.get(3)?,
+            is_sidechain: row.get::<_, i64>(4)? != 0,
+            ts: row.get(5)?,
+            model: row.get(6)?,
+            parts,
+        });
+    }
 
-    Ok(rows
-        .into_iter()
-        .map(|mut message| {
-            message.parts = parts_by_seq.remove(&message.seq).unwrap_or_default();
-            message
-        })
-        .collect())
+    Ok(messages)
 }
 
 fn session_file_events(conn: &Connection, session_id: &str) -> Result<Vec<FileEventDto>> {
