@@ -54,7 +54,7 @@ export default function SettingsPanel({
   if (!open) return null;
 
   return (
-    <div className="modal-backdrop palette__backdrop" role="presentation" onClick={onClose}>
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
         ref={dialogRef}
         className="settings"

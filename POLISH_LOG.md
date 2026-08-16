@@ -3365,6 +3365,22 @@
   2. *Naming/consistency:* Audit test naming conventions.
   3. *ROADMAP progression:* Audit status alignment.
 
+## Iteration 225
+- **Lens:** Dead code & duplication
+- **Change:** Remove redundant backdrop class from `SettingsPanel.tsx`.
+- **Critique:**
+  - `SettingsPanel` applied both `className="modal-backdrop palette__backdrop"`, but `.modal-backdrop` and `.palette__backdrop` are defined with identical styles on the same selector group in `src/styles.css`.
+  - Fix: Cleaned up redundant class name in `src/components/SettingsPanel.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit test naming conventions.
+  2. *ROADMAP progression:* Audit status alignment.
+  3. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
+
+
 
 
 
