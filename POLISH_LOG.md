@@ -1577,6 +1577,22 @@
   2. *Naming/consistency:* Audit folder delete confirmation messaging.
   3. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
 
+## Iteration 105
+- **Lens:** Dead code & duplication
+- **Change:** Update `keyset_after` doc comment in `query.rs` (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `keyset_after` doc comment documented sharing between `list_sessions_page` and `list_repository_sessions_page`, but missed noting its shared usage in `list_folder_sessions_page`.
+  - Fix: Updated doc comment to list all three pagination functions.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit folder delete confirmation messaging.
+  2. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
+  3. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+
+
 
 
 

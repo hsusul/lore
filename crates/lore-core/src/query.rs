@@ -64,8 +64,9 @@ fn session_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSumma
 /// strictly after `cursor` in the newest-first `(started_at DESC, id DESC)`
 /// total order. `prefix` qualifies the columns (`""` or `"s."`). Missing
 /// timestamps sort last, so a null-`started_at` cursor is confined to that
-/// trailing block. Shared by [`list_sessions_page`] and
-/// [`list_repository_sessions_page`] so the two pages cannot drift apart.
+/// trailing block. Shared by [`list_sessions_page`],
+/// [`list_repository_sessions_page`], and [`list_folder_sessions_page`] so the
+/// pages cannot drift apart.
 fn keyset_after(cursor: &SessionCursor, prefix: &str) -> (&'static str, Vec<Value>) {
     match (cursor.started_at, prefix) {
         (Some(started_at), "s.") => (
