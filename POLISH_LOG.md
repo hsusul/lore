@@ -752,6 +752,22 @@
   2. *Error handling:* Check `get_git_snapshot` error conversion when git inspection fails.
   3. *Performance/allocations:* Check string cloning during folder name sanitization.
 
+## Iteration 50
+- **Lens:** Missing tests/edge cases
+- **Change:** Add unit test coverage for empty search filters and unknown filter prefixes (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `search.rs` unit tests lacked explicit assertions for empty filter values (`agent:`, `path:`), whitespace-only inputs, and unknown filter prefixes that should fall back to search terms.
+  - Fix: Added `parse_query_handles_empty_filters_and_unknown_prefixes` unit test in `crates/lore-core/src/search.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 81 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Verify error handling when `read_schedule` encounters invalid JSON.
+  2. *Performance/allocations:* Audit pre-allocations in search document projections.
+  3. *API & DTO ergonomics:* Audit IPC commands return type clarity for `remove_agent_root`.
+
+
 
 
 

@@ -383,6 +383,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_query_handles_empty_filters_and_unknown_prefixes() {
+        // Empty filter values are ignored, unrecognized prefixes are treated as terms.
+        let q = parse_query("agent: path: unknown:filter foo:bar");
+        assert_eq!(q.agent, None);
+        assert_eq!(q.path, None);
+        assert!(!q.has_error);
+        assert_eq!(q.terms, vec!["unknown:filter", "foo:bar"]);
+
+        // Whitespace only
+        let empty = parse_query("    \t\n  ");
+        assert!(empty.terms.is_empty());
+        assert_eq!(empty.agent, None);
+        assert_eq!(empty.path, None);
+        assert!(!empty.has_error);
+    }
+
+    #[test]
     fn fts_match_quotes_terms_and_neutralizes_operators() {
         // A hostile term with quotes/operators becomes a single safe phrase.
         let m = fts_match(&["foo\" OR bar".to_string()]).unwrap();
