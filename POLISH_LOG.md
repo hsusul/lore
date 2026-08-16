@@ -2299,6 +2299,22 @@
   2. *ROADMAP progression:* Review M7 acceptance criteria and egress test requirements.
   3. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
 
+## Iteration 154
+- **Lens:** Naming/consistency
+- **Change:** Export and reuse canonical `is_zero_width` helper in `lore_core` root across search, folders, and Tauri IPC commands (`crates/lore-core/src/lib.rs`, `crates/lore-core/src/folders.rs`, `crates/lore-core/src/search.rs`, `src-tauri/src/lib.rs`).
+- **Critique:**
+  - Zero-width character filtering (`'\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}'`) was duplicated across `folders.rs`, `search.rs`, and multiple validation helpers in `src-tauri/src/lib.rs`.
+  - Fix: Defined `pub fn is_zero_width(c: char) -> bool` at the `lore_core` crate root, reused across all modules and commands, and added a unit test.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Review M7 acceptance criteria and egress test requirements.
+  2. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
+  3. *Correctness bugs:* Audit virtual scroll offset calculations when item height fluctuates.
+
+
 
 
 

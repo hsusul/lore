@@ -45,6 +45,15 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Check if a character is an invisible zero-width Unicode codepoint.
+#[must_use]
+pub fn is_zero_width(c: char) -> bool {
+    matches!(
+        c,
+        '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}'
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,5 +62,17 @@ mod tests {
     fn version_is_reported() {
         assert_eq!(version(), env!("CARGO_PKG_VERSION"));
         assert!(!version().is_empty());
+    }
+
+    #[test]
+    fn is_zero_width_detects_all_zero_width_codepoints() {
+        assert!(is_zero_width('\u{feff}'));
+        assert!(is_zero_width('\u{200b}'));
+        assert!(is_zero_width('\u{200c}'));
+        assert!(is_zero_width('\u{200d}'));
+        assert!(is_zero_width('\u{2060}'));
+        assert!(!is_zero_width('a'));
+        assert!(!is_zero_width(' '));
+        assert!(!is_zero_width('\n'));
     }
 }

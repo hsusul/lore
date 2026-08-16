@@ -315,10 +315,7 @@ fn create_folder(state: State<'_, AppState>, name: String) -> Result<FolderSumma
 fn is_invalid_folder_id(id: &str) -> bool {
     id.is_empty()
         || id.len() > 64
-        || id.chars().any(|c| {
-            c.is_control()
-                || matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
-        })
+        || id.chars().any(|c| c.is_control() || lore_core::is_zero_width(c))
 }
 
 /// Rename a folder.
@@ -384,10 +381,7 @@ fn list_folder_sessions_page(
 fn is_invalid_setting_key(key: &str) -> bool {
     key.is_empty()
         || key.len() > 128
-        || key.chars().any(|c| {
-            c.is_control()
-                || matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
-        })
+        || key.chars().any(|c| c.is_control() || lore_core::is_zero_width(c))
 }
 
 /// Read a setting's raw JSON value.
@@ -437,10 +431,7 @@ fn set_backup_schedule(
     keep: i64,
 ) -> Result<(), String> {
     if interval.len() > 64
-        || interval.chars().any(|c| {
-            c.is_control()
-                || matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
-        })
+        || interval.chars().any(|c| c.is_control() || lore_core::is_zero_width(c))
     {
         return Err("invalid backup interval".to_string());
     }

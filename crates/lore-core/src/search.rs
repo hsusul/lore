@@ -365,12 +365,7 @@ fn fts_match(terms: &[String]) -> Option<String> {
     for term in terms {
         let clean: String = term
             .chars()
-            .filter(|&c| {
-                !matches!(
-                    c,
-                    '\0' | '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}'
-                )
-            })
+            .filter(|&c| c != '\0' && !crate::is_zero_width(c))
             .collect();
         if clean.is_empty() {
             continue;
