@@ -64,6 +64,12 @@ pub enum BackupError {
     Settings(#[from] crate::storage::StorageError),
 }
 
+impl From<std::io::Error> for BackupError {
+    fn from(_: std::io::Error) -> Self {
+        BackupError::Io
+    }
+}
+
 /// Convenience result alias for the backup layer.
 pub type Result<T> = std::result::Result<T, BackupError>;
 

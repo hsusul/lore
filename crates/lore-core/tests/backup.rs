@@ -386,3 +386,14 @@ fn backup_schedule_read_clamping_and_fallback() {
     let s = read_schedule(&conn).unwrap();
     assert_eq!(s.keep, 100);
 }
+
+#[test]
+fn backup_error_from_io() {
+    let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cannot write backup");
+    let backup_err: lore_core::backup::BackupError = io_err.into();
+    assert!(matches!(backup_err, lore_core::backup::BackupError::Io));
+    assert_eq!(
+        backup_err.to_string(),
+        "io error while creating or pruning backup"
+    );
+}
