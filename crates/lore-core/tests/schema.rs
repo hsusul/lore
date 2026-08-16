@@ -35,6 +35,9 @@ fn all_v0_tables_exist() {
         // infra from 0001
         "setting",
         "job",
+        // organizational metadata from 0006
+        "folder",
+        "session_folder",
     ];
     for t in expected {
         let n: i64 = conn
@@ -62,25 +65,25 @@ fn foreign_keys_are_enforced() {
 #[test]
 fn data_model_indexes_exist() {
     // DATA_MODEL.md §8 declares these as performance-critical; they are created
-    // by migrations 0004 and 0005. Assert the documented contract holds.
+    // by migrations 0004, 0005, and 0006. Assert the documented contract holds.
     let conn = db();
     let expected = [
-        "ix_repo_identity_kind_hash",
-        "ix_worktree_repository_path",
-        "ix_source_artifact_agent_path",
-        "ix_source_artifact_agent_native_hash",
+        ("ix_repo_identity_kind_hash", "repository_identity_evidence"),
+        ("ix_worktree_repository_path", "worktree"),
+        ("ix_source_artifact_agent_path", "source_artifact"),
+        ("ix_source_artifact_agent_native_hash", "source_artifact"),
+        ("ix_session_folder_folder", "session_folder"),
     ];
-    for idx in expected {
+    for (idx, tbl) in expected {
         let n: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master
-                 WHERE name = ?1 AND type = 'index' AND tbl_name IN
-                   ('repository_identity_evidence','worktree','source_artifact')",
-                [idx],
+                 WHERE name = ?1 AND type = 'index' AND tbl_name = ?2",
+                [idx, tbl],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 1, "missing documented index: {idx}");
+        assert_eq!(n, 1, "missing documented index: {idx} on {tbl}");
     }
 }
 

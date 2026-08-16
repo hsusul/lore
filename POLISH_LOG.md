@@ -317,6 +317,22 @@
   2. *Naming/consistency:* Ensure uniform test fixture naming across parser modules.
   3. *ROADMAP progression:* Audit milestone tracker for M6/M7 verification notes.
 
+## Iteration 21
+- **Lens:** Dead code & duplication / schema coverage
+- **Change:** Add folder table and index assertions to schema regression suite (`crates/lore-core/tests/schema.rs`).
+- **Critique:**
+  - `crates/lore-core/tests/schema.rs` verified tables and performance indexes from migrations 0001..0005, but had not been updated to assert the existence of the `folder` and `session_folder` tables or the `ix_session_folder_folder` index introduced in migration 0008.
+  - Fix: Added `"folder"` and `"session_folder"` to `all_v0_tables_exist` and `"ix_session_folder_folder"` to `data_model_indexes_exist`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Reconcile error enum message formats across `SourceRootError` and `BackupError`.
+  2. *ROADMAP progression:* Review completed milestone verification entries in `docs/product/ROADMAP.md`.
+  3. *Dependency/build hygiene:* Check for any unused cargo profile flags or unnecessary dependencies.
+
+
 
 
 
