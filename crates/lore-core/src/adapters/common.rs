@@ -89,7 +89,8 @@ fn title_from_text(text: &str) -> Option<String> {
 
 /// Parse an RFC3339 timestamp to epoch milliseconds.
 pub(crate) fn epoch_ms(s: &str) -> Option<i64> {
-    let dt = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()?;
+    let dt = time::OffsetDateTime::parse(s.trim(), &time::format_description::well_known::Rfc3339)
+        .ok()?;
     i64::try_from(dt.unix_timestamp_nanos() / 1_000_000).ok()
 }
 
@@ -281,5 +282,15 @@ mod tests {
             Some("\"test-adapter\"".to_string())
         );
         assert_eq!(json_field(&json, "missing"), None);
+    }
+
+    #[test]
+    fn epoch_ms_parses_rfc3339_with_optional_whitespace() {
+        let ts = "2026-08-11T10:00:00.000Z";
+        let expected = epoch_ms(ts);
+        assert!(expected.is_some());
+        assert_eq!(epoch_ms(&format!("  {ts}  ")), expected);
+        assert_eq!(epoch_ms("not-a-date"), None);
+        assert_eq!(epoch_ms(""), None);
     }
 }

@@ -3095,6 +3095,22 @@
   2. *Performance/allocations:* Audit string allocations in query builders.
   3. *API & DTO ergonomics:* Audit IPC client result helpers.
 
+## Iteration 207
+- **Lens:** Error handling
+- **Change:** Harden `epoch_ms` against surrounding whitespace in RFC3339 timestamp parsing with unit tests (`crates/lore-core/src/adapters/common.rs`).
+- **Critique:**
+  - `epoch_ms` called `OffsetDateTime::parse` directly on raw string inputs, which failed if untrusted JSON contained whitespace padding.
+  - Fix: Applied `.trim()` before RFC3339 parsing and added test coverage for padded timestamps.
+- **Validation Results:**
+  - `cargo test --workspace`: 97 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Audit string allocations in query builders.
+  2. *API & DTO ergonomics:* Audit IPC client result helpers.
+  3. *Docs accuracy vs code:* Audit IPC documentation.
+
+
 
 
 
