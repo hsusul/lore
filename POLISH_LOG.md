@@ -1967,6 +1967,22 @@
   2. *Correctness bugs:* Audit FTS5 snippet highlight marker escaping.
   3. *Missing tests/edge cases:* Test drag-and-drop folder drop effect styling.
 
+## Iteration 132
+- **Lens:** Dependency/build hygiene
+- **Change:** Update workspace member description in root `Cargo.toml` (`Cargo.toml`).
+- **Critique:**
+  - Root `Cargo.toml` contained an outdated future-tense comment regarding `src-tauri` workspace membership.
+  - Fix: Updated the comment to accurately describe `src-tauri` as a member crate depending on `lore-core` and `lore-ipc`.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit FTS5 snippet highlight marker escaping.
+  2. *Missing tests/edge cases:* Test drag-and-drop folder drop effect styling.
+  3. *Error handling:* Verify graceful UI error banner dismissal.
+
+
 
 
 
