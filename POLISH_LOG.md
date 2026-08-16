@@ -527,6 +527,22 @@
   2. *Dependency/build hygiene:* Check package.json scripts and dependency locks.
   3. *Correctness bugs:* Audit date format edge cases in session duration formatting.
 
+## Iteration 35
+- **Lens:** ROADMAP progression
+- **Change:** Reconcile search sort order support (`SortOrder::Relevance`, `SortOrder::Newest`, `SortOrder::Oldest`) in search architecture doc (`docs/architecture/SEARCH.md`).
+- **Critique:**
+  - `docs/architecture/SEARCH.md` §3 listed relevance/newest/oldest sort support as planned work, though all three sort modes with keyset pagination are fully implemented in `crates/lore-core/src/search.rs`.
+  - Fix: Updated `docs/architecture/SEARCH.md` §3 to mark sort orders as implemented.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (89 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Check package.json dependencies and scripts.
+  2. *Correctness bugs:* Verify session duration string formatting for sub-minute sessions.
+  3. *Missing tests/edge cases:* Test sort order switching in frontend search UI.
+
+
 
 
 
