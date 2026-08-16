@@ -2344,6 +2344,22 @@
   2. *Missing tests/edge cases:* Add test for zero-width character handling in settings keys.
   3. *Error handling:* Verify error message formatting when JSON parse error occurs in set_setting.
 
+## Iteration 157
+- **Lens:** Correctness bugs
+- **Change:** Harden virtual windowing and scroll positioning bounds against negative count, negative overscan, and out-of-range scroll targets (`src/virtual.ts`, `src/virtual.test.ts`).
+- **Critique:**
+  - `computeWindow` and `scrollToIndex` did not guard against negative counts or negative overscan values, which could result in negative spacer heights or invalid negative scroll targets.
+  - Fix: Guarded `safeCount` and `safeOverscan` in `computeWindow` with non-negative bounds clamping and bound `scrollToIndex` target indices, adding unit tests for negative counts and overscan.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (110 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Add unit test for zero-width character rejection in settings IPC handlers.
+  2. *Error handling:* Verify error message consistency on malformed JSON payload in set_setting.
+  3. *Performance/allocations:* Review SQL query plans on session folder join listings.
+
+
 
 
 

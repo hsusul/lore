@@ -31,17 +31,19 @@ export function computeWindow(
   rowHeight: number,
   overscan: number,
 ): WindowRange {
-  if (count === 0 || viewportHeight <= 0 || rowHeight <= 0) {
-    return { startIndex: 0, endIndex: count, padTop: 0, padBottom: 0 };
+  const safeCount = Math.max(0, count);
+  if (safeCount === 0 || viewportHeight <= 0 || rowHeight <= 0) {
+    return { startIndex: 0, endIndex: safeCount, padTop: 0, padBottom: 0 };
   }
   const safeScrollTop = Math.max(0, scrollTop);
-  const first = Math.max(0, Math.floor(safeScrollTop / rowHeight) - overscan);
-  const last = Math.min(count, Math.ceil((safeScrollTop + viewportHeight) / rowHeight) + overscan);
+  const safeOverscan = Math.max(0, overscan);
+  const first = Math.max(0, Math.floor(safeScrollTop / rowHeight) - safeOverscan);
+  const last = Math.min(safeCount, Math.ceil((safeScrollTop + viewportHeight) / rowHeight) + safeOverscan);
   return {
     startIndex: first,
-    endIndex: last,
+    endIndex: Math.max(first, last),
     padTop: first * rowHeight,
-    padBottom: Math.max(0, (count - last) * rowHeight),
+    padBottom: Math.max(0, (safeCount - last) * rowHeight),
   };
 }
 
@@ -106,13 +108,14 @@ export function useWindowing(
   const scrollToIndex = useCallback(
     (index: number) => {
       const el = containerRef.current;
-      if (!el || viewportHeight <= 0 || rowHeight <= 0) return;
-      const top = index * rowHeight;
+      if (!el || viewportHeight <= 0 || rowHeight <= 0 || count <= 0 || index < 0) return;
+      const targetIndex = Math.min(index, count - 1);
+      const top = targetIndex * rowHeight;
       const bottom = top + rowHeight;
       if (top < el.scrollTop) el.scrollTop = top;
       else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
     },
-    [containerRef, viewportHeight, rowHeight],
+    [containerRef, count, viewportHeight, rowHeight],
   );
 
   return { ...range, rowHeight, scrollToIndex };
