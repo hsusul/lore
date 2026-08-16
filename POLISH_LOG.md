@@ -1562,6 +1562,22 @@
   2. *Dead code & duplication:* Inspect unused CSS styles or imports.
   3. *Naming/consistency:* Audit folder delete confirmation messaging.
 
+## Iteration 104
+- **Lens:** Security/input validation
+- **Change:** Add cursor length limit (`s.len() <= 2_048`) in `Cursor::decode` (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `Cursor::decode` in `search.rs` did not enforce a string length bound before splitting and parsing hex numbers, unlike `SessionCursor::decode` in `query.rs`.
+  - Fix: Added `if s.len() > 2_048 { return None; }` check and oversized cursor test case.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Inspect unused CSS styles or imports.
+  2. *Naming/consistency:* Audit folder delete confirmation messaging.
+  3. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
+
+
 
 
 

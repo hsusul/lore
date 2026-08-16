@@ -288,6 +288,9 @@ impl Cursor {
     /// `None`, which the caller treats as "no cursor" (first page) — never a
     /// panic on untrusted client input.
     fn decode(s: &str) -> Option<Cursor> {
+        if s.len() > 2_048 {
+            return None;
+        }
         let mut parts = s.split(':');
         let rank = f64::from_bits(u64::from_str_radix(parts.next()?, 16).ok()?);
         if !rank.is_finite() {
@@ -479,5 +482,7 @@ mod tests {
         ] {
             assert!(Cursor::decode(bad).is_none(), "{bad:?} should be rejected");
         }
+        let oversized = "0:0:0".to_string() + &"x".repeat(3_000);
+        assert!(Cursor::decode(&oversized).is_none(), "oversized cursor should be rejected");
     }
 }
