@@ -2839,6 +2839,22 @@
   2. *ROADMAP progression:* Audit milestone tracker status.
   3. *Dependency/build hygiene:* Check for unused build dependencies.
 
+## Iteration 190
+- **Lens:** Naming/consistency
+- **Change:** Implement `std::fmt::Display` for `BackupInterval` delegating to `as_str()` and add roundtrip tests (`crates/lore-core/src/backup.rs`).
+- **Critique:**
+  - `BackupInterval` had `as_str()` and `parse()` but lacked a `std::fmt::Display` implementation, differing from model enums (`ParseStatus`, `Role`, `EventKind`, etc.).
+  - Fix: Implemented `std::fmt::Display for BackupInterval` and added unit test verifying Display/parse roundtrip.
+- **Validation Results:**
+  - `cargo test --workspace`: 91 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit milestone tracker status.
+  2. *Dependency/build hygiene:* Check for unused build dependencies.
+  3. *Correctness bugs:* Audit error boundaries around async operations.
+
+
 
 
 
