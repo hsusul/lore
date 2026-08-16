@@ -78,6 +78,11 @@ pub(crate) fn str_field(obj: &serde_json::Value, key: &str) -> Option<String> {
     obj.get(key).and_then(serde_json::Value::as_str).map(str::to_string)
 }
 
+/// Extract an optional serialized JSON field from a JSON object.
+pub(crate) fn json_field(obj: &serde_json::Value, key: &str) -> Option<String> {
+    obj.get(key).and_then(|v| serde_json::to_string(v).ok())
+}
+
 /// Extract an optional non-negative integer from a JSON object.
 pub(crate) fn non_negative_int_field(obj: &serde_json::Value, key: &str) -> Option<i64> {
     obj.get(key)
@@ -206,5 +211,25 @@ mod tests {
         assert_eq!(non_negative_int_field(&json, "string"), None);
         assert_eq!(non_negative_int_field(&json, "null_val"), None);
         assert_eq!(non_negative_int_field(&json, "missing"), None);
+    }
+
+    #[test]
+    fn json_and_str_field_extract_values() {
+        let json: serde_json::Value = serde_json::json!({
+            "name": "test-adapter",
+            "nested": { "key": "value" },
+            "empty_str": ""
+        });
+        assert_eq!(str_field(&json, "name"), Some("test-adapter".to_string()));
+        assert_eq!(str_field(&json, "empty_str"), Some("".to_string()));
+        assert_eq!(str_field(&json, "nested"), None);
+        assert_eq!(str_field(&json, "missing"), None);
+
+        assert_eq!(
+            json_field(&json, "nested"),
+            Some("{\"key\":\"value\"}".to_string())
+        );
+        assert_eq!(json_field(&json, "name"), Some("\"test-adapter\"".to_string()));
+        assert_eq!(json_field(&json, "missing"), None);
     }
 }

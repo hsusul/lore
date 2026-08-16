@@ -2284,6 +2284,22 @@
   2. *Naming/consistency:* Audit CSS token naming across component selectors.
   3. *ROADMAP progression:* Audit milestone tracker for M7 criteria.
 
+## Iteration 153
+- **Lens:** Dead code & duplication
+- **Change:** Centralize `json_field` extractor in `adapters::common` and eliminate duplicate in `claude_code.rs` (`crates/lore-core/src/adapters/common.rs`, `crates/lore-core/src/adapters/claude_code.rs`).
+- **Critique:**
+  - `json_field` was defined privately in `claude_code.rs` instead of being shared in `common.rs` alongside `str_field` and `non_negative_int_field`.
+  - Fix: Moved `json_field` to `adapters::common`, reused in `claude_code.rs`, and added unit tests in `common.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit CSS class name conventions across modal components.
+  2. *ROADMAP progression:* Review M7 acceptance criteria and egress test requirements.
+  3. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
+
+
 
 
 

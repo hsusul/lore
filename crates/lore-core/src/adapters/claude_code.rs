@@ -12,7 +12,9 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::common::{bounded, epoch_ms, fallback_title, sanitize_path, str_field};
+use super::common::{
+    bounded, epoch_ms, fallback_title, json_field, sanitize_path, str_field,
+};
 use super::{
     AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
 };
@@ -422,10 +424,6 @@ fn event_kind_for(event_type: &str) -> EventKind {
         "pr-link" => EventKind::PrLink,
         _ => EventKind::Message,
     }
-}
-
-fn json_field(obj: &Value, key: &str) -> Option<String> {
-    obj.get(key).and_then(|v| serde_json::to_string(v).ok())
 }
 
 impl AgentAdapter for ClaudeCodeAdapter {
