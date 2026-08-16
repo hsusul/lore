@@ -208,6 +208,22 @@
   2. *Error handling:* Verify error feedback when `rename_folder` is called with a blank name or nonexistent ID.
   3. *Performance/allocations:* String allocation tuning in `query_session_page`.
 
+## Iteration 14
+- **Lens:** Missing tests/edge cases
+- **Change:** Add edge-case unit tests for folder foreign-key enforcement on unknown session IDs and safe no-ops for nonexistent folder rename/delete (`crates/lore-core/src/folders.rs`).
+- **Critique:**
+  - `folders.rs` tested foreign-key errors when filing into an unknown folder, but lacked explicit assertions for filing an unknown session ID (testing `session_folder.session_id` FK enforcement) and verifying that `rename_folder` and `delete_folder` on nonexistent folder IDs succeed idempotently as safe no-ops without error.
+  - Fix: Added `filing_an_unknown_session_is_rejected` and `rename_and_delete_nonexistent_folder_are_safe_noops` tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Validate JSON format in `set_setting` IPC command to reject invalid JSON early.
+  2. *Performance/allocations:* Optimize SQL query construction in `list_sessions_page`.
+  3. *API & DTO ergonomics:* Ensure consistent naming for query filter options.
+
+
 
 
 

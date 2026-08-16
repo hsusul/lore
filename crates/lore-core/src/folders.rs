@@ -240,4 +240,18 @@ mod tests {
         let sid = seed_session(&conn, "s1");
         assert!(set_session_folder(&conn, &sid, Some("nope")).is_err());
     }
+
+    #[test]
+    fn filing_an_unknown_session_is_rejected() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let a = create_folder(&conn, "A").unwrap();
+        assert!(set_session_folder(&conn, "nonexistent-session", Some(&a.id)).is_err());
+    }
+
+    #[test]
+    fn rename_and_delete_nonexistent_folder_are_safe_noops() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        assert!(rename_folder(&conn, "nonexistent", "New Name").is_ok());
+        assert!(delete_folder(&conn, "nonexistent").is_ok());
+    }
 }
