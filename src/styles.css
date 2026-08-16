@@ -442,6 +442,10 @@ button:disabled {
   padding: 0.28rem 0.5rem;
 }
 
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
 .btn--danger {
   color: var(--accent-fg);
   background: var(--danger);

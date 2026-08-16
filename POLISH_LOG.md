@@ -872,6 +872,22 @@
   2. *ROADMAP progression:* Audit M7 deletion sweep verification plan.
   3. *Dependency/build hygiene:* Audit Cargo.lock workspace dependencies.
 
+## Iteration 58
+- **Lens:** Naming/consistency
+- **Change:** Add hover state rule for `.btn--ghost` in design system stylesheet (`src/styles.css`).
+- **Critique:**
+  - `.btn--ghost` lacked an explicit `:hover:not(:disabled)` state in `styles.css`, creating an interactive discrepancy compared to other button variants.
+  - Fix: Added `.btn--ghost:hover:not(:disabled) { background: var(--surface-hover); }` to `src/styles.css`.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit M7 deletion sweep verification plan in PRD and Roadmap.
+  2. *Dependency/build hygiene:* Check Cargo.lock workspace dependencies.
+  3. *Correctness bugs:* Audit SQLite index integrity on session folders.
+
+
 
 
 
