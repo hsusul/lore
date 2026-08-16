@@ -39,12 +39,14 @@ dist-ssr/
 *.provisionprofile
 
 # Local project documentation
-docs/
 *.md
 !README.md
 !AGENTS.md
 !CLAUDE.md
 !POLISH_LOG.md
+!docs/
+!docs/**
+!docs/**/*.md
 
 # Local agent instructions and design previews
 /.claude/
