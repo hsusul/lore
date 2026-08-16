@@ -3110,6 +3110,22 @@
   2. *API & DTO ergonomics:* Audit IPC client result helpers.
   3. *Docs accuracy vs code:* Audit IPC documentation.
 
+## Iteration 208
+- **Lens:** Performance/allocations
+- **Change:** Eliminate intermediate string allocations in `SessionCursor::encode_parts` with a pre-allocated single-pass encoder (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `SessionCursor::encode_parts` performed multiple string allocations with `.map_or_else()`, chained `.replace()` calls, and `format!()`.
+  - Fix: Rewrote `encode_parts` using a single pre-allocated `String` with direct byte scanning for `%` and `:`.
+- **Validation Results:**
+  - `cargo test --workspace`: 97 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit IPC client result helpers.
+  2. *Docs accuracy vs code:* Audit IPC documentation.
+  3. *UX & accessibility:* Audit settings modal keyboard traps.
+
+
 
 
 

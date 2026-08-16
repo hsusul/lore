@@ -244,9 +244,22 @@ struct SessionCursor {
 
 impl SessionCursor {
     fn encode_parts(started_at: Option<i64>, id: &str) -> String {
-        let started_at = started_at.map_or_else(|| "n".to_string(), |value| value.to_string());
-        let id = id.replace('%', "%25").replace(':', "%3A");
-        format!("{started_at}:{id}")
+        use std::fmt::Write;
+        let mut out = String::with_capacity(id.len() + 24);
+        match started_at {
+            Some(value) => {
+                let _ = write!(&mut out, "{value}:");
+            }
+            None => out.push_str("n:"),
+        }
+        for b in id.bytes() {
+            match b {
+                b'%' => out.push_str("%25"),
+                b':' => out.push_str("%3A"),
+                _ => out.push(b as char),
+            }
+        }
+        out
     }
 
     #[cfg(test)]
