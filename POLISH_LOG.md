@@ -1352,6 +1352,22 @@
   2. *UX & accessibility:* Check settings panel focus trap cleanup on unmount.
   3. *Security/input validation:* Check setting key allowed characters regex/bounds.
 
+## Iteration 90
+- **Lens:** Docs accuracy vs code
+- **Change:** Update ARCHITECTURE.md canonical description in `DOCS_INDEX.md` (`docs/DOCS_INDEX.md`).
+- **Critique:**
+  - `docs/DOCS_INDEX.md` entry for `architecture/ARCHITECTURE.md` did not mention user-defined folders and local backup/recovery subsystems.
+  - Fix: Updated the canonical docs index table to note user-defined folders and local backups.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Check settings panel focus trap cleanup on unmount.
+  2. *Security/input validation:* Check setting key allowed characters regex/bounds.
+  3. *Dead code & duplication:* Audit unused CSS helper classes in styles.css.
+
+
 
 
 
