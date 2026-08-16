@@ -49,13 +49,8 @@ fn title_from_text(text: &str) -> Option<String> {
     let line = candidate
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty())?
-        .trim_start_matches('#')
-        .trim_start_matches(['-', '*'])
-        .trim();
-    if line.is_empty() || (line.starts_with('<') && line.ends_with('>')) {
-        return None;
-    }
+        .map(|l| l.trim_start_matches('#').trim_start_matches(['-', '*']).trim())
+        .find(|line| !line.is_empty() && !(line.starts_with('<') && line.ends_with('>')))?;
 
     let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut chars = normalized.chars();
@@ -163,6 +158,11 @@ mod tests {
             title_from_text("<appshot>…</appshot>\n\n## My request:\nFix the missing titles"),
             Some("Fix the missing titles".to_string())
         );
+        assert_eq!(
+            title_from_text("<USER_REQUEST>\nFix repository discovery\n</USER_REQUEST>"),
+            Some("Fix repository discovery".to_string())
+        );
+        assert_eq!(title_from_text("<empty_tag>\n</empty_tag>"), None);
     }
 
     #[test]
