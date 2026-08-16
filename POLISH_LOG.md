@@ -1307,6 +1307,22 @@
   2. *Performance/allocations:* Audit folder listing query statement caching.
   3. *API & DTO ergonomics:* Audit docstrings in `lore_ipc::FolderSummary`.
 
+## Iteration 87
+- **Lens:** Error handling
+- **Change:** Implement `From<std::io::Error>` for `StorageError` in `storage.rs` (`crates/lore-core/src/storage.rs`).
+- **Critique:**
+  - `StorageError` lacked a standard `From<std::io::Error>` implementation, requiring repetitive `.map_err(|_| StorageError::Io)` conversions across storage/blob operations.
+  - Fix: Added `impl From<std::io::Error> for StorageError` mapping I/O errors content-freely to `StorageError::Io` and added unit test.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Pre-allocate vector capacity in `list_folders`.
+  2. *API & DTO ergonomics:* Audit docstrings in `lore_ipc::FolderSummary`.
+  3. *Docs accuracy vs code:* Verify storage error description in DATA_MODEL.md.
+
+
 
 
 

@@ -20,8 +20,14 @@ pub enum StorageError {
     Sqlite(#[from] rusqlite::Error),
     #[error("migration error: {0}")]
     Migration(String),
-    #[error("io error reading source")]
+    #[error("io error")]
     Io,
+}
+
+impl From<std::io::Error> for StorageError {
+    fn from(_: std::io::Error) -> Self {
+        StorageError::Io
+    }
 }
 
 /// Convenience result alias for the storage layer.
@@ -189,5 +195,13 @@ mod tests {
         let conn = open(&path).unwrap();
         assert!(path.exists());
         assert!(foreign_keys_on(&conn));
+    }
+
+    #[test]
+    fn storage_error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let storage_err: StorageError = io_err.into();
+        assert!(matches!(storage_err, StorageError::Io));
+        assert_eq!(storage_err.to_string(), "io error");
     }
 }
