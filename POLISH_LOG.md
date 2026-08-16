@@ -3575,6 +3575,22 @@
   2. *Dependency/build hygiene:* Audit Cargo workspace.
   3. *Correctness bugs:* Audit empty search string handling.
 
+## Iteration 239
+- **Lens:** ROADMAP progression
+- **Change:** Document `aria-busy` pagination feedback, `clamp` input bounding, `SearchSortOrder` TS export, and `source_roots` character validation in `docs/product/ROADMAP.md` M7.
+- **Critique:**
+  - `ROADMAP.md` M7 summary needed to reflect the latest safety, input validation, and accessibility enhancements.
+  - Fix: Updated `docs/product/ROADMAP.md` M7 status description.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (118 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit Cargo workspace.
+  2. *Correctness bugs:* Audit empty search string handling.
+  3. *Missing tests/edge cases:* Audit virtual scroll window edges.
+
+
 
 
 
