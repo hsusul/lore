@@ -483,3 +483,26 @@ fn oldest_sort_paginates_without_duplicates() {
         "no row repeats across oldest pages"
     );
 }
+
+#[test]
+fn search_page_with_only_zero_width_characters_returns_empty_page() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    persist_claude(
+        &conn,
+        &blobs,
+        &user_message("c1", "/p", "some text content"),
+        "c1",
+    );
+
+    let res = search_page(
+        &conn,
+        "\u{feff}\u{200b}\u{200c}\u{200d}\u{2060}",
+        10,
+        None,
+        SortOrder::Relevance,
+    )
+    .unwrap();
+    assert!(res.hits.is_empty());
+    assert!(res.next_cursor.is_none());
+}

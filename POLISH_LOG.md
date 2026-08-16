@@ -1817,6 +1817,22 @@
   2. *Error handling:* Verify error handling when backup directory is read-only.
   3. *Performance/allocations:* Review SQL parameter allocation in search filters.
 
+## Iteration 122
+- **Lens:** Missing tests/edge cases
+- **Change:** Add `search_page_with_only_zero_width_characters_returns_empty_page` integration test in `tests/search.rs` (`crates/lore-core/tests/search.rs`).
+- **Critique:**
+  - Search integration tests verified pagination and filtering, but did not assert end-to-end that queries consisting entirely of zero-width characters return an empty `SearchPage` with `next_cursor: None` without SQLite FTS5 syntax errors.
+  - Fix: Added `search_page_with_only_zero_width_characters_returns_empty_page` test.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Verify error handling when backup directory is read-only.
+  2. *Performance/allocations:* Review SQL parameter allocation in search filters.
+  3. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
+
+
 
 
 
