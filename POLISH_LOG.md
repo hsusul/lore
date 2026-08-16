@@ -239,6 +239,23 @@
   2. *API & DTO ergonomics:* Verify UI error message toasts when settings or root updates fail.
   3. *Docs accuracy vs code:* Verify ADR-0005 egress test requirements match current codebase guards.
 
+## Iteration 16
+- **Lens:** Performance/allocations
+- **Change:** Eliminate heap string allocations in keyset pagination SQL predicate generation (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `keyset_after` invoked `format!()` on every keyset-paginated query to construct dynamic `String` values for static SQL predicates across 4 known branches.
+  - Keyset pagination runs on every scroll and "load more" action in the UI.
+  - Fix: Changed `keyset_after` to return static `&'static str` string literals, eliminating runtime format/heap string allocations on every page query.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit TypeScript IPC interface helper typing for `null` / `undefined` optionals.
+  2. *Docs accuracy vs code:* Check documentation of `keyset_after` and cursor encoding in `docs/architecture/DATA_MODEL.md`.
+  3. *UX & accessibility:* Verify keyboard navigation focus trap and ESC handling on folder creation dialog.
+
+
 
 
 

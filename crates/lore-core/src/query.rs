@@ -66,22 +66,30 @@ fn session_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSumma
 /// timestamps sort last, so a null-`started_at` cursor is confined to that
 /// trailing block. Shared by [`list_sessions_page`] and
 /// [`list_repository_sessions_page`] so the two pages cannot drift apart.
-fn keyset_after(cursor: &SessionCursor, prefix: &str) -> (String, Vec<Value>) {
-    match cursor.started_at {
-        Some(started_at) => (
-            format!(
-                "{prefix}started_at < ? \
-                 OR {prefix}started_at IS NULL \
-                 OR ({prefix}started_at = ? AND {prefix}id < ?)"
-            ),
+fn keyset_after(cursor: &SessionCursor, prefix: &str) -> (&'static str, Vec<Value>) {
+    match (cursor.started_at, prefix) {
+        (Some(started_at), "s.") => (
+            "s.started_at < ? OR s.started_at IS NULL OR (s.started_at = ? AND s.id < ?)",
             vec![
                 Value::Integer(started_at),
                 Value::Integer(started_at),
                 Value::Text(cursor.id.clone()),
             ],
         ),
-        None => (
-            format!("{prefix}started_at IS NULL AND {prefix}id < ?"),
+        (Some(started_at), _) => (
+            "started_at < ? OR started_at IS NULL OR (started_at = ? AND id < ?)",
+            vec![
+                Value::Integer(started_at),
+                Value::Integer(started_at),
+                Value::Text(cursor.id.clone()),
+            ],
+        ),
+        (None, "s.") => (
+            "s.started_at IS NULL AND s.id < ?",
+            vec![Value::Text(cursor.id.clone())],
+        ),
+        (None, _) => (
+            "started_at IS NULL AND id < ?",
             vec![Value::Text(cursor.id.clone())],
         ),
     }
@@ -108,7 +116,7 @@ pub fn list_sessions_page(
     if let Some(cursor) = &cursor {
         let (body, keyset_params) = keyset_after(cursor, "");
         sql.push_str(" WHERE ");
-        sql.push_str(&body);
+        sql.push_str(body);
         params.extend(keyset_params);
     }
     sql.push_str(" ORDER BY started_at DESC, id DESC LIMIT ?");
@@ -163,7 +171,7 @@ pub fn list_repository_sessions_page(
     if let Some(cursor) = &cursor {
         let (body, keyset_params) = keyset_after(cursor, "s.");
         sql.push_str(" AND (");
-        sql.push_str(&body);
+        sql.push_str(body);
         sql.push(')');
         params.extend(keyset_params);
     }
@@ -194,7 +202,7 @@ pub fn list_folder_sessions_page(
     if let Some(cursor) = &cursor {
         let (body, keyset_params) = keyset_after(cursor, "s.");
         sql.push_str(" AND (");
-        sql.push_str(&body);
+        sql.push_str(body);
         sql.push(')');
         params.extend(keyset_params);
     }
