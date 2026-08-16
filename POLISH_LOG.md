@@ -2989,6 +2989,22 @@
   2. *Dead code & duplication:* Audit redundant styles in index.css.
   3. *Naming/consistency:* Audit enum display implementations.
 
+## Iteration 200
+- **Lens:** Security/input validation
+- **Change:** Consolidate `is_invalid_folder_name` to reject zero-width and control characters in `create_folder` and `rename_folder` and add unit tests (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `create_folder` and `rename_folder` checked control characters but did not reject zero-width invisible characters, and lacked standalone unit tests for token validation helpers.
+  - Fix: Added `is_invalid_folder_name` checking length, control, and zero-width characters, with unit tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 93 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit redundant styles in index.css.
+  2. *Naming/consistency:* Audit enum display implementations.
+  3. *ROADMAP progression:* Audit milestone tracker status.
+
+
 
 
 
