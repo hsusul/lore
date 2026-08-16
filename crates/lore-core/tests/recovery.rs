@@ -163,7 +163,10 @@ fn recover_archive_handles_unopenable_database_file() {
         RecoveryOutcome::QuarantinedOnly { quarantine_path } => quarantine_path,
         other => panic!("expected QuarantinedOnly, got {other:?}"),
     };
-    assert_eq!(std::fs::read(&quarantine_path).unwrap(), b"\xff\xff\xff\xff");
+    assert_eq!(
+        std::fs::read(&quarantine_path).unwrap(),
+        b"\xff\xff\xff\xff"
+    );
 }
 
 #[test]

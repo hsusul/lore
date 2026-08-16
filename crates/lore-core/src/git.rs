@@ -30,7 +30,11 @@ use std::time::{Duration, Instant};
 #[must_use]
 pub fn normalize_remote_url(raw: &str) -> Option<String> {
     let raw = raw.trim();
-    if raw.is_empty() || raw.chars().any(|c| c.is_ascii_control() || c.is_ascii_whitespace()) {
+    if raw.is_empty()
+        || raw
+            .chars()
+            .any(|c| c.is_ascii_control() || c.is_ascii_whitespace())
+    {
         return None;
     }
 

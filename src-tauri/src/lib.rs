@@ -130,7 +130,8 @@ fn list_repositories(state: State<'_, AppState>) -> Result<Vec<RepositorySummary
 fn is_invalid_text_token(s: &str, max_len: usize) -> bool {
     s.is_empty()
         || s.len() > max_len
-        || s.chars().any(|c| c.is_control() || lore_core::is_zero_width(c))
+        || s.chars()
+            .any(|c| c.is_control() || lore_core::is_zero_width(c))
 }
 
 /// List the most recent sessions that touched `repository_id` (newest first).
@@ -385,8 +386,13 @@ fn list_folder_sessions_page(
         return Err("invalid folder id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
-    lore_core::query::list_folder_sessions_page(&conn, &id, limit.clamp(1, 10_000), cursor.as_deref())
-        .map_err(|e| e.to_string())
+    lore_core::query::list_folder_sessions_page(
+        &conn,
+        &id,
+        limit.clamp(1, 10_000),
+        cursor.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn is_invalid_setting_key(key: &str) -> bool {

@@ -37,11 +37,7 @@ pub fn export_session_markdown(
 
     let title = s.title.as_deref().unwrap_or("(untitled session)");
     let clean_title = title.replace(['\r', '\n'], " ");
-    let _ = writeln!(
-        out,
-        "# {}",
-        render(&clean_title)
-    );
+    let _ = writeln!(out, "# {}", render(&clean_title));
     let _ = writeln!(
         out,
         "\n> {} · {} messages · {} tool calls{}\n",

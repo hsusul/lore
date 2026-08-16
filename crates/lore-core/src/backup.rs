@@ -203,11 +203,7 @@ pub fn write_schedule(conn: &Connection, schedule: BackupSchedule) -> Result<()>
         KEY_INTERVAL,
         &format!("\"{}\"", schedule.interval.as_str()),
     )?;
-    crate::settings::set(
-        conn,
-        KEY_KEEP,
-        &schedule.keep.clamp(1, 100).to_string(),
-    )?;
+    crate::settings::set(conn, KEY_KEEP, &schedule.keep.clamp(1, 100).to_string())?;
     Ok(())
 }
 

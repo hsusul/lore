@@ -12,9 +12,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::common::{
-    bounded, epoch_ms, fallback_title, json_field, sanitize_path, str_field,
-};
+use super::common::{bounded, epoch_ms, fallback_title, json_field, sanitize_path, str_field};
 use super::{
     AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
 };

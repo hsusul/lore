@@ -77,10 +77,11 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<FolderSummary>> {
 pub fn create_folder(conn: &Connection, name: &str) -> Result<FolderSummary> {
     let name = clean_name(name);
     let _write = crate::storage::write_lock();
-    let position: i64 =
-        conn.query_row("SELECT COALESCE(MAX(position), -1) + 1 FROM folder", [], |r| {
-            r.get(0)
-        })?;
+    let position: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM folder",
+        [],
+        |r| r.get(0),
+    )?;
     let id: String = conn.query_row(
         "INSERT INTO folder (id, name, position, created_at, updated_at)
          VALUES (lower(hex(randomblob(16))), ?1, ?2, unixepoch('now') * 1000,
@@ -226,13 +227,23 @@ mod tests {
         let b = create_folder(&conn, "B").unwrap();
 
         set_session_folder(&conn, &sid, Some(&a.id)).unwrap();
-        assert_eq!(folder_of_session(&conn, &sid).unwrap().as_deref(), Some(a.id.as_str()));
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(a.id.as_str())
+        );
         assert_eq!(list_folders(&conn).unwrap()[0].session_count, 1);
 
         // Re-filing replaces the prior membership rather than duplicating it.
         set_session_folder(&conn, &sid, Some(&b.id)).unwrap();
-        assert_eq!(folder_of_session(&conn, &sid).unwrap().as_deref(), Some(b.id.as_str()));
-        let counts: Vec<i64> = list_folders(&conn).unwrap().iter().map(|f| f.session_count).collect();
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(b.id.as_str())
+        );
+        let counts: Vec<i64> = list_folders(&conn)
+            .unwrap()
+            .iter()
+            .map(|f| f.session_count)
+            .collect();
         assert_eq!(counts, vec![0, 1], "the thread moved, it was not copied");
 
         // Unfiling removes membership entirely.
@@ -261,7 +272,8 @@ mod tests {
         let a = create_folder(&conn, "A").unwrap();
         set_session_folder(&conn, &sid, Some(&a.id)).unwrap();
 
-        conn.execute("DELETE FROM agent_session WHERE id = ?1", [&sid]).unwrap();
+        conn.execute("DELETE FROM agent_session WHERE id = ?1", [&sid])
+            .unwrap();
         assert_eq!(list_folders(&conn).unwrap()[0].session_count, 0);
     }
 

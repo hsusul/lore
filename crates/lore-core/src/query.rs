@@ -244,8 +244,7 @@ struct SessionCursor {
 
 impl SessionCursor {
     fn encode_parts(started_at: Option<i64>, id: &str) -> String {
-        let started_at = started_at
-            .map_or_else(|| "n".to_string(), |value| value.to_string());
+        let started_at = started_at.map_or_else(|| "n".to_string(), |value| value.to_string());
         let id = id.replace('%', "%25").replace(':', "%3A");
         format!("{started_at}:{id}")
     }
@@ -779,7 +778,11 @@ mod tests {
 
         assert_eq!(actual, expected);
         let unique: std::collections::HashSet<_> = actual.iter().collect();
-        assert_eq!(unique.len(), 6, "all rows with identical timestamps paginated without duplicates");
+        assert_eq!(
+            unique.len(),
+            6,
+            "all rows with identical timestamps paginated without duplicates"
+        );
     }
 
     #[test]
@@ -991,8 +994,7 @@ mod tests {
             ClaudeCodeAdapter::new().parse_str(&fixture("claude_code", "basic_text.jsonl"), "b");
         let s1 = persist_session(&conn, "claude-code", "Claude Code", &claude, &blobs).unwrap();
 
-        let codex =
-            CodexAdapter::new().parse_str(&fixture("codex", "minimal.jsonl"), "codex_b");
+        let codex = CodexAdapter::new().parse_str(&fixture("codex", "minimal.jsonl"), "codex_b");
         let s2 = persist_session(&conn, "codex", "Codex", &codex, &blobs).unwrap();
 
         let f1 = crate::folders::create_folder(&conn, "Auth Refactor").unwrap();

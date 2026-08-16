@@ -501,7 +501,10 @@ mod tests {
             assert!(Cursor::decode(bad).is_none(), "{bad:?} should be rejected");
         }
         let oversized = "0:0:0".to_string() + &"x".repeat(3_000);
-        assert!(Cursor::decode(&oversized).is_none(), "oversized cursor should be rejected");
+        assert!(
+            Cursor::decode(&oversized).is_none(),
+            "oversized cursor should be rejected"
+        );
     }
 
     #[test]

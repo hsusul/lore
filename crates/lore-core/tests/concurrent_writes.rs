@@ -50,7 +50,10 @@ fn concurrent_writers_never_hit_a_locked_database() {
     stop.store(true, Ordering::Relaxed);
     let worker_busy = worker.join().unwrap();
 
-    assert_eq!(ui_busy, 0, "UI writes hit 'database is locked' {ui_busy} time(s)");
+    assert_eq!(
+        ui_busy, 0,
+        "UI writes hit 'database is locked' {ui_busy} time(s)"
+    );
     assert_eq!(
         worker_busy, 0,
         "worker writes hit 'database is locked' {worker_busy} time(s)"

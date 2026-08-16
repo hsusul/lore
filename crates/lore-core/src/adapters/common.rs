@@ -49,7 +49,11 @@ fn title_from_text(text: &str) -> Option<String> {
     let line = candidate
         .lines()
         .map(str::trim)
-        .map(|l| l.trim_start_matches('#').trim_start_matches(['-', '*']).trim())
+        .map(|l| {
+            l.trim_start_matches('#')
+                .trim_start_matches(['-', '*'])
+                .trim()
+        })
         .find(|line| !line.is_empty() && !(line.starts_with('<') && line.ends_with('>')))?;
 
     let mut title = String::with_capacity(TITLE_MAX_CHARS + 4);
@@ -96,7 +100,9 @@ pub(crate) fn bounded(s: &str) -> String {
 
 /// Extract an optional string field from a JSON object.
 pub(crate) fn str_field(obj: &serde_json::Value, key: &str) -> Option<String> {
-    obj.get(key).and_then(serde_json::Value::as_str).map(str::to_string)
+    obj.get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 /// Extract an optional serialized JSON field from a JSON object.
@@ -107,7 +113,10 @@ pub(crate) fn json_field(obj: &serde_json::Value, key: &str) -> Option<String> {
 /// Extract an optional non-negative integer from a JSON object.
 pub(crate) fn non_negative_int_field(obj: &serde_json::Value, key: &str) -> Option<i64> {
     obj.get(key)
-        .and_then(|v| v.as_i64().or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok())))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))
+        })
         .filter(|&v| v >= 0)
 }
 
@@ -191,8 +200,14 @@ mod tests {
         assert_eq!(sanitize_path(r"..\..\a\b"), "a/b");
         assert_eq!(sanitize_path(r"src\..\src\app.ts"), "src/app.ts");
         assert_eq!(sanitize_path(r"foo/bar\baz"), "foo/bar/baz");
-        assert_eq!(sanitize_path(r"C:\Users\dev\project\file.ts"), "Users/dev/project/file.ts");
-        assert_eq!(sanitize_path(r"d:/project/src/index.js"), "project/src/index.js");
+        assert_eq!(
+            sanitize_path(r"C:\Users\dev\project\file.ts"),
+            "Users/dev/project/file.ts"
+        );
+        assert_eq!(
+            sanitize_path(r"d:/project/src/index.js"),
+            "project/src/index.js"
+        );
     }
 
     #[test]
@@ -261,7 +276,10 @@ mod tests {
             json_field(&json, "nested"),
             Some("{\"key\":\"value\"}".to_string())
         );
-        assert_eq!(json_field(&json, "name"), Some("\"test-adapter\"".to_string()));
+        assert_eq!(
+            json_field(&json, "name"),
+            Some("\"test-adapter\"".to_string())
+        );
         assert_eq!(json_field(&json, "missing"), None);
     }
 }

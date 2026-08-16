@@ -463,7 +463,8 @@ fn oldest_sort_paginates_without_duplicates() {
     let mut paged = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
-        let page = search_page(&conn, "oldestterm", 2, cursor.as_deref(), SortOrder::Oldest).unwrap();
+        let page =
+            search_page(&conn, "oldestterm", 2, cursor.as_deref(), SortOrder::Oldest).unwrap();
         for h in &page.hits {
             paged.push(h.session_id.clone());
         }

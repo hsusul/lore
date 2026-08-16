@@ -3049,6 +3049,23 @@
   2. *Correctness bugs:* Audit cursor decoding edge cases.
   3. *Missing tests/edge cases:* Audit null handling in search queries.
 
+## Iteration 204
+- **Lens:** Dependency/build hygiene
+- **Change:** Format entire Rust workspace with `cargo fmt` to ensure 100% rustfmt compliance (`crates/lore-core`, `crates/lore-ipc`, `src-tauri`).
+- **Critique:**
+  - Minor formatting variances existed across `crates/lore-core` and `src-tauri` files.
+  - Fix: Executed `cargo fmt --all` and verified clean check with `cargo fmt --all -- --check`.
+- **Validation Results:**
+  - `cargo fmt --all -- --check`: Clean (0 diffs).
+  - `cargo test --workspace`: 94 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit cursor decoding edge cases.
+  2. *Missing tests/edge cases:* Audit null handling in search queries.
+  3. *Error handling:* Audit unwrap/expect in test utilities.
+
+
 
 
 

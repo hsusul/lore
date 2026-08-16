@@ -309,9 +309,7 @@ fn recorded_git(meta: &Value) -> RecordedGit {
 /// a tolerant legacy fallback because the on-disk format is version-sensitive.
 fn token_totals(payload: &Value) -> Option<Tokens> {
     let info = payload.get("info")?;
-    let usage = info
-        .get("total_token_usage")
-        .unwrap_or(info);
+    let usage = info.get("total_token_usage").unwrap_or(info);
     let input = non_negative_int_field(usage, "input_tokens")
         .or_else(|| non_negative_int_field(usage, "input"));
     let output = non_negative_int_field(usage, "output_tokens")
