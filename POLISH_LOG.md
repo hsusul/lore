@@ -1142,6 +1142,22 @@
   2. *API & DTO ergonomics:* Document and audit DTO field comments in lore-ipc.
   3. *Docs accuracy vs code:* Verify IPC command list in ARCHITECTURE.md §5.
 
+## Iteration 76
+- **Lens:** Performance/allocations
+- **Change:** Pre-allocate Markdown export buffer capacity in `export_session_markdown` (`crates/lore-core/src/export.rs`).
+- **Critique:**
+  - `export_session_markdown` used unbuffered `String::new()`, causing repeated heap reallocations during Markdown rendering on sessions with many messages and file events.
+  - Fix: Pre-allocated string buffer with capacity derived from `messages.len()` and `file_events.len()`.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Document and audit DTO field comments in lore-ipc.
+  2. *Docs accuracy vs code:* Verify IPC command list in ARCHITECTURE.md §5.
+  3. *UX & accessibility:* Audit keyboard focus outlines on empty session placeholders.
+
+
 
 
 

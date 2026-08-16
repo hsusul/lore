@@ -26,7 +26,13 @@ pub fn export_session_markdown(
         return Ok(None);
     };
     let s = &detail.summary;
-    let mut out = String::new();
+    let estimated_capacity = detail
+        .messages
+        .len()
+        .saturating_mul(256)
+        .saturating_add(detail.file_events.len().saturating_mul(64))
+        .saturating_add(512);
+    let mut out = String::with_capacity(estimated_capacity);
     let render = |text: &str| render_field(text, include_secrets);
 
     let _ = writeln!(
