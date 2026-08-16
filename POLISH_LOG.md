@@ -947,6 +947,22 @@
   2. *Performance/allocations:* Avoid query string reallocations in session page builders.
   3. *API & DTO ergonomics:* Audit IPC FolderSummary serialization.
 
+## Iteration 63
+- **Lens:** Error handling
+- **Change:** Fall back to older intact backups in `recover_archive` when newest backup is corrupted (`crates/lore-core/src/recovery.rs`, `crates/lore-core/tests/recovery.rs`).
+- **Critique:**
+  - `recover_archive` only attempted to restore `backups.into_iter().last()`; if the newest backup was corrupted, recovery degraded to `QuarantinedOnly` with no database restored despite older valid backups existing.
+  - Fix: Iterated `backups.into_iter().rev()` in `recover_archive` to restore the newest usable backup, and added `recover_archive_falls_back_to_older_backup_when_newest_is_corrupt` integration test.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Pre-allocate string query buffers in `query.rs` folder queries.
+  2. *API & DTO ergonomics:* Ensure consistent naming for folder DTO conversions.
+  3. *Docs accuracy vs code:* Verify recovery documentation in `SECURITY.md`.
+
+
 
 
 

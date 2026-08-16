@@ -73,20 +73,24 @@ pub fn recover_archive(archive_dir: &Path, backup_dir: &Path) -> Result<Recovery
 
     let quarantine_path = quarantine(&db_path, archive_dir)?;
 
-    // Restore the newest Lore-owned backup, if any. After quarantine the archive
-    // location is gone, so the outcome must never be an error: the caller has to
-    // know the archive was preserved, not that a restore "failed".
-    let newest = backup::list_backups(backup_dir)
-        .ok()
-        .and_then(|backups| backups.into_iter().last());
-    match newest {
-        Some(backup_path) if backup::restore_backup(&backup_path, &db_path).is_ok() => {
-            Ok(RecoveryOutcome::Restored {
-                quarantine_path,
-                backup_path,
-            })
+    // Restore the newest usable Lore-owned backup, if any. After quarantine the
+    // archive location is gone, so the outcome must never be an error: the caller
+    // has to know the archive was preserved, not that a restore "failed".
+    let mut restored = None;
+    if let Ok(backups) = backup::list_backups(backup_dir) {
+        for backup_path in backups.into_iter().rev() {
+            if backup::restore_backup(&backup_path, &db_path).is_ok() {
+                restored = Some(backup_path);
+                break;
+            }
         }
-        _ => Ok(RecoveryOutcome::QuarantinedOnly { quarantine_path }),
+    }
+    match restored {
+        Some(backup_path) => Ok(RecoveryOutcome::Restored {
+            quarantine_path,
+            backup_path,
+        }),
+        None => Ok(RecoveryOutcome::QuarantinedOnly { quarantine_path }),
     }
 }
 

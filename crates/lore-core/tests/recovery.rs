@@ -165,3 +165,43 @@ fn recover_archive_handles_unopenable_database_file() {
     };
     assert_eq!(std::fs::read(&quarantine_path).unwrap(), b"\xff\xff\xff\xff");
 }
+
+#[test]
+fn recover_archive_falls_back_to_older_backup_when_newest_is_corrupt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, blobs) = archive(dir.path());
+    populate(&conn, &blobs);
+    let expected = counts(&conn);
+    let backups = dir.path().join("backups");
+
+    // Create an initial valid backup (b1).
+    let b1 = create_backup(&conn, &backups, DEFAULT_BACKUP_RETENTION).unwrap();
+    drop(conn);
+    drop(blobs);
+
+    // Create a newer second backup (b2) with a future-dated name, but write corrupted data into it.
+    let b2 = backups.join("lore-backup-20991231T235959Z-999.db");
+    std::fs::write(&b2, b"corrupted backup content").unwrap();
+
+    // Corrupt the main archive as well.
+    std::fs::write(dir.path().join("lore.db"), b"corrupted main db").unwrap();
+
+    let outcome = recover_archive(dir.path(), &backups).unwrap();
+    let (quarantine_path, backup_path) = match outcome {
+        RecoveryOutcome::Restored {
+            quarantine_path,
+            backup_path,
+        } => (quarantine_path, backup_path),
+        other => panic!("expected Restored, got {other:?}"),
+    };
+
+    assert!(quarantine_path.starts_with(dir.path().join("quarantine")));
+    assert_eq!(backup_path, b1.path, "fell back to the older intact backup");
+
+    let (restored, _) = archive(dir.path());
+    assert_eq!(
+        counts(&restored),
+        expected,
+        "restored database matches initial state"
+    );
+}
