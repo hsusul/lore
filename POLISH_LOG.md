@@ -1067,6 +1067,22 @@
   2. *Dependency/build hygiene:* Audit dev-dependencies in lore-core Cargo.toml.
   3. *Correctness bugs:* Check SQLite index usage on session listing queries.
 
+## Iteration 71
+- **Lens:** ROADMAP progression
+- **Change:** Document M7 local backup, restore, and recovery capabilities in PRD Safety scope (`docs/product/PRD.md` §6).
+- **Critique:**
+  - `docs/product/PRD.md` §6 listed secret scanning and export redaction under Safety without noting SQLite online backup create/restore wiring, recovery fallback, or user-configurable cadence controls.
+  - Fix: Updated `docs/product/PRD.md` §6 Safety scope to reflect the M7 local backup, restore, and recovery deliverables.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit dev-dependencies in lore-core Cargo.toml.
+  2. *Correctness bugs:* Check SQLite index usage on session listing queries.
+  3. *Missing tests/edge cases:* Add test for invalid backup intervals in IPC handlers.
+
+
 
 
 
