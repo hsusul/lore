@@ -3530,6 +3530,22 @@
   2. *Dead code & duplication:* Audit redundant styles.
   3. *Naming/consistency:* Audit test assertions.
 
+## Iteration 236
+- **Lens:** Security/input validation
+- **Change:** Filter control characters and zero-width characters in `source_roots` path normalization and custom roots loading (`crates/lore-core/src/source_roots.rs`).
+- **Critique:**
+  - `source_roots` checked path length and directory presence, but did not reject control characters (`c.is_control()`) or zero-width invisible characters (`crate::is_zero_width(c)`), allowing poisoned folder paths to be persisted or parsed.
+  - Fix: Added control and zero-width character checks to `normalize_selected_path` and `custom_roots` filtering with unit tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (116 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit redundant styles.
+  2. *Naming/consistency:* Audit test assertions.
+  3. *ROADMAP progression:* Audit milestone descriptions.
+
+
 
 
 
