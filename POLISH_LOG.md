@@ -1787,6 +1787,22 @@
   2. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
   3. *Missing tests/edge cases:* Add unit tests for zero-width character handling in search query sanitization.
 
+## Iteration 120
+- **Lens:** Dependency/build hygiene
+- **Change:** Enforce `unwrap_used`, `expect_used`, and `panic` clippy lints in `src-tauri/Cargo.toml` (`src-tauri/Cargo.toml`).
+- **Critique:**
+  - `src-tauri/Cargo.toml` did not enable `unwrap_used`, `expect_used`, and `panic` clippy lints, leaving Tauri IPC command handlers without the compile-time safety guards enforced on `lore-core` and `lore-ipc`.
+  - Fix: Added `unwrap_used = "warn"`, `expect_used = "warn"`, and `panic = "warn"` to `[lints.clippy]` in `src-tauri/Cargo.toml`.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
+  2. *Missing tests/edge cases:* Add unit tests for zero-width character handling in search query sanitization.
+  3. *Error handling:* Verify error handling when backup directory is read-only.
+
+
 
 
 
