@@ -20,7 +20,8 @@ const MAX_NAME_LEN: usize = 100;
 /// length, and fall back to a sensible default when empty. Never fails so the
 /// UI can stay optimistic.
 fn clean_name(name: &str) -> String {
-    let single_line = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let filtered: String = name.chars().filter(|c| !c.is_control()).collect();
+    let single_line = filtered.split_whitespace().collect::<Vec<_>>().join(" ");
     let capped: String = single_line.chars().take(MAX_NAME_LEN).collect();
     let trimmed = capped.trim();
     if trimmed.is_empty() {
@@ -181,6 +182,9 @@ mod tests {
 
         let multiline = create_folder(&conn, "  Project   Alpha  \n  V2  ").unwrap();
         assert_eq!(multiline.name, "Project Alpha V2");
+
+        let with_controls = create_folder(&conn, "  Secret\0\x07Folder  ").unwrap();
+        assert_eq!(with_controls.name, "SecretFolder");
 
         let long = create_folder(&conn, &"word ".repeat(30)).unwrap();
         assert!(long.name.chars().count() <= MAX_NAME_LEN);

@@ -587,6 +587,22 @@
   2. *Performance/allocations:* Audit CSS transitions for will-change or hardware acceleration where helpful.
   3. *API & DTO ergonomics:* Audit return types of `createFolder` and `renameFolder`.
 
+## Iteration 39
+- **Lens:** Error handling
+- **Change:** Sanitize unprintable ASCII control characters in folder names (`crates/lore-core/src/folders.rs`).
+- **Critique:**
+  - `clean_name` in `crates/lore-core/src/folders.rs` normalized whitespace and string length, but did not strip unprintable ASCII control characters (such as null bytes or terminal control codes).
+  - Fix: Filtered out non-printable control characters `c.is_control()` in `clean_name` and added regression tests in `folders.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 11 test files passed (98 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Add `will-change: transform` or layer promotion to high-frequency UI transitions.
+  2. *API & DTO ergonomics:* Audit FolderSummary and BackupScheduleDto interfaces in `src/ipc.ts`.
+  3. *Docs accuracy vs code:* Verify that `docs/architecture/DATA_MODEL.md` accurately documents control character sanitization.
+
+
 
 
 
