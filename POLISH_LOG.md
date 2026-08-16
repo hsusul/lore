@@ -2238,6 +2238,22 @@
   2. *UX & accessibility:* Audit keyboard focus order on Settings modal tabs/sections.
   3. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
 
+## Iteration 150
+- **Lens:** Docs accuracy vs code
+- **Change:** Document default backup interval ("off") and retention count (7) in `DATA_MODEL.md` (`docs/architecture/DATA_MODEL.md`).
+- **Critique:**
+  - `docs/architecture/DATA_MODEL.md` §3 listed `backup.interval` and `backup.keep` but omitted default values (`"off"` interval and `7` snapshots).
+  - Fix: Updated `DATA_MODEL.md` §3 to explicitly specify `backup.interval` default `"off"` and `backup.keep` default 7 snapshots (clamped to 1..100).
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit keyboard focus order and aria labels in Settings modal tabs/sections.
+  2. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
+  3. *Dead code & duplication:* Audit redundant imports in frontend component files.
+
+
 
 
 
