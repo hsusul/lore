@@ -335,4 +335,4 @@ The archive is **SQLite plus its app-owned sidecars/directories**, not literally
 
 - Thinking/reasoning remains viewable but not searchable by default; confirm whether opt-in indexing is desirable.
 - Cross-source dedupe between SpecStory Markdown and native sessions needs evidence beyond fuzzy text; `SessionSource` supports linking once a safe key is defined.
-- The exact local-backup cadence/retention is a settings decision, but recovery must not assume agent logs still exist.
+- **DECIDED (M7):** Local-backup cadence and retention are user-configurable via `Setting` keys (`backup.interval` off/daily/weekly and `backup.keep` 1..100); recovery falls back across intact backups and does not assume original agent logs exist.

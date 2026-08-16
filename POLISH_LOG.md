@@ -1172,6 +1172,22 @@
   2. *UX & accessibility:* Audit keyboard focus outlines on empty session placeholders.
   3. *Security/input validation:* Check boundary parameters in search_page IPC handler.
 
+## Iteration 78
+- **Lens:** Docs accuracy vs code
+- **Change:** Mark backup cadence/retention modeling decision as DECIDED (M7) in `DATA_MODEL.md` §11 (`docs/architecture/DATA_MODEL.md`).
+- **Critique:**
+  - `docs/architecture/DATA_MODEL.md` §11 still listed backup cadence/retention as an open modeling decision despite being implemented and documented as a settled settings schema in §3 and `SECURITY.md`.
+  - Fix: Updated `DATA_MODEL.md` §11 to record the M7 decision and reference settings keys and recovery fallback behavior.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit keyboard focus outlines on empty session placeholders.
+  2. *Security/input validation:* Check boundary parameters in search_page IPC handler.
+  3. *Dead code & duplication:* Check duplicate color definitions in styles.css.
+
+
 
 
 
