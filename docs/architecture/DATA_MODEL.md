@@ -38,7 +38,11 @@ Skill *─* evidence rows (V0.5+)
 
 ### Setting — Lore-owned configuration
 
-`Setting(key TEXT PK, value_json JSON, updated_at INT)` stores local application configuration. Custom adapter roots use `agent_roots.<agent_id>` with a JSON array of canonical absolute directory paths. They are configuration, not source evidence: removing one changes future discovery/watch coverage but never deletes `SourceArtifact` or archived session rows. Values remain local and contain no session content.
+`Setting(key TEXT PK, value_json JSON, updated_at INT)` stores local application configuration:
+- Custom adapter roots use `agent_roots.<agent_id>` with a JSON array of canonical absolute directory paths. They are configuration, not source evidence: removing one changes future discovery/watch coverage but never deletes `SourceArtifact` or archived session rows.
+- Automatic backup configuration uses `backup.interval` (`"off" | "daily" | "weekly"`), `backup.keep` (numeric retention count clamped to 1..100), and `backup.last_at` (epoch ms timestamp of latest run).
+
+Values remain local and contain no session content. Clearing archived content preserves settings so preferences, backup schedule, and configured source roots remain.
 
 ### Folder and SessionFolder — Lore-owned organization
 

@@ -271,6 +271,22 @@
   2. *UX & accessibility:* Ensure focus returns to folder trigger after folder modal dismiss.
   3. *Security/input validation:* Check path sanitization in blob store read operations.
 
+## Iteration 18
+- **Lens:** Docs accuracy vs code
+- **Change:** Document backup schedule configuration settings in canonical data model specification (`docs/architecture/DATA_MODEL.md`).
+- **Critique:**
+  - `docs/architecture/DATA_MODEL.md` §3 documented `agent_roots.<agent_id>` under `Setting`, but omitted the canonical `backup.interval`, `backup.keep`, and `backup.last_at` settings keys used by the local backup subsystem (`crates/lore-core/src/backup.rs`).
+  - Fix: Documented backup schedule settings keys, valid interval values, and retention bounds in `DATA_MODEL.md` §3.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (87 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Add aria-label and keyboard shortcut tips to folder filter actions.
+  2. *Security/input validation:* Path traversal guards on blob relpath reads.
+  3. *Dead code & duplication:* Consolidate any redundant test helpers across integration test files.
+
+
 
 
 
