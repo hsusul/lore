@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::common::{
-    bounded, epoch_ms, fallback_title, resolve_file_event_segments, sanitize_path, str_field,
-    unified_diff_line_counts,
+    bounded, epoch_ms, fallback_title, non_negative_int_field, resolve_file_event_segments,
+    sanitize_path, str_field, unified_diff_line_counts,
 };
 use super::{
     AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
@@ -308,16 +308,17 @@ fn recorded_git(meta: &Value) -> RecordedGit {
 /// `info.total_token_usage`; the flat `info.{input,output}` form is retained as
 /// a tolerant legacy fallback because the on-disk format is version-sensitive.
 fn token_totals(payload: &Value) -> Option<Tokens> {
-    let info = payload.get("info")?.as_object()?;
+    let info = payload.get("info")?;
     let usage = info
         .get("total_token_usage")
-        .and_then(Value::as_object)
         .unwrap_or(info);
-    let input = int_field(usage, "input_tokens").or_else(|| int_field(usage, "input"));
-    let output = int_field(usage, "output_tokens").or_else(|| int_field(usage, "output"));
+    let input = non_negative_int_field(usage, "input_tokens")
+        .or_else(|| non_negative_int_field(usage, "input"));
+    let output = non_negative_int_field(usage, "output_tokens")
+        .or_else(|| non_negative_int_field(usage, "output"));
     let cache = optional_sum([
-        int_field(usage, "cached_input_tokens"),
-        int_field(usage, "cache_write_input_tokens"),
+        non_negative_int_field(usage, "cached_input_tokens"),
+        non_negative_int_field(usage, "cache_write_input_tokens"),
     ]);
     if input.is_none() && output.is_none() && cache.is_none() {
         None
@@ -328,10 +329,6 @@ fn token_totals(payload: &Value) -> Option<Tokens> {
             cache,
         })
     }
-}
-
-fn int_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<i64> {
-    object.get(key).and_then(Value::as_i64)
 }
 
 fn optional_sum<const N: usize>(values: [Option<i64>; N]) -> Option<i64> {

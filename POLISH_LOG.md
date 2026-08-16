@@ -377,6 +377,22 @@
   2. *Missing tests/edge cases:* Keyset pagination tests for folder views when folder contains only 1 session.
   3. *Error handling:* Verify graceful UI message when database lock error occurs during backup.
 
+## Iteration 25
+- **Lens:** Correctness bugs
+- **Change:** Add `non_negative_int_field` helper and validate non-negative token usage bounds in Codex adapter (`crates/lore-core/src/adapters/common.rs`, `crates/lore-core/src/adapters/codex.rs`).
+- **Critique:**
+  - Token counts parsed from agent log payloads in `codex.rs` relied on unchecked `as_i64()` calls without non-negative bounds checking or `u64` conversion support. Negative sentinel metrics (e.g. `-1`) could enter session summaries.
+  - Fix: Added `non_negative_int_field` in `common.rs` with `filter(|&v| v >= 0)` and `u64` conversion fallback, integrated into `CodexAdapter::token_totals`, and added unit test coverage in `common.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test `get_setting` behavior when reading a key overwritten multiple times.
+  2. *Error handling:* Verify error handling when restoring a backup into a read-only directory path.
+  3. *Performance/allocations:* Review SQL query parameter binding in `query.rs` for list queries.
+
+
 
 
 

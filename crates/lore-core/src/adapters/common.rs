@@ -78,6 +78,13 @@ pub(crate) fn str_field(obj: &serde_json::Value, key: &str) -> Option<String> {
     obj.get(key).and_then(serde_json::Value::as_str).map(str::to_string)
 }
 
+/// Extract an optional non-negative integer from a JSON object.
+pub(crate) fn non_negative_int_field(obj: &serde_json::Value, key: &str) -> Option<i64> {
+    obj.get(key)
+        .and_then(|v| v.as_i64().or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok())))
+        .filter(|&v| v >= 0)
+}
+
 /// Neutralize path traversal so a recorded `FileEvent.path` can never represent
 /// an escape (`../`). Produces a clean relative path.
 pub(crate) fn sanitize_path(raw: &str) -> String {
@@ -182,5 +189,22 @@ mod tests {
         let title = title_from_text(&"x".repeat(100)).unwrap();
         assert_eq!(title.chars().count(), TITLE_MAX_CHARS + 1);
         assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn non_negative_int_field_validates_bounds() {
+        let json: serde_json::Value = serde_json::json!({
+            "zero": 0,
+            "positive": 42,
+            "negative": -5,
+            "string": "123",
+            "null_val": null
+        });
+        assert_eq!(non_negative_int_field(&json, "zero"), Some(0));
+        assert_eq!(non_negative_int_field(&json, "positive"), Some(42));
+        assert_eq!(non_negative_int_field(&json, "negative"), None);
+        assert_eq!(non_negative_int_field(&json, "string"), None);
+        assert_eq!(non_negative_int_field(&json, "null_val"), None);
+        assert_eq!(non_negative_int_field(&json, "missing"), None);
     }
 }
