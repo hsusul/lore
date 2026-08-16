@@ -2659,6 +2659,22 @@
   2. *ROADMAP progression:* Update M7 status notes in ROADMAP.md.
   3. *Dependency/build hygiene:* Audit workspace Cargo dependencies for duplicate features.
 
+## Iteration 178
+- **Lens:** Naming/consistency
+- **Change:** Implement `std::fmt::Display` for core domain enums (`ParseStatus`, `Role`, `EventKind`, `PartKind`, `FileChangeKind`, `FileEventSource`) (`crates/lore-core/src/model.rs`).
+- **Critique:**
+  - Domain enums only implemented `as_str()`, requiring verbose conversion when constructing logs, diagnostics, or formatting strings.
+  - Fix: Implemented `Display` for all six domain enums delegating directly to `as_str()` and added verification unit tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Update M7 status notes in ROADMAP.md.
+  2. *Dependency/build hygiene:* Audit workspace Cargo dependencies for duplicate features.
+  3. *Correctness bugs:* Audit error boundaries around async operations.
+
+
 
 
 

@@ -25,6 +25,12 @@ impl ParseStatus {
     }
 }
 
+impl std::fmt::Display for ParseStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Message author role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -45,6 +51,12 @@ impl Role {
             Role::Tool => "tool",
             Role::Meta => "meta",
         }
+    }
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -77,6 +89,12 @@ impl EventKind {
     }
 }
 
+impl std::fmt::Display for EventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Kind of an ordered content block within a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartKind {
@@ -103,6 +121,12 @@ impl PartKind {
             PartKind::Opaque => "opaque",
             PartKind::Other => "other",
         }
+    }
+}
+
+impl std::fmt::Display for PartKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -133,6 +157,12 @@ impl FileChangeKind {
     }
 }
 
+impl std::fmt::Display for FileChangeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Provenance of a file event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileEventSource {
@@ -149,6 +179,12 @@ impl FileEventSource {
             FileEventSource::AgentToolInput => "agent_tool_input",
             FileEventSource::LoreCapture => "lore_capture",
         }
+    }
+}
+
+impl std::fmt::Display for FileEventSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -324,11 +360,17 @@ mod tests {
     #[test]
     fn enum_string_forms_match_schema() {
         assert_eq!(Role::Assistant.as_str(), "assistant");
+        assert_eq!(format!("{}", Role::Assistant), "assistant");
         assert_eq!(PartKind::ToolResult.as_str(), "tool_result");
+        assert_eq!(format!("{}", PartKind::ToolResult), "tool_result");
         assert_eq!(EventKind::PrLink.as_str(), "pr_link");
+        assert_eq!(format!("{}", EventKind::PrLink), "pr_link");
         assert_eq!(FileChangeKind::Patch.as_str(), "patch");
+        assert_eq!(format!("{}", FileChangeKind::Patch), "patch");
         assert_eq!(FileEventSource::AgentPatch.as_str(), "agent_patch");
+        assert_eq!(format!("{}", FileEventSource::AgentPatch), "agent_patch");
         assert_eq!(ParseStatus::Partial.as_str(), "partial");
+        assert_eq!(format!("{}", ParseStatus::Partial), "partial");
     }
 
     #[test]
