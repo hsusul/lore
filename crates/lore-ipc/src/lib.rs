@@ -353,4 +353,37 @@ mod tests {
         assert!(value["started_at"].is_number());
         assert!(value["ended_at"].is_null());
     }
+
+    #[test]
+    fn search_page_and_backup_schedule_roundtrip() {
+        let schedule = BackupScheduleDto {
+            interval: "daily".into(),
+            keep: 14,
+        };
+        let sched_json = serde_json::to_string(&schedule).unwrap();
+        assert_eq!(
+            serde_json::from_str::<BackupScheduleDto>(&sched_json).unwrap(),
+            schedule
+        );
+
+        let search_page = SearchPage {
+            hits: vec![SearchHit {
+                session_id: "s1".into(),
+                source_kind: "message_part".into(),
+                source_id: "p1".into(),
+                field: "text".into(),
+                snippet: "match".into(),
+                rank: -2.5,
+                title: Some("Title".into()),
+                agent_id: "claude-code".into(),
+                started_at: Some(1_700_000_000),
+            }],
+            next_cursor: Some("cur123".into()),
+        };
+        let page_json = serde_json::to_string(&search_page).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SearchPage>(&page_json).unwrap(),
+            search_page
+        );
+    }
 }

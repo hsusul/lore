@@ -3200,6 +3200,22 @@
   2. *ROADMAP progression:* Audit status alignment.
   3. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
 
+## Iteration 214
+- **Lens:** Naming/consistency
+- **Change:** Add JSON serialization and roundtrip test coverage for `SearchPage` and `BackupScheduleDto` in `crates/lore-ipc/src/lib.rs`.
+- **Critique:**
+  - `lore-ipc` tested JSON roundtripping for `DetectedAgent` and `SessionSummary`, but lacked roundtrip tests for paginated and settings DTOs.
+  - Fix: Added `search_page_and_backup_schedule_roundtrip` unit test in `crates/lore-ipc`.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit status alignment.
+  2. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
+  3. *Correctness bugs:* Audit empty search string handling.
+
+
 
 
 
