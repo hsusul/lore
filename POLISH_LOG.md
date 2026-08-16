@@ -2419,6 +2419,22 @@
   2. *UX & accessibility:* Audit aria labels and keyboard shortcuts in command palette.
   3. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
 
+## Iteration 162
+- **Lens:** Docs accuracy vs code
+- **Change:** Document unified text token boundary validation and zero-width filtering in ARCHITECTURE.md §5 IPC contract (`docs/architecture/ARCHITECTURE.md`).
+- **Critique:**
+  - `docs/architecture/ARCHITECTURE.md` §5 IPC command description mentioned general boundary validation but did not document unified `is_invalid_text_token` rules and zero-width code point rejection.
+  - Fix: Updated `ARCHITECTURE.md` §5 to explicitly document the unified token length bounds and control/zero-width character rejection across all command handlers.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit aria labels and keyboard shortcuts in command palette.
+  2. *Security/input validation:* Check JSON escape sanitization when rendering structured message parts.
+  3. *Dead code & duplication:* Audit redundant utility classes in CSS stylesheet.
+
+
 
 
 
