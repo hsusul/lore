@@ -2974,6 +2974,22 @@
   2. *Security/input validation:* Check validation for folder rename tokens.
   3. *Dead code & duplication:* Audit redundant styles in index.css.
 
+## Iteration 199
+- **Lens:** UX & accessibility
+- **Change:** Support `Cmd+Backspace` / `Ctrl+Backspace` for folder deletion in `FolderList` (`src/components/FolderList.tsx`, `src/components/FolderList.test.tsx`).
+- **Critique:**
+  - Standard Mac keyboard layouts lack a forward Delete key by default; users pressing Backspace / ⌘Backspace could not delete focused folders via keyboard.
+  - Fix: Added `Cmd+Backspace` and `Ctrl+Backspace` handling to the folder button's `onKeyDown` listener.
+- **Validation Results:**
+  - `cargo test --workspace`: 91 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Check validation for folder rename tokens.
+  2. *Dead code & duplication:* Audit redundant styles in index.css.
+  3. *Naming/consistency:* Audit enum display implementations.
+
+
 
 
 

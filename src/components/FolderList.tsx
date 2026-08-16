@@ -170,12 +170,15 @@ export default function FolderList({
                       if (event.key === "F2") {
                         event.preventDefault();
                         startEdit(folder);
-                      } else if (event.key === "Delete") {
+                      } else if (
+                        event.key === "Delete" ||
+                        (event.key === "Backspace" && (event.metaKey || event.ctrlKey))
+                      ) {
                         event.preventDefault();
                         onDelete(folder.id);
                       }
                     }}
-                    title="Open folder (F2 to rename, Delete to remove)"
+                    title="Open folder (F2 to rename, Delete or ⌘Backspace to remove)"
                   >
                     <span className="dot dot--folder" aria-hidden="true" />
                     <span className="nav-item__name">{folder.name}</span>
