@@ -2929,6 +2929,22 @@
   2. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
   3. *Docs accuracy vs code:* Verify IPC command docstrings in src/ipc.ts.
 
+## Iteration 196
+- **Lens:** Performance/allocations
+- **Change:** Memoize window range computation and output struct in `useWindowing` hook (`src/virtual.ts`).
+- **Critique:**
+  - `useWindowing` recomputed window ranges and allocated fresh object references on every render even when parameters hadn't changed.
+  - Fix: Wrapped `computeWindow` in `useMemo` and memoized the returned `Windowing` object.
+- **Validation Results:**
+  - `cargo test --workspace`: 91 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (114 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
+  2. *Docs accuracy vs code:* Verify IPC command docstrings in src/ipc.ts.
+  3. *UX & accessibility:* Audit keyboard focus order across modals.
+
+
 
 
 
