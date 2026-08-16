@@ -120,9 +120,9 @@ pub fn search_page(
     params.push(Value::Text(HIGHLIGHT_END.to_string()));
     params.push(Value::Text(match_expr));
 
-    if let Some(agent) = &query.agent {
+    if let Some(agent) = query.agent {
         sql.push_str(" AND sd.agent_id = ?");
-        params.push(Value::Text(agent.clone()));
+        params.push(Value::Text(agent));
     }
     if query.has_error {
         sql.push_str(
@@ -130,7 +130,7 @@ pub fn search_page(
                           WHERE tc.session_id = sd.session_id AND tc.is_error = 1)",
         );
     }
-    if let Some(path) = &query.path {
+    if let Some(path) = query.path {
         sql.push_str(
             " AND EXISTS (SELECT 1 FROM file_event fe
                           WHERE fe.session_id = sd.session_id AND fe.path LIKE ?)",

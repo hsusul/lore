@@ -1847,6 +1847,22 @@
   2. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
   3. *Docs accuracy vs code:* Verify setting key validation docstrings.
 
+## Iteration 124
+- **Lens:** Performance/allocations
+- **Change:** Move `query.agent` and `query.path` directly into SQL params without cloning (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `search_page` cloned `query.agent` via `agent.clone()` when appending query parameters, even though `query` is consumed in the function scope.
+  - Fix: Transferred ownership of `query.agent` and `query.path` directly into `Value::Text`, avoiding heap allocations on filtered searches.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
+  2. *Docs accuracy vs code:* Verify setting key validation docstrings.
+  3. *UX & accessibility:* Review focus outline contrast on folder rename inputs.
+
+
 
 
 
