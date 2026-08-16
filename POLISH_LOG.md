@@ -392,6 +392,22 @@
   2. *Error handling:* Verify error handling when restoring a backup into a read-only directory path.
   3. *Performance/allocations:* Review SQL query parameter binding in `query.rs` for list queries.
 
+## Iteration 26
+- **Lens:** Missing tests/edge cases
+- **Change:** Add keyset pagination, empty-folder, and non-existent folder tests for `list_folder_sessions_page` (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `list_folder_sessions_page` lacked unit test coverage for multi-page keyset continuation, empty folders, and queries against unknown folder IDs.
+  - Fix: Added `list_folder_sessions_page_paginates_and_handles_empty_folders` in `crates/lore-core/src/query.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Verify graceful error when parsing invalid UTF-8 strings in json helper utilities.
+  2. *Performance/allocations:* Optimize vector capacities in session detail part collections.
+  3. *API & DTO ergonomics:* Add TypeScript helper for folder deletion confirmation dialogs.
+
+
 
 
 

@@ -979,4 +979,47 @@ mod tests {
         assert!(opaque.text.is_none() && opaque.content_json.is_none());
         assert!(!opaque.searchable);
     }
+
+    #[test]
+    fn list_folder_sessions_page_paginates_and_handles_empty_folders() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        let claude =
+            ClaudeCodeAdapter::new().parse_str(&fixture("claude_code", "basic_text.jsonl"), "b");
+        let s1 = persist_session(&conn, "claude-code", "Claude Code", &claude, &blobs).unwrap();
+
+        let codex =
+            CodexAdapter::new().parse_str(&fixture("codex", "minimal.jsonl"), "codex_b");
+        let s2 = persist_session(&conn, "codex", "Codex", &codex, &blobs).unwrap();
+
+        let f1 = crate::folders::create_folder(&conn, "Auth Refactor").unwrap();
+        let f_empty = crate::folders::create_folder(&conn, "Empty Folder").unwrap();
+
+        crate::folders::set_session_folder(&conn, &s1, Some(&f1.id)).unwrap();
+        crate::folders::set_session_folder(&conn, &s2, Some(&f1.id)).unwrap();
+
+        // Query empty folder -> 0 sessions, no cursor.
+        let empty_page = list_folder_sessions_page(&conn, &f_empty.id, 10, None).unwrap();
+        assert_eq!(empty_page.sessions.len(), 0);
+        assert!(empty_page.next_cursor.is_none());
+
+        // Query non-existent folder -> 0 sessions, no error.
+        let missing_page = list_folder_sessions_page(&conn, "nonexistent", 10, None).unwrap();
+        assert_eq!(missing_page.sessions.len(), 0);
+        assert!(missing_page.next_cursor.is_none());
+
+        // Paged query: limit 1 returns 1 session and next_cursor.
+        let page1 = list_folder_sessions_page(&conn, &f1.id, 1, None).unwrap();
+        assert_eq!(page1.sessions.len(), 1);
+        assert!(page1.next_cursor.is_some());
+
+        // Page 2 using cursor returns remaining 1 session and no further cursor.
+        let page2 =
+            list_folder_sessions_page(&conn, &f1.id, 1, page1.next_cursor.as_deref()).unwrap();
+        assert_eq!(page2.sessions.len(), 1);
+        assert!(page2.next_cursor.is_none());
+        assert_ne!(page1.sessions[0].id, page2.sessions[0].id);
+    }
 }
