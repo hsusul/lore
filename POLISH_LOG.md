@@ -2132,6 +2132,22 @@
   2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
   3. *Correctness bugs:* Audit SearchResults escape key handling.
 
+## Iteration 143
+- **Lens:** ROADMAP progression
+- **Change:** Expand M7 tasks and tests with custom source roots and IPC boundary validation (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `ROADMAP.md` M7 did not list custom root configuration or IPC boundary input validation rules (zero-width character / control character sanitization, length bounds, payload size limits) implemented in `src-tauri/src/lib.rs`.
+  - Fix: Updated M7 tasks and tests to document IPC boundary sanitization and custom source root management.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  2. *Correctness bugs:* Audit SearchResults escape key handling.
+  3. *Missing tests/edge cases:* Test CommandPalette Escape key dismissal.
+
+
 
 
 

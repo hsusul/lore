@@ -90,9 +90,9 @@ Ship the **git-anchored searchable archive** (the wedge, fully local, no LLM) en
 
 ## M7 — Safety, settings & polish (V0 release candidate)
 - **Goal:** trustworthy, shippable V0.
-- **Tasks:** expand/tune secret rules + UI badges/reveal; redaction-aware export; Settings (privacy/data/backup/recovery/forget/rescan); truthful threat-boundary copy; Agents screen; deletion sweep; egress boundary verified; accessibility pass.
+- **Tasks:** expand/tune secret rules + UI badges/reveal; redaction-aware export; Settings (privacy/data/backup/recovery/forget/rescan/custom source roots); IPC boundary validation (length bounds, control/zero-width character rejection, payload size caps); truthful threat-boundary copy; Agents screen; deletion sweep; egress boundary verified; accessibility pass.
 - **Modules:** secrets, app, UI, storage.
-- **Tests:** planted large-field secrets redacted in all derived surfaces; scan failure quarantines; “Forget everything” removes all Lore-owned DB sidecars/blobs/backups/caches/logs and reports non-owned copies; backup recovery without sources; offline/a11y tests.
+- **Tests:** planted large-field secrets redacted in all derived surfaces; scan failure quarantines; “Forget everything” removes all Lore-owned DB sidecars/blobs/backups/caches/logs and reports non-owned copies; backup recovery without sources; IPC boundary sanitization tests; offline/a11y tests.
 - **Done-when:** V0 acceptance criteria (`PRD.md` §9) met; the default archive workflow attempts zero outbound connections and the explicit updater is the only permitted path.
 - **Risks:** secret false-positives/negatives → tunable rules + tests.
 
