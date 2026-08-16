@@ -100,7 +100,8 @@ pub fn search_page(
     // ordering, and LIMIT on the exposed `rank`/`sa`/`did` aliases (before the
     // join); the outer query joins `title` and re-sorts the page. Params are
     // appended in SQL text order.
-    let mut sql = String::from(
+    let mut sql = String::with_capacity(1024);
+    sql.push_str(
         "SELECT p.session_id, p.source_kind, p.source_id, p.field, p.snip, p.rank,
                 s.title AS title, p.agent_id, p.sa, p.did
          FROM (
@@ -114,11 +115,10 @@ pub fn search_page(
              JOIN search_document sd ON sd.id = search_fts.rowid
              WHERE search_fts MATCH ?",
     );
-    let mut params: Vec<Value> = vec![
-        Value::Text(HIGHLIGHT_START.to_string()),
-        Value::Text(HIGHLIGHT_END.to_string()),
-        Value::Text(match_expr),
-    ];
+    let mut params: Vec<Value> = Vec::with_capacity(16);
+    params.push(Value::Text(HIGHLIGHT_START.to_string()));
+    params.push(Value::Text(HIGHLIGHT_END.to_string()));
+    params.push(Value::Text(match_expr));
 
     if let Some(agent) = &query.agent {
         sql.push_str(" AND sd.agent_id = ?");

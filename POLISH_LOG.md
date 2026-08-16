@@ -782,6 +782,22 @@
   2. *API & DTO ergonomics:* Clarify return type documentation in `src/ipc.ts`.
   3. *Docs accuracy vs code:* Verify `docs/architecture/SEARCH.md` keyset pagination parameters.
 
+## Iteration 52
+- **Lens:** Performance/allocations
+- **Change:** Pre-allocate query string and parameters capacity in `search_page` (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `search_page` dynamically resized `sql` strings and `params` vectors on each search invocation without capacity hints, causing repetitive heap reallocations on every debounced keystroke query.
+  - Fix: Pre-allocated `String::with_capacity(1024)` for `sql` and `Vec::with_capacity(16)` for `params`.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Export `SessionSortOrder` helper type alias in `src/ipc.ts`.
+  2. *Docs accuracy vs code:* Reconcile M6 keyset pagination docs in `docs/architecture/SEARCH.md`.
+  3. *UX & accessibility:* Audit keyboard focus after modal dismissal.
+
+
 
 
 
