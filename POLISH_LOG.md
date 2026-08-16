@@ -1322,6 +1322,22 @@
   2. *API & DTO ergonomics:* Audit docstrings in `lore_ipc::FolderSummary`.
   3. *Docs accuracy vs code:* Verify storage error description in DATA_MODEL.md.
 
+## Iteration 88
+- **Lens:** Performance/allocations
+- **Change:** Eliminate intermediate `Vec<&str>` allocation in `clean_name` (`crates/lore-core/src/folders.rs`).
+- **Critique:**
+  - `clean_name` split on whitespace into an intermediate `Vec<&str>` before calling `.join(" ")`.
+  - Fix: Pre-allocated `String::with_capacity(filtered.len())` and accumulated whitespace-delimited tokens directly into the output buffer.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit docstrings in `lore_ipc::FolderSummary`.
+  2. *Docs accuracy vs code:* Verify storage error description in DATA_MODEL.md.
+  3. *UX & accessibility:* Check settings panel focus trap cleanup on unmount.
+
+
 
 
 

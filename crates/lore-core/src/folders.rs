@@ -28,7 +28,13 @@ fn clean_name(name: &str) -> String {
         .chars()
         .filter(|c| !c.is_control() && !is_zero_width(*c))
         .collect();
-    let single_line = filtered.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut single_line = String::with_capacity(filtered.len());
+    for (i, word) in filtered.split_whitespace().enumerate() {
+        if i > 0 {
+            single_line.push(' ');
+        }
+        single_line.push_str(word);
+    }
     let capped: String = single_line.chars().take(MAX_NAME_LEN).collect();
     let trimmed = capped.trim();
     if trimmed.is_empty() {
