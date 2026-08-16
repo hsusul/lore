@@ -295,11 +295,13 @@ pub fn restore_backup(backup_path: &Path, dst_db_path: &Path) -> Result<()> {
 }
 
 fn is_backup_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            name.starts_with(BACKUP_PREFIX) && name.ends_with(&format!(".{BACKUP_EXT}"))
-        })
+    path.is_file()
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.starts_with(BACKUP_PREFIX) && name.ends_with(&format!(".{BACKUP_EXT}"))
+            })
 }
 
 /// Backup files inherit the app's private-file posture (SECURITY.md §2).

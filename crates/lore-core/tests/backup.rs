@@ -331,3 +331,16 @@ fn list_backups_on_nonexistent_dir_returns_empty() {
     let result = lore_core::backup::list_backups(&missing_dir).unwrap();
     assert!(result.is_empty(), "nonexistent backup directory returns empty list");
 }
+
+#[test]
+fn list_backups_ignores_subdirectories_matching_backup_naming_pattern() {
+    let dir = tempfile::tempdir().unwrap();
+    let backup_dir = dir.path().join("backups");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+    // A directory named like a backup file
+    let fake_backup_subdir = backup_dir.join("lore-00000000000000000001-0001.db");
+    std::fs::create_dir_all(&fake_backup_subdir).unwrap();
+
+    let result = lore_core::backup::list_backups(&backup_dir).unwrap();
+    assert!(result.is_empty(), "directories matching backup naming must be ignored");
+}

@@ -737,6 +737,22 @@
   2. *Missing tests/edge cases:* Test sort order switching in frontend search UI.
   3. *Error handling:* Check `get_git_snapshot` error conversion when git inspection fails.
 
+## Iteration 49
+- **Lens:** Correctness bugs
+- **Change:** Ensure `is_backup_file` checks `path.is_file()` to ignore subdirectories (`crates/lore-core/src/backup.rs`, `crates/lore-core/tests/backup.rs`).
+- **Critique:**
+  - `is_backup_file` checked filename prefix and extension but omitted `path.is_file()`, which would treat a directory named like a backup (`lore-*.db`) as an archive file during backup enumeration and pruning.
+  - Fix: Added `path.is_file()` check in `is_backup_file` and added regression test `list_backups_ignores_subdirectories_matching_backup_naming_pattern`.
+- **Validation Results:**
+  - `cargo test --workspace`: 81 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test sort order switching in frontend search UI.
+  2. *Error handling:* Check `get_git_snapshot` error conversion when git inspection fails.
+  3. *Performance/allocations:* Check string cloning during folder name sanitization.
+
+
 
 
 
