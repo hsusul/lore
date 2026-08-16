@@ -2854,6 +2854,22 @@
   2. *Dependency/build hygiene:* Check for unused build dependencies.
   3. *Correctness bugs:* Audit error boundaries around async operations.
 
+## Iteration 191
+- **Lens:** ROADMAP progression
+- **Change:** Document UI accessibility and keyboard roving navigation polish in M7 current state table (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `ROADMAP.md` M7 status did not record the `aria-busy` signaling on `BackupSettings` or `j`/`k`/`Home`/`End` roving keyboard navigation in search results listbox.
+  - Fix: Updated `docs/product/ROADMAP.md` M7 table entry to reflect both accessibility improvements.
+- **Validation Results:**
+  - `cargo test --workspace`: 91 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Check for unused build dependencies.
+  2. *Correctness bugs:* Audit error boundaries around async operations.
+  3. *Missing tests/edge cases:* Audit null handling in relative time formatting.
+
+
 
 
 
