@@ -2314,6 +2314,22 @@
   2. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
   3. *Correctness bugs:* Audit virtual scroll offset calculations when item height fluctuates.
 
+## Iteration 155
+- **Lens:** ROADMAP progression
+- **Change:** Reconcile `ROADMAP.md` milestone status with markdown export formatting sanitization and canonical zero-width input validation (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `docs/product/ROADMAP.md` M7 current state table and next build sequence lagged behind merged capabilities, omitting markdown export title newline / backtick escaping hardening and canonical zero-width input validation across IPC commands.
+  - Fix: Updated `ROADMAP.md` M7 status notes and tasks to reflect built capabilities accurately.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (109 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace dev-dependencies and cargo profile flags.
+  2. *Correctness bugs:* Audit virtual scroll offset calculations when item height fluctuates.
+  3. *Missing tests/edge cases:* Add test for zero-width character handling in settings keys.
+
+
 
 
 
