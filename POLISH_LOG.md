@@ -827,6 +827,22 @@
   2. *Security/input validation:* Check folder ID argument format in IPC folder commands.
   3. *Dead code & duplication:* Consolidate redundant CSS button classes.
 
+## Iteration 55
+- **Lens:** UX & accessibility
+- **Change:** Add explicit `type="button"` attributes to close and action buttons in `SettingsPanel.tsx` (`src/components/SettingsPanel.tsx`).
+- **Critique:**
+  - Close button and "Forget everything" button omitted `type="button"`, making their trigger behavior vulnerable to accidental form context defaults.
+  - Fix: Added `type="button"` to both buttons in `src/components/SettingsPanel.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Validate folder ID hex string format in IPC folder commands.
+  2. *Dead code & duplication:* Consolidate redundant CSS button classes.
+  3. *Naming/consistency:* Audit styling tokens in index.css.
+
+
 
 
 

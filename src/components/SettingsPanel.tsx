@@ -62,7 +62,7 @@ export default function SettingsPanel({
       >
         <header className="settings__head">
           <h2>Settings</h2>
-          <button className="icon-btn" aria-label="Close settings" onClick={onClose}>
+          <button type="button" className="icon-btn" aria-label="Close settings" onClick={onClose}>
             ✕
           </button>
         </header>
@@ -160,7 +160,7 @@ export default function SettingsPanel({
             Lore. Original agent logs are not touched. Secure block-level erasure is not guaranteed
             on SSDs.
           </p>
-          <button className="btn--danger" onClick={onForgetEverything}>
+          <button type="button" className="btn--danger" onClick={onForgetEverything}>
             Forget everything
           </button>
         </section>
