@@ -347,6 +347,22 @@
   2. *Dependency/build hygiene:* Audit workspace Cargo.toml profiles and dev-dependencies.
   3. *Correctness bugs:* Review token count overflow bounds in session summary aggregations.
 
+## Iteration 23
+- **Lens:** ROADMAP progression
+- **Change:** Reconcile roadmap tracker status with audited milestone implementations (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `ROADMAP.md` reconciliation metadata lagged behind recent work on folders, backup scheduling UI and recovery hardening, and schema regression suites.
+  - Fix: Updated the reconciliation header to reflect the current audited status.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Verify workspace lints and compiler profiles.
+  2. *Correctness bugs:* Inspect token total aggregation overflow handling in Codex adapter.
+  3. *Missing tests/edge cases:* Test `get_setting` behavior when reading a key that was overwritten multiple times.
+
+
 
 
 

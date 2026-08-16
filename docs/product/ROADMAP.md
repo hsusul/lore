@@ -2,7 +2,7 @@
 
 > Milestones that each produce working, independently-mergeable software. Companion: `PRD.md`, `docs/architecture/*`, `docs/development/TESTING.md`. Each milestone: **Goal · Tasks · Modules · Tests · Done-when · Risks.** Tags: **DECISION** / **OPINION**.
 
-> **Last reconciled with `main`: 2026-08-14 (`980c44a`).** Status here reflects code and committed tests, not intent. “Built” means the milestone's main path exists; unchecked acceptance work still blocks calling the milestone complete.
+> **Last reconciled with `main`: 2026-08-16.** Status here reflects code and committed tests, not intent. “Built” means the milestone's main path exists; unchecked acceptance work still blocks calling the milestone complete.
 
 ## Current state
 
