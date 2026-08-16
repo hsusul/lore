@@ -672,8 +672,11 @@ mod tests {
     #[test]
     fn sanitize_path_neutralizes_traversal() {
         assert_eq!(super::sanitize_path("../../etc/passwd"), "etc/passwd");
+        assert_eq!(super::sanitize_path(r"..\..\etc\passwd"), "etc/passwd");
         assert_eq!(super::sanitize_path("./src/../src/app.ts"), "src/app.ts");
+        assert_eq!(super::sanitize_path(r".\src\..\src\app.ts"), "src/app.ts");
         assert_eq!(super::sanitize_path("/abs/path.rs"), "abs/path.rs");
+        assert_eq!(super::sanitize_path(r"\abs\path.rs"), "abs/path.rs");
     }
 
     #[test]

@@ -77,7 +77,7 @@ pub(crate) fn bounded(s: &str) -> String {
 /// an escape (`../`). Produces a clean relative path.
 pub(crate) fn sanitize_path(raw: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
-    for seg in raw.split('/') {
+    for seg in raw.split(['/', '\\']) {
         match seg {
             "" | "." => {}
             ".." => {
@@ -141,6 +141,9 @@ mod tests {
     #[test]
     fn sanitize_strips_traversal() {
         assert_eq!(sanitize_path("../../a/b"), "a/b");
+        assert_eq!(sanitize_path(r"..\..\a\b"), "a/b");
+        assert_eq!(sanitize_path(r"src\..\src\app.ts"), "src/app.ts");
+        assert_eq!(sanitize_path(r"foo/bar\baz"), "foo/bar/baz");
     }
 
     #[test]
