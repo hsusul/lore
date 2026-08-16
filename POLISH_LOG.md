@@ -647,6 +647,22 @@
   2. *Security/input validation:* Validate setting key arguments against non-printable ASCII characters.
   3. *Dead code & duplication:* Audit redundant interface types across components.
 
+## Iteration 43
+- **Lens:** UX & accessibility
+- **Change:** Exclude hidden/aria-hidden elements and prevent Tab leakage when empty in focus trap (`src/focus-trap.ts`, `src/focus-trap.test.tsx`).
+- **Critique:**
+  - `src/focus-trap.ts` query did not exclude `input[type="hidden"]` or `[aria-hidden="true"]` nodes, and permitted Tab key presses to leak into background windows when no focusable elements existed.
+  - Fix: Added exclusion selectors for hidden/aria-hidden elements, called `event.preventDefault()` when `nodes.length === 0`, and added dedicated test suite `src/focus-trap.test.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Validate setting key arguments against non-printable ASCII characters.
+  2. *Dead code & duplication:* Audit redundant interface types across components.
+  3. *Naming/consistency:* Audit CSS variable definitions in index.css.
+
+
 
 
 
