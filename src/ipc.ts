@@ -248,7 +248,8 @@ export function setSetting(key: string, valueJson: string): Promise<void> {
 
 /** Serialize and persist a typed setting value. */
 export function setJsonSetting<T>(key: string, value: T): Promise<void> {
-  return setSetting(key, JSON.stringify(value));
+  const serialized = JSON.stringify(value);
+  return setSetting(key, serialized ?? "null");
 }
 
 /** Read the automatic-backup schedule (interval + retention). */

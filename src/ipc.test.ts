@@ -192,5 +192,12 @@ describe("ipc contract", () => {
       key: "test.key",
       valueJson: JSON.stringify({ enabled: false }),
     });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await setJsonSetting("undefined.key", undefined);
+    expect(invoke).toHaveBeenCalledWith("set_setting", {
+      key: "undefined.key",
+      valueJson: "null",
+    });
   });
 });

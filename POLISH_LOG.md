@@ -2734,6 +2734,22 @@
   2. *Performance/allocations:* Audit string allocations in search snippet highlight parser.
   3. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
 
+## Iteration 183
+- **Lens:** Error handling
+- **Change:** Ensure `setJsonSetting` falls back to valid `"null"` JSON string when `JSON.stringify` produces `undefined` (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - `JSON.stringify(undefined)` returns `undefined` in JavaScript, which would pass `undefined` as `valueJson` to Tauri IPC instead of a valid JSON string.
+  - Fix: Upgraded `setJsonSetting` to pass `serialized ?? "null"` to `setSetting` and added unit test.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Audit string allocations in search snippet highlight parser.
+  2. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
+  3. *Docs accuracy vs code:* Verify IPC command docstrings in src/ipc.ts.
+
+
 
 
 
