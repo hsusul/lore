@@ -66,4 +66,31 @@ describe("computeWindow", () => {
     expect(nonNegativeOverscan.startIndex).toBe(10);
     expect(nonNegativeOverscan.endIndex).toBe(20);
   });
+
+  it("handles NaN and non-finite dimensions safely", () => {
+    expect(computeWindow(NaN, 0, 400, 40, 5)).toEqual({
+      startIndex: 0,
+      endIndex: 0,
+      padTop: 0,
+      padBottom: 0,
+    });
+    expect(computeWindow(100, 0, NaN, 40, 5)).toEqual({
+      startIndex: 0,
+      endIndex: 100,
+      padTop: 0,
+      padBottom: 0,
+    });
+    expect(computeWindow(100, 0, 400, NaN, 5)).toEqual({
+      startIndex: 0,
+      endIndex: 100,
+      padTop: 0,
+      padBottom: 0,
+    });
+    expect(computeWindow(100, NaN, 400, 40, NaN)).toEqual({
+      startIndex: 0,
+      endIndex: 10,
+      padTop: 0,
+      padBottom: 90 * 40,
+    });
+  });
 });

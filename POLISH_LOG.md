@@ -2899,6 +2899,22 @@
   2. *Error handling:* Audit unwrap/expect in test utilities.
   3. *Performance/allocations:* Audit string allocations in virtualizer.
 
+## Iteration 194
+- **Lens:** Missing tests/edge cases
+- **Change:** Harden `computeWindow` against non-finite inputs (`NaN`, `Infinity`) and add unit tests (`src/virtual.ts`, `src/virtual.test.ts`).
+- **Critique:**
+  - `computeWindow` assumed numbers were always finite; passing `NaN` for dimensions caused `Math.max(0, NaN)` to propagate `NaN` instead of triggering safe fallbacks.
+  - Fix: Added `Number.isFinite()` guards across `count`, `viewportHeight`, `rowHeight`, `scrollTop`, and `overscan`, plus test coverage.
+- **Validation Results:**
+  - `cargo test --workspace`: 91 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (114 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Audit unwrap/expect in test utilities.
+  2. *Performance/allocations:* Audit string allocations in virtualizer.
+  3. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
+
+
 
 
 

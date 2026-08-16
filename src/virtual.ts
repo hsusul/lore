@@ -31,14 +31,23 @@ export function computeWindow(
   rowHeight: number,
   overscan: number,
 ): WindowRange {
-  const safeCount = Math.max(0, count);
-  if (safeCount === 0 || viewportHeight <= 0 || rowHeight <= 0) {
+  const safeCount = Number.isFinite(count) ? Math.max(0, count) : 0;
+  if (
+    safeCount === 0 ||
+    !Number.isFinite(viewportHeight) ||
+    viewportHeight <= 0 ||
+    !Number.isFinite(rowHeight) ||
+    rowHeight <= 0
+  ) {
     return { startIndex: 0, endIndex: safeCount, padTop: 0, padBottom: 0 };
   }
-  const safeScrollTop = Math.max(0, scrollTop);
-  const safeOverscan = Math.max(0, overscan);
+  const safeScrollTop = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0;
+  const safeOverscan = Number.isFinite(overscan) ? Math.max(0, overscan) : 0;
   const first = Math.max(0, Math.floor(safeScrollTop / rowHeight) - safeOverscan);
-  const last = Math.min(safeCount, Math.ceil((safeScrollTop + viewportHeight) / rowHeight) + safeOverscan);
+  const last = Math.min(
+    safeCount,
+    Math.ceil((safeScrollTop + viewportHeight) / rowHeight) + safeOverscan,
+  );
   return {
     startIndex: first,
     endIndex: Math.max(first, last),
