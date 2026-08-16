@@ -392,6 +392,9 @@ fn set_setting(state: State<'_, AppState>, key: String, value_json: String) -> R
     if key.starts_with("agent_roots.") {
         return Err("agent root settings require the folder picker".to_string());
     }
+    if value_json.len() > 65_536 {
+        return Err("setting value exceeds maximum size".to_string());
+    }
     serde_json::from_str::<serde_json::Value>(&value_json)
         .map_err(|e| format!("invalid JSON value: {e}"))?;
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;

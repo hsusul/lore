@@ -1382,6 +1382,22 @@
   2. *Dead code & duplication:* Audit unused CSS helper classes in styles.css.
   3. *Naming/consistency:* Audit error message formatting in settings operations.
 
+## Iteration 92
+- **Lens:** Security/input validation
+- **Change:** Bound maximum allowed `value_json` payload size in `set_setting` IPC command (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `set_setting` validated `key` length and JSON format, but did not enforce a size upper bound on `value_json` before JSON parsing and database storage.
+  - Fix: Added `value_json.len() <= 65_536` check in `set_setting` to reject oversized payload allocations.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit unused CSS helper classes in styles.css.
+  2. *Naming/consistency:* Audit error message formatting in settings operations.
+  3. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
+
+
 
 
 
