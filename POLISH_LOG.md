@@ -992,6 +992,22 @@
   2. *UX & accessibility:* Verify focus indicators on folder action buttons.
   3. *Security/input validation:* Check IPC repository command argument length limits.
 
+## Iteration 66
+- **Lens:** Docs accuracy vs code
+- **Change:** Document reverse-order intact backup recovery fallback in `docs/architecture/SECURITY.md` §6.
+- **Critique:**
+  - `docs/architecture/SECURITY.md` §6 described archive recovery generically without mentioning the fallback to older intact backups when the newest snapshot is corrupt.
+  - Fix: Updated `docs/architecture/SECURITY.md` §6 with exact reverse-chronological fallback details.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Verify focus-visible outline on folder item buttons.
+  2. *Security/input validation:* Check IPC repository command argument length limits.
+  3. *Dead code & duplication:* Consolidate test helper assertions across integration tests.
+
+
 
 
 

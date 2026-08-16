@@ -67,7 +67,7 @@ Scanner false negatives remain possible. UI/copy must say “flagged secrets red
 
 ## 6. Data durability, deletion, and recovery (DECISION)
 
-- **Recovery:** integrity failure closes the active DB, preserves it as a quarantine artifact, and offers restore from a Lore-owned local backup, best-effort salvage, or re-scan of sources that still exist. Never discard the only archive automatically.
+- **Recovery:** integrity failure closes the active DB, preserves it as a quarantine artifact, and restores from the newest intact Lore-owned local backup (falling back in reverse chronological order if the newest snapshot is damaged), or preserves the quarantine artifact for best-effort salvage/re-scan if no usable backup exists. Never discard the only archive automatically.
 - **Local backups:** use SQLite's online backup mechanism; backups inherit app permissions and secret posture. Cadence/retention is user-visible and bounded; no cloud upload.
 - **Forget session/repo:** transactionally remove canonical rows, SearchDocuments/FTS, unreferenced blobs, findings, and derived caches; run WAL checkpoint plus `secure_delete`/vacuum maintenance; delete Lore-owned backups that could still contain the forgotten rows, then create a fresh post-deletion backup if enabled.
 - **Forget everything:** close connections, remove Lore-owned DB/WAL/SHM, blobs, backups, caches, and content-bearing logs. Recreate only empty settings/state after confirmation. Secure physical erasure cannot be guaranteed on SSD/copy-on-write filesystems; say so.
