@@ -234,6 +234,11 @@ pre,
   opacity: 1;
   background: color-mix(in srgb, currentColor 15%, transparent);
 }
+.shell__banner-dismiss:focus-visible {
+  opacity: 1;
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
 
 .session__actions {
   display: flex;
