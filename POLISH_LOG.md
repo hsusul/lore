@@ -2057,6 +2057,22 @@
   2. *UX & accessibility:* Review color-mix contrast in high-contrast themes.
   3. *Security/input validation:* Check setting size boundaries.
 
+## Iteration 138
+- **Lens:** Docs accuracy vs code
+- **Change:** Align folder name normalization description with implementation in `DATA_MODEL.md` §3 (`docs/architecture/DATA_MODEL.md`).
+- **Critique:**
+  - `DATA_MODEL.md` §3 stated that control characters are stripped from folder names, whereas `clean_name` in `crates/lore-core/src/folders.rs` maps them to whitespace to avoid word concatenation.
+  - Fix: Updated `DATA_MODEL.md` §3 to specify whitespace mapping.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Review color-mix contrast in high-contrast themes.
+  2. *Security/input validation:* Check setting size boundaries.
+  3. *Dead code & duplication:* Audit redundant utility classes in `src/styles.css`.
+
+
 
 
 
