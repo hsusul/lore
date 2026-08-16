@@ -2509,6 +2509,22 @@
   2. *Correctness bugs:* Audit error boundaries around asynchronous settings operations.
   3. *Missing tests/edge cases:* Test recovery when corrupted DB is completely 0-byte or unreadable.
 
+## Iteration 168
+- **Lens:** Dependency/build hygiene
+- **Change:** Optimize release Cargo profile with `opt-level = 3` and `codegen-units = 1` for binary size and execution performance (`Cargo.toml`).
+- **Critique:**
+  - The workspace `[profile.release]` set `strip = true` and `lto = "thin"`, but omitted explicit `opt-level = 3` and single codegen unit configuration (`codegen-units = 1`) for desktop release builds.
+  - Fix: Configured `opt-level = 3` and `codegen-units = 1` in `Cargo.toml`.
+- **Validation Results:**
+  - `cargo test --workspace`: 89 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test && npm run build`: Clean; 12 test files passed (111 tests), Vite build passed in ~293ms.
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit error boundaries around asynchronous settings operations.
+  2. *Missing tests/edge cases:* Test recovery when corrupted DB is completely 0-byte or unreadable.
+  3. *Error handling:* Audit unwrap/expect in non-test test utilities or benchmark harnesses.
+
+
 
 
 
