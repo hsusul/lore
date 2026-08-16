@@ -4,6 +4,6 @@ import type { SessionSummary } from "./SessionSummary";
 /**
  * One stable newest-first page for the repository/session browser. The
  * cursor is opaque to the UI and must be passed back unchanged. Payload of
- * `list_sessions_page` / `list_repository_sessions_page`.
+ * `list_sessions_page` / `list_repository_sessions_page` / `list_folder_sessions_page`.
  */
 export type SessionPage = { sessions: Array<SessionSummary>, next_cursor: string | null, };

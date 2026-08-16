@@ -1517,6 +1517,22 @@
   2. *Docs accuracy vs code:* Verify backup settings description in `SECURITY.md`.
   3. *UX & accessibility:* Check active state styling for search pagination buttons.
 
+## Iteration 101
+- **Lens:** API & DTO ergonomics
+- **Change:** Clarify `DetectedAgent` docstring in `lore-ipc` (`crates/lore-ipc/src/lib.rs`) and regenerate TypeScript definitions.
+- **Critique:**
+  - `DetectedAgent` docstring stated it was the "Payload of the `list_detected_agents` command" rather than "Payload element of the `list_detected_agents` command".
+  - Fix: Updated docstring and regenerated TypeScript types via `cargo test -p lore-ipc`.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify backup settings description in `SECURITY.md`.
+  2. *UX & accessibility:* Check active state styling for search pagination buttons.
+  3. *Security/input validation:* Check pagination limit clamp across all command handlers.
+
+
 
 
 

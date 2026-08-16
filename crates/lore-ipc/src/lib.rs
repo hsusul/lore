@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// An agent adapter and whether it was detected on this machine.
-/// Payload of the `list_detected_agents` command.
+/// Payload element of the `list_detected_agents` command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct DetectedAgent {

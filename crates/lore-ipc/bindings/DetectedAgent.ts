@@ -2,7 +2,7 @@
 
 /**
  * An agent adapter and whether it was detected on this machine.
- * Payload of the `list_detected_agents` command.
+ * Payload element of the `list_detected_agents` command.
  */
 export type DetectedAgent = { 
 /**
