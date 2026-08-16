@@ -1577,6 +1577,22 @@
   2. *Naming/consistency:* Audit folder delete confirmation messaging.
   3. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
 
+## Iteration 106
+- **Lens:** Naming/consistency
+- **Change:** Match folder delete button `title` tooltip to its `aria-label` in `FolderList.tsx` (`src/components/FolderList.tsx`).
+- **Critique:**
+  - The delete button had a generic `title="Delete folder"` tooltip despite having an accessible `aria-label={`Delete folder ${folder.name}`}`.
+  - Fix: Updated `title={`Delete folder ${folder.name}`}` for tooltip consistency across folder items.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
+  2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  3. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
+
+
 ## Iteration 105
 - **Lens:** Dead code & duplication
 - **Change:** Update `keyset_after` doc comment in `query.rs` (`crates/lore-core/src/query.rs`).

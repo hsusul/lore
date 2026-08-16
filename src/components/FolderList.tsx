@@ -188,7 +188,7 @@ export default function FolderList({
                     type="button"
                     className="folder__delete"
                     aria-label={`Delete folder ${folder.name}`}
-                    title="Delete folder"
+                    title={`Delete folder ${folder.name}`}
                     onClick={() => onDelete(folder.id)}
                   >
                     ✕
