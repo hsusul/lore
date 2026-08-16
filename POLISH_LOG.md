@@ -2869,6 +2869,22 @@
   2. *Correctness bugs:* Audit error boundaries around async operations.
   3. *Missing tests/edge cases:* Audit null handling in relative time formatting.
 
+## Iteration 192
+- **Lens:** Dependency/build hygiene
+- **Change:** Add unified `"check"` script to `package.json` (`npm run typecheck && npm run lint && npm test`).
+- **Critique:**
+  - Running frontend quality gates required invoking three separate npm commands sequentially (`npm run typecheck`, `npm run lint`, `npm test`).
+  - Fix: Added `"check": "npm run typecheck && npm run lint && npm test"` to `package.json` scripts.
+- **Validation Results:**
+  - `cargo test --workspace`: 91 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit error boundaries around async operations.
+  2. *Missing tests/edge cases:* Test null handling in relative time formatting.
+  3. *Error handling:* Audit unwrap/expect in test utilities.
+
+
 
 
 
