@@ -260,7 +260,7 @@ pub struct SearchHit {
 /// One page of search results plus an opaque keyset cursor. `next_cursor` is
 /// `Some` only when a full page was returned (more results may follow); pass it
 /// back verbatim as the `cursor` argument to fetch the next page. A cursor is
-/// valid only for the identical query that produced it. Payload of `search_page`.
+/// valid only for the identical query and sort order that produced it. Payload of `search_page`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SearchPage {

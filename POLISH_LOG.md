@@ -1682,6 +1682,22 @@
   2. *Docs accuracy vs code:* Verify custom root path validation docs.
   3. *UX & accessibility:* Audit keyboard navigation in folder row list items.
 
+## Iteration 113
+- **Lens:** API & DTO ergonomics
+- **Change:** Note sort order requirement in `SearchPage` docstring (`crates/lore-ipc/src/lib.rs`) and regenerate TypeScript definitions.
+- **Critique:**
+  - `SearchPage` docstring stated that cursors were valid only for the query that produced them, omitting that cursors are also specific to the sort order (`"relevance"`, `"newest"`, `"oldest"`).
+  - Fix: Updated docstring to specify "identical query and sort order" and regenerated TypeScript types.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify custom root path validation docs.
+  2. *UX & accessibility:* Audit keyboard navigation in folder row list items.
+  3. *Security/input validation:* Check string size boundaries on setting keys.
+
+
 
 
 
