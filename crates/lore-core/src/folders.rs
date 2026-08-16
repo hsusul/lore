@@ -26,7 +26,8 @@ fn is_zero_width(c: char) -> bool {
 fn clean_name(name: &str) -> String {
     let filtered: String = name
         .chars()
-        .filter(|c| !c.is_control() && !is_zero_width(*c))
+        .filter(|c| !is_zero_width(*c))
+        .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
     let mut single_line = String::with_capacity(filtered.len());
     for (i, word) in filtered.split_whitespace().enumerate() {
@@ -197,13 +198,16 @@ mod tests {
         assert_eq!(multiline.name, "Project Alpha V2");
 
         let with_controls = create_folder(&conn, "  Secret\0\x07Folder  ").unwrap();
-        assert_eq!(with_controls.name, "SecretFolder");
+        assert_eq!(with_controls.name, "Secret Folder");
 
         let with_bom = create_folder(&conn, "\u{feff}   \u{feff}").unwrap();
         assert_eq!(with_bom.name, "New folder");
 
         let with_zero_width = create_folder(&conn, "\u{200b}\u{200c}\u{200d}\u{2060}").unwrap();
         assert_eq!(with_zero_width.name, "New folder");
+
+        let multiline = create_folder(&conn, "  Folder\r\n\tWith\nSpaces  ").unwrap();
+        assert_eq!(multiline.name, "Folder With Spaces");
 
         let long = create_folder(&conn, &"word ".repeat(30)).unwrap();
         assert!(long.name.chars().count() <= MAX_NAME_LEN);

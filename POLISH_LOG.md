@@ -1652,6 +1652,22 @@
   2. *Performance/allocations:* Audit CSS selector complexity in timeline rows.
   3. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
 
+## Iteration 111
+- **Lens:** Error handling
+- **Change:** Replace control characters with whitespace in `clean_name` before tokenization (`crates/lore-core/src/folders.rs`).
+- **Critique:**
+  - `clean_name` filtered out control characters directly (`!c.is_control()`), which caused multiline inputs without adjacent spaces (e.g. `"Folder\r\n\tWith\nSpaces"`) to collapse into concatenated words (`"FolderWithSpaces"`).
+  - Fix: Mapped control characters to space `' '` before `split_whitespace()` tokenization and added unit test.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Audit CSS selector complexity in timeline rows.
+  2. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
+  3. *Docs accuracy vs code:* Verify custom root path validation docs.
+
+
 
 
 
