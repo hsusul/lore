@@ -2389,6 +2389,22 @@
   2. *API & DTO ergonomics:* Audit TypeScript helper functions in `src/ipc.ts`.
   3. *Docs accuracy vs code:* Verify docstrings match consolidated validation bounds.
 
+## Iteration 160
+- **Lens:** Performance/allocations
+- **Change:** Eliminate intermediate heap string allocations in `clean_name` folder normalization (`crates/lore-core/src/folders.rs`).
+- **Critique:**
+  - `clean_name` created an intermediate collected `String` of all filtered characters before splitting on whitespace and collecting into another `single_line` string.
+  - Fix: Streamed character filtering and whitespace normalization in a single pass directly into the sized output buffer.
+- **Validation Results:**
+  - `cargo test --workspace`: 88 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (110 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit TypeScript helper functions in `src/ipc.ts`.
+  2. *Docs accuracy vs code:* Verify docstrings match consolidated validation bounds.
+  3. *UX & accessibility:* Audit aria labels and keyboard shortcuts in command palette.
+
+
 
 
 

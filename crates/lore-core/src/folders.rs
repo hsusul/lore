@@ -20,20 +20,31 @@ const MAX_NAME_LEN: usize = 100;
 /// length, and fall back to a sensible default when empty. Never fails so the
 /// UI can stay optimistic.
 fn clean_name(name: &str) -> String {
-    let filtered: String = name
-        .chars()
-        .filter(|c| !crate::is_zero_width(*c))
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let mut single_line = String::with_capacity(filtered.len());
-    for (i, word) in filtered.split_whitespace().enumerate() {
-        if i > 0 {
-            single_line.push(' ');
+    let mut words = name
+        .split(|c: char| c.is_whitespace() || c.is_control() || crate::is_zero_width(c))
+        .filter(|w| !w.is_empty());
+    let mut single_line = String::with_capacity(name.len().min(MAX_NAME_LEN));
+    if let Some(first) = words.next() {
+        for c in first.chars().filter(|c| !crate::is_zero_width(*c)) {
+            if single_line.chars().count() >= MAX_NAME_LEN {
+                break;
+            }
+            single_line.push(c);
         }
-        single_line.push_str(word);
+        for word in words {
+            if single_line.chars().count() >= MAX_NAME_LEN {
+                break;
+            }
+            single_line.push(' ');
+            for c in word.chars().filter(|c| !crate::is_zero_width(*c)) {
+                if single_line.chars().count() >= MAX_NAME_LEN {
+                    break;
+                }
+                single_line.push(c);
+            }
+        }
     }
-    let capped: String = single_line.chars().take(MAX_NAME_LEN).collect();
-    let trimmed = capped.trim();
+    let trimmed = single_line.trim();
     if trimmed.is_empty() {
         "New folder".to_string()
     } else {
