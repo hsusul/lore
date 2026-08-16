@@ -356,9 +356,17 @@ fn fts_match(terms: &[String]) -> Option<String> {
     }
     let quoted: Vec<String> = terms
         .iter()
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .map(|term| {
+            let clean: String = term.chars().filter(|&c| c != '\0').collect();
+            format!("\"{}\"", clean.replace('"', "\"\""))
+        })
+        .filter(|q| q != "\"\"")
         .collect();
-    Some(quoted.join(" "))
+    if quoted.is_empty() {
+        None
+    } else {
+        Some(quoted.join(" "))
+    }
 }
 
 #[cfg(test)]
@@ -380,6 +388,11 @@ mod tests {
         let m = fts_match(&["foo\" OR bar".to_string()]).unwrap();
         assert_eq!(m, "\"foo\"\" OR bar\"");
         assert!(fts_match(&[]).is_none());
+
+        // Null bytes are stripped and empty terms are discarded.
+        let m_clean = fts_match(&["hello\0world".to_string(), "\0".to_string()]).unwrap();
+        assert_eq!(m_clean, "\"helloworld\"");
+        assert!(fts_match(&["\0".to_string()]).is_none());
     }
 
     #[test]

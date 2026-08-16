@@ -482,6 +482,22 @@
   2. *Dead code & duplication:* Audit redundant test utilities across frontend test files.
   3. *Naming/consistency:* Audit CSS class name conventions across sidebar navigation components.
 
+## Iteration 32
+- **Lens:** Security/input validation
+- **Change:** Sanitize embedded null bytes and discard empty phrase terms in FTS5 MATCH builder (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `fts_match` in `search.rs` passed user search terms directly into quoted phrases without stripping `\0` null bytes or filtering out terms that evaluate to empty phrases (`""`), risking C-string truncation or invalid FTS5 syntax errors.
+  - Fix: Stripped `\0` null bytes during phrase construction, filtered out empty quoted phrases, and added regression assertions in `search.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (89 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Consolidate duplicate mock setups in frontend test suites.
+  2. *Naming/consistency:* Reconcile CSS class naming for modal buttons vs sidebar buttons.
+  3. *ROADMAP progression:* Verify M6 search performance benchmark suite documentation.
+
+
 
 
 
