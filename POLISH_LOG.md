@@ -1022,6 +1022,22 @@
   2. *Dead code & duplication:* Consolidate test helper assertions across integration tests.
   3. *Naming/consistency:* Audit aria-labels across left navigation panes.
 
+## Iteration 68
+- **Lens:** Security/input validation
+- **Change:** Validate repository ID bounds and control characters in IPC repository commands (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `list_repository_sessions` and `list_repository_sessions_page` accepted `id` arguments directly without checking length bounds or rejecting ASCII control characters.
+  - Fix: Added input validation checks (`!id.is_empty() && id.len() <= 256 && !id.chars().any(|c| c.is_control())`) across repository IPC commands.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Consolidate test helper assertions across integration tests.
+  2. *Naming/consistency:* Audit aria-labels across left navigation panes.
+  3. *ROADMAP progression:* Audit M7 verification deliverables in PRD.
+
+
 
 
 

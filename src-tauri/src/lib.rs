@@ -127,13 +127,16 @@ fn list_repositories(state: State<'_, AppState>) -> Result<Vec<RepositorySummary
     lore_core::query::list_repositories(&conn).map_err(|e| e.to_string())
 }
 
-/// List the most recent sessions that touched a repository.
+/// List the most recent sessions that touched `repository_id` (newest first).
 #[tauri::command]
 fn list_repository_sessions(
     state: State<'_, AppState>,
     id: String,
     limit: i64,
 ) -> Result<Vec<SessionSummary>, String> {
+    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid repository id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::query::list_repository_sessions(&conn, &id, limit.clamp(1, 10_000))
         .map_err(|e| e.to_string())
@@ -147,6 +150,9 @@ fn list_repository_sessions_page(
     limit: i64,
     cursor: Option<String>,
 ) -> Result<SessionPage, String> {
+    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid repository id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::query::list_repository_sessions_page(
         &conn,
