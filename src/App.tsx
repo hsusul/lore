@@ -524,6 +524,15 @@ export default function App() {
       const report = await forgetEverything();
       setDetail(null);
       setSelectedSession(null);
+      setSelectedRepo(null);
+      selectedRepoRef.current = null;
+      setSelectedFolder(null);
+      selectedFolderRef.current = null;
+      setGit([]);
+      setQuery("");
+      queryRef.current = "";
+      setHits([]);
+      setCursor(null);
       setSettingsOpen(false);
       await refresh();
       setNotice(`Archive cleared (${report.blobs_removed} blob(s) removed).`);

@@ -56,8 +56,10 @@ import App from "./App";
 import {
   addAgentRoot,
   chooseAgentRootDirectory,
+  forgetEverything,
   getSession,
   listDetectedAgents,
+  listFolders,
   listRepositories,
   listRepositorySessionsPage,
   listSessionsPage,
@@ -724,5 +726,71 @@ describe("App shell", () => {
 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("heading", { name: "B session", level: 2 })).toBeTruthy();
+  });
+
+  it("resets active repo, folder, search, and session when forgetting everything", async () => {
+    const session = summary("session-1", "Initial session");
+    vi.mocked(listSessionsPage).mockResolvedValue({
+      sessions: [session],
+      next_cursor: null,
+    });
+    vi.mocked(listRepositorySessionsPage).mockResolvedValue({
+      sessions: [session],
+      next_cursor: null,
+    });
+    vi.mocked(listRepositories).mockResolvedValue([
+      {
+        id: "repo-1",
+        display_name: "lore",
+        session_count: 1,
+        worktree_count: 1,
+        identity_confidence: "confirmed",
+        primary_path: "/Users/dev/Lore",
+        is_missing: false,
+      },
+    ]);
+    vi.mocked(listFolders).mockResolvedValue([
+      {
+        id: "folder-1",
+        name: "Sprint 1",
+        session_count: 1,
+        position: 0,
+      },
+    ]);
+    vi.mocked(getSession).mockResolvedValue(detail(session));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<App />);
+
+    // Select repository
+    fireEvent.click(await screen.findByText("lore"));
+    // Open session
+    fireEvent.click(await screen.findByText("Initial session"));
+    expect(await screen.findByRole("heading", { name: "Initial session", level: 2 })).toBeTruthy();
+
+    // Open settings and click Forget everything
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+
+    // Mock empty response after forget
+    vi.mocked(listRepositories).mockResolvedValue([]);
+    vi.mocked(listFolders).mockResolvedValue([]);
+    vi.mocked(listSessionsPage).mockResolvedValue({
+      sessions: [],
+      next_cursor: null,
+    });
+    vi.mocked(forgetEverything).mockResolvedValueOnce({
+      blobs_removed: 3,
+      source_paths: [],
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Forget everything" }));
+    });
+
+    expect(forgetEverything).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Archive cleared (3 blob(s) removed).");
+    expect(screen.queryByRole("heading", { name: "Initial session", level: 2 })).toBeNull();
   });
 });
