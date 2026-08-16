@@ -93,4 +93,19 @@ describe("FolderList", () => {
     fireEvent.drop(row, { dataTransfer });
     expect(props.onDropSession).toHaveBeenCalledWith("f1", "sess-9");
   });
+
+  it("toggles is-dragover class on dragOver and dragLeave with valid session mime", () => {
+    setup();
+    const row = screen.getByText("Inbox").closest("li")!;
+    const dataTransfer = {
+      types: ["application/x-lore-session"],
+      dropEffect: "",
+    };
+    fireEvent.dragOver(row, { dataTransfer });
+    expect(row.classList.contains("is-dragover")).toBe(true);
+    expect(dataTransfer.dropEffect).toBe("move");
+
+    fireEvent.dragLeave(row);
+    expect(row.classList.contains("is-dragover")).toBe(false);
+  });
 });

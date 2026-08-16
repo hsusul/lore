@@ -1997,6 +1997,22 @@
   2. *Error handling:* Verify graceful UI error banner dismissal.
   3. *Performance/allocations:* Review regex compilation in secret scanner.
 
+## Iteration 134
+- **Lens:** Missing tests/edge cases
+- **Change:** Add dragOver and dragLeave class toggle tests in `FolderList.test.tsx` (`src/components/FolderList.test.tsx`).
+- **Critique:**
+  - `FolderList.test.tsx` tested dropping a session, but did not assert that `is-dragover` CSS class and `dropEffect = "move"` are set on `dragOver` and cleared on `dragLeave`.
+  - Fix: Added a unit test verifying `is-dragover` class toggling and `dropEffect` assignment.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (105 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Verify graceful UI error banner dismissal.
+  2. *Performance/allocations:* Review regex compilation in secret scanner.
+  3. *API & DTO ergonomics:* Audit error message serialization on IPC commands.
+
+
 
 
 
