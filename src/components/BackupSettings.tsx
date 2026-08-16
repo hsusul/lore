@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
 
-import { backupNow, getBackupSchedule, setBackupSchedule } from "../ipc";
+import {
+  backupNow,
+  getBackupSchedule,
+  setBackupSchedule,
+  type BackupInterval,
+} from "../ipc";
 
-const INTERVALS = [
+const INTERVALS: { value: BackupInterval; label: string }[] = [
   { value: "off", label: "Off" },
   { value: "daily", label: "Daily" },
   { value: "weekly", label: "Weekly" },
@@ -15,7 +20,7 @@ const INTERVALS = [
  * removed by "Forget everything".
  */
 export default function BackupSettings() {
-  const [interval, setIntervalValue] = useState("off");
+  const [interval, setIntervalValue] = useState<BackupInterval>("off");
   const [keep, setKeep] = useState(5);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,7 +30,7 @@ export default function BackupSettings() {
     getBackupSchedule()
       .then((s) => {
         if (alive) {
-          setIntervalValue(s.interval);
+          setIntervalValue(s.interval as BackupInterval);
           setKeep(s.keep);
         }
       })
@@ -35,7 +40,7 @@ export default function BackupSettings() {
     };
   }, []);
 
-  async function persist(nextInterval: string, nextKeep: number) {
+  async function persist(nextInterval: BackupInterval, nextKeep: number) {
     setIntervalValue(nextInterval);
     setKeep(nextKeep);
     setStatus(null);
@@ -73,7 +78,7 @@ export default function BackupSettings() {
         <select
           id="backup-interval"
           value={interval}
-          onChange={(event) => void persist(event.target.value, keep)}
+          onChange={(event) => void persist(event.target.value as BackupInterval, keep)}
         >
           {INTERVALS.map((option) => (
             <option key={option.value} value={option.value}>

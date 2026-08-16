@@ -857,6 +857,22 @@
   2. *Naming/consistency:* Reconcile button variant classes across components.
   3. *ROADMAP progression:* Audit M7 deletion sweep verification plan.
 
+## Iteration 57
+- **Lens:** Dead code & duplication
+- **Change:** Utilize `BackupInterval` type across state and functions in `BackupSettings.tsx` (`src/components/BackupSettings.tsx`).
+- **Critique:**
+  - `BackupSettings.tsx` used untyped primitive strings for interval values rather than importing and using the domain `BackupInterval` union type.
+  - Fix: Applied `BackupInterval` type to state, `INTERVALS` option array, and `persist` arguments in `src/components/BackupSettings.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Reconcile button variant classes across components.
+  2. *ROADMAP progression:* Audit M7 deletion sweep verification plan.
+  3. *Dependency/build hygiene:* Audit Cargo.lock workspace dependencies.
+
+
 
 
 
