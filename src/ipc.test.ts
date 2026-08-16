@@ -11,6 +11,7 @@ import {
   addAgentRoot,
   chooseAgentRootDirectory,
   listDetectedAgents,
+  listFolderSessionsPage,
   listRepositorySessionsPage,
   listSessions,
   listSessionsPage,
@@ -69,6 +70,8 @@ describe("ipc contract", () => {
     invoke.mockResolvedValue({ sessions: [], next_cursor: null });
     await listSessionsPage(100, "all-cursor");
     await listRepositorySessionsPage("repo-a", 100, "repo-cursor");
+    await listFolderSessionsPage("folder-1", 100, "folder-cursor");
+    await listFolderSessionsPage("folder-1", 50);
 
     expect(invoke).toHaveBeenNthCalledWith(1, "list_sessions_page", {
       limit: 100,
@@ -78,6 +81,16 @@ describe("ipc contract", () => {
       id: "repo-a",
       limit: 100,
       cursor: "repo-cursor",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, "list_folder_sessions_page", {
+      id: "folder-1",
+      limit: 100,
+      cursor: "folder-cursor",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(4, "list_folder_sessions_page", {
+      id: "folder-1",
+      limit: 50,
+      cursor: null,
     });
   });
 

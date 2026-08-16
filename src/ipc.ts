@@ -25,6 +25,7 @@ import type { SessionPage } from "../crates/lore-ipc/bindings/SessionPage";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 
 export type {
+  BackupScheduleDto,
   DetectedAgent,
   FileEventDto,
   FolderSummary,
@@ -139,7 +140,7 @@ export function setSessionFolder(sessionId: string, folderId: string | null): Pr
 export function listFolderSessionsPage(
   id: string,
   limit: number,
-  cursor: string | null,
+  cursor: string | null = null,
 ): Promise<SessionPage> {
   return invoke<SessionPage>("list_folder_sessions_page", { id, limit, cursor });
 }
@@ -217,8 +218,6 @@ export function getSetting(key: string): Promise<string | null> {
 export function setSetting(key: string, valueJson: string): Promise<void> {
   return invoke<void>("set_setting", { key, valueJson });
 }
-
-export type { BackupScheduleDto };
 
 /** Read the automatic-backup schedule (interval + retention). */
 export function getBackupSchedule(): Promise<BackupScheduleDto> {
