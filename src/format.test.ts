@@ -1,0 +1,55 @@
+import { describe, expect, it } from "vitest";
+
+import { agentLabel, formatRelative, formatTime } from "./format";
+
+describe("format helpers", () => {
+  describe("agentLabel", () => {
+    it("maps known agent ids to friendly display names", () => {
+      expect(agentLabel("claude-code")).toBe("Claude");
+      expect(agentLabel("codex")).toBe("Codex");
+    });
+
+    it("falls back to raw id for unknown agents", () => {
+      expect(agentLabel("gemini-cli")).toBe("gemini-cli");
+      expect(agentLabel("custom-agent")).toBe("custom-agent");
+    });
+  });
+
+  describe("formatTime", () => {
+    it("returns empty string for null", () => {
+      expect(formatTime(null)).toBe("");
+    });
+
+    it("formats a valid millisecond epoch timestamp", () => {
+      const formatted = formatTime(1_700_000_000_000);
+      expect(formatted).toBeTruthy();
+      expect(typeof formatted).toBe("string");
+    });
+  });
+
+  describe("formatRelative", () => {
+    it("returns empty string for null", () => {
+      expect(formatRelative(null)).toBe("");
+    });
+
+    it("handles future timestamps or clock skew gracefully without negative numbers", () => {
+      const now = Date.now();
+      expect(formatRelative(now + 10_000)).toBe("just now");
+      expect(formatRelative(now + 60_000)).toBe("just now");
+    });
+
+    it("formats recent seconds as 'just now'", () => {
+      const now = Date.now();
+      expect(formatRelative(now - 10_000)).toBe("just now");
+      expect(formatRelative(now - 40_000)).toBe("just now");
+    });
+
+    it("formats minutes, hours, days, and weeks", () => {
+      const now = Date.now();
+      expect(formatRelative(now - 5 * 60 * 1000)).toBe("5m");
+      expect(formatRelative(now - 3 * 60 * 60 * 1000)).toBe("3h");
+      expect(formatRelative(now - 2 * 24 * 60 * 60 * 1000)).toBe("2d");
+      expect(formatRelative(now - 14 * 24 * 60 * 60 * 1000)).toBe("2w");
+    });
+  });
+});

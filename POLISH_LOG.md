@@ -557,6 +557,22 @@
   2. *Missing tests/edge cases:* Test sort order switching in frontend search UI.
   3. *Error handling:* Validate folder name trim handling for empty strings on rename.
 
+## Iteration 37
+- **Lens:** Correctness bugs
+- **Change:** Clamp future clock skew in relative timestamp formatting and add test suite (`src/format.ts`, `src/format.test.ts`).
+- **Critique:**
+  - `formatRelative` in `src/format.ts` produced negative time outputs like `"-2m"` when given future timestamps or when system clocks had skew across processes.
+  - Fix: Clamped relative time difference `diff <= 45_000` to return `"just now"`, and added a full unit test suite in `src/format.test.ts`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 11 test files passed (97 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test sort order switching in search UI components.
+  2. *Error handling:* Verify error handling when renaming a folder to an empty string.
+  3. *Performance/allocations:* Audit CSS animations for GPU acceleration properties.
+
+
 
 
 

@@ -25,8 +25,9 @@ export function formatTime(ms: number | null): string {
 /** Compact relative time ("just now", "5m", "3h", "2d", "4w", or a date). */
 export function formatRelative(ms: number | null): string {
   if (ms == null) return "";
-  const seconds = Math.round((Date.now() - ms) / 1000);
-  if (seconds < 45) return "just now";
+  const diff = Date.now() - ms;
+  if (diff <= 45_000) return "just now";
+  const seconds = Math.round(diff / 1000);
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.round(minutes / 60);
