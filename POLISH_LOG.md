@@ -2539,6 +2539,22 @@
   2. *Error handling:* Audit unwrap/expect in non-test test utilities or benchmark harnesses.
   3. *Performance/allocations:* Stream file path normalizations in session detail rendering.
 
+## Iteration 170
+- **Lens:** Missing tests/edge cases
+- **Change:** Add test and minimum header size validation for 0-byte/truncated database files in recovery (`crates/lore-core/src/recovery.rs`, `crates/lore-core/tests/recovery.rs`).
+- **Critique:**
+  - SQLite treats a 0-byte file as an empty valid database without tables, which caused `PRAGMA integrity_check` to return "ok" on empty/truncated files (< 100 byte SQLite header) rather than quarantining and restoring from a healthy backup.
+  - Fix: Added a minimum file size check (`>= 100` bytes) to `integrity_ok` in `recovery.rs` and added integration test `recover_archive_handles_zero_byte_empty_file` in `tests/recovery.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Audit unwrap/expect in non-test test utilities or benchmark harnesses.
+  2. *Performance/allocations:* Stream file path normalizations in session detail rendering.
+  3. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
+
+
 
 
 

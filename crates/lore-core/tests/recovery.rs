@@ -205,3 +205,18 @@ fn recover_archive_falls_back_to_older_backup_when_newest_is_corrupt() {
         "restored database matches initial state"
     );
 }
+
+#[test]
+fn recover_archive_handles_zero_byte_empty_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    std::fs::write(dir.path().join("lore.db"), b"").unwrap();
+
+    let outcome = recover_archive(dir.path(), &backups).unwrap();
+    let quarantine_path = match outcome {
+        RecoveryOutcome::QuarantinedOnly { quarantine_path } => quarantine_path,
+        other => panic!("expected QuarantinedOnly, got {other:?}"),
+    };
+    assert_eq!(std::fs::read(&quarantine_path).unwrap(), b"");
+}

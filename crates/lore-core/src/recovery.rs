@@ -95,8 +95,15 @@ pub fn recover_archive(archive_dir: &Path, backup_dir: &Path) -> Result<Recovery
 }
 
 /// Does the database at `db_path` open cleanly and pass `PRAGMA
-/// integrity_check`? A missing/corrupt file or a non-"ok" result is not intact.
+/// integrity_check`? A missing, truncated (< 100 byte SQLite header), corrupt,
+/// or non-"ok" file is not intact.
 fn integrity_ok(db_path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(db_path) else {
+        return false;
+    };
+    if meta.len() < 100 {
+        return false;
+    }
     let Ok(conn) = Connection::open_with_flags(
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
