@@ -12,6 +12,9 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 
+[lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 

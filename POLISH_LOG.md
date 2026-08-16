@@ -1607,6 +1607,22 @@
   2. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
   3. *Missing tests/edge cases:* Add unit test for empty folder pagination query.
 
+## Iteration 108
+- **Lens:** Dependency/build hygiene
+- **Change:** Add `[lints.rust]` `rust_2018_idioms` configuration to `src-tauri/Cargo.toml` (`src-tauri/Cargo.toml`).
+- **Critique:**
+  - `src-tauri/Cargo.toml` configured `[lints.clippy]` but omitted `rust_2018_idioms` in `[lints.rust]`, creating a minor discrepancy with workspace lint standards.
+  - Fix: Added `[lints.rust] rust_2018_idioms = { level = "warn", priority = -1 }`.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
+  2. *Missing tests/edge cases:* Add unit test for empty folder pagination query.
+  3. *Error handling:* Verify error message propagation on empty folder queries.
+
+
 
 
 ## Iteration 105
