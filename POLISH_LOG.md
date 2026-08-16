@@ -512,6 +512,22 @@
   2. *ROADMAP progression:* Check M6 performance benchmark targets in `docs/architecture/SEARCH.md`.
   3. *Dependency/build hygiene:* Audit Cargo.lock and npm package-lock for clean dependency graphs.
 
+## Iteration 34
+- **Lens:** Naming/consistency
+- **Change:** Add semantic `.modal-backdrop` class alias in CSS and apply to Settings modal (`src/styles.css`, `src/components/SettingsPanel.tsx`).
+- **Critique:**
+  - Dialog overlay styles were coupled exclusively to `.palette__backdrop`, using palette-specific naming for settings and general modal dialogs.
+  - Fix: Aliased `.modal-backdrop` with `.palette__backdrop` in `styles.css` and added `.modal-backdrop` to `SettingsPanel.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (89 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Reconcile search ranking boost tuning notes in `SEARCH.md`.
+  2. *Dependency/build hygiene:* Check package.json scripts and dependency locks.
+  3. *Correctness bugs:* Audit date format edge cases in session duration formatting.
+
+
 
 
 
