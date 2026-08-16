@@ -632,6 +632,22 @@
   2. *UX & accessibility:* Audit focus restoration on modal dismiss in SettingsPanel.
   3. *Security/input validation:* Check setting key validation against non-printable ASCII or control characters.
 
+## Iteration 42
+- **Lens:** Docs accuracy vs code
+- **Change:** Document folder name sanitization rules in data model schema (`docs/architecture/DATA_MODEL.md`).
+- **Critique:**
+  - `docs/architecture/DATA_MODEL.md` §3 described the `Folder` entity schema but did not document name normalization invariants (control character filtering, length capping at 100 characters, whitespace trimming, and default fallback).
+  - Fix: Updated `docs/architecture/DATA_MODEL.md` §3 with folder name normalization invariants.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 11 test files passed (98 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit focus restoration on modal dismiss in SettingsPanel.
+  2. *Security/input validation:* Validate setting key arguments against non-printable ASCII characters.
+  3. *Dead code & duplication:* Audit redundant interface types across components.
+
+
 
 
 
