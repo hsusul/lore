@@ -1217,6 +1217,22 @@
   2. *Naming/consistency:* Audit error messages across IPC boundary commands.
   3. *ROADMAP progression:* Review M7 release packaging verification gates in ROADMAP.
 
+## Iteration 81
+- **Lens:** Dead code & duplication
+- **Change:** Group `.dot--accent` and `.dot--confirmed` CSS selector rules in `styles.css` (`src/styles.css`).
+- **Critique:**
+  - `src/styles.css` defined `.dot--accent` and `.dot--confirmed` in separate consecutive rules with duplicate `background: var(--accent)` declarations.
+  - Fix: Grouped `.dot--accent, .dot--confirmed` into a single combined rule.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit error messages across IPC boundary commands in `lib.rs`.
+  2. *ROADMAP progression:* Review M7 release packaging verification gates in ROADMAP.
+  3. *Dependency/build hygiene:* Audit Cargo workspace metadata tags.
+
+
 
 
 

@@ -508,9 +508,7 @@ button:disabled {
   background: var(--text-3);
 }
 
-.dot--accent {
-  background: var(--accent);
-}
+.dot--accent,
 .dot--confirmed {
   background: var(--accent);
 }
