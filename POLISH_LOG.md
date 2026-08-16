@@ -3215,6 +3215,22 @@
   2. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
   3. *Correctness bugs:* Audit empty search string handling.
 
+## Iteration 215
+- **Lens:** ROADMAP progression
+- **Change:** Document TypeScript `SecretScanState`/`SecretSeverity` exports, `sanitize_path` security filtering, and `aria-labelledby` modal labeling in `docs/product/ROADMAP.md` M7 current state.
+- **Critique:**
+  - `ROADMAP.md` M7 table did not reflect recent TypeScript IPC domain union exports, control/zero-width path filtering, and screen-reader dialog accessibility improvements.
+  - Fix: Updated `docs/product/ROADMAP.md` M7 summary.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
+  2. *Correctness bugs:* Audit empty search string handling.
+  3. *Missing tests/edge cases:* Audit query cursor decoding boundary tests.
+
+
 
 
 
