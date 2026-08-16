@@ -200,4 +200,10 @@ describe("ipc contract", () => {
       valueJson: "null",
     });
   });
+
+  it("exports strongly-typed domain union types", async () => {
+    const { HIGHLIGHT_START, HIGHLIGHT_END } = await import("./ipc");
+    expect(HIGHLIGHT_START).toBe("\u{e000}");
+    expect(HIGHLIGHT_END).toBe("\u{e001}");
+  });
 });

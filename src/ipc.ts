@@ -51,6 +51,18 @@ export type MessagePartKind =
   | "summary"
   | "opaque"
   | "other";
+export type MessageEventKind =
+  | "message"
+  | "summary"
+  | "compaction"
+  | "attachment"
+  | "title"
+  | "mode"
+  | "pr_link"
+  | "other";
+export type FileEventSource = "agent_patch" | "agent_tool_input" | "lore_capture";
+export type GitObservationProvenance = "agent_recorded" | "lore_captured" | "lore_reverified";
+export type ResolutionConfidence = "high" | "medium" | "low" | "unresolved";
 
 export type {
   BackupScheduleDto,
