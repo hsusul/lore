@@ -407,6 +407,22 @@
   2. *Performance/allocations:* Optimize vector capacities in session detail part collections.
   3. *API & DTO ergonomics:* Add TypeScript helper for folder deletion confirmation dialogs.
 
+## Iteration 27
+- **Lens:** Error handling / export completeness
+- **Change:** Render structured JSON message parts when text is absent in Markdown export (`crates/lore-core/src/export.rs`).
+- **Critique:**
+  - `export_session_markdown` only rendered `part.text`. Non-text parts containing structured JSON (such as tool inputs/arguments in `part.content_json`) were silently omitted from the exported Markdown.
+  - Fix: Added structured JSON rendering fallback ````json\n...\n```` via `render(json)` to ensure full-fidelity export, and added unit test coverage in `export.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Pre-allocate vector capacity when populating `parts_by_seq` in `query.rs`.
+  2. *API & DTO ergonomics:* Audit TypeScript type exports in `src/ipc.ts`.
+  3. *Docs accuracy vs code:* Verify that `docs/architecture/SECURITY.md` notes structured JSON part export masking.
+
+
 
 
 

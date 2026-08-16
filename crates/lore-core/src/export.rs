@@ -62,6 +62,8 @@ pub fn export_session_markdown(
                 _ => {
                     if let Some(text) = &part.text {
                         let _ = writeln!(out, "{}\n", render(text));
+                    } else if let Some(json) = &part.content_json {
+                        let _ = writeln!(out, "```json\n{}\n```\n", render(json));
                     }
                 }
             }
@@ -165,5 +167,20 @@ mod tests {
             rendered.contains("unavailable"),
             "a content-free diagnostic is shown instead"
         );
+    }
+
+    #[test]
+    fn export_renders_structured_json_parts_when_text_is_absent() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"run command\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"cargo test\"}}]}}\n"
+        );
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+        assert!(md.contains("```json"));
+        assert!(md.contains("cargo test"));
     }
 }
