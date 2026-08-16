@@ -3485,6 +3485,22 @@
   2. *Docs accuracy vs code:* Audit error documentation.
   3. *UX & accessibility:* Audit session view badge contrast.
 
+## Iteration 233
+- **Lens:** API & DTO ergonomics
+- **Change:** Export `SearchSortOrder` domain type alias in TypeScript IPC module (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - In TypeScript IPC, `SearchSort` was defined but `SearchSortOrder` (matching Rust `SortOrder` nomenclature) was not exported as a convenient alias.
+  - Fix: Added and exported `SearchSortOrder = SearchSort` with unit test assertions.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Audit error documentation.
+  2. *UX & accessibility:* Audit session view badge contrast.
+  3. *Security/input validation:* Audit regex boundaries.
+
+
 
 
 

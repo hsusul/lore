@@ -26,6 +26,7 @@ import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary"
 
 export type BackupInterval = "off" | "daily" | "weekly";
 export type SearchSort = "relevance" | "newest" | "oldest";
+export type SearchSortOrder = SearchSort;
 export type ParseStatus = "ok" | "partial" | "failed";
 export type IdentityConfidence = "confirmed" | "high" | "medium" | "low";
 export type GitTemporalConfidence =

@@ -214,5 +214,8 @@ describe("ipc contract", () => {
 
     const sourceKind: import("./ipc").SearchSourceKind = "message_part";
     expect(sourceKind).toBe("message_part");
+
+    const sortOrder: import("./ipc").SearchSortOrder = "relevance";
+    expect(sortOrder).toBe("relevance");
   });
 });
