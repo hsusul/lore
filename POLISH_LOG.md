@@ -3425,6 +3425,22 @@
   2. *Missing tests/edge cases:* Audit search term escaping.
   3. *Error handling:* Audit database lock poison error formatting.
 
+## Iteration 229
+- **Lens:** Correctness bugs
+- **Change:** Filter zero-width and control characters in `agent:` and `path:` search query filters (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `parse_query` stripped filter prefixes (`agent:`, `path:`) but did not sanitize zero-width or control characters from the extracted filter value strings, which could result in unmatchable filter predicates or poisoned SQL parameter bindings.
+  - Fix: Sanitized zero-width and control characters from `agent:` and `path:` filter values with unit tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Audit search term escaping.
+  2. *Error handling:* Audit database lock poison error formatting.
+  3. *Performance/allocations:* Audit string allocation in query filters.
+
+
 
 
 

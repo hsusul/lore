@@ -352,12 +352,20 @@ fn parse_query(raw: &str) -> ParsedQuery {
     let mut has_error = false;
     for token in bounded.split_whitespace() {
         if let Some(value) = token.strip_prefix("agent:") {
-            if !value.is_empty() {
-                agent = Some(value.to_string());
+            let clean: String = value
+                .chars()
+                .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
+                .collect();
+            if !clean.is_empty() {
+                agent = Some(clean);
             }
         } else if let Some(value) = token.strip_prefix("path:") {
-            if !value.is_empty() {
-                path = Some(value.to_string());
+            let clean: String = value
+                .chars()
+                .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
+                .collect();
+            if !clean.is_empty() {
+                path = Some(clean);
             }
         } else if token == "has:error" {
             has_error = true;
@@ -530,10 +538,23 @@ mod tests {
     #[test]
     fn sort_order_display_and_parse_roundtrip() {
         for order in [SortOrder::Relevance, SortOrder::Newest, SortOrder::Oldest] {
-            assert_eq!(order.as_str(), format!("{order}"));
             assert_eq!(SortOrder::parse(Some(order.as_str())), order);
+            assert_eq!(order.to_string(), order.as_str());
         }
         assert_eq!(SortOrder::parse(None), SortOrder::Relevance);
         assert_eq!(SortOrder::parse(Some("invalid")), SortOrder::Relevance);
+    }
+
+    #[test]
+    fn parse_query_sanitizes_structured_filters() {
+        let q1 = parse_query("agent:\u{200b}codex\u{200c} path:\0src/lib.rs term");
+        assert_eq!(q1.agent.as_deref(), Some("codex"));
+        assert_eq!(q1.path.as_deref(), Some("src/lib.rs"));
+        assert_eq!(q1.terms, vec!["term".to_string()]);
+
+        let q2 = parse_query("agent:\u{200b} path:\0 has:error");
+        assert_eq!(q2.agent, None);
+        assert_eq!(q2.path, None);
+        assert!(q2.has_error);
     }
 }
