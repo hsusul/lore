@@ -16,13 +16,17 @@ use crate::storage::Result;
 /// Longest accepted folder name; longer input is truncated on a char boundary.
 const MAX_NAME_LEN: usize = 100;
 
+fn is_zero_width(c: char) -> bool {
+    matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
+}
+
 /// Normalize a user-supplied folder name: trim surrounding whitespace, cap the
 /// length, and fall back to a sensible default when empty. Never fails so the
 /// UI can stay optimistic.
 fn clean_name(name: &str) -> String {
     let filtered: String = name
         .chars()
-        .filter(|c| !c.is_control() && *c != '\u{feff}')
+        .filter(|c| !c.is_control() && !is_zero_width(*c))
         .collect();
     let single_line = filtered.split_whitespace().collect::<Vec<_>>().join(" ");
     let capped: String = single_line.chars().take(MAX_NAME_LEN).collect();
@@ -191,6 +195,9 @@ mod tests {
 
         let with_bom = create_folder(&conn, "\u{feff}   \u{feff}").unwrap();
         assert_eq!(with_bom.name, "New folder");
+
+        let with_zero_width = create_folder(&conn, "\u{200b}\u{200c}\u{200d}\u{2060}").unwrap();
+        assert_eq!(with_zero_width.name, "New folder");
 
         let long = create_folder(&conn, &"word ".repeat(30)).unwrap();
         assert!(long.name.chars().count() <= MAX_NAME_LEN);

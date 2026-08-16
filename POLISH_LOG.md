@@ -1277,6 +1277,22 @@
   2. *Missing tests/edge cases:* Add test for invalid session folder input combinations.
   3. *Error handling:* Verify SQLite connection timeout configurations.
 
+## Iteration 85
+- **Lens:** Correctness bugs
+- **Change:** Filter zero-width space and joiner characters (`\u{200b}`, `\u{200c}`, `\u{200d}`, `\u{2060}`) in `clean_name` (`crates/lore-core/src/folders.rs`).
+- **Critique:**
+  - `clean_name` filtered `\u{feff}`, but strings composed of zero-width space (`\u{200b}`), ZWNJ (`\u{200c}`), ZWJ (`\u{200d}`), or word joiner (`\u{2060}`) bypassed fallback and produced invisible folder names in the UI.
+  - Fix: Added `is_zero_width` character filter matching zero-width spaces/joiners so invisible names fall back to `"New folder"`.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Add test for invalid session folder input combinations.
+  2. *Error handling:* Verify SQLite connection timeout configurations.
+  3. *Performance/allocations:* Audit folder listing query statement caching.
+
+
 
 
 
