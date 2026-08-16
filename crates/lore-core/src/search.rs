@@ -306,8 +306,20 @@ impl Cursor {
     }
 }
 
+fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        s
+    } else {
+        let mut idx = max_bytes;
+        while !s.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        &s[..idx]
+    }
+}
+
 fn parse_query(raw: &str) -> ParsedQuery {
-    let bounded = &raw[..raw.len().min(MAX_QUERY_LEN)];
+    let bounded = truncate_to_char_boundary(raw, MAX_QUERY_LEN);
     let mut terms = Vec::new();
     let mut agent = None;
     let mut path = None;
@@ -377,6 +389,18 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(parse_query(&raw).terms.len(), MAX_TERMS);
+    }
+
+    #[test]
+    fn parse_query_truncates_multibyte_utf8_without_panicking() {
+        // Construct a query of ASCII characters up to byte index 511, followed by
+        // a 4-byte UTF-8 emoji spanning bytes 511..515. The slice must not split
+        // the code point.
+        let mut raw = "a".repeat(MAX_QUERY_LEN - 1);
+        raw.push('🦀');
+        let parsed = parse_query(&raw);
+        assert_eq!(parsed.terms.len(), 1);
+        assert_eq!(parsed.terms[0].len(), MAX_QUERY_LEN - 1);
     }
 
     #[test]
