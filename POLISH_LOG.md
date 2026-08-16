@@ -3290,6 +3290,22 @@
   2. *API & DTO ergonomics:* Audit IPC client result helpers.
   3. *Docs accuracy vs code:* Audit IPC documentation.
 
+## Iteration 220
+- **Lens:** Performance/allocations
+- **Change:** Eliminate intermediate string allocations in keyset `Cursor::encode` via single pre-allocated `write!` buffer (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `Cursor::encode` allocated intermediate strings via `v.to_string()` / `"n".to_string()` and a secondary `format!()` heap allocation.
+  - Fix: Streamlined `encode` into a single pre-allocated `String` with capacity 48 bytes using `write!`.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit IPC client result helpers.
+  2. *Docs accuracy vs code:* Audit IPC documentation.
+  3. *UX & accessibility:* Audit command palette search clear button.
+
+
 
 
 

@@ -292,11 +292,16 @@ impl Cursor {
     }
 
     fn encode(&self) -> String {
-        let sa = match self.started_at {
-            Some(v) => v.to_string(),
-            None => "n".to_string(),
-        };
-        format!("{:x}:{}:{}", self.rank.to_bits(), sa, self.id)
+        use std::fmt::Write;
+        let mut out = String::with_capacity(48);
+        let _ = write!(out, "{:x}:", self.rank.to_bits());
+        if let Some(sa) = self.started_at {
+            let _ = write!(out, "{sa}");
+        } else {
+            out.push('n');
+        }
+        let _ = write!(out, ":{}", self.id);
+        out
     }
 
     /// Parse a cursor produced by [`Cursor::encode`]. Any malformed input yields
