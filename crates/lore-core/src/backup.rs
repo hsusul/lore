@@ -189,9 +189,15 @@ pub fn write_schedule(conn: &Connection, schedule: BackupSchedule) -> Result<()>
     crate::settings::set(
         conn,
         KEY_INTERVAL,
-        &format!("\"{}\"", schedule.interval.as_str()),
+        &serde_json::to_string(schedule.interval.as_str())
+            .unwrap_or_else(|_| "\"off\"".to_string()),
     )?;
-    crate::settings::set(conn, KEY_KEEP, &schedule.keep.clamp(1, 100).to_string())?;
+    crate::settings::set(
+        conn,
+        KEY_KEEP,
+        &serde_json::to_string(&schedule.keep.clamp(1, 100))
+            .unwrap_or_else(|_| "5".to_string()),
+    )?;
     Ok(())
 }
 
@@ -284,6 +290,9 @@ pub fn list_backups(backup_dir: &Path) -> Result<Vec<PathBuf>> {
 /// closes the active DB first (SECURITY.md §6). Original agent logs are never
 /// needed: a backup contains the entire archive. Content-free on failure.
 pub fn restore_backup(backup_path: &Path, dst_db_path: &Path) -> Result<()> {
+    if !backup_path.is_file() {
+        return Err(BackupError::Io);
+    }
     let mut dst = Connection::open(dst_db_path).map_err(|_| BackupError::Io)?;
     dst.restore(
         DatabaseName::Main,

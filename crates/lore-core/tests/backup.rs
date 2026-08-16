@@ -206,6 +206,17 @@ fn restore_backup_rejects_a_non_database_file() {
 }
 
 #[test]
+fn restore_backup_rejects_a_nonexistent_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.db");
+    let dst = dir.path().join("out.db");
+    assert!(
+        lore_core::backup::restore_backup(&missing, &dst).is_err(),
+        "restoring from a nonexistent file must fail"
+    );
+}
+
+#[test]
 fn list_backups_lists_only_lore_owned_backups_in_order() {
     let dir = tempfile::tempdir().unwrap();
     let (conn, _blobs) = archive(dir.path());

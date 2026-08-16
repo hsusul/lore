@@ -767,6 +767,22 @@
   2. *Performance/allocations:* Audit pre-allocations in search document projections.
   3. *API & DTO ergonomics:* Audit IPC commands return type clarity for `remove_agent_root`.
 
+## Iteration 51
+- **Lens:** Error handling
+- **Change:** Early-return `BackupError::Io` on nonexistent/directory paths in `restore_backup` and use `serde_json` serialization in `write_schedule` (`crates/lore-core/src/backup.rs`, `crates/lore-core/tests/backup.rs`).
+- **Critique:**
+  - `restore_backup` directly invoked SQLite restore without validating that `backup_path.is_file()`, and `write_schedule` used raw string formatting rather than standard serialization.
+  - Fix: Added `if !backup_path.is_file() { return Err(BackupError::Io); }` check, switched `write_schedule` to `serde_json::to_string`, and added `restore_backup_rejects_a_nonexistent_file` integration test.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Pre-allocate vector capacity in `crates/lore-core/src/search.rs` query keyset builder.
+  2. *API & DTO ergonomics:* Clarify return type documentation in `src/ipc.ts`.
+  3. *Docs accuracy vs code:* Verify `docs/architecture/SEARCH.md` keyset pagination parameters.
+
+
 
 
 
