@@ -887,6 +887,22 @@
   2. *Dependency/build hygiene:* Check Cargo.lock workspace dependencies.
   3. *Correctness bugs:* Audit SQLite index integrity on session folders.
 
+## Iteration 59
+- **Lens:** ROADMAP progression
+- **Change:** Note IPC boundary input hardening in M7 roadmap status (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `docs/product/ROADMAP.md` M7 summary and build sequence listed backups, quarantine, and settings without noting IPC boundary validation hardening.
+  - Fix: Updated `docs/product/ROADMAP.md` under M7 in Current state and Next build sequence.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit `package.json` scripts and devDependencies.
+  2. *Correctness bugs:* Audit SQLite index coverage on session folders.
+  3. *Missing tests/edge cases:* Add test for setting invalid backup retention values.
+
+
 
 
 
