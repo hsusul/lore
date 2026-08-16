@@ -229,10 +229,13 @@ fn query_session_page(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let has_more = sessions.len() > limit as usize;
     sessions.truncate(limit as usize);
-    let next_cursor = has_more
-        .then(|| sessions.last().map(SessionCursor::from_row))
-        .flatten()
-        .map(|cursor| cursor.encode());
+    let next_cursor = if has_more {
+        sessions
+            .last()
+            .map(|s| SessionCursor::encode_parts(s.started_at, &s.id))
+    } else {
+        None
+    };
     Ok(SessionPage {
         sessions,
         next_cursor,
@@ -249,19 +252,16 @@ struct SessionCursor {
 }
 
 impl SessionCursor {
-    fn from_row(session: &SessionSummary) -> Self {
-        Self {
-            started_at: session.started_at,
-            id: session.id.clone(),
-        }
+    fn encode_parts(started_at: Option<i64>, id: &str) -> String {
+        let started_at = started_at
+            .map_or_else(|| "n".to_string(), |value| value.to_string());
+        let id = id.replace('%', "%25").replace(':', "%3A");
+        format!("{started_at}:{id}")
     }
 
+    #[cfg(test)]
     fn encode(&self) -> String {
-        let started_at = self
-            .started_at
-            .map_or_else(|| "n".to_string(), |value| value.to_string());
-        let id = self.id.replace('%', "%25").replace(':', "%3A");
-        format!("{started_at}:{id}")
+        Self::encode_parts(self.started_at, &self.id)
     }
 
     fn decode(raw: &str) -> Option<Self> {

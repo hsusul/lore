@@ -1667,6 +1667,22 @@
   2. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
   3. *Docs accuracy vs code:* Verify custom root path validation docs.
 
+## Iteration 112
+- **Lens:** Performance/allocations
+- **Change:** Avoid intermediate string clone in `query_session_page` cursor encoding (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `query_session_page` cloned `session.id` into a temporary `SessionCursor` struct before calling `.encode()`.
+  - Fix: Added `SessionCursor::encode_parts(started_at, id)` to format cursor strings directly from row references without copying string fields.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
+  2. *Docs accuracy vs code:* Verify custom root path validation docs.
+  3. *UX & accessibility:* Audit keyboard navigation in folder row list items.
+
+
 
 
 
