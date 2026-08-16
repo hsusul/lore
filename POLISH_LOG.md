@@ -2674,6 +2674,22 @@
   2. *Dependency/build hygiene:* Audit workspace Cargo dependencies for duplicate features.
   3. *Correctness bugs:* Audit error boundaries around async operations.
 
+## Iteration 179
+- **Lens:** ROADMAP progression
+- **Change:** Document minimum header size validation and path sanitization drive neutralization in M7 current state (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `ROADMAP.md` M7 status notes had not recorded the empty/0-byte corrupted database recovery probe validation or Windows drive letter path sanitization.
+  - Fix: Updated `docs/product/ROADMAP.md` M7 table entry to reflect both safety measures.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace Cargo dependencies for duplicate features.
+  2. *Correctness bugs:* Audit error boundaries around async operations.
+  3. *Missing tests/edge cases:* Audit null handling in relative time formatting.
+
+
 
 
 
