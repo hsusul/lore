@@ -175,6 +175,40 @@ describe("SearchResults", () => {
     expect(onExitUp).toHaveBeenCalledTimes(2);
   });
 
+  it("navigates with j, k, Home and End keys", () => {
+    render(
+      <SearchResults
+        hits={[
+          hit({ session_id: "a", source_id: "pa" }),
+          hit({ session_id: "b", source_id: "pb" }),
+          hit({ session_id: "c", source_id: "pc" }),
+        ]}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    const listbox = screen.getByRole("listbox", { name: /search results/i });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+
+    // 'j' moves down
+    fireEvent.keyDown(listbox, { key: "j" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+
+    // 'End' jumps to the end
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-2");
+
+    // 'k' moves up
+    fireEvent.keyDown(listbox, { key: "k" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+
+    // 'Home' jumps to the start
+    fireEvent.keyDown(listbox, { key: "Home" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+  });
+
   it("opens the active result on Enter", () => {
     const onOpen = vi.fn();
     render(

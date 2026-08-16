@@ -2719,6 +2719,22 @@
   2. *Error handling:* Audit unwrap/expect in test utilities.
   3. *Performance/allocations:* Audit string allocations in search snippet highlight parser.
 
+## Iteration 182
+- **Lens:** Missing tests/edge cases
+- **Change:** Add comprehensive tests for `j`, `k`, `Home`, and `End` roving keyboard navigation in `SearchResults` (`src/components/SearchResults.test.tsx`).
+- **Critique:**
+  - `SearchResults.test.tsx` covered arrow keys and Enter, but lacked unit tests asserting that vim-style `j`/`k` and `Home`/`End` correctly moved the `aria-activedescendant` index.
+  - Fix: Added `navigates with j, k, Home and End keys` test in `SearchResults.test.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Audit unwrap/expect in test utilities.
+  2. *Performance/allocations:* Audit string allocations in search snippet highlight parser.
+  3. *API & DTO ergonomics:* Audit TypeScript error types in IPC client.
+
+
 
 
 
