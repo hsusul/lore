@@ -662,6 +662,22 @@
   2. *Dead code & duplication:* Audit redundant interface types across components.
   3. *Naming/consistency:* Audit CSS variable definitions in index.css.
 
+## Iteration 44
+- **Lens:** Security/input validation
+- **Change:** Validate key length and reject control characters in `get_setting` and `set_setting` (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `get_setting` and `set_setting` accepted arbitrarily long setting keys without checking length bounds (`key.len() <= 128`) or rejecting ASCII control characters, leaving the boundary open to unbounded keys or SQLite C-string anomalies.
+  - Fix: Added bounds checking (`!key.is_empty() && key.len() <= 128 && !key.chars().any(|c| c.is_control())`) in `get_setting` and `set_setting`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Consolidate duplicate CSS transition timings.
+  2. *Naming/consistency:* Audit color token naming in styles.css.
+  3. *ROADMAP progression:* Audit M7 forget-everything test coverage.
+
+
 
 
 
