@@ -385,5 +385,28 @@ mod tests {
             serde_json::from_str::<SearchPage>(&page_json).unwrap(),
             search_page
         );
+
+        let report = ForgetReport {
+            blobs_removed: 5,
+            source_paths: vec!["/Users/dev/.codex/sessions/s1.jsonl".into()],
+        };
+        let rep_json = serde_json::to_string(&report).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ForgetReport>(&rep_json).unwrap(),
+            report
+        );
+
+        let rescan = RescanResult {
+            discovered: 10,
+            ingested: 8,
+            skipped: 2,
+            failed: 0,
+            enriched: 8,
+        };
+        let rescan_json = serde_json::to_string(&rescan).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RescanResult>(&rescan_json).unwrap(),
+            rescan
+        );
     }
 }

@@ -3380,6 +3380,22 @@
   2. *ROADMAP progression:* Audit status alignment.
   3. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
 
+## Iteration 226
+- **Lens:** Naming/consistency
+- **Change:** Add JSON serialization and roundtrip test coverage for `ForgetReport` and `RescanResult` in `crates/lore-ipc/src/lib.rs`.
+- **Critique:**
+  - `lore-ipc` tested JSON roundtripping for session, agent, search, and backup DTOs, but lacked unit tests verifying `ForgetReport` and `RescanResult` roundtrips.
+  - Fix: Added `ForgetReport` and `RescanResult` roundtrip test assertions in `crates/lore-ipc`.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Audit status alignment.
+  2. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
+  3. *Correctness bugs:* Audit empty search string handling.
+
+
 
 
 
