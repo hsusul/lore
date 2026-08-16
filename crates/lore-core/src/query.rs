@@ -266,7 +266,23 @@ impl SessionCursor {
             "n" => None,
             value => Some(value.parse().ok()?),
         };
-        let id = encoded_id.replace("%3A", ":").replace("%25", "%");
+        let mut id = String::with_capacity(encoded_id.len());
+        let mut chars = encoded_id.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '%' {
+                let next_two: String = chars.by_ref().take(2).collect();
+                match next_two.as_str() {
+                    "25" => id.push('%'),
+                    "3A" | "3a" => id.push(':'),
+                    _ => {
+                        id.push('%');
+                        id.push_str(&next_two);
+                    }
+                }
+            } else {
+                id.push(c);
+            }
+        }
         Some(Self { started_at, id })
     }
 }
@@ -783,6 +799,23 @@ mod tests {
             6,
             "all rows with identical timestamps paginated without duplicates"
         );
+    }
+
+    #[test]
+    fn session_cursor_roundtrips_complex_ids() {
+        for (started_at, id) in [
+            (Some(1_700_000_000_i64), "simple-id"),
+            (None, "null-time-id"),
+            (Some(123), "id:with:colons"),
+            (Some(456), "id%with%percent"),
+            (Some(789), "id%3Awith%25encoded"),
+            (None, "%253A"),
+        ] {
+            let encoded = SessionCursor::encode_parts(started_at, id);
+            let decoded = SessionCursor::decode(&encoded).expect("cursor decodes");
+            assert_eq!(decoded.started_at, started_at);
+            assert_eq!(decoded.id, id);
+        }
     }
 
     #[test]

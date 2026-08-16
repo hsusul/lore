@@ -3065,6 +3065,22 @@
   2. *Missing tests/edge cases:* Audit null handling in search queries.
   3. *Error handling:* Audit unwrap/expect in test utilities.
 
+## Iteration 205
+- **Lens:** Correctness bugs
+- **Change:** Implement single-pass percent decoding for `SessionCursor::decode` to avoid replace collision bugs (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `SessionCursor::decode` chained `.replace("%3A", ":").replace("%25", "%")`, which incorrectly decoded ids containing encoded sequence substrings like `%253A` into `%:` instead of `%3A`.
+  - Fix: Implemented single-pass scanner decoding of `%25` and `%3A` with comprehensive roundtrip unit tests.
+- **Validation Results:**
+  - `cargo test --workspace`: 95 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Audit null handling in search queries.
+  2. *Error handling:* Audit unwrap/expect in test utilities.
+  3. *Performance/allocations:* Audit string allocations in query builders.
+
+
 
 
 
