@@ -977,6 +977,22 @@
   2. *Docs accuracy vs code:* Reconcile recovery documentation in `SECURITY.md`.
   3. *UX & accessibility:* Verify focus indicators on folder action buttons.
 
+## Iteration 65
+- **Lens:** API & DTO ergonomics
+- **Change:** Document `list_folder_sessions_page` command on `SessionPage` DTO in `lore-ipc` (`crates/lore-ipc/src/lib.rs`).
+- **Critique:**
+  - `SessionPage` DTO doc comments listed `list_sessions_page` and `list_repository_sessions_page` but omitted `list_folder_sessions_page`.
+  - Fix: Updated `SessionPage` doc comments in `crates/lore-ipc/src/lib.rs` and regenerated TypeScript bindings.
+- **Validation Results:**
+  - `cargo test --workspace`: 83 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Reconcile recovery documentation in `SECURITY.md`.
+  2. *UX & accessibility:* Verify focus indicators on folder action buttons.
+  3. *Security/input validation:* Check IPC repository command argument length limits.
+
+
 
 
 
