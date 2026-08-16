@@ -1412,6 +1412,22 @@
   2. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
   3. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
 
+## Iteration 94
+- **Lens:** Naming/consistency
+- **Change:** Add `path` parameter boundary checks to `add_agent_root` and `remove_agent_root` in `lib.rs` (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `add_agent_root` and `remove_agent_root` validated `agent_id`, but did not check `path` length or control characters at the IPC boundary.
+  - Fix: Added `path.is_empty() || path.len() > 4096 || path.chars().any(|c| c.is_control())` input checks.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Review scale test suite execution commands in TESTING.md.
+  2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  3. *Correctness bugs:* Audit FTS5 rank score formatting in search results.
+
+
 
 
 

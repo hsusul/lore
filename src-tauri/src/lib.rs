@@ -473,6 +473,9 @@ fn add_agent_root(
     if agent_id.is_empty() || agent_id.len() > 64 || agent_id.chars().any(|c| c.is_control()) {
         return Err("invalid agent id".to_string());
     }
+    if path.is_empty() || path.len() > 4096 || path.chars().any(|c| c.is_control()) {
+        return Err("invalid root path".to_string());
+    }
     let config = {
         let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
         lore_core::source_roots::add_custom_root(&conn, &state.registry, &agent_id, &path)
@@ -492,6 +495,9 @@ fn remove_agent_root(
 ) -> Result<(), String> {
     if agent_id.is_empty() || agent_id.len() > 64 || agent_id.chars().any(|c| c.is_control()) {
         return Err("invalid agent id".to_string());
+    }
+    if path.is_empty() || path.len() > 4096 || path.chars().any(|c| c.is_control()) {
+        return Err("invalid root path".to_string());
     }
     let config = {
         let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
