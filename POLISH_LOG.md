@@ -1862,6 +1862,22 @@
   2. *Docs accuracy vs code:* Verify setting key validation docstrings.
   3. *UX & accessibility:* Review focus outline contrast on folder rename inputs.
 
+## Iteration 125
+- **Lens:** API & DTO ergonomics
+- **Change:** Add `SessionDetail` container field cross-references to `SegmentDto`, `MessageDto`, and `FileEventDto` docstrings (`crates/lore-ipc/src/lib.rs`).
+- **Critique:**
+  - `SegmentDto`, `MessageDto`, and `FileEventDto` lacked docstrings explaining their containment within `SessionDetail`, making generated TypeScript bindings less descriptive.
+  - Fix: Annotated each child DTO with its parent `SessionDetail` field reference and regenerated TypeScript bindings.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Verify setting key validation docstrings.
+  2. *UX & accessibility:* Review focus outline contrast on folder rename inputs.
+  3. *Security/input validation:* Check setting size boundaries.
+
+
 
 
 

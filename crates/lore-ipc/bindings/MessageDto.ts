@@ -2,7 +2,7 @@
 import type { MessagePartDto } from "./MessagePartDto";
 
 /**
- * One message/turn with its ordered parts.
+ * One message/turn with its ordered parts. Element of `SessionDetail.messages`.
  */
 export type MessageDto = { id: string, seq: number, 
 /**

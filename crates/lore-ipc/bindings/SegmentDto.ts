@@ -2,7 +2,7 @@
 
 /**
  * A context segment (cwd/model/provider valid for a seq range), with its
- * resolved repository link and confidence.
+ * resolved repository link and confidence. Element of `SessionDetail.segments`.
  */
 export type SegmentDto = { id: string, seq_start: number, seq_end: number, cwd: string | null, model: string | null, provider: string | null, repository_id: string | null, 
 /**

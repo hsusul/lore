@@ -117,7 +117,7 @@ pub struct MessagePartDto {
     pub searchable: bool,
 }
 
-/// One message/turn with its ordered parts.
+/// One message/turn with its ordered parts. Element of `SessionDetail.messages`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct MessageDto {
@@ -137,7 +137,7 @@ pub struct MessageDto {
 }
 
 /// A context segment (cwd/model/provider valid for a seq range), with its
-/// resolved repository link and confidence.
+/// resolved repository link and confidence. Element of `SessionDetail.segments`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SegmentDto {
@@ -154,7 +154,7 @@ pub struct SegmentDto {
     pub resolution_confidence: String,
 }
 
-/// A file the session touched.
+/// A file the session touched. Element of `SessionDetail.file_events`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct FileEventDto {
