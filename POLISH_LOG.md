@@ -1742,6 +1742,22 @@
   2. *Naming/consistency:* Review CSS class naming consistency in settings components.
   3. *ROADMAP progression:* Audit status markings in docs/product/ROADMAP.md.
 
+## Iteration 117
+- **Lens:** Dead code & duplication
+- **Change:** Consolidate `.dot--folder` style into primary `.dot` indicator modifiers section (`src/styles.css`).
+- **Critique:**
+  - `.dot--folder` was defined at line 677 separated from the common indicator dot modifier block at lines 511-525.
+  - Fix: Co-located `.dot--folder` alongside the other `.dot` modifiers in the core indicator utility block.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Review CSS class naming consistency in settings components.
+  2. *ROADMAP progression:* Audit status markings in docs/product/ROADMAP.md.
+  3. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+
+
 
 
 

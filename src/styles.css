@@ -518,6 +518,9 @@ button:disabled {
 .dot--medium {
   background: var(--warn);
 }
+.dot--folder {
+  background: var(--text-2);
+}
 .dot--low,
 .dot--unresolved {
   background: var(--text-3);
@@ -672,10 +675,6 @@ kbd {
 }
 .folder-row.is-dragover .nav-item {
   background: transparent;
-}
-
-.dot--folder {
-  background: var(--text-2);
 }
 
 .folder__field {
