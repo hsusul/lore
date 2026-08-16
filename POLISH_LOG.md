@@ -3230,6 +3230,22 @@
   2. *Correctness bugs:* Audit empty search string handling.
   3. *Missing tests/edge cases:* Audit query cursor decoding boundary tests.
 
+## Iteration 216
+- **Lens:** Dependency/build hygiene
+- **Change:** Audit Cargo workspace dependencies, manifests, and rustfmt compliance across `crates/lore-core`, `crates/lore-ipc`, and `src-tauri`.
+- **Critique:**
+  - Audited `Cargo.toml`, `package.json`, and ran `cargo fmt --all -- --check` across the entire workspace to ensure zero formatting drift or unpinned dependencies.
+  - Fix: Verified clean formatting and dependency boundaries.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit empty search string handling.
+  2. *Missing tests/edge cases:* Audit query cursor decoding boundary tests.
+  3. *Error handling:* Audit database lock recovery.
+
+
 
 
 
