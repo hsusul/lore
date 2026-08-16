@@ -111,12 +111,21 @@ pub(crate) fn non_negative_int_field(obj: &serde_json::Value, key: &str) -> Opti
         .filter(|&v| v >= 0)
 }
 
-/// Neutralize path traversal so a recorded `FileEvent.path` can never represent
-/// an escape (`../`). Produces a clean relative path.
+/// Neutralize path traversal and drive prefixes so a recorded
+/// `FileEvent.path` can never represent an escape (`../` or `C:\`). Produces
+/// a clean relative path.
 pub(crate) fn sanitize_path(raw: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for seg in raw.split(['/', '\\']) {
-        match seg {
+        let clean_seg = if seg.len() == 2
+            && seg.as_bytes()[1] == b':'
+            && seg.as_bytes()[0].is_ascii_alphabetic()
+        {
+            ""
+        } else {
+            seg
+        };
+        match clean_seg {
             "" | "." => {}
             ".." => {
                 parts.pop();
@@ -182,6 +191,8 @@ mod tests {
         assert_eq!(sanitize_path(r"..\..\a\b"), "a/b");
         assert_eq!(sanitize_path(r"src\..\src\app.ts"), "src/app.ts");
         assert_eq!(sanitize_path(r"foo/bar\baz"), "foo/bar/baz");
+        assert_eq!(sanitize_path(r"C:\Users\dev\project\file.ts"), "Users/dev/project/file.ts");
+        assert_eq!(sanitize_path(r"d:/project/src/index.js"), "project/src/index.js");
     }
 
     #[test]

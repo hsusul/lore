@@ -2629,6 +2629,22 @@
   2. *Dead code & duplication:* Remove unused styles or selectors in SettingsPanel styles.
   3. *Naming/consistency:* Audit error diagnostic text consistency in Rust core.
 
+## Iteration 176
+- **Lens:** Security/input validation
+- **Change:** Neutralize Windows drive letter prefixes (e.g. `C:\`) in `sanitize_path` to prevent escaped path representations (`crates/lore-core/src/adapters/common.rs`).
+- **Critique:**
+  - `sanitize_path` split on slashes and backslashes, but retained drive letters like `C:` as path segments (e.g., `C:\path\to\file` became `C:/path/to/file`).
+  - Fix: Upgraded `sanitize_path` to strip 2-byte drive letter segments (`[a-zA-Z]:`) and added integration tests for Windows absolute path inputs.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Remove unused styles or selectors in SettingsPanel styles.
+  2. *Naming/consistency:* Audit error diagnostic text consistency in Rust core.
+  3. *ROADMAP progression:* Update M7 status notes in ROADMAP.md.
+
+
 
 
 
