@@ -313,10 +313,19 @@ fn create_folder(state: State<'_, AppState>, name: String) -> Result<FolderSumma
     lore_core::folders::create_folder(&conn, &name).map_err(|e| e.to_string())
 }
 
+fn is_invalid_folder_id(id: &str) -> bool {
+    id.is_empty()
+        || id.len() > 64
+        || id.chars().any(|c| {
+            c.is_control()
+                || matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
+        })
+}
+
 /// Rename a folder.
 #[tauri::command]
 fn rename_folder(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
-    if id.is_empty() || id.len() > 64 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_folder_id(&id) {
         return Err("invalid folder id".to_string());
     }
     if name.len() > 256 {
@@ -329,7 +338,7 @@ fn rename_folder(state: State<'_, AppState>, id: String, name: String) -> Result
 /// Delete a folder; its threads become unfiled but are not removed from Lore.
 #[tauri::command]
 fn delete_folder(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    if id.is_empty() || id.len() > 64 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_folder_id(&id) {
         return Err("invalid folder id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -348,7 +357,7 @@ fn set_session_folder(
         return Err("invalid session id".to_string());
     }
     if let Some(ref fid) = folder_id {
-        if fid.is_empty() || fid.len() > 64 || fid.chars().any(|c| c.is_control()) {
+        if is_invalid_folder_id(fid) {
             return Err("invalid folder id".to_string());
         }
     }
@@ -365,7 +374,7 @@ fn list_folder_sessions_page(
     limit: i64,
     cursor: Option<String>,
 ) -> Result<SessionPage, String> {
-    if id.is_empty() || id.len() > 64 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_folder_id(&id) {
         return Err("invalid folder id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;

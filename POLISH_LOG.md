@@ -2087,6 +2087,22 @@
   2. *Dead code & duplication:* Audit redundant utility classes in `src/styles.css`.
   3. *Naming/consistency:* Audit CSS custom property prefixing.
 
+## Iteration 140
+- **Lens:** Security/input validation
+- **Change:** Consolidate folder ID validation with `is_invalid_folder_id` in `src-tauri/src/lib.rs` (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - Folder commands (`rename_folder`, `delete_folder`, `set_session_folder`, `list_folder_sessions_page`) checked for control characters but did not reject zero-width Unicode characters in folder identifiers.
+  - Fix: Added `is_invalid_folder_id` helper enforcing length bounds, control character, and zero-width character rejection across all folder handlers.
+- **Validation Results:**
+  - `cargo test --workspace`: 87 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (106 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit redundant utility classes in `src/styles.css`.
+  2. *Naming/consistency:* Audit CSS custom property prefixing.
+  3. *ROADMAP progression:* Audit M7 verification entries.
+
+
 
 
 
