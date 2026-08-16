@@ -2689,6 +2689,22 @@
   2. *Correctness bugs:* Audit error boundaries around async operations.
   3. *Missing tests/edge cases:* Audit null handling in relative time formatting.
 
+## Iteration 180
+- **Lens:** Dependency/build hygiene
+- **Change:** Add `[profile.dev.package."*"] opt-level = 2` to optimize third-party workspace dependencies in development mode (`Cargo.toml`).
+- **Critique:**
+  - Heavy external dependencies (such as C SQLite amalgamation in rusqlite, gix, and parsing libraries) ran unoptimized during dev/test cycles.
+  - Fix: Configured `opt-level = 2` for external dependency packages under the dev profile while keeping workspace crates fast to compile.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Correctness bugs:* Audit error boundaries around async operations.
+  2. *Missing tests/edge cases:* Audit null handling in relative time formatting.
+  3. *Error handling:* Audit unwrap/expect in test utilities.
+
+
 
 
 
