@@ -1502,6 +1502,22 @@
   2. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
   3. *Docs accuracy vs code:* Verify backup settings description in `SECURITY.md`.
 
+## Iteration 100
+- **Lens:** Performance/allocations
+- **Change:** Build quoted FTS5 MATCH expression directly into pre-allocated string in `fts_match` (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `fts_match` mapped terms through intermediate strings and collected into a temporary `Vec<String>` before calling `.join(" ")`.
+  - Fix: Pre-allocated `String::with_capacity(terms.len() * 16)` and formatted quoted phrases and double quotes directly into the output buffer.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
+  2. *Docs accuracy vs code:* Verify backup settings description in `SECURITY.md`.
+  3. *UX & accessibility:* Check active state styling for search pagination buttons.
+
+
 
 
 

@@ -357,18 +357,31 @@ fn fts_match(terms: &[String]) -> Option<String> {
     if terms.is_empty() {
         return None;
     }
-    let quoted: Vec<String> = terms
-        .iter()
-        .map(|term| {
-            let clean: String = term.chars().filter(|&c| c != '\0').collect();
-            format!("\"{}\"", clean.replace('"', "\"\""))
-        })
-        .filter(|q| q != "\"\"")
-        .collect();
-    if quoted.is_empty() {
+    let mut out = String::with_capacity(terms.len() * 16);
+    let mut first = true;
+    for term in terms {
+        let clean: String = term.chars().filter(|&c| c != '\0').collect();
+        if clean.is_empty() {
+            continue;
+        }
+        if !first {
+            out.push(' ');
+        }
+        first = false;
+        out.push('"');
+        for ch in clean.chars() {
+            if ch == '"' {
+                out.push_str("\"\"");
+            } else {
+                out.push(ch);
+            }
+        }
+        out.push('"');
+    }
+    if out.is_empty() {
         None
     } else {
-        Some(quoted.join(" "))
+        Some(out)
     }
 }
 
