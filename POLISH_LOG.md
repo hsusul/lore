@@ -1772,6 +1772,22 @@
   2. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
   3. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
 
+## Iteration 119
+- **Lens:** ROADMAP progression
+- **Change:** Note zero-width character sanitization in M7 summary in `ROADMAP.md` (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `ROADMAP.md` M7 implementation summary noted control-character validation across IPC commands, but omitted zero-width Unicode sanitization.
+  - Fix: Updated M7 status to reflect control-character and zero-width sanitization across all IPC commands.
+- **Validation Results:**
+  - `cargo test --workspace`: 86 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (104 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit workspace Cargo clippy configuration.
+  2. *Correctness bugs:* Audit FTS5 query token escaping edge cases.
+  3. *Missing tests/edge cases:* Add unit tests for zero-width character handling in search query sanitization.
+
+
 
 
 
