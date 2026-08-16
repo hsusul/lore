@@ -42,9 +42,13 @@ export default function SettingsPanel({
   // close, return focus to the element that opened it.
   useEffect(() => {
     if (!open) return;
-    restoreFocusRef.current = document.activeElement as HTMLElement | null;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    restoreFocusRef.current = previousFocus;
     dialogRef.current?.focus();
-    return () => restoreFocusRef.current?.focus?.();
+    return () => {
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
   }, [open]);
 
   if (!open) return null;

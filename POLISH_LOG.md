@@ -1367,6 +1367,22 @@
   2. *Security/input validation:* Check setting key allowed characters regex/bounds.
   3. *Dead code & duplication:* Audit unused CSS helper classes in styles.css.
 
+## Iteration 91
+- **Lens:** UX & accessibility
+- **Change:** Add `isConnected` DOM connection check and safe type narrowing to focus restoration in `SettingsPanel.tsx` (`src/components/SettingsPanel.tsx`).
+- **Critique:**
+  - `SettingsPanel.tsx` called `.focus()` on `restoreFocusRef.current` without checking whether the previously focused node remained connected to the DOM document upon closing the modal.
+  - Fix: Stored `document.activeElement instanceof HTMLElement` and checked `previousFocus?.isConnected` before restoring focus, matching `CommandPalette.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Check setting key allowed characters regex/bounds.
+  2. *Dead code & duplication:* Audit unused CSS helper classes in styles.css.
+  3. *Naming/consistency:* Audit error message formatting in settings operations.
+
+
 
 
 
