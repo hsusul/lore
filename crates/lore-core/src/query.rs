@@ -744,6 +744,45 @@ mod tests {
     }
 
     #[test]
+    fn session_pages_handle_identical_timestamps_without_skips_or_duplicates() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        // 6 sessions sharing the exact same millisecond timestamp
+        for i in 0..6 {
+            let content = concat!(
+                "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"same-time-",
+            );
+            let full_content = format!("{content}{i}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}\n");
+            let parsed = CodexAdapter::new().parse_str(&full_content, &format!("same-time-{i}"));
+            persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+        }
+
+        let expected: Vec<String> = list_sessions(&conn, 100)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(expected.len(), 6);
+
+        let mut actual = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = list_sessions_page(&conn, 2, cursor.as_deref()).unwrap();
+            actual.extend(page.sessions.into_iter().map(|s| s.id));
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+
+        assert_eq!(actual, expected);
+        let unique: std::collections::HashSet<_> = actual.iter().collect();
+        assert_eq!(unique.len(), 6, "all rows with identical timestamps paginated without duplicates");
+    }
+
+    #[test]
     fn empty_database_lists_nothing() {
         let conn = crate::storage::open_in_memory().unwrap();
         assert!(list_sessions(&conn, 10).unwrap().is_empty());

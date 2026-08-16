@@ -193,6 +193,22 @@
   2. *Missing tests/edge cases:* Query pagination with null timestamps boundary conditions.
   3. *Error handling:* Parse safety on malformed JSON payload strings in `set_setting` IPC command.
 
+## Iteration 13
+- **Lens:** Correctness bugs
+- **Change:** Add deterministic regression test verifying keyset pagination tie-breaking over sessions sharing identical timestamps (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - Keyset pagination across varying timestamps was tested, but an explicit regression proof was missing for multi-page traversals through bursts of sessions sharing the exact same millisecond timestamp where the secondary `(started_at = ? AND id < ?)` tie-breaker must prevent duplicate or skipped items across page boundaries.
+  - Fix: Added `session_pages_handle_identical_timestamps_without_skips_or_duplicates` verifying complete, deduplicated iteration across 6 timestamp-colliding sessions with page limit 2.
+- **Validation Results:**
+  - `cargo test --workspace`: 78 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (85 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test `set_setting` and `get_setting` IPC commands with arbitrary JSON types (strings, booleans, objects).
+  2. *Error handling:* Verify error feedback when `rename_folder` is called with a blank name or nonexistent ID.
+  3. *Performance/allocations:* String allocation tuning in `query_session_page`.
+
+
 
 
 
