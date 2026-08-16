@@ -707,6 +707,22 @@
   2. *Dependency/build hygiene:* Check unused dev dependencies in root and crates.
   3. *Correctness bugs:* Audit SQLite index integrity on all v0 tables.
 
+## Iteration 47
+- **Lens:** ROADMAP progression
+- **Change:** Note `SortOrder` multi-mode keyset pagination in M6 roadmap sections (`docs/product/ROADMAP.md`).
+- **Critique:**
+  - `docs/product/ROADMAP.md` M6 summary and test plan referenced BM25 keyset pagination, omitting explicit mention of the relevance/newest/oldest sort suite landed in `crates/lore-core/src/search.rs`.
+  - Fix: Updated `docs/product/ROADMAP.md` under M6 Current State and Milestone Details to specify relevance/newest/oldest sort mode coverage.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (102 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dependency/build hygiene:* Audit unused dev dependencies or scripts in `crates/lore-core/Cargo.toml`.
+  2. *Correctness bugs:* Check `crates/lore-core/src/backup.rs` file permissions error handling.
+  3. *Missing tests/edge cases:* Add regression tests for empty search query handling in `search.rs`.
+
+
 
 
 
