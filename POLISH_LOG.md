@@ -3470,6 +3470,22 @@
   2. *API & DTO ergonomics:* Audit session detail response helpers.
   3. *Docs accuracy vs code:* Audit error documentation.
 
+## Iteration 232
+- **Lens:** Performance/allocations
+- **Change:** Eliminate unnecessary `Value::Real` clones in keyset SQL parameter construction (`crates/lore-core/src/search.rs`).
+- **Critique:**
+  - `keyset` repeatedly cloned intermediate `Value::Real` values for relevance cursor parameter binding.
+  - Fix: Directly initialized `Value::Real` into the params vector.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Audit session detail response helpers.
+  2. *Docs accuracy vs code:* Audit error documentation.
+  3. *UX & accessibility:* Audit session view badge contrast.
+
+
 
 
 

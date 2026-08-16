@@ -219,34 +219,34 @@ fn keyset(sort: SortOrder, cursor: &Option<Cursor>) -> (String, Vec<Value>) {
     };
     match sort {
         SortOrder::Relevance => match c.started_at {
-            Some(sa) => {
-                let r = Value::Real(c.rank);
-                (
-                    " WHERE rank > ?
-                        OR (rank = ? AND sa < ?)
-                        OR (rank = ? AND sa IS NULL)
-                        OR (rank = ? AND sa = ? AND did > ?)"
-                        .to_string(),
-                    vec![
-                        r.clone(),
-                        r.clone(),
-                        Value::Integer(sa),
-                        r.clone(),
-                        r,
-                        Value::Integer(sa),
-                        Value::Integer(c.id),
-                    ],
-                )
-            }
+            Some(sa) => (
+                " WHERE rank > ?
+                    OR (rank = ? AND sa < ?)
+                    OR (rank = ? AND sa IS NULL)
+                    OR (rank = ? AND sa = ? AND did > ?)"
+                    .to_string(),
+                vec![
+                    Value::Real(c.rank),
+                    Value::Real(c.rank),
+                    Value::Integer(sa),
+                    Value::Real(c.rank),
+                    Value::Real(c.rank),
+                    Value::Integer(sa),
+                    Value::Integer(c.id),
+                ],
+            ),
             None => {
                 // Already inside the trailing NULL-started_at block; no
                 // real-timestamp row can follow it at the same rank.
-                let r = Value::Real(c.rank);
                 (
                     " WHERE rank > ?
                         OR (rank = ? AND sa IS NULL AND did > ?)"
                         .to_string(),
-                    vec![r.clone(), r, Value::Integer(c.id)],
+                    vec![
+                        Value::Real(c.rank),
+                        Value::Real(c.rank),
+                        Value::Integer(c.id),
+                    ],
                 )
             }
         },
