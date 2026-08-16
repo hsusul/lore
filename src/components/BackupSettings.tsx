@@ -101,7 +101,13 @@ export default function BackupSettings() {
           }
         />
       </div>
-      <button type="button" className="btn--ghost" onClick={() => void runNow()} disabled={busy}>
+      <button
+        type="button"
+        className="btn--ghost"
+        onClick={() => void runNow()}
+        disabled={busy}
+        aria-busy={busy}
+      >
         {busy ? "Backing up…" : "Back up now"}
       </button>
       {status && (

@@ -2794,6 +2794,22 @@
   2. *Security/input validation:* Audit regex sanitization in search.
   3. *Dead code & duplication:* Audit unused imports in test files.
 
+## Iteration 187
+- **Lens:** UX & accessibility
+- **Change:** Add `aria-busy` attribute to the "Back up now" button in `BackupSettings` and verify in unit tests (`src/components/BackupSettings.tsx`, `src/components/BackupSettings.test.tsx`).
+- **Critique:**
+  - When an on-demand backup was triggered, the button changed text and was disabled, but assistive technologies did not receive an `aria-busy` state update.
+  - Fix: Added `aria-busy={busy}` on the button and unit tested its state transitions.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Audit regex sanitization in search.
+  2. *Dead code & duplication:* Audit unused imports in test files.
+  3. *Naming/consistency:* Audit enum display implementations.
+
+
 
 
 
