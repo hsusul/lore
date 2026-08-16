@@ -1472,6 +1472,22 @@
   2. *Error handling:* Verify query parameter bounds on keyset search cursor parsing.
   3. *Performance/allocations:* Audit SQL parameter allocations in search pagination queries.
 
+## Iteration 98
+- **Lens:** Missing tests/edge cases
+- **Change:** Add `oldest_sort_paginates_without_duplicates` integration test (`crates/lore-core/tests/search.rs`).
+- **Critique:**
+  - `search.rs` had comprehensive test coverage for `SortOrder::Newest` pagination and single-shot `SortOrder::Oldest` ordering, but lacked an integration test verifying full multi-page keyset traversal in `SortOrder::Oldest` mode.
+  - Fix: Added `oldest_sort_paginates_without_duplicates` testing multi-page iteration with null-start sessions.
+- **Validation Results:**
+  - `cargo test --workspace`: 85 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Verify query parameter bounds on keyset search cursor parsing.
+  2. *Performance/allocations:* Audit SQL parameter allocations in search pagination queries.
+  3. *API & DTO ergonomics:* Review DTO docstrings in `lore_ipc`.
+
+
 
 
 

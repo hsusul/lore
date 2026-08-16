@@ -427,3 +427,59 @@ fn newest_sort_paginates_without_duplicates() {
         "no row repeats across newest pages"
     );
 }
+
+#[test]
+fn oldest_sort_paginates_without_duplicates() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    // Ten timestamped sessions plus two null-start ones; page the oldest sort in
+    // twos and require the reassembly to equal the single-shot oldest order.
+    for i in 0..10 {
+        codex_at(
+            &conn,
+            &blobs,
+            &format!("cx{i}"),
+            &format!("2026-08-11T10:00:{i:02}.000Z"),
+            "oldestterm here",
+        );
+    }
+    for i in 0..2 {
+        persist_claude(
+            &conn,
+            &blobs,
+            &user_message(&format!("cl{i}"), "/p", "oldestterm here"),
+            &format!("cl{i}"),
+        );
+    }
+
+    let full: Vec<String> = search_page(&conn, "oldestterm", 50, None, SortOrder::Oldest)
+        .unwrap()
+        .hits
+        .iter()
+        .map(|h| h.session_id.clone())
+        .collect();
+    assert_eq!(full.len(), 12);
+
+    let mut paged = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = search_page(&conn, "oldestterm", 2, cursor.as_deref(), SortOrder::Oldest).unwrap();
+        for h in &page.hits {
+            paged.push(h.session_id.clone());
+        }
+        match page.next_cursor {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
+    }
+    assert_eq!(
+        paged, full,
+        "oldest paging matches single-shot oldest order"
+    );
+    let unique: std::collections::HashSet<_> = paged.iter().cloned().collect();
+    assert_eq!(
+        unique.len(),
+        paged.len(),
+        "no row repeats across oldest pages"
+    );
+}
