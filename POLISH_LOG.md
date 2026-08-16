@@ -2959,6 +2959,22 @@
   2. *UX & accessibility:* Audit keyboard focus order across modals.
   3. *Security/input validation:* Check validation for folder rename tokens.
 
+## Iteration 198
+- **Lens:** Docs accuracy vs code
+- **Change:** Document unified `npm run check` script in `docs/development/DEVELOPMENT.md`.
+- **Critique:**
+  - `docs/development/DEVELOPMENT.md` §3 listed individual UI commands but omitted the unified `npm run check` script.
+  - Fix: Added `npm run check` to `DEVELOPMENT.md` common commands table.
+- **Validation Results:**
+  - `cargo test --workspace`: 91 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit keyboard focus order across modals.
+  2. *Security/input validation:* Check validation for folder rename tokens.
+  3. *Dead code & duplication:* Audit redundant styles in index.css.
+
+
 
 
 
