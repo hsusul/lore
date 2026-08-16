@@ -25,6 +25,7 @@ import type { SessionPage } from "../crates/lore-ipc/bindings/SessionPage";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 
 export type BackupInterval = "off" | "daily" | "weekly";
+export type SearchSort = "relevance" | "newest" | "oldest";
 
 export type {
   BackupScheduleDto,
@@ -39,6 +40,7 @@ export type {
   RescanResult,
   ScanProgress,
   SearchHit,
+  SearchPage,
   SegmentDto,
   SessionDetail,
   SessionPage,
@@ -161,9 +163,6 @@ export function getFilePatch(id: string): Promise<string | null> {
 export function search(query: string, limit: number = 50): Promise<SearchHit[]> {
   return invoke<SearchHit[]>("search", { query, limit });
 }
-
-/** Result ordering for {@link searchPage}. */
-export type SearchSort = "relevance" | "newest" | "oldest";
 
 /**
  * Paginated full-text search. Pass `cursor = null` for the first page; on each

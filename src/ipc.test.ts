@@ -153,4 +153,17 @@ describe("ipc contract", () => {
       keep: 14,
     });
   });
+
+  it("searchPage invokes with defaults and custom sort order", async () => {
+    invoke.mockResolvedValue({ hits: [], next_cursor: null });
+    const { searchPage } = await import("./ipc");
+    const sort: import("./ipc").SearchSort = "newest";
+    await searchPage("test query", 25, "c1", sort);
+    expect(invoke).toHaveBeenCalledWith("search_page", {
+      query: "test query",
+      limit: 25,
+      cursor: "c1",
+      sort: "newest",
+    });
+  });
 });

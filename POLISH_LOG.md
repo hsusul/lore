@@ -797,6 +797,22 @@
   2. *Docs accuracy vs code:* Reconcile M6 keyset pagination docs in `docs/architecture/SEARCH.md`.
   3. *UX & accessibility:* Audit keyboard focus after modal dismissal.
 
+## Iteration 53
+- **Lens:** API & DTO ergonomics
+- **Change:** Group `SearchSort` type and re-export `SearchPage` DTO at the top of the IPC surface (`src/ipc.ts`, `src/ipc.test.ts`).
+- **Critique:**
+  - `SearchPage` was imported from generated bindings but omitted from the top-level re-export type block, and `SearchSort` was defined inline midway down the file.
+  - Fix: Added `SearchPage` to the export type list, grouped `SearchSort` with top-level types, and added test coverage for `SearchSort` in `src/ipc.test.ts`.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Docs accuracy vs code:* Audit `docs/architecture/SEARCH.md` pagination cursor schema.
+  2. *UX & accessibility:* Check focus return when closing SettingsPanel via Escape.
+  3. *Security/input validation:* Check `delete_folder` folder ID validation.
+
+
 
 
 
