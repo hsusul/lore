@@ -20,28 +20,25 @@ const MAX_NAME_LEN: usize = 100;
 /// length, and fall back to a sensible default when empty. Never fails so the
 /// UI can stay optimistic.
 fn clean_name(name: &str) -> String {
-    let mut words = name
+    let words = name
         .split(|c: char| c.is_whitespace() || c.is_control() || crate::is_zero_width(c))
         .filter(|w| !w.is_empty());
     let mut single_line = String::with_capacity(name.len().min(MAX_NAME_LEN));
-    if let Some(first) = words.next() {
-        for c in first.chars().filter(|c| !crate::is_zero_width(*c)) {
-            if single_line.chars().count() >= MAX_NAME_LEN {
-                break;
-            }
-            single_line.push(c);
-        }
-        for word in words {
-            if single_line.chars().count() >= MAX_NAME_LEN {
+    let mut count = 0;
+    for word in words {
+        if count > 0 {
+            if count >= MAX_NAME_LEN {
                 break;
             }
             single_line.push(' ');
-            for c in word.chars().filter(|c| !crate::is_zero_width(*c)) {
-                if single_line.chars().count() >= MAX_NAME_LEN {
-                    break;
-                }
-                single_line.push(c);
+            count += 1;
+        }
+        for c in word.chars().filter(|c| !crate::is_zero_width(*c)) {
+            if count >= MAX_NAME_LEN {
+                break;
             }
+            single_line.push(c);
+            count += 1;
         }
     }
     let trimmed = single_line.trim();

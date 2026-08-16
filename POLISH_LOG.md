@@ -2824,6 +2824,22 @@
   2. *Naming/consistency:* Audit enum display implementations.
   3. *ROADMAP progression:* Audit milestone tracker status.
 
+## Iteration 189
+- **Lens:** Dead code & duplication
+- **Change:** Refactor `clean_name` in `folders.rs` to stream words in a single loop with explicit character counting (`crates/lore-core/src/folders.rs`).
+- **Critique:**
+  - `clean_name` duplicated character iteration logic across `first` and `words` iterations, and repeatedly calculated `single_line.chars().count()` on every char insertion.
+  - Fix: Refactored into a single loop using a running `count` variable, eliminating code duplication and repeated string traversals.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (112 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit enum display implementations.
+  2. *ROADMAP progression:* Audit milestone tracker status.
+  3. *Dependency/build hygiene:* Check for unused build dependencies.
+
+
 
 
 
