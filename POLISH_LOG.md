@@ -2599,6 +2599,22 @@
   2. *UX & accessibility:* Audit keyboard focus outlines on interactive buttons in Settings.
   3. *Security/input validation:* Check path sanitization against windows drive letter escapes.
 
+## Iteration 174
+- **Lens:** Docs accuracy vs code
+- **Change:** Reconcile pipeline adapter lifecycle description with pure-function `ParsedSession` design (`docs/architecture/AGENT_ADAPTERS.md`).
+- **Critique:**
+  - `docs/architecture/AGENT_ADAPTERS.md` §4 referenced the earlier sink-based design (`adapter.parse_session(ref, sink)` and `set parse_status from ParseOutcome`), which conflicted with §2's pure-function `ParsedSession` contract.
+  - Fix: Updated `AGENT_ADAPTERS.md` §4 to accurately document `adapter.parse_session(ref) -> ParsedSession` and `set parse_status from ParsedSession`.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *UX & accessibility:* Audit keyboard focus outlines on interactive buttons in Settings.
+  2. *Security/input validation:* Check path sanitization against windows drive letter escapes.
+  3. *Dead code & duplication:* Remove unused styles or selectors in SettingsPanel styles.
+
+
 
 
 
