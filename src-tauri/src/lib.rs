@@ -277,6 +277,9 @@ fn create_folder(state: State<'_, AppState>, name: String) -> Result<FolderSumma
 /// Rename a folder.
 #[tauri::command]
 fn rename_folder(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
+    if id.is_empty() || id.len() > 64 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid folder id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::folders::rename_folder(&conn, &id, &name).map_err(|e| e.to_string())
 }
@@ -284,6 +287,9 @@ fn rename_folder(state: State<'_, AppState>, id: String, name: String) -> Result
 /// Delete a folder; its threads become unfiled but are not removed from Lore.
 #[tauri::command]
 fn delete_folder(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    if id.is_empty() || id.len() > 64 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid folder id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::folders::delete_folder(&conn, &id).map_err(|e| e.to_string())
 }
@@ -296,6 +302,14 @@ fn set_session_folder(
     session_id: String,
     folder_id: Option<String>,
 ) -> Result<(), String> {
+    if session_id.is_empty() || session_id.len() > 256 || session_id.chars().any(|c| c.is_control()) {
+        return Err("invalid session id".to_string());
+    }
+    if let Some(ref fid) = folder_id {
+        if fid.is_empty() || fid.len() > 64 || fid.chars().any(|c| c.is_control()) {
+            return Err("invalid folder id".to_string());
+        }
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::folders::set_session_folder(&conn, &session_id, folder_id.as_deref())
         .map_err(|e| e.to_string())
@@ -309,6 +323,9 @@ fn list_folder_sessions_page(
     limit: i64,
     cursor: Option<String>,
 ) -> Result<SessionPage, String> {
+    if id.is_empty() || id.len() > 64 || id.chars().any(|c| c.is_control()) {
+        return Err("invalid folder id".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::query::list_folder_sessions_page(&conn, &id, limit.clamp(1, 10_000), cursor.as_deref())
         .map_err(|e| e.to_string())

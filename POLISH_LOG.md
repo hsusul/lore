@@ -842,6 +842,22 @@
   2. *Dead code & duplication:* Consolidate redundant CSS button classes.
   3. *Naming/consistency:* Audit styling tokens in index.css.
 
+## Iteration 56
+- **Lens:** Security/input validation
+- **Change:** Validate ID length and control characters in folder IPC commands (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `rename_folder`, `delete_folder`, `set_session_folder`, and `list_folder_sessions_page` passed `id` and `session_id` arguments directly without checking length bounds or rejecting ASCII control characters.
+  - Fix: Added input validation checks (`!id.is_empty() && id.len() <= 64 && !id.chars().any(|c| c.is_control())` and session ID bounds) across folder commands.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Dead code & duplication:* Audit redundant CSS rules across component styles.
+  2. *Naming/consistency:* Reconcile button variant classes across components.
+  3. *ROADMAP progression:* Audit M7 deletion sweep verification plan.
+
+
 
 
 
