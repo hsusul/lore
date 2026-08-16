@@ -2704,6 +2704,22 @@
   2. *Missing tests/edge cases:* Audit null handling in relative time formatting.
   3. *Error handling:* Audit unwrap/expect in test utilities.
 
+## Iteration 181
+- **Lens:** Correctness bugs
+- **Change:** Guard `formatTime` and `formatRelative` against non-finite timestamps (e.g. `NaN`, `Infinity`) (`src/format.ts`, `src/format.test.ts`).
+- **Critique:**
+  - Passing `NaN` or non-finite numbers into `formatTime` or `formatRelative` resulted in `"Invalid Date"` string output instead of graceful fallback to `""`.
+  - Fix: Added `!Number.isFinite(ms)` checks and added comprehensive unit tests for `NaN` and `+/-Infinity`.
+- **Validation Results:**
+  - `cargo test --workspace`: 90 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (111 tests).
+- **Backlog Candidates Noticed:**
+  1. *Missing tests/edge cases:* Test empty session list focus restoration when closing command palette.
+  2. *Error handling:* Audit unwrap/expect in test utilities.
+  3. *Performance/allocations:* Audit string allocations in search snippet highlight parser.
+
+
 
 
 

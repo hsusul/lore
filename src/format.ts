@@ -10,9 +10,9 @@ export function agentLabel(agentId: string): string {
   return AGENT_LABELS[agentId] ?? agentId;
 }
 
-/** Absolute local time, or "" for null. */
+/** Absolute local time, or "" for null / non-finite timestamps. */
 export function formatTime(ms: number | null): string {
-  if (ms == null) return "";
+  if (ms == null || !Number.isFinite(ms)) return "";
   return new Date(ms).toLocaleString(undefined, {
     year: "numeric",
     month: "short",
@@ -24,7 +24,7 @@ export function formatTime(ms: number | null): string {
 
 /** Compact relative time ("just now", "5m", "3h", "2d", "4w", or a date). */
 export function formatRelative(ms: number | null): string {
-  if (ms == null) return "";
+  if (ms == null || !Number.isFinite(ms)) return "";
   const diff = Date.now() - ms;
   if (diff < -60_000) {
     return new Date(ms).toLocaleDateString(undefined, {

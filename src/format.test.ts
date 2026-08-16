@@ -16,8 +16,11 @@ describe("format helpers", () => {
   });
 
   describe("formatTime", () => {
-    it("returns empty string for null", () => {
+    it("returns empty string for null and non-finite values", () => {
       expect(formatTime(null)).toBe("");
+      expect(formatTime(NaN)).toBe("");
+      expect(formatTime(Infinity)).toBe("");
+      expect(formatTime(-Infinity)).toBe("");
     });
 
     it("formats a valid millisecond epoch timestamp", () => {
@@ -28,8 +31,11 @@ describe("format helpers", () => {
   });
 
   describe("formatRelative", () => {
-    it("returns empty string for null", () => {
+    it("returns empty string for null and non-finite values", () => {
       expect(formatRelative(null)).toBe("");
+      expect(formatRelative(NaN)).toBe("");
+      expect(formatRelative(Infinity)).toBe("");
+      expect(formatRelative(-Infinity)).toBe("");
     });
 
     it("handles future timestamps or clock skew gracefully without negative numbers", () => {
