@@ -306,6 +306,9 @@ fn list_folders(state: State<'_, AppState>) -> Result<Vec<FolderSummary>, String
 /// Create a folder and return it (name is trimmed and length-capped).
 #[tauri::command]
 fn create_folder(state: State<'_, AppState>, name: String) -> Result<FolderSummary, String> {
+    if name.len() > 256 {
+        return Err("folder name exceeds maximum length".to_string());
+    }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::folders::create_folder(&conn, &name).map_err(|e| e.to_string())
 }
@@ -315,6 +318,9 @@ fn create_folder(state: State<'_, AppState>, name: String) -> Result<FolderSumma
 fn rename_folder(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
     if id.is_empty() || id.len() > 64 || id.chars().any(|c| c.is_control()) {
         return Err("invalid folder id".to_string());
+    }
+    if name.len() > 256 {
+        return Err("folder name exceeds maximum length".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::folders::rename_folder(&conn, &id, &name).map_err(|e| e.to_string())

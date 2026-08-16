@@ -1232,6 +1232,22 @@
   2. *ROADMAP progression:* Review M7 release packaging verification gates in ROADMAP.
   3. *Dependency/build hygiene:* Audit Cargo workspace metadata tags.
 
+## Iteration 82
+- **Lens:** Naming/consistency
+- **Change:** Add folder name length bounds checking to `create_folder` and `rename_folder` in IPC commands (`src-tauri/src/lib.rs`).
+- **Critique:**
+  - `create_folder` and `rename_folder` did not enforce a parameter length bound at the IPC boundary, unlike session, setting, and search commands.
+  - Fix: Added `name.len() <= 256` validation checks to `create_folder` and `rename_folder`.
+- **Validation Results:**
+  - `cargo test --workspace`: 84 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *ROADMAP progression:* Review M7 release packaging verification gates in ROADMAP.
+  2. *Dependency/build hygiene:* Audit Cargo workspace metadata tags.
+  3. *Correctness bugs:* Audit FTS5 rank score serialization in search results.
+
+
 
 
 
