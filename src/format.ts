@@ -5,6 +5,12 @@ const AGENT_LABELS: Record<string, string> = {
   codex: "Codex",
 };
 
+/** Clamp a number between min and max bounds. */
+export function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(Math.max(value, min), max);
+}
+
 /** Short, human agent label (falls back to the raw id). */
 export function agentLabel(agentId: string): string {
   return AGENT_LABELS[agentId] ?? agentId;

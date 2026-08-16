@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { clamp } from "../format";
 import {
   backupNow,
   getBackupSchedule,
@@ -97,7 +98,7 @@ export default function BackupSettings() {
           value={keep}
           disabled={interval === "off"}
           onChange={(event) =>
-            void persist(interval, Math.max(1, Math.min(100, Number(event.target.value) || 1)))
+            void persist(interval, clamp(Number(event.target.value) || 1, 1, 100))
           }
         />
       </div>

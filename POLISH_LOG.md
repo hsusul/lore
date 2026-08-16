@@ -3545,6 +3545,22 @@
   2. *Naming/consistency:* Audit test assertions.
   3. *ROADMAP progression:* Audit milestone descriptions.
 
+## Iteration 237
+- **Lens:** Dead code & duplication
+- **Change:** Extract shared `clamp` utility helper in `src/format.ts` and use in `BackupSettings.tsx`.
+- **Critique:**
+  - `BackupSettings.tsx` implemented ad-hoc double `Math.max(1, Math.min(100, ...))` bounding logic without a shared helper function.
+  - Fix: Extracted `clamp(value, min, max)` helper in `src/format.ts` with unit tests and simplified `BackupSettings.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 99 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (118 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit test assertions.
+  2. *ROADMAP progression:* Audit milestone descriptions.
+  3. *Dependency/build hygiene:* Audit Cargo workspace.
+
+
 
 
 
