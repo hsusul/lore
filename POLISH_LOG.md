@@ -3275,6 +3275,22 @@
   2. *Performance/allocations:* Audit string allocations in query builders.
   3. *API & DTO ergonomics:* Audit IPC client result helpers.
 
+## Iteration 219
+- **Lens:** Error handling
+- **Change:** Make corrupt archive quarantine resilient to cross-device moves with fallback `move_or_copy` in `crates/lore-core/src/recovery.rs`.
+- **Critique:**
+  - `quarantine` used bare `std::fs::rename`, which fails with `EXDEV` if the quarantine destination resides on a separate filesystem mount.
+  - Fix: Added a robust `move_or_copy` fallback that copies and unlinks the source when `rename` fails.
+- **Validation Results:**
+  - `cargo test --workspace`: 98 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Performance/allocations:* Audit string allocations in query builders.
+  2. *API & DTO ergonomics:* Audit IPC client result helpers.
+  3. *Docs accuracy vs code:* Audit IPC documentation.
+
+
 
 
 

@@ -115,6 +115,15 @@ fn integrity_ok(db_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn move_or_copy(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if std::fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(src, dst)?;
+    let _ = std::fs::remove_file(src);
+    Ok(())
+}
+
 /// Preserve the corrupt archive (and any WAL/SHM sidecars) under a fresh
 /// `quarantine/` artifact, returning its path. The archive location is emptied
 /// so a restore can replace it wholesale.
@@ -139,9 +148,9 @@ fn quarantine(db_path: &Path, archive_dir: &Path) -> Result<PathBuf> {
         }
         let dst = quarantine_dir.join(format!("lore-{stamp:020}-{seq:04}{suffix}"));
         if suffix.is_empty() {
-            std::fs::rename(&src, &dst).map_err(|_| RecoveryError::Io)?;
+            move_or_copy(&src, &dst).map_err(|_| RecoveryError::Io)?;
             main_dst = Some(dst);
-        } else if std::fs::rename(&src, &dst).is_err() {
+        } else if move_or_copy(&src, &dst).is_err() {
             let _ = std::fs::remove_file(&src);
         }
     }
