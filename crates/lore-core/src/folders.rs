@@ -20,12 +20,13 @@ const MAX_NAME_LEN: usize = 100;
 /// length, and fall back to a sensible default when empty. Never fails so the
 /// UI can stay optimistic.
 fn clean_name(name: &str) -> String {
-    let trimmed = name.trim();
-    let capped: String = trimmed.chars().take(MAX_NAME_LEN).collect();
-    if capped.is_empty() {
+    let single_line = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let capped: String = single_line.chars().take(MAX_NAME_LEN).collect();
+    let trimmed = capped.trim();
+    if trimmed.is_empty() {
         "New folder".to_string()
     } else {
-        capped
+        trimmed.to_string()
     }
 }
 
@@ -175,8 +176,15 @@ mod tests {
     #[test]
     fn an_empty_name_falls_back_to_a_default() {
         let conn = crate::storage::open_in_memory().unwrap();
-        let f = create_folder(&conn, "   ").unwrap();
+        let f = create_folder(&conn, "   \n\t  ").unwrap();
         assert_eq!(f.name, "New folder");
+
+        let multiline = create_folder(&conn, "  Project   Alpha  \n  V2  ").unwrap();
+        assert_eq!(multiline.name, "Project Alpha V2");
+
+        let long = create_folder(&conn, &"word ".repeat(30)).unwrap();
+        assert!(long.name.chars().count() <= MAX_NAME_LEN);
+        assert!(!long.name.ends_with(' '));
     }
 
     #[test]

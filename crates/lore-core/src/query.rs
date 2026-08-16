@@ -687,6 +687,63 @@ mod tests {
     }
 
     #[test]
+    fn folder_session_pages_stay_scoped_and_stable() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        let folder_a = crate::folders::create_folder(&conn, "Folder A").unwrap();
+        let folder_b = crate::folders::create_folder(&conn, "Folder B").unwrap();
+
+        let mut folder_a_ids = Vec::new();
+        for i in 0..5 {
+            let content = format!(
+                concat!(
+                    "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:0{i}.000Z\",\"payload\":{{\"id\":\"fldr-cx{i}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}}}\n",
+                    "{{\"type\":\"turn_context\",\"timestamp\":\"2026-08-11T10:00:0{i}.000Z\",\"payload\":{{\"cwd\":\"/p\",\"model\":\"gpt-x\",\"turn_id\":\"t{i}\"}}}}\n",
+                    "{{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:0{i}.000Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":\"hello\"}}}}\n"
+                ),
+                i = i,
+            );
+            let parsed = CodexAdapter::new().parse_str(&content, &format!("fldr-cx{i}"));
+            let id = persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+            if i % 2 == 0 {
+                crate::folders::set_session_folder(&conn, &id, Some(&folder_a.id)).unwrap();
+                folder_a_ids.push(id);
+            } else {
+                crate::folders::set_session_folder(&conn, &id, Some(&folder_b.id)).unwrap();
+            }
+        }
+        // Newest first order for Folder A: i=4, 2, 0
+        folder_a_ids.reverse();
+
+        // Folder A contains i=4, 2, 0 (3 sessions total, newest first).
+        let first = list_folder_sessions_page(&conn, &folder_a.id, 2, None).unwrap();
+        assert_eq!(first.sessions.len(), 2);
+        assert!(first.next_cursor.is_some());
+
+        let second =
+            list_folder_sessions_page(&conn, &folder_a.id, 2, first.next_cursor.as_deref())
+                .unwrap();
+        assert_eq!(second.sessions.len(), 1);
+        assert!(second.next_cursor.is_none());
+
+        let actual: Vec<String> = first
+            .sessions
+            .into_iter()
+            .chain(second.sessions)
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(actual, folder_a_ids);
+
+        // Empty folder produces an empty page with no cursor.
+        let empty_folder = crate::folders::create_folder(&conn, "Empty").unwrap();
+        let empty_page = list_folder_sessions_page(&conn, &empty_folder.id, 10, None).unwrap();
+        assert!(empty_page.sessions.is_empty());
+        assert!(empty_page.next_cursor.is_none());
+    }
+
+    #[test]
     fn empty_database_lists_nothing() {
         let conn = crate::storage::open_in_memory().unwrap();
         assert!(list_sessions(&conn, 10).unwrap().is_empty());
