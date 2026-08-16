@@ -364,7 +364,7 @@ fn session_messages(conn: &Connection, session_id: &str) -> Result<Vec<MessageDt
          FROM message WHERE session_id = ?1 ORDER BY seq",
     )?;
     let mut rows = stmt.query([session_id])?;
-    let mut messages = Vec::new();
+    let mut messages = Vec::with_capacity(parts_by_seq.len());
     while let Some(row) = rows.next()? {
         let seq: i64 = row.get(1)?;
         let parts = parts_by_seq.remove(&seq).unwrap_or_default();

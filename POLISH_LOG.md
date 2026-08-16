@@ -602,6 +602,22 @@
   2. *API & DTO ergonomics:* Audit FolderSummary and BackupScheduleDto interfaces in `src/ipc.ts`.
   3. *Docs accuracy vs code:* Verify that `docs/architecture/DATA_MODEL.md` accurately documents control character sanitization.
 
+## Iteration 40
+- **Lens:** Performance/allocations
+- **Change:** Pre-allocate `messages` vector capacity in `session_messages` query (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `session_messages` initialized `let mut messages = Vec::new()` with 0 initial capacity, causing dynamic reallocations as message rows were read from SQLite during thread opening.
+  - Fix: Pre-allocated `Vec::with_capacity(parts_by_seq.len())` using the known parts mapping size.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 11 test files passed (98 tests).
+- **Backlog Candidates Noticed:**
+  1. *API & DTO ergonomics:* Ensure `FolderSummary` and `BackupScheduleDto` types are explicitly exported in `src/ipc.ts`.
+  2. *Docs accuracy vs code:* Audit `docs/architecture/DATA_MODEL.md` for `folder` and `session_folder` table schema.
+  3. *UX & accessibility:* Test keyboard focus return after closing modals.
+
+
 
 
 
