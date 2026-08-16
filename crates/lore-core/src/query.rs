@@ -1016,5 +1016,15 @@ mod tests {
         assert_eq!(page2.sessions.len(), 1);
         assert!(page2.next_cursor.is_none());
         assert_ne!(page1.sessions[0].id, page2.sessions[0].id);
+
+        // Malformed cursor degrades to first page without error.
+        let malformed_page =
+            list_folder_sessions_page(&conn, &f1.id, 1, Some("not-valid-cursor")).unwrap();
+        assert_eq!(malformed_page.sessions.len(), 1);
+        assert_eq!(malformed_page.sessions[0].id, page1.sessions[0].id);
+
+        // Limit <= 0 clamps to 1.
+        let clamped_zero = list_folder_sessions_page(&conn, &f1.id, 0, None).unwrap();
+        assert_eq!(clamped_zero.sessions.len(), 1);
     }
 }

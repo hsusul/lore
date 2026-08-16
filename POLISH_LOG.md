@@ -932,6 +932,22 @@
   2. *Error handling:* Check SQLite foreign key violations on folder deletion cascade.
   3. *Performance/allocations:* Profile folder query preparation in hot loops.
 
+## Iteration 62
+- **Lens:** Missing tests/edge cases
+- **Change:** Add test coverage for malformed cursors and boundary limit clamping in `list_folder_sessions_page` (`crates/lore-core/src/query.rs`).
+- **Critique:**
+  - `list_folder_sessions_page` pagination test suite lacked assertions verifying that malformed cursor strings gracefully degrade to page 1 and zero/negative limits are clamped.
+  - Fix: Added test assertions for malformed cursor strings and boundary limits to `query.rs`.
+- **Validation Results:**
+  - `cargo test --workspace`: 82 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 12 test files passed (103 tests).
+- **Backlog Candidates Noticed:**
+  1. *Error handling:* Check SQLite error mapping in `list_folder_sessions_page`.
+  2. *Performance/allocations:* Avoid query string reallocations in session page builders.
+  3. *API & DTO ergonomics:* Audit IPC FolderSummary serialization.
+
+
 
 
 
