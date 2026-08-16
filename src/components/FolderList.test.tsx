@@ -60,6 +60,18 @@ describe("FolderList", () => {
     expect(props.onDelete).toHaveBeenCalledWith("f1");
   });
 
+  it("renames a folder on F2 keyboard shortcut", () => {
+    const props = setup();
+    const folderBtn = screen.getByRole("button", { name: /^Inbox/ });
+    fireEvent.keyDown(folderBtn, { key: "F2" });
+
+    const editField = screen.getByLabelText("Rename folder Inbox");
+    expect(editField).toBeTruthy();
+    fireEvent.change(editField, { target: { value: "Archive" } });
+    fireEvent.keyDown(editField, { key: "Enter" });
+    expect(props.onRename).toHaveBeenCalledWith("f1", "Archive");
+  });
+
   it("files a dropped thread into the folder", () => {
     const props = setup();
     const row = screen.getByText("Inbox").closest("li")!;

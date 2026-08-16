@@ -286,6 +286,23 @@
   2. *Security/input validation:* Path traversal guards on blob relpath reads.
   3. *Dead code & duplication:* Consolidate any redundant test helpers across integration test files.
 
+## Iteration 19
+- **Lens:** UX & accessibility
+- **Change:** Add F2 keyboard shortcut for inline folder rename and improve landmark/counter aria labels (`src/components/FolderList.tsx`, `src/components/FolderList.test.tsx`).
+- **Critique:**
+  - Folders could previously only be renamed via mouse double-click, locking out keyboard-only and assistive-technology users from renaming folders.
+  - The navigation landmark had a lowercase `aria-label="folders"`, and the thread count badge lacked descriptive context for screen readers.
+  - Fix: Added `onKeyDown` with `F2` key handler to trigger rename on focused folder, capitalized navigation label to `aria-label="Folders"`, added `aria-label="${folder.session_count} threads"` on count badge, and added test in `FolderList.test.tsx`.
+- **Validation Results:**
+  - `cargo test --workspace`: 80 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run typecheck && npm run lint && npm test`: Clean; 10 test files passed (88 tests).
+- **Backlog Candidates Noticed:**
+  1. *Security/input validation:* Verify path normalization in `crates/lore-core/src/storage/blob.rs` for Windows backslash safety.
+  2. *Dead code & duplication:* Consolidate temporary directory creation test fixtures.
+  3. *Naming/consistency:* Audit error type naming across storage and backup modules.
+
+
 
 
 

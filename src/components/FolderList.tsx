@@ -76,7 +76,7 @@ export default function FolderList({
   }
 
   return (
-    <nav className="folders" aria-label="folders">
+    <nav className="folders" aria-label="Folders">
       <div className="nav-heading__row">
         <h2 className="nav-heading">Folders</h2>
         <button
@@ -162,11 +162,22 @@ export default function FolderList({
                     aria-pressed={selectedId === folder.id}
                     onClick={() => onSelect(folder.id)}
                     onDoubleClick={() => startEdit(folder)}
-                    title="Open folder (double-click to rename)"
+                    onKeyDown={(event) => {
+                      if (event.key === "F2") {
+                        event.preventDefault();
+                        startEdit(folder);
+                      }
+                    }}
+                    title="Open folder (F2 or double-click to rename)"
                   >
                     <span className="dot dot--folder" aria-hidden />
                     <span className="nav-item__name">{folder.name}</span>
-                    <span className="nav-item__count">{folder.session_count}</span>
+                    <span
+                      className="nav-item__count"
+                      aria-label={`${folder.session_count} threads`}
+                    >
+                      {folder.session_count}
+                    </span>
                   </button>
                   <button
                     className="folder__delete"
