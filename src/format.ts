@@ -22,15 +22,19 @@ export function formatTime(ms: number | null): string {
   });
 }
 
+function formatShortDate(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
 /** Compact relative time ("just now", "5m", "3h", "2d", "4w", or a date). */
 export function formatRelative(ms: number | null): string {
   if (ms == null || !Number.isFinite(ms)) return "";
   const diff = Date.now() - ms;
   if (diff < -60_000) {
-    return new Date(ms).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-    });
+    return formatShortDate(ms);
   }
   if (diff <= 45_000) return "just now";
   const seconds = Math.round(diff / 1000);
@@ -42,8 +46,5 @@ export function formatRelative(ms: number | null): string {
   if (days < 7) return `${days}d`;
   const weeks = Math.round(days / 7);
   if (weeks < 5) return `${weeks}w`;
-  return new Date(ms).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  return formatShortDate(ms);
 }

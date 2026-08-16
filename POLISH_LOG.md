@@ -3185,6 +3185,22 @@
   2. *Naming/consistency:* Audit test naming conventions.
   3. *ROADMAP progression:* Audit status alignment.
 
+## Iteration 213
+- **Lens:** Dead code & duplication
+- **Change:** Deduplicate short date formatting into helper function `formatShortDate` in `src/format.ts`.
+- **Critique:**
+  - `formatRelative` duplicated the `toLocaleDateString(undefined, { month: "short", day: "numeric" })` options between the distant-past and distant-future branches.
+  - Fix: Extracted a reusable `formatShortDate` function.
+- **Validation Results:**
+  - `cargo test --workspace`: 97 passed across lore-core, lore-ipc, lore-app (2 scale/dev ignored).
+  - `cargo clippy --workspace -- -D warnings`: Clean (0 warnings).
+  - `npm run check`: Clean; 12 test files passed (115 tests).
+- **Backlog Candidates Noticed:**
+  1. *Naming/consistency:* Audit test naming conventions.
+  2. *ROADMAP progression:* Audit status alignment.
+  3. *Dependency/build hygiene:* Audit Cargo workspace dependencies.
+
+
 
 
 
