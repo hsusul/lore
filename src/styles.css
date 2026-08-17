@@ -109,6 +109,35 @@
   box-sizing: border-box;
 }
 
+/* Scrollbars. macOS overlay scrollbars default to a light track that widens on
+   hover, which reads as a white bar over our dark surfaces. Style them from the
+   theme tokens instead, at a fixed width so hovering doesn't resize them.
+
+   Deliberately no `scrollbar-width`/`scrollbar-color`: setting either makes
+   WebKit and Chromium ignore the ::-webkit-scrollbar rules below and fall back
+   to the native overlay bar, which is the thing we're replacing. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  /* Pad the thumb inside the track without changing its box width. */
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-3);
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -183,13 +212,34 @@ pre,
 }
 
 .shell__progress {
-  margin: 0;
-  padding: 0.3rem 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.85rem;
   font-size: 0.78rem;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+}
+
+.shell__progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+
+.shell__progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 180ms ease;
+}
+
+.shell__progress-text {
+  white-space: nowrap;
 }
 
 .shell__error {
@@ -494,11 +544,17 @@ button:disabled {
   border-radius: var(--r-sm);
   color: var(--text-2);
   line-height: 0;
+  cursor: pointer;
 }
 
-.icon-btn:hover {
+.icon-btn:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .chip {
@@ -1341,6 +1397,12 @@ kbd {
   font-size: 0.72rem;
 }
 
+.results__time {
+  color: var(--text-3);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
 .hit__snippet {
   /* Clamp to a fixed two lines so every result row is the same height — a
      prerequisite for windowing the list, and denser/more scannable. Full text
@@ -1586,14 +1648,15 @@ kbd {
   white-space: nowrap;
 }
 
-.settings__root-remove,
-.settings__add-root {
+.settings__root-remove {
   padding: 0.3rem 0.5rem;
   font-size: 0.72rem;
 }
 
 .settings__add-root {
   margin-top: 0.55rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
 }
 
 .settings__row {
@@ -1615,7 +1678,12 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
-    transition: none !important;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

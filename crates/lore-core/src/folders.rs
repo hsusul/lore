@@ -16,28 +16,32 @@ use crate::storage::Result;
 /// Longest accepted folder name; longer input is truncated on a char boundary.
 const MAX_NAME_LEN: usize = 100;
 
-fn is_zero_width(c: char) -> bool {
-    matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
-}
-
 /// Normalize a user-supplied folder name: trim surrounding whitespace, cap the
 /// length, and fall back to a sensible default when empty. Never fails so the
 /// UI can stay optimistic.
 fn clean_name(name: &str) -> String {
-    let filtered: String = name
-        .chars()
-        .filter(|c| !is_zero_width(*c))
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let mut single_line = String::with_capacity(filtered.len());
-    for (i, word) in filtered.split_whitespace().enumerate() {
-        if i > 0 {
+    let words = name
+        .split(|c: char| c.is_whitespace() || c.is_control() || crate::is_zero_width(c))
+        .filter(|w| !w.is_empty());
+    let mut single_line = String::with_capacity(name.len().min(MAX_NAME_LEN));
+    let mut count = 0;
+    for word in words {
+        if count > 0 {
+            if count >= MAX_NAME_LEN {
+                break;
+            }
             single_line.push(' ');
+            count += 1;
         }
-        single_line.push_str(word);
+        for c in word.chars().filter(|c| !crate::is_zero_width(*c)) {
+            if count >= MAX_NAME_LEN {
+                break;
+            }
+            single_line.push(c);
+            count += 1;
+        }
     }
-    let capped: String = single_line.chars().take(MAX_NAME_LEN).collect();
-    let trimmed = capped.trim();
+    let trimmed = single_line.trim();
     if trimmed.is_empty() {
         "New folder".to_string()
     } else {
@@ -73,10 +77,11 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<FolderSummary>> {
 pub fn create_folder(conn: &Connection, name: &str) -> Result<FolderSummary> {
     let name = clean_name(name);
     let _write = crate::storage::write_lock();
-    let position: i64 =
-        conn.query_row("SELECT COALESCE(MAX(position), -1) + 1 FROM folder", [], |r| {
-            r.get(0)
-        })?;
+    let position: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM folder",
+        [],
+        |r| r.get(0),
+    )?;
     let id: String = conn.query_row(
         "INSERT INTO folder (id, name, position, created_at, updated_at)
          VALUES (lower(hex(randomblob(16))), ?1, ?2, unixepoch('now') * 1000,
@@ -222,13 +227,23 @@ mod tests {
         let b = create_folder(&conn, "B").unwrap();
 
         set_session_folder(&conn, &sid, Some(&a.id)).unwrap();
-        assert_eq!(folder_of_session(&conn, &sid).unwrap().as_deref(), Some(a.id.as_str()));
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(a.id.as_str())
+        );
         assert_eq!(list_folders(&conn).unwrap()[0].session_count, 1);
 
         // Re-filing replaces the prior membership rather than duplicating it.
         set_session_folder(&conn, &sid, Some(&b.id)).unwrap();
-        assert_eq!(folder_of_session(&conn, &sid).unwrap().as_deref(), Some(b.id.as_str()));
-        let counts: Vec<i64> = list_folders(&conn).unwrap().iter().map(|f| f.session_count).collect();
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(b.id.as_str())
+        );
+        let counts: Vec<i64> = list_folders(&conn)
+            .unwrap()
+            .iter()
+            .map(|f| f.session_count)
+            .collect();
         assert_eq!(counts, vec![0, 1], "the thread moved, it was not copied");
 
         // Unfiling removes membership entirely.
@@ -257,7 +272,8 @@ mod tests {
         let a = create_folder(&conn, "A").unwrap();
         set_session_folder(&conn, &sid, Some(&a.id)).unwrap();
 
-        conn.execute("DELETE FROM agent_session WHERE id = ?1", [&sid]).unwrap();
+        conn.execute("DELETE FROM agent_session WHERE id = ?1", [&sid])
+            .unwrap();
         assert_eq!(list_folders(&conn).unwrap()[0].session_count, 0);
     }
 

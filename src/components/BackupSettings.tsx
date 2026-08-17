@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { clamp } from "../format";
 import {
   backupNow,
   getBackupSchedule,
@@ -21,7 +22,7 @@ const INTERVALS: { value: BackupInterval; label: string }[] = [
  */
 export default function BackupSettings() {
   const [interval, setIntervalValue] = useState<BackupInterval>("off");
-  const [keep, setKeep] = useState(5);
+  const [keep, setKeep] = useState(7);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -65,11 +66,11 @@ export default function BackupSettings() {
   }
 
   return (
-    <section aria-labelledby="backups-heading">
+    <section aria-labelledby="backups-heading" aria-describedby="backups-desc">
       <h3 id="backups-heading" className="section-title">
         Backups
       </h3>
-      <p className="empty">
+      <p id="backups-desc" className="empty">
         Local, Lore-owned snapshots of your archive, kept private on this machine and removed by
         "Forget everything".
       </p>
@@ -97,11 +98,17 @@ export default function BackupSettings() {
           value={keep}
           disabled={interval === "off"}
           onChange={(event) =>
-            void persist(interval, Math.max(1, Math.min(100, Number(event.target.value) || 1)))
+            void persist(interval, clamp(Number(event.target.value) || 1, 1, 100))
           }
         />
       </div>
-      <button type="button" className="btn--ghost" onClick={() => void runNow()} disabled={busy}>
+      <button
+        type="button"
+        className="btn--ghost"
+        onClick={() => void runNow()}
+        disabled={busy}
+        aria-busy={busy}
+      >
         {busy ? "Backing up…" : "Back up now"}
       </button>
       {status && (

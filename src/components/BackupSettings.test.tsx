@@ -35,11 +35,23 @@ describe("BackupSettings", () => {
   });
 
   it("runs an on-demand backup and reports success", async () => {
+    let resolveBackup: () => void = () => {};
+    backupNow.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveBackup = resolve;
+        }),
+    );
     render(<BackupSettings />);
     await screen.findByLabelText("Automatic backups");
-    fireEvent.click(screen.getByRole("button", { name: /back up now/i }));
+    const button = screen.getByRole("button", { name: /back up now/i });
+    expect(button.getAttribute("aria-busy")).toBe("false");
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    resolveBackup();
     await waitFor(() => expect(backupNow).toHaveBeenCalled());
     expect(await screen.findByText(/backup created/i)).toBeTruthy();
+    expect(button.getAttribute("aria-busy")).toBe("false");
   });
 
   it("disables the retention input when backups are off", async () => {

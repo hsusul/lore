@@ -54,18 +54,18 @@ export default function SettingsPanel({
   if (!open) return null;
 
   return (
-    <div className="modal-backdrop palette__backdrop" role="presentation" onClick={onClose}>
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
         ref={dialogRef}
         className="settings"
         role="dialog"
         aria-modal="true"
-        aria-label="Settings"
+        aria-labelledby="settings-title"
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="settings__head">
-          <h2>Settings</h2>
+          <h2 id="settings-title">Settings</h2>
           <button type="button" className="icon-btn" aria-label="Close settings" onClick={onClose}>
             ✕
           </button>
@@ -89,11 +89,11 @@ export default function SettingsPanel({
           </ul>
         </section>
 
-        <section aria-labelledby="agents-heading">
+        <section aria-labelledby="agents-heading" aria-describedby="agents-desc">
           <h3 id="agents-heading" className="section-title">
             Agents
           </h3>
-          <p className="empty">
+          <p id="agents-desc" className="empty">
             Lore checks these folders read-only. Add another location if your agent history lives
             somewhere else.
           </p>
@@ -155,16 +155,21 @@ export default function SettingsPanel({
 
         <BackupSettings />
 
-        <section aria-labelledby="data-heading">
+        <section aria-labelledby="data-heading" aria-describedby="data-desc">
           <h3 id="data-heading" className="section-title">
             Data
           </h3>
-          <p className="empty">
+          <p id="data-desc" className="empty">
             Forget everything removes all ingested sessions, repositories, findings, and blobs from
             Lore. Original agent logs are not touched. Secure block-level erasure is not guaranteed
             on SSDs.
           </p>
-          <button type="button" className="btn--danger" onClick={onForgetEverything}>
+          <button
+            type="button"
+            className="btn--danger"
+            aria-describedby="data-desc"
+            onClick={onForgetEverything}
+          >
             Forget everything
           </button>
         </section>

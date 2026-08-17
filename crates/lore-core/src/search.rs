@@ -36,6 +36,15 @@ pub enum SortOrder {
 }
 
 impl SortOrder {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Relevance => "relevance",
+            Self::Newest => "newest",
+            Self::Oldest => "oldest",
+        }
+    }
+
     /// Parse the wire value (`"newest"` / `"oldest"`); anything else — including
     /// `None` or an unknown string — is `Relevance`.
     #[must_use]
@@ -48,19 +57,26 @@ impl SortOrder {
     }
 }
 
+impl std::fmt::Display for SortOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A parsed query: plain terms plus optional structured filters.
 struct ParsedQuery {
     terms: Vec<String>,
     agent: Option<String>,
     path: Option<String>,
+    tool: Option<String>,
     has_error: bool,
 }
 
 /// Search the archive, returning the first page only. `raw` is the user's query
-/// (plain terms plus optional `agent:`, `path:`, and `has:error` filters);
-/// returns up to `limit` hits ranked best-first. An empty term set yields no
-/// results. Convenience wrapper over [`search_page`] for callers that do not
-/// paginate.
+/// (plain terms plus optional `agent:`, `path:`, `tool:`, and `has:error`
+/// filters); returns up to `limit` hits ranked best-first. An empty term set
+/// yields no results. Convenience wrapper over [`search_page`] for callers that
+/// do not paginate.
 pub fn search(conn: &Connection, raw: &str, limit: i64) -> Result<Vec<SearchHit>> {
     Ok(search_page(conn, raw, limit, None, SortOrder::Relevance)?.hits)
 }
@@ -137,6 +153,13 @@ pub fn search_page(
         );
         params.push(Value::Text(format!("{path}%")));
     }
+    if let Some(tool) = query.tool {
+        sql.push_str(
+            " AND EXISTS (SELECT 1 FROM tool_call tc
+                          WHERE tc.session_id = sd.session_id AND tc.name = ?)",
+        );
+        params.push(Value::Text(tool));
+    }
     sql.push_str(") m");
 
     // Keyset predicate: keep only rows strictly after the cursor in the chosen
@@ -204,34 +227,34 @@ fn keyset(sort: SortOrder, cursor: &Option<Cursor>) -> (String, Vec<Value>) {
     };
     match sort {
         SortOrder::Relevance => match c.started_at {
-            Some(sa) => {
-                let r = Value::Real(c.rank);
-                (
-                    " WHERE rank > ?
-                        OR (rank = ? AND sa < ?)
-                        OR (rank = ? AND sa IS NULL)
-                        OR (rank = ? AND sa = ? AND did > ?)"
-                        .to_string(),
-                    vec![
-                        r.clone(),
-                        r.clone(),
-                        Value::Integer(sa),
-                        r.clone(),
-                        r,
-                        Value::Integer(sa),
-                        Value::Integer(c.id),
-                    ],
-                )
-            }
+            Some(sa) => (
+                " WHERE rank > ?
+                    OR (rank = ? AND sa < ?)
+                    OR (rank = ? AND sa IS NULL)
+                    OR (rank = ? AND sa = ? AND did > ?)"
+                    .to_string(),
+                vec![
+                    Value::Real(c.rank),
+                    Value::Real(c.rank),
+                    Value::Integer(sa),
+                    Value::Real(c.rank),
+                    Value::Real(c.rank),
+                    Value::Integer(sa),
+                    Value::Integer(c.id),
+                ],
+            ),
             None => {
                 // Already inside the trailing NULL-started_at block; no
                 // real-timestamp row can follow it at the same rank.
-                let r = Value::Real(c.rank);
                 (
                     " WHERE rank > ?
                         OR (rank = ? AND sa IS NULL AND did > ?)"
                         .to_string(),
-                    vec![r.clone(), r, Value::Integer(c.id)],
+                    vec![
+                        Value::Real(c.rank),
+                        Value::Real(c.rank),
+                        Value::Integer(c.id),
+                    ],
                 )
             }
         },
@@ -277,11 +300,16 @@ impl Cursor {
     }
 
     fn encode(&self) -> String {
-        let sa = match self.started_at {
-            Some(v) => v.to_string(),
-            None => "n".to_string(),
-        };
-        format!("{:x}:{}:{}", self.rank.to_bits(), sa, self.id)
+        use std::fmt::Write;
+        let mut out = String::with_capacity(48);
+        let _ = write!(out, "{:x}:", self.rank.to_bits());
+        if let Some(sa) = self.started_at {
+            let _ = write!(out, "{sa}");
+        } else {
+            out.push('n');
+        }
+        let _ = write!(out, ":{}", self.id);
+        out
     }
 
     /// Parse a cursor produced by [`Cursor::encode`]. Any malformed input yields
@@ -301,7 +329,7 @@ impl Cursor {
             v => Some(v.parse::<i64>().ok()?),
         };
         let id = parts.next()?.parse::<i64>().ok()?;
-        if parts.next().is_some() {
+        if id <= 0 || parts.next().is_some() {
             return None;
         }
         Some(Cursor {
@@ -329,15 +357,32 @@ fn parse_query(raw: &str) -> ParsedQuery {
     let mut terms = Vec::new();
     let mut agent = None;
     let mut path = None;
+    let mut tool = None;
     let mut has_error = false;
     for token in bounded.split_whitespace() {
         if let Some(value) = token.strip_prefix("agent:") {
-            if !value.is_empty() {
-                agent = Some(value.to_string());
+            let clean: String = value
+                .chars()
+                .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
+                .collect();
+            if !clean.is_empty() {
+                agent = Some(clean);
             }
         } else if let Some(value) = token.strip_prefix("path:") {
-            if !value.is_empty() {
-                path = Some(value.to_string());
+            let clean: String = value
+                .chars()
+                .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
+                .collect();
+            if !clean.is_empty() {
+                path = Some(clean);
+            }
+        } else if let Some(value) = token.strip_prefix("tool:") {
+            let clean: String = value
+                .chars()
+                .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
+                .collect();
+            if !clean.is_empty() {
+                tool = Some(clean);
             }
         } else if token == "has:error" {
             has_error = true;
@@ -349,6 +394,7 @@ fn parse_query(raw: &str) -> ParsedQuery {
         terms,
         agent,
         path,
+        tool,
         has_error,
     }
 }
@@ -365,12 +411,7 @@ fn fts_match(terms: &[String]) -> Option<String> {
     for term in terms {
         let clean: String = term
             .chars()
-            .filter(|&c| {
-                !matches!(
-                    c,
-                    '\0' | '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}'
-                )
-            })
+            .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
             .collect();
         if clean.is_empty() {
             continue;
@@ -402,10 +443,11 @@ mod tests {
 
     #[test]
     fn parses_terms_and_filters() {
-        let q = parse_query("retry backoff agent:codex path:auth/ has:error");
+        let q = parse_query("retry backoff agent:codex path:auth/ tool:Edit has:error");
         assert_eq!(q.terms, vec!["retry", "backoff"]);
         assert_eq!(q.agent.as_deref(), Some("codex"));
         assert_eq!(q.path.as_deref(), Some("auth/"));
+        assert_eq!(q.tool.as_deref(), Some("Edit"));
         assert!(q.has_error);
     }
 
@@ -484,6 +526,8 @@ mod tests {
             "abc:notanint:2",
             "1:2",
             "1:2:3:4",
+            "0:1:0",
+            "0:1:-5",
             "7ff8000000000000:1:2", // NaN
             "7ff0000000000000:1:2", // +Infinity
             "fff0000000000000:1:2", // -Infinity
@@ -491,7 +535,10 @@ mod tests {
             assert!(Cursor::decode(bad).is_none(), "{bad:?} should be rejected");
         }
         let oversized = "0:0:0".to_string() + &"x".repeat(3_000);
-        assert!(Cursor::decode(&oversized).is_none(), "oversized cursor should be rejected");
+        assert!(
+            Cursor::decode(&oversized).is_none(),
+            "oversized cursor should be rejected"
+        );
     }
 
     #[test]
@@ -501,9 +548,35 @@ mod tests {
 
         let mixed = vec![
             "\u{200b}hello\u{200c}".to_string(),
-            "\0".to_string(),
+            "\0\u{0007}\u{001f}".to_string(),
             "world".to_string(),
         ];
         assert_eq!(fts_match(&mixed), Some("\"hello\" \"world\"".to_string()));
+    }
+
+    #[test]
+    fn sort_order_display_and_parse_roundtrip() {
+        for order in [SortOrder::Relevance, SortOrder::Newest, SortOrder::Oldest] {
+            assert_eq!(SortOrder::parse(Some(order.as_str())), order);
+            assert_eq!(order.to_string(), order.as_str());
+        }
+        assert_eq!(SortOrder::parse(None), SortOrder::Relevance);
+        assert_eq!(SortOrder::parse(Some("invalid")), SortOrder::Relevance);
+    }
+
+    #[test]
+    fn parse_query_sanitizes_structured_filters() {
+        let q1 = parse_query(
+            "agent:\u{200b}codex\u{200c} path:\0src/lib.rs tool:\u{200b}Bash\u{200c} term",
+        );
+        assert_eq!(q1.agent.as_deref(), Some("codex"));
+        assert_eq!(q1.path.as_deref(), Some("src/lib.rs"));
+        assert_eq!(q1.tool.as_deref(), Some("Bash"));
+        assert_eq!(q1.terms, vec!["term".to_string()]);
+
+        let q2 = parse_query("agent:\u{200b} path:\0 has:error");
+        assert_eq!(q2.agent, None);
+        assert_eq!(q2.path, None);
+        assert!(q2.has_error);
     }
 }

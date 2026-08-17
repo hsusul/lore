@@ -95,14 +95,33 @@ pub fn recover_archive(archive_dir: &Path, backup_dir: &Path) -> Result<Recovery
 }
 
 /// Does the database at `db_path` open cleanly and pass `PRAGMA
-/// integrity_check`? A missing/corrupt file or a non-"ok" result is not intact.
+/// integrity_check`? A missing, truncated (< 100 byte SQLite header), corrupt,
+/// or non-"ok" file is not intact.
 fn integrity_ok(db_path: &Path) -> bool {
-    let Ok(conn) = Connection::open(db_path) else {
+    let Ok(meta) = std::fs::metadata(db_path) else {
+        return false;
+    };
+    if meta.len() < 100 {
+        return false;
+    }
+    let Ok(conn) = Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
         return false;
     };
     conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
         .map(|result| result == "ok")
         .unwrap_or(false)
+}
+
+fn move_or_copy(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if std::fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(src, dst)?;
+    let _ = std::fs::remove_file(src);
+    Ok(())
 }
 
 /// Preserve the corrupt archive (and any WAL/SHM sidecars) under a fresh
@@ -128,9 +147,11 @@ fn quarantine(db_path: &Path, archive_dir: &Path) -> Result<PathBuf> {
             continue;
         }
         let dst = quarantine_dir.join(format!("lore-{stamp:020}-{seq:04}{suffix}"));
-        std::fs::rename(&src, &dst).map_err(|_| RecoveryError::Io)?;
         if suffix.is_empty() {
+            move_or_copy(&src, &dst).map_err(|_| RecoveryError::Io)?;
             main_dst = Some(dst);
+        } else if move_or_copy(&src, &dst).is_err() {
+            let _ = std::fs::remove_file(&src);
         }
     }
     main_dst.ok_or(RecoveryError::Io)

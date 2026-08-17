@@ -144,13 +144,19 @@ describe("ipc contract", () => {
     });
   });
 
-  it("setBackupSchedule passes interval and keep count", async () => {
+  it("setBackupSchedule passes interval and keep count, defaulting keep to 7", async () => {
     invoke.mockResolvedValue(undefined);
     const interval: import("./ipc").BackupInterval = "weekly";
     await (await import("./ipc")).setBackupSchedule(interval, 14);
-    expect(invoke).toHaveBeenCalledWith("set_backup_schedule", {
+    expect(invoke).toHaveBeenNthCalledWith(1, "set_backup_schedule", {
       interval: "weekly",
       keep: 14,
+    });
+
+    await (await import("./ipc")).setBackupSchedule("daily");
+    expect(invoke).toHaveBeenNthCalledWith(2, "set_backup_schedule", {
+      interval: "daily",
+      keep: 7,
     });
   });
 
@@ -165,5 +171,51 @@ describe("ipc contract", () => {
       cursor: "c1",
       sort: "newest",
     });
+  });
+
+  it("getJsonSetting and setJsonSetting serialize and parse typed payloads", async () => {
+    const { getJsonSetting, setJsonSetting } = await import("./ipc");
+    invoke.mockResolvedValueOnce(JSON.stringify({ enabled: true, count: 42 }));
+    const parsed = await getJsonSetting<{ enabled: boolean; count: number }>("test.key");
+    expect(parsed).toEqual({ enabled: true, count: 42 });
+    expect(invoke).toHaveBeenCalledWith("get_setting", { key: "test.key" });
+
+    invoke.mockResolvedValueOnce(null);
+    expect(await getJsonSetting("missing.key")).toBeNull();
+
+    invoke.mockResolvedValueOnce("invalid json {{{");
+    expect(await getJsonSetting("malformed.key")).toBeNull();
+
+    invoke.mockResolvedValueOnce(undefined);
+    await setJsonSetting("test.key", { enabled: false });
+    expect(invoke).toHaveBeenCalledWith("set_setting", {
+      key: "test.key",
+      valueJson: JSON.stringify({ enabled: false }),
+    });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await setJsonSetting("undefined.key", undefined);
+    expect(invoke).toHaveBeenCalledWith("set_setting", {
+      key: "undefined.key",
+      valueJson: "null",
+    });
+  });
+
+  it("exports strongly-typed domain union types", async () => {
+    const { HIGHLIGHT_START, HIGHLIGHT_END } = await import("./ipc");
+    expect(HIGHLIGHT_START).toBe("\u{e000}");
+    expect(HIGHLIGHT_END).toBe("\u{e001}");
+
+    const scanState: import("./ipc").SecretScanState = "failed_quarantined";
+    expect(scanState).toBe("failed_quarantined");
+
+    const severity: import("./ipc").SecretSeverity = "critical";
+    expect(severity).toBe("critical");
+
+    const sourceKind: import("./ipc").SearchSourceKind = "message_part";
+    expect(sourceKind).toBe("message_part");
+
+    const sortOrder: import("./ipc").SearchSortOrder = "relevance";
+    expect(sortOrder).toBe("relevance");
   });
 });

@@ -127,6 +127,13 @@ fn list_repositories(state: State<'_, AppState>) -> Result<Vec<RepositorySummary
     lore_core::query::list_repositories(&conn).map_err(|e| e.to_string())
 }
 
+fn is_invalid_text_token(s: &str, max_len: usize) -> bool {
+    s.is_empty()
+        || s.len() > max_len
+        || s.chars()
+            .any(|c| c.is_control() || lore_core::is_zero_width(c))
+}
+
 /// List the most recent sessions that touched `repository_id` (newest first).
 #[tauri::command]
 fn list_repository_sessions(
@@ -134,7 +141,7 @@ fn list_repository_sessions(
     id: String,
     limit: i64,
 ) -> Result<Vec<SessionSummary>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid repository id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -150,7 +157,7 @@ fn list_repository_sessions_page(
     limit: i64,
     cursor: Option<String>,
 ) -> Result<SessionPage, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid repository id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -166,7 +173,7 @@ fn list_repository_sessions_page(
 /// Read one session in context (header, segments, ordered-part timeline, files).
 #[tauri::command]
 fn get_session(state: State<'_, AppState>, id: String) -> Result<Option<SessionDetail>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -178,7 +185,7 @@ fn get_session(state: State<'_, AppState>, id: String) -> Result<Option<SessionD
 /// completed, so its content stays unavailable — SECRET_SCANNING.md §6).
 #[tauri::command]
 fn get_file_patch(state: State<'_, AppState>, id: String) -> Result<Option<String>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid event id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -191,7 +198,7 @@ fn get_git_snapshot(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Vec<GitObservationDto>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -201,7 +208,7 @@ fn get_git_snapshot(
 /// How many secrets were flagged in a session (all redacted from derived surfaces).
 #[tauri::command]
 fn session_secret_count(state: State<'_, AppState>, id: String) -> Result<i64, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -216,7 +223,7 @@ fn export_session_markdown(
     id: String,
     include_secrets: bool,
 ) -> Result<Option<String>, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -224,10 +231,39 @@ fn export_session_markdown(
         .map_err(|e| e.to_string())
 }
 
+/// Write a session's redacted Markdown export to the path chosen in the OS save
+/// dialog. The content is identical to the clipboard export (masked by default);
+/// writing to the user-selected file is the only side effect, and that file is
+/// outside Lore's ownership once written.
+#[tauri::command]
+fn save_session_export(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+    include_secrets: bool,
+) -> Result<(), String> {
+    if is_invalid_text_token(&id, 256) {
+        return Err("invalid session id".to_string());
+    }
+    if path.is_empty()
+        || path.len() > 4096
+        || path
+            .chars()
+            .any(|c| c.is_control() || lore_core::is_zero_width(c))
+    {
+        return Err("invalid export path".to_string());
+    }
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    let markdown = lore_core::export::export_session_markdown(&conn, &id, include_secrets)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "session not found".to_string())?;
+    std::fs::write(std::path::Path::new(&path), markdown).map_err(|e| e.to_string())
+}
+
 /// Forget a session: remove its rows, projections, findings, and orphan blobs.
 #[tauri::command]
 fn forget_session(state: State<'_, AppState>, id: String) -> Result<ForgetReport, String> {
-    if id.is_empty() || id.len() > 256 || id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -302,23 +338,25 @@ fn list_folders(state: State<'_, AppState>) -> Result<Vec<FolderSummary>, String
     lore_core::folders::list_folders(&conn).map_err(|e| e.to_string())
 }
 
+fn is_invalid_folder_name(name: &str) -> bool {
+    name.len() > 256
+        || name
+            .chars()
+            .any(|c| c.is_control() || lore_core::is_zero_width(c))
+}
+
 /// Create a folder and return it (name is trimmed and length-capped).
 #[tauri::command]
 fn create_folder(state: State<'_, AppState>, name: String) -> Result<FolderSummary, String> {
-    if name.len() > 256 {
-        return Err("folder name exceeds maximum length".to_string());
+    if is_invalid_folder_name(&name) {
+        return Err("invalid folder name".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::folders::create_folder(&conn, &name).map_err(|e| e.to_string())
 }
 
 fn is_invalid_folder_id(id: &str) -> bool {
-    id.is_empty()
-        || id.len() > 64
-        || id.chars().any(|c| {
-            c.is_control()
-                || matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
-        })
+    is_invalid_text_token(id, 64)
 }
 
 /// Rename a folder.
@@ -327,8 +365,8 @@ fn rename_folder(state: State<'_, AppState>, id: String, name: String) -> Result
     if is_invalid_folder_id(&id) {
         return Err("invalid folder id".to_string());
     }
-    if name.len() > 256 {
-        return Err("folder name exceeds maximum length".to_string());
+    if is_invalid_folder_name(&name) {
+        return Err("invalid folder name".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::folders::rename_folder(&conn, &id, &name).map_err(|e| e.to_string())
@@ -352,7 +390,7 @@ fn set_session_folder(
     session_id: String,
     folder_id: Option<String>,
 ) -> Result<(), String> {
-    if session_id.is_empty() || session_id.len() > 256 || session_id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&session_id, 256) {
         return Err("invalid session id".to_string());
     }
     if let Some(ref fid) = folder_id {
@@ -377,17 +415,17 @@ fn list_folder_sessions_page(
         return Err("invalid folder id".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
-    lore_core::query::list_folder_sessions_page(&conn, &id, limit.clamp(1, 10_000), cursor.as_deref())
-        .map_err(|e| e.to_string())
+    lore_core::query::list_folder_sessions_page(
+        &conn,
+        &id,
+        limit.clamp(1, 10_000),
+        cursor.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn is_invalid_setting_key(key: &str) -> bool {
-    key.is_empty()
-        || key.len() > 128
-        || key.chars().any(|c| {
-            c.is_control()
-                || matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
-        })
+    is_invalid_text_token(key, 128)
 }
 
 /// Read a setting's raw JSON value.
@@ -436,12 +474,7 @@ fn set_backup_schedule(
     interval: String,
     keep: i64,
 ) -> Result<(), String> {
-    if interval.len() > 64
-        || interval.chars().any(|c| {
-            c.is_control()
-                || matches!(c, '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}')
-        })
-    {
+    if is_invalid_text_token(&interval, 64) {
         return Err("invalid backup interval".to_string());
     }
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
@@ -493,10 +526,10 @@ fn add_agent_root(
     agent_id: String,
     path: String,
 ) -> Result<(), String> {
-    if agent_id.is_empty() || agent_id.len() > 64 || agent_id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&agent_id, 64) {
         return Err("invalid agent id".to_string());
     }
-    if path.is_empty() || path.len() > 4096 || path.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&path, 4096) {
         return Err("invalid root path".to_string());
     }
     let config = {
@@ -516,10 +549,10 @@ fn remove_agent_root(
     agent_id: String,
     path: String,
 ) -> Result<(), String> {
-    if agent_id.is_empty() || agent_id.len() > 64 || agent_id.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&agent_id, 64) {
         return Err("invalid agent id".to_string());
     }
-    if path.is_empty() || path.len() > 4096 || path.chars().any(|c| c.is_control()) {
+    if is_invalid_text_token(&path, 4096) {
         return Err("invalid root path".to_string());
     }
     let config = {
@@ -678,6 +711,7 @@ pub fn run() {
             get_file_patch,
             session_secret_count,
             export_session_markdown,
+            save_session_export,
             forget_session,
             forget_everything,
             search,
@@ -721,4 +755,39 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_invalid_folder_name() {
+        assert!(!is_invalid_folder_name("My Projects"));
+        assert!(is_invalid_folder_name("Folder\x00Name"));
+        assert!(is_invalid_folder_name("Folder\u{200B}Name"));
+        assert!(is_invalid_folder_name(&"a".repeat(257)));
+    }
+
+    #[test]
+    fn test_is_invalid_text_token() {
+        assert!(!is_invalid_text_token("valid_token_123", 64));
+        assert!(is_invalid_text_token("", 64));
+        assert!(is_invalid_text_token("invalid\x07", 64));
+        assert!(is_invalid_text_token("invalid\u{200C}", 64));
+        assert!(is_invalid_text_token(&"x".repeat(65), 64));
+    }
+
+    #[test]
+    fn test_is_invalid_setting_key_and_folder_id() {
+        assert!(!is_invalid_setting_key("ui.theme"));
+        assert!(is_invalid_setting_key(""));
+        assert!(is_invalid_setting_key("ui\0theme"));
+        assert!(is_invalid_setting_key(&"k".repeat(129)));
+
+        assert!(!is_invalid_folder_id("0123456789abcdef0123456789abcdef"));
+        assert!(is_invalid_folder_id(""));
+        assert!(is_invalid_folder_id("0123\u{200d}456"));
+        assert!(is_invalid_folder_id(&"f".repeat(65)));
+    }
 }

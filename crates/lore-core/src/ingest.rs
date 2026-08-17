@@ -736,6 +736,7 @@ pub fn ingest_file(
                 && row.ingest_state.as_deref() == Some("ok") =>
         {
             // Unchanged content: refresh stat/alias only, no re-parse.
+            let _write = crate::storage::write_lock();
             let tx = conn.unchecked_transaction()?;
             update_source(&tx, &row.id, &snapshot, row.generation)?;
             add_path_alias(&tx, &row.id, &snapshot.path)?;
@@ -773,6 +774,10 @@ pub fn ingest_file(
     // Stage blob files before opening the transaction (DATA_MODEL.md §3).
     let patch_blobs = stage_patch_blobs(blobs, &parsed)?;
 
+    // Serialize with other archive writers (UI folder writes, forget, settings)
+    // so the two connections never contend on SQLite's write lock. Taken after
+    // parse and blob staging so file I/O stays outside the lock.
+    let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
     let target_session_id = session_id_for(agent_id, &parsed);
     if prev.is_some() {

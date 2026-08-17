@@ -12,6 +12,7 @@ import { agentLabel } from "./format";
 import {
   addAgentRoot,
   chooseAgentRootDirectory,
+  chooseExportFilePath,
   createFolder,
   deleteFolder,
   exportSessionMarkdown,
@@ -31,6 +32,7 @@ import {
   removeAgentRoot,
   renameFolder,
   rescan,
+  saveSessionExport,
   searchPage,
   sessionSecretCount,
   setSessionFolder,
@@ -253,6 +255,21 @@ export default function App() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen((open) => !open);
+        return;
+      }
+      // `/` focuses search (Linear/Notion convention) unless the user is already
+      // typing in a field, so `/` never hijacks a real keystroke.
+      if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const target = event.target as HTMLElement | null;
+        const editable =
+          target?.isContentEditable ||
+          target?.tagName === "INPUT" ||
+          target?.tagName === "TEXTAREA" ||
+          target?.tagName === "SELECT";
+        if (!editable) {
+          event.preventDefault();
+          searchInputRef.current?.focus();
+        }
       }
     }
     window.addEventListener("keydown", onKey);
@@ -481,8 +498,24 @@ export default function App() {
     try {
       const markdown = await exportSessionMarkdown(selectedSession, false);
       if (markdown == null) return;
-      await navigator.clipboard?.writeText(markdown);
-      setNotice("Exported Markdown to the clipboard (flagged secrets redacted).");
+      if (!navigator.clipboard?.writeText) {
+        setError("Clipboard is unavailable here. Use “Save file” instead.");
+        return;
+      }
+      await navigator.clipboard.writeText(markdown);
+      setNotice("Copied Markdown to the clipboard (flagged secrets redacted).");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleSaveFile() {
+    if (!selectedSession) return;
+    try {
+      const path = await chooseExportFilePath();
+      if (path === null) return; // user cancelled the save dialog
+      await saveSessionExport(selectedSession, path, false);
+      setNotice("Saved session export.");
     } catch (e) {
       setError(String(e));
     }
@@ -671,6 +704,13 @@ export default function App() {
     sessions.length === 0 &&
     agents.every((agent) => agent.session_count === 0);
 
+  // Scan progress: processed vs discovered, so the header strip can show a real
+  // fraction and bar rather than bare counters. Discovered is the candidate
+  // count; processed is how many of those candidates have been resolved.
+  const scanProcessed = progress ? progress.ingested + progress.skipped + progress.failed : 0;
+  const scanTotal = progress ? Math.max(progress.discovered, scanProcessed, 0) : 0;
+  const scanPercent = scanTotal > 0 ? Math.min(100, Math.round((scanProcessed / scanTotal) * 100)) : 0;
+
   return (
     <div className="shell">
       <header className="shell__bar">
@@ -719,11 +759,23 @@ export default function App() {
       </header>
 
       {progress && (
-        <p className="shell__progress" role="status">
-          Discovered {progress.discovered} · ingested {progress.ingested} · skipped{" "}
-          {progress.skipped} · failed {progress.failed}
-          {progress.done ? " · done" : "…"}
-        </p>
+        <div className="shell__progress" role="status">
+          <div
+            className="shell__progress-bar"
+            role="progressbar"
+            aria-label="Archive scan progress"
+            aria-valuenow={scanPercent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="shell__progress-fill" style={{ width: `${scanPercent}%` }} />
+          </div>
+          <span className="shell__progress-text">
+            {progress.done
+              ? `Scan complete · ${progress.ingested} ingested · ${progress.skipped} skipped · ${progress.failed} failed`
+              : `${scanProcessed}/${scanTotal} sessions · ${scanPercent}% · ${progress.failed} failed`}
+          </span>
+        </div>
       )}
       {error && (
         <div className="shell__error" role="alert">
@@ -863,6 +915,7 @@ export default function App() {
               loadPatch={getFilePatch}
               secretCount={secretCount}
               onExport={handleExport}
+              onSaveFile={handleSaveFile}
               onForget={handleForget}
             />
           )}

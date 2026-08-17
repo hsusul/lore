@@ -72,11 +72,14 @@ describe("FolderList", () => {
     expect(props.onRename).toHaveBeenCalledWith("f1", "Archive");
   });
 
-  it("deletes a folder on Delete keyboard shortcut", () => {
+  it("deletes a folder on Delete or Cmd+Backspace keyboard shortcut", () => {
     const props = setup();
     const folderBtn = screen.getByRole("button", { name: /^Inbox/ });
     fireEvent.keyDown(folderBtn, { key: "Delete" });
     expect(props.onDelete).toHaveBeenCalledWith("f1");
+
+    fireEvent.keyDown(folderBtn, { key: "Backspace", metaKey: true });
+    expect(props.onDelete).toHaveBeenCalledTimes(2);
   });
 
   it("files a dropped thread into the folder", () => {

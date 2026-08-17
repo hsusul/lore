@@ -53,4 +53,44 @@ describe("computeWindow", () => {
       padBottom: 0,
     });
   });
+
+  it("safely handles negative count and negative overscan", () => {
+    expect(computeWindow(-5, 0, 400, 40, -2)).toEqual({
+      startIndex: 0,
+      endIndex: 0,
+      padTop: 0,
+      padBottom: 0,
+    });
+
+    const nonNegativeOverscan = computeWindow(100, 400, 400, 40, -3);
+    expect(nonNegativeOverscan.startIndex).toBe(10);
+    expect(nonNegativeOverscan.endIndex).toBe(20);
+  });
+
+  it("handles NaN and non-finite dimensions safely", () => {
+    expect(computeWindow(NaN, 0, 400, 40, 5)).toEqual({
+      startIndex: 0,
+      endIndex: 0,
+      padTop: 0,
+      padBottom: 0,
+    });
+    expect(computeWindow(100, 0, NaN, 40, 5)).toEqual({
+      startIndex: 0,
+      endIndex: 100,
+      padTop: 0,
+      padBottom: 0,
+    });
+    expect(computeWindow(100, 0, 400, NaN, 5)).toEqual({
+      startIndex: 0,
+      endIndex: 100,
+      padTop: 0,
+      padBottom: 0,
+    });
+    expect(computeWindow(100, NaN, 400, 40, NaN)).toEqual({
+      startIndex: 0,
+      endIndex: 10,
+      padTop: 0,
+      padBottom: 90 * 40,
+    });
+  });
 });

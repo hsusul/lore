@@ -28,6 +28,11 @@ unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
 
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
-strip = true
+opt-level = 3
 lto = "thin"
+codegen-units = 1
+strip = true

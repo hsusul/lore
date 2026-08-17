@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { agentLabel, formatRelative, formatTime } from "./format";
+import { agentLabel, clamp, formatRelative, formatTime } from "./format";
 
 describe("format helpers", () => {
   describe("agentLabel", () => {
@@ -16,8 +16,11 @@ describe("format helpers", () => {
   });
 
   describe("formatTime", () => {
-    it("returns empty string for null", () => {
+    it("returns empty string for null and non-finite values", () => {
       expect(formatTime(null)).toBe("");
+      expect(formatTime(NaN)).toBe("");
+      expect(formatTime(Infinity)).toBe("");
+      expect(formatTime(-Infinity)).toBe("");
     });
 
     it("formats a valid millisecond epoch timestamp", () => {
@@ -28,8 +31,11 @@ describe("format helpers", () => {
   });
 
   describe("formatRelative", () => {
-    it("returns empty string for null", () => {
+    it("returns empty string for null and non-finite values", () => {
       expect(formatRelative(null)).toBe("");
+      expect(formatRelative(NaN)).toBe("");
+      expect(formatRelative(Infinity)).toBe("");
+      expect(formatRelative(-Infinity)).toBe("");
     });
 
     it("handles future timestamps or clock skew gracefully without negative numbers", () => {
@@ -53,6 +59,19 @@ describe("format helpers", () => {
       expect(formatRelative(now - 3 * 60 * 60 * 1000)).toBe("3h");
       expect(formatRelative(now - 2 * 24 * 60 * 60 * 1000)).toBe("2d");
       expect(formatRelative(now - 14 * 24 * 60 * 60 * 1000)).toBe("2w");
+    });
+  });
+
+  describe("clamp", () => {
+    it("clamps values within min and max boundaries", () => {
+      expect(clamp(5, 1, 10)).toBe(5);
+      expect(clamp(0, 1, 10)).toBe(1);
+      expect(clamp(15, 1, 10)).toBe(10);
+    });
+
+    it("handles non-finite values by returning min", () => {
+      expect(clamp(NaN, 1, 10)).toBe(1);
+      expect(clamp(Infinity, 1, 10)).toBe(1);
     });
   });
 });

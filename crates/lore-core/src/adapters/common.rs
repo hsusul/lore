@@ -49,13 +49,38 @@ fn title_from_text(text: &str) -> Option<String> {
     let line = candidate
         .lines()
         .map(str::trim)
-        .map(|l| l.trim_start_matches('#').trim_start_matches(['-', '*']).trim())
+        .map(|l| {
+            l.trim_start_matches('#')
+                .trim_start_matches(['-', '*'])
+                .trim()
+        })
         .find(|line| !line.is_empty() && !(line.starts_with('<') && line.ends_with('>')))?;
 
-    let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut chars = normalized.chars();
-    let title: String = chars.by_ref().take(TITLE_MAX_CHARS).collect();
-    if chars.next().is_some() {
+    let mut title = String::with_capacity(TITLE_MAX_CHARS + 4);
+    let mut count = 0;
+    let mut truncated = false;
+    for word in line.split_whitespace() {
+        if count > 0 {
+            if count >= TITLE_MAX_CHARS {
+                truncated = true;
+                break;
+            }
+            title.push(' ');
+            count += 1;
+        }
+        for c in word.chars() {
+            if count >= TITLE_MAX_CHARS {
+                truncated = true;
+                break;
+            }
+            title.push(c);
+            count += 1;
+        }
+        if truncated {
+            break;
+        }
+    }
+    if truncated {
         Some(format!("{}…", title.trim_end()))
     } else {
         Some(title)
@@ -64,7 +89,8 @@ fn title_from_text(text: &str) -> Option<String> {
 
 /// Parse an RFC3339 timestamp to epoch milliseconds.
 pub(crate) fn epoch_ms(s: &str) -> Option<i64> {
-    let dt = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()?;
+    let dt = time::OffsetDateTime::parse(s.trim(), &time::format_description::well_known::Rfc3339)
+        .ok()?;
     i64::try_from(dt.unix_timestamp_nanos() / 1_000_000).ok()
 }
 
@@ -75,27 +101,50 @@ pub(crate) fn bounded(s: &str) -> String {
 
 /// Extract an optional string field from a JSON object.
 pub(crate) fn str_field(obj: &serde_json::Value, key: &str) -> Option<String> {
-    obj.get(key).and_then(serde_json::Value::as_str).map(str::to_string)
+    obj.get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+/// Extract an optional serialized JSON field from a JSON object.
+pub(crate) fn json_field(obj: &serde_json::Value, key: &str) -> Option<String> {
+    obj.get(key).and_then(|v| serde_json::to_string(v).ok())
 }
 
 /// Extract an optional non-negative integer from a JSON object.
 pub(crate) fn non_negative_int_field(obj: &serde_json::Value, key: &str) -> Option<i64> {
     obj.get(key)
-        .and_then(|v| v.as_i64().or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok())))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))
+        })
         .filter(|&v| v >= 0)
 }
 
-/// Neutralize path traversal so a recorded `FileEvent.path` can never represent
-/// an escape (`../`). Produces a clean relative path.
+/// Neutralize path traversal, drive prefixes, control characters, and zero-width
+/// bytes so a recorded `FileEvent.path` can never represent an escape (`../` or
+/// `C:\`) or terminal/filesystem poison. Produces a clean relative path.
 pub(crate) fn sanitize_path(raw: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
     for seg in raw.split(['/', '\\']) {
-        match seg {
+        let clean_seg = if seg.len() == 2
+            && seg.as_bytes()[1] == b':'
+            && seg.as_bytes()[0].is_ascii_alphabetic()
+        {
+            ""
+        } else {
+            seg
+        };
+        let filtered: String = clean_seg
+            .chars()
+            .filter(|c| !c.is_control() && !crate::is_zero_width(*c))
+            .collect();
+        match filtered.as_str() {
             "" | "." => {}
             ".." => {
                 parts.pop();
             }
-            other => parts.push(other),
+            _ => parts.push(filtered),
         }
     }
     parts.join("/")
@@ -115,8 +164,8 @@ pub(crate) fn unified_diff_line_counts(diff: &str) -> Option<(i64, i64)> {
             continue;
         }
         match line.as_bytes().first() {
-            Some(b'+') => added += 1,
-            Some(b'-') => removed += 1,
+            Some(b'+') => added = added.saturating_add(1),
+            Some(b'-') => removed = removed.saturating_add(1),
             _ => {}
         }
     }
@@ -156,6 +205,18 @@ mod tests {
         assert_eq!(sanitize_path(r"..\..\a\b"), "a/b");
         assert_eq!(sanitize_path(r"src\..\src\app.ts"), "src/app.ts");
         assert_eq!(sanitize_path(r"foo/bar\baz"), "foo/bar/baz");
+        assert_eq!(
+            sanitize_path(r"C:\Users\dev\project\file.ts"),
+            "Users/dev/project/file.ts"
+        );
+        assert_eq!(
+            sanitize_path(r"d:/project/src/index.js"),
+            "project/src/index.js"
+        );
+        assert_eq!(
+            sanitize_path("src/\0poison\r/app\u{200b}.ts"),
+            "src/poison/app.ts"
+        );
     }
 
     #[test]
@@ -206,5 +267,38 @@ mod tests {
         assert_eq!(non_negative_int_field(&json, "string"), None);
         assert_eq!(non_negative_int_field(&json, "null_val"), None);
         assert_eq!(non_negative_int_field(&json, "missing"), None);
+    }
+
+    #[test]
+    fn json_and_str_field_extract_values() {
+        let json: serde_json::Value = serde_json::json!({
+            "name": "test-adapter",
+            "nested": { "key": "value" },
+            "empty_str": ""
+        });
+        assert_eq!(str_field(&json, "name"), Some("test-adapter".to_string()));
+        assert_eq!(str_field(&json, "empty_str"), Some("".to_string()));
+        assert_eq!(str_field(&json, "nested"), None);
+        assert_eq!(str_field(&json, "missing"), None);
+
+        assert_eq!(
+            json_field(&json, "nested"),
+            Some("{\"key\":\"value\"}".to_string())
+        );
+        assert_eq!(
+            json_field(&json, "name"),
+            Some("\"test-adapter\"".to_string())
+        );
+        assert_eq!(json_field(&json, "missing"), None);
+    }
+
+    #[test]
+    fn epoch_ms_parses_rfc3339_with_optional_whitespace() {
+        let ts = "2026-08-11T10:00:00.000Z";
+        let expected = epoch_ms(ts);
+        assert!(expected.is_some());
+        assert_eq!(epoch_ms(&format!("  {ts}  ")), expected);
+        assert_eq!(epoch_ms("not-a-date"), None);
+        assert_eq!(epoch_ms(""), None);
     }
 }

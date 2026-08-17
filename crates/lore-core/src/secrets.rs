@@ -132,6 +132,16 @@ const PREFIX_RULES: &[PrefixRule] = &[
         min_tail: 36,
     },
     PrefixRule {
+        // GitHub fine-grained PATs (`github_pat_…`) carry `_` inside the token
+        // body, so they need the alnum_dash_us alphabet and their own rule id
+        // (the classic `ghp_`-family rule uses a strict alphanumeric tail).
+        id: "github-fine-grained-pat",
+        severity: Severity::High,
+        prefixes: &["github_pat_"],
+        tail: alnum_dash_us,
+        min_tail: 20,
+    },
+    PrefixRule {
         id: "gitlab-pat",
         severity: Severity::High,
         prefixes: &["glpat-"],
@@ -724,6 +734,13 @@ mod tests {
         assert!(found(&t("AKIA", "ABCDEFGHIJKLMNOP")).contains(&"aws-access-key-id"));
         assert!(found(&t("AIza", "SyA1234567890abcdefghijklmnopqrstuvz")).contains(&"gcp-api-key"));
         assert!(found(&t("ghp", "_0123456789abcdefghijklmnopqrstuvwxyz")).contains(&"github-token"));
+        // Fine-grained PATs carry an internal `_`; the strict `ghp_` rule misses
+        // them, so they get their own rule (detected, not just generic entropy).
+        assert!(found(&t(
+            "github_pat",
+            "_ABCDEFGHIJKLMNOPQRSTUV_abcdefghijklmnopqrstuvwxyz0123456789"
+        ))
+        .contains(&"github-fine-grained-pat"));
         assert!(found(&t("glpat", "-abcdef0123456789ABCDEF")).contains(&"gitlab-pat"));
         assert!(found(&t("xoxb", "-123456789012-abcdefABCDEF")).contains(&"slack-token"));
         assert!(found(&t("sk", "_live_0123456789abcdefABCD")).contains(&"stripe-key"));
@@ -860,5 +877,21 @@ mod tests {
             "a scanner failure is an error, never a panic"
         );
         assert!(scan_ok("id 550e8400-e29b-41d4-a716-446655440000").is_empty());
+    }
+
+    #[test]
+    fn redaction_handles_adjacent_secrets_and_empty_inputs() {
+        assert_eq!(redact("", &[]), "");
+        assert_eq!(redact("no secrets here", &[]), "no secrets here");
+
+        let s1 = t("ghp", "_0123456789abcdefghijklmnopqrstuvwxyz");
+        let s2 = t("sk", "_live_0123456789abcdefABCD");
+        let combined = format!("{s1} {s2}");
+        let findings = scan_ok(&combined);
+        assert_eq!(findings.len(), 2);
+        let redacted = redact(&combined, &findings);
+        assert!(!redacted.contains(&s1));
+        assert!(!redacted.contains(&s2));
+        assert_eq!(redacted, "«redacted:github-token» «redacted:stripe-key»");
     }
 }

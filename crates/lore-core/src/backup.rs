@@ -39,7 +39,7 @@ const PAUSE_BETWEEN_STEPS: Duration = Duration::from_millis(10);
 /// Default number of Lore-owned backups to keep on disk. Bounded and
 /// user-visible (SECURITY.md §6); the exact cadence/retention remains a
 /// settings decision (DATA_MODEL.md §11) — this is only the mechanism's bound.
-pub const DEFAULT_BACKUP_RETENTION: usize = 5;
+pub const DEFAULT_BACKUP_RETENTION: usize = 7;
 
 /// Per-process counter so backups created within the same millisecond never
 /// collide; names remain lexicographically sortable (== chronological).
@@ -160,6 +160,12 @@ impl BackupInterval {
     }
 }
 
+impl std::fmt::Display for BackupInterval {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The user-configurable automatic-backup schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackupSchedule {
@@ -197,11 +203,7 @@ pub fn write_schedule(conn: &Connection, schedule: BackupSchedule) -> Result<()>
         KEY_INTERVAL,
         &format!("\"{}\"", schedule.interval.as_str()),
     )?;
-    crate::settings::set(
-        conn,
-        KEY_KEEP,
-        &schedule.keep.clamp(1, 100).to_string(),
-    )?;
+    crate::settings::set(conn, KEY_KEEP, &schedule.keep.clamp(1, 100).to_string())?;
     Ok(())
 }
 
@@ -327,4 +329,23 @@ fn set_private(path: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn set_private(_path: &Path) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_interval_display_and_parse_roundtrip() {
+        for (interval, expected) in [
+            (BackupInterval::Off, "off"),
+            (BackupInterval::Daily, "daily"),
+            (BackupInterval::Weekly, "weekly"),
+        ] {
+            assert_eq!(interval.to_string(), expected);
+            assert_eq!(interval.as_str(), expected);
+            assert_eq!(BackupInterval::parse(expected), interval);
+        }
+        assert_eq!(BackupInterval::parse("unknown"), BackupInterval::Off);
+    }
 }

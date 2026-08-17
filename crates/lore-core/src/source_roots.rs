@@ -49,6 +49,9 @@ pub fn custom_roots(conn: &Connection, agent_id: &str) -> Result<Vec<PathBuf>> {
         .filter(|path| {
             !path.is_empty()
                 && path.chars().count() <= MAX_PATH_CHARS
+                && !path
+                    .chars()
+                    .any(|c| c.is_control() || crate::is_zero_width(c))
                 && Path::new(path).is_absolute()
                 && Path::new(path).parent().is_some()
         })
@@ -71,7 +74,12 @@ fn store_custom_roots(conn: &Connection, agent_id: &str, roots: &[PathBuf]) -> R
 }
 
 fn normalize_selected_path(path: &str) -> Result<PathBuf> {
-    if path.is_empty() || path.chars().count() > MAX_PATH_CHARS {
+    if path.is_empty()
+        || path.chars().count() > MAX_PATH_CHARS
+        || path
+            .chars()
+            .any(|c| c.is_control() || crate::is_zero_width(c))
+    {
         return Err(SourceRootError::InvalidPath);
     }
     let selected = Path::new(path);
@@ -270,7 +278,7 @@ mod tests {
         crate::settings::set(
             &conn,
             &setting_key("codex"),
-            r#"["relative","/","/definitely/missing-but-safe"]"#,
+            r#"["relative","/","/poison\u0000path","/zero\u200bwidth","/definitely/missing-but-safe"]"#,
         )
         .unwrap();
 

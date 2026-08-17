@@ -68,32 +68,23 @@ fn session_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSumma
 /// [`list_repository_sessions_page`], and [`list_folder_sessions_page`] so the
 /// pages cannot drift apart.
 fn keyset_after(cursor: &SessionCursor, prefix: &str) -> (&'static str, Vec<Value>) {
-    match (cursor.started_at, prefix) {
-        (Some(started_at), "s.") => (
-            "s.started_at < ? OR s.started_at IS NULL OR (s.started_at = ? AND s.id < ?)",
-            vec![
-                Value::Integer(started_at),
-                Value::Integer(started_at),
-                Value::Text(cursor.id.clone()),
-            ],
-        ),
-        (Some(started_at), _) => (
-            "started_at < ? OR started_at IS NULL OR (started_at = ? AND id < ?)",
-            vec![
-                Value::Integer(started_at),
-                Value::Integer(started_at),
-                Value::Text(cursor.id.clone()),
-            ],
-        ),
-        (None, "s.") => (
-            "s.started_at IS NULL AND s.id < ?",
-            vec![Value::Text(cursor.id.clone())],
-        ),
-        (None, _) => (
-            "started_at IS NULL AND id < ?",
-            vec![Value::Text(cursor.id.clone())],
-        ),
-    }
+    let params = match cursor.started_at {
+        Some(started_at) => vec![
+            Value::Integer(started_at),
+            Value::Integer(started_at),
+            Value::Text(cursor.id.clone()),
+        ],
+        None => vec![Value::Text(cursor.id.clone())],
+    };
+    let clause = match (cursor.started_at.is_some(), prefix) {
+        (true, "s.") => {
+            "s.started_at < ? OR s.started_at IS NULL OR (s.started_at = ? AND s.id < ?)"
+        }
+        (true, _) => "started_at < ? OR started_at IS NULL OR (started_at = ? AND id < ?)",
+        (false, "s.") => "s.started_at IS NULL AND s.id < ?",
+        (false, _) => "started_at IS NULL AND id < ?",
+    };
+    (clause, params)
 }
 
 /// List one stable newest-first page of sessions. The opaque cursor stores the
@@ -253,10 +244,22 @@ struct SessionCursor {
 
 impl SessionCursor {
     fn encode_parts(started_at: Option<i64>, id: &str) -> String {
-        let started_at = started_at
-            .map_or_else(|| "n".to_string(), |value| value.to_string());
-        let id = id.replace('%', "%25").replace(':', "%3A");
-        format!("{started_at}:{id}")
+        use std::fmt::Write;
+        let mut out = String::with_capacity(id.len() + 24);
+        match started_at {
+            Some(value) => {
+                let _ = write!(&mut out, "{value}:");
+            }
+            None => out.push_str("n:"),
+        }
+        for b in id.bytes() {
+            match b {
+                b'%' => out.push_str("%25"),
+                b':' => out.push_str("%3A"),
+                _ => out.push(b as char),
+            }
+        }
+        out
     }
 
     #[cfg(test)]
@@ -276,7 +279,23 @@ impl SessionCursor {
             "n" => None,
             value => Some(value.parse().ok()?),
         };
-        let id = encoded_id.replace("%3A", ":").replace("%25", "%");
+        let mut id = String::with_capacity(encoded_id.len());
+        let mut chars = encoded_id.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '%' {
+                let next_two: String = chars.by_ref().take(2).collect();
+                match next_two.as_str() {
+                    "25" => id.push('%'),
+                    "3A" | "3a" => id.push(':'),
+                    _ => {
+                        id.push('%');
+                        id.push_str(&next_two);
+                    }
+                }
+            } else {
+                id.push(c);
+            }
+        }
         Some(Self { started_at, id })
     }
 }
@@ -760,9 +779,7 @@ mod tests {
 
         // 6 sessions sharing the exact same millisecond timestamp
         for i in 0..6 {
-            let content = concat!(
-                "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"same-time-",
-            );
+            let content = "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"same-time-";
             let full_content = format!("{content}{i}\",\"cli_version\":\"1\",\"cwd\":\"/p\"}}\n");
             let parsed = CodexAdapter::new().parse_str(&full_content, &format!("same-time-{i}"));
             persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
@@ -788,7 +805,50 @@ mod tests {
 
         assert_eq!(actual, expected);
         let unique: std::collections::HashSet<_> = actual.iter().collect();
-        assert_eq!(unique.len(), 6, "all rows with identical timestamps paginated without duplicates");
+        assert_eq!(
+            unique.len(),
+            6,
+            "all rows with identical timestamps paginated without duplicates"
+        );
+    }
+
+    #[test]
+    fn session_cursor_roundtrips_complex_ids() {
+        for (started_at, id) in [
+            (Some(1_700_000_000_i64), "simple-id"),
+            (None, "null-time-id"),
+            (Some(123), "id:with:colons"),
+            (Some(456), "id%with%percent"),
+            (Some(789), "id%3Awith%25encoded"),
+            (None, "%253A"),
+        ] {
+            let encoded = SessionCursor::encode_parts(started_at, id);
+            let decoded = SessionCursor::decode(&encoded).expect("cursor decodes");
+            assert_eq!(decoded.started_at, started_at);
+            assert_eq!(decoded.id, id);
+        }
+    }
+
+    #[test]
+    fn session_cursor_rejects_malformed_inputs() {
+        for bad in [
+            "",
+            "nocolon",
+            ":empty_time",
+            "100:",
+            "not_an_int:valid_id",
+            "100:id:with:colons",
+        ] {
+            assert!(
+                SessionCursor::decode(bad).is_none(),
+                "{bad:?} should be rejected"
+            );
+        }
+        let oversized = "100:".to_string() + &"x".repeat(3_000);
+        assert!(
+            SessionCursor::decode(&oversized).is_none(),
+            "oversized cursor should be rejected"
+        );
     }
 
     #[test]
@@ -1000,8 +1060,7 @@ mod tests {
             ClaudeCodeAdapter::new().parse_str(&fixture("claude_code", "basic_text.jsonl"), "b");
         let s1 = persist_session(&conn, "claude-code", "Claude Code", &claude, &blobs).unwrap();
 
-        let codex =
-            CodexAdapter::new().parse_str(&fixture("codex", "minimal.jsonl"), "codex_b");
+        let codex = CodexAdapter::new().parse_str(&fixture("codex", "minimal.jsonl"), "codex_b");
         let s2 = persist_session(&conn, "codex", "Codex", &codex, &blobs).unwrap();
 
         let f1 = crate::folders::create_folder(&conn, "Auth Refactor").unwrap();

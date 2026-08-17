@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // SettingsPanel renders BackupSettings, which reads the schedule on mount.
 vi.mock("../ipc", () => ({
-  getBackupSchedule: vi.fn().mockResolvedValue({ interval: "off", keep: 5 }),
+  getBackupSchedule: vi.fn().mockResolvedValue({ interval: "off", keep: 7 }),
   setBackupSchedule: vi.fn().mockResolvedValue(undefined),
   backupNow: vi.fn().mockResolvedValue(undefined),
 }));

@@ -4,7 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { DetectedAgent } from "../crates/lore-ipc/bindings/DetectedAgent";
 import type { FileEventDto } from "../crates/lore-ipc/bindings/FileEventDto";
@@ -26,6 +26,47 @@ import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary"
 
 export type BackupInterval = "off" | "daily" | "weekly";
 export type SearchSort = "relevance" | "newest" | "oldest";
+export type SearchSortOrder = SearchSort;
+export type ParseStatus = "ok" | "partial" | "failed";
+export type IdentityConfidence = "confirmed" | "high" | "medium" | "low";
+export type GitTemporalConfidence =
+  | "exact_event"
+  | "near_event"
+  | "retrospective"
+  | "current_only";
+export type FileChangeKind =
+  | "edit"
+  | "write"
+  | "create"
+  | "delete"
+  | "move"
+  | "read"
+  | "patch";
+export type MessageRole = "user" | "assistant" | "system" | "tool" | "meta";
+export type MessagePartKind =
+  | "text"
+  | "thinking"
+  | "tool_use"
+  | "tool_result"
+  | "attachment"
+  | "summary"
+  | "opaque"
+  | "other";
+export type MessageEventKind =
+  | "message"
+  | "summary"
+  | "compaction"
+  | "attachment"
+  | "title"
+  | "mode"
+  | "pr_link"
+  | "other";
+export type FileEventSource = "agent_patch" | "agent_tool_input" | "lore_capture";
+export type GitObservationProvenance = "agent_recorded" | "lore_captured" | "lore_reverified";
+export type ResolutionConfidence = "high" | "medium" | "low" | "unresolved";
+export type SecretScanState = "clean" | "redacted" | "failed_quarantined";
+export type SecretSeverity = "low" | "medium" | "high" | "critical";
+export type SearchSourceKind = "message_part" | "file_event" | "session";
 
 export type {
   BackupScheduleDto,
@@ -62,6 +103,14 @@ export function chooseAgentRootDirectory(displayName: string): Promise<string | 
     directory: true,
     multiple: false,
     title: `Choose ${displayName} session folder`,
+  });
+}
+
+/** Open the OS save dialog for a session export, or null when cancelled. */
+export function chooseExportFilePath(): Promise<string | null> {
+  return save({
+    defaultPath: "session.md",
+    filters: [{ name: "Markdown", extensions: ["md"] }],
   });
 }
 
@@ -195,6 +244,15 @@ export function exportSessionMarkdown(
   });
 }
 
+/** Write a session's redacted Markdown export to a user-chosen file path. */
+export function saveSessionExport(
+  id: string,
+  path: string,
+  includeSecrets: boolean = false,
+): Promise<void> {
+  return invoke<void>("save_session_export", { id, path, includeSecrets });
+}
+
 /** Forget a session: remove its rows, projections, findings, and orphan blobs. */
 export function forgetSession(id: string): Promise<ForgetReport> {
   return invoke<ForgetReport>("forget_session", { id });
@@ -215,9 +273,26 @@ export function getSetting(key: string): Promise<string | null> {
   return invoke<string | null>("get_setting", { key });
 }
 
+/** Read and parse a typed setting value, or null when unset or malformed. */
+export async function getJsonSetting<T>(key: string): Promise<T | null> {
+  const raw = await getSetting(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** Persist a setting's raw JSON value (Lore-owned; cleared by "forget everything"). */
 export function setSetting(key: string, valueJson: string): Promise<void> {
   return invoke<void>("set_setting", { key, valueJson });
+}
+
+/** Serialize and persist a typed setting value. */
+export function setJsonSetting<T>(key: string, value: T): Promise<void> {
+  const serialized = JSON.stringify(value);
+  return setSetting(key, serialized ?? "null");
 }
 
 /** Read the automatic-backup schedule (interval + retention). */
@@ -227,8 +302,8 @@ export function getBackupSchedule(): Promise<BackupScheduleDto> {
 
 /** Persist the automatic-backup schedule. `interval` is "off" | "daily" | "weekly". */
 export function setBackupSchedule(
-  interval: BackupInterval | string,
-  keep: number,
+  interval: BackupInterval,
+  keep: number = 7,
 ): Promise<void> {
   return invoke<void>("set_backup_schedule", { interval, keep });
 }

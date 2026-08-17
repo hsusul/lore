@@ -102,4 +102,18 @@ mod tests {
         set(&conn, "flag", "\"nonsense\"").unwrap();
         assert!(get_bool(&conn, "flag", true).unwrap());
     }
+
+    #[test]
+    fn structured_json_payloads_round_trip() {
+        let conn = db();
+        let payload = r#"{"roots":["/custom/path"],"enabled":true,"limit":100}"#;
+        set(&conn, "agent_roots.claude_code", payload).unwrap();
+        let retrieved = get(&conn, "agent_roots.claude_code").unwrap().unwrap();
+        assert_eq!(retrieved, payload);
+
+        let parsed: serde_json::Value = serde_json::from_str(&retrieved).unwrap();
+        assert_eq!(parsed["roots"][0], "/custom/path");
+        assert_eq!(parsed["enabled"], true);
+        assert_eq!(parsed["limit"], 100);
+    }
 }

@@ -1,11 +1,14 @@
 import { forwardRef, Fragment, useCallback, useEffect, useRef, useState } from "react";
 
-import { agentLabel } from "../format";
+import { agentLabel, formatRelative } from "../format";
 import { HIGHLIGHT_END, HIGHLIGHT_START, type SearchHit } from "../ipc";
 import { useWindowing } from "../virtual";
 
 /** Split a snippet on the highlight markers into plain/highlighted runs. */
 function Snippet({ text }: { text: string }) {
+  if (!text.includes(HIGHLIGHT_START)) {
+    return <span className="hit__snippet">{text}</span>;
+  }
   const nodes: React.ReactNode[] = [];
   let rest = text;
   let key = 0;
@@ -165,6 +168,9 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
               <div className="results__meta">
                 <span className="results__title">{hit.title ?? "(untitled)"}</span>
                 <span className="chip chip--agent">{agentLabel(hit.agent_id)}</span>
+                {hit.started_at != null && (
+                  <time className="results__time">{formatRelative(hit.started_at)}</time>
+                )}
                 <span className="results__field">{FIELD_LABEL[hit.field] ?? hit.field}</span>
               </div>
               <Snippet text={hit.snippet} />
@@ -180,6 +186,7 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
             className="results__more"
             onClick={onLoadMore}
             disabled={loadingMore}
+            aria-busy={loadingMore}
           >
             {loadingMore ? "Loading…" : "Load more results"}
           </button>

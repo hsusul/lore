@@ -175,6 +175,40 @@ describe("SearchResults", () => {
     expect(onExitUp).toHaveBeenCalledTimes(2);
   });
 
+  it("navigates with j, k, Home and End keys", () => {
+    render(
+      <SearchResults
+        hits={[
+          hit({ session_id: "a", source_id: "pa" }),
+          hit({ session_id: "b", source_id: "pb" }),
+          hit({ session_id: "c", source_id: "pc" }),
+        ]}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    const listbox = screen.getByRole("listbox", { name: /search results/i });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+
+    // 'j' moves down
+    fireEvent.keyDown(listbox, { key: "j" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+
+    // 'End' jumps to the end
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-2");
+
+    // 'k' moves up
+    fireEvent.keyDown(listbox, { key: "k" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+
+    // 'Home' jumps to the start
+    fireEvent.keyDown(listbox, { key: "Home" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+  });
+
   it("opens the active result on Enter", () => {
     const onOpen = vi.fn();
     render(
@@ -210,6 +244,25 @@ describe("SearchResults", () => {
     expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
   });
 
+  it("shows how long ago a result was recorded", () => {
+    const { container } = render(
+      <SearchResults
+        hits={[
+          hit({ session_id: "a", source_id: "pa", started_at: Date.now() }),
+          hit({ session_id: "b", source_id: "pb", started_at: null }),
+        ]}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    // A recent result carries its relative time; a result with no timestamp
+    // renders no <time> element (so the row does not mislead about recency).
+    expect(screen.getByText("just now")).toBeTruthy();
+    expect(container.querySelectorAll("time.results__time").length).toBe(1);
+  });
+
   it("marks the opened session as selected without moving keyboard focus", () => {
     render(
       <SearchResults
@@ -230,5 +283,46 @@ describe("SearchResults", () => {
     expect(options[0].getAttribute("aria-selected")).toBe("false");
     expect(options[2].getAttribute("aria-selected")).toBe("false");
     expect(options[0].className).toContain("is-active");
+  });
+
+  it("renders load more button with aria-busy and handles clicks", () => {
+    const onLoadMore = vi.fn();
+    const hits = [hit({ session_id: "a" })];
+    const { rerender } = render(
+      <SearchResults
+        hits={hits}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+        hasMore
+        loadingMore={false}
+        onLoadMore={onLoadMore}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: /load more results/i });
+    expect(button.getAttribute("aria-busy")).toBe("false");
+    expect(button.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(button);
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <SearchResults
+        hits={hits}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+        hasMore
+        loadingMore
+        onLoadMore={onLoadMore}
+      />,
+    );
+
+    const busyButton = screen.getByRole("button", { name: /loading/i });
+    expect(busyButton.getAttribute("aria-busy")).toBe("true");
+    expect(busyButton.hasAttribute("disabled")).toBe(true);
   });
 });

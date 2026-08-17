@@ -353,4 +353,87 @@ mod tests {
         assert!(value["started_at"].is_number());
         assert!(value["ended_at"].is_null());
     }
+
+    #[test]
+    fn search_page_and_backup_schedule_roundtrip() {
+        let schedule = BackupScheduleDto {
+            interval: "daily".into(),
+            keep: 14,
+        };
+        let sched_json = serde_json::to_string(&schedule).unwrap();
+        assert_eq!(
+            serde_json::from_str::<BackupScheduleDto>(&sched_json).unwrap(),
+            schedule
+        );
+
+        let search_page = SearchPage {
+            hits: vec![SearchHit {
+                session_id: "s1".into(),
+                source_kind: "message_part".into(),
+                source_id: "p1".into(),
+                field: "text".into(),
+                snippet: "match".into(),
+                rank: -2.5,
+                title: Some("Title".into()),
+                agent_id: "claude-code".into(),
+                started_at: Some(1_700_000_000),
+            }],
+            next_cursor: Some("cur123".into()),
+        };
+        let page_json = serde_json::to_string(&search_page).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SearchPage>(&page_json).unwrap(),
+            search_page
+        );
+
+        let report = ForgetReport {
+            blobs_removed: 5,
+            source_paths: vec!["/Users/dev/.codex/sessions/s1.jsonl".into()],
+        };
+        let rep_json = serde_json::to_string(&report).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ForgetReport>(&rep_json).unwrap(),
+            report
+        );
+
+        let rescan = RescanResult {
+            discovered: 10,
+            ingested: 8,
+            skipped: 2,
+            failed: 0,
+            enriched: 8,
+        };
+        let rescan_json = serde_json::to_string(&rescan).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RescanResult>(&rescan_json).unwrap(),
+            rescan
+        );
+
+        let folder = FolderSummary {
+            id: "f1".into(),
+            name: "My Folder".into(),
+            session_count: 3,
+            position: 0,
+        };
+        let folder_json = serde_json::to_string(&folder).unwrap();
+        assert_eq!(
+            serde_json::from_str::<FolderSummary>(&folder_json).unwrap(),
+            folder
+        );
+
+        let repo = RepositorySummary {
+            id: "repo1".into(),
+            display_name: "lore".into(),
+            identity_confidence: "confirmed".into(),
+            primary_path: Some("/Users/dev/lore".into()),
+            is_missing: false,
+            session_count: 12,
+            worktree_count: 2,
+        };
+        let repo_json = serde_json::to_string(&repo).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RepositorySummary>(&repo_json).unwrap(),
+            repo
+        );
+    }
 }

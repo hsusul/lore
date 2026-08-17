@@ -50,9 +50,56 @@ fn concurrent_writers_never_hit_a_locked_database() {
     stop.store(true, Ordering::Relaxed);
     let worker_busy = worker.join().unwrap();
 
-    assert_eq!(ui_busy, 0, "UI writes hit 'database is locked' {ui_busy} time(s)");
+    assert_eq!(
+        ui_busy, 0,
+        "UI writes hit 'database is locked' {ui_busy} time(s)"
+    );
     assert_eq!(
         worker_busy, 0,
         "worker writes hit 'database is locked' {worker_busy} time(s)"
     );
+}
+
+#[test]
+fn ingest_file_serializes_on_the_process_write_lock() {
+    use lore_core::adapters::claude_code::ClaudeCodeAdapter;
+    use lore_core::ingest::ingest_file;
+    use lore_core::storage::blob::BlobStore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("session.jsonl");
+    std::fs::write(
+        &source,
+        "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"s1\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+    )
+    .unwrap();
+
+    let conn = storage::open_in_memory().unwrap();
+    let blobs = BlobStore::open(dir.path().join("blobs")).unwrap();
+    let adapter = ClaudeCodeAdapter::new();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Hold the process-wide write lock so the worker's ingest must wait for it.
+    let guard = storage::write_lock();
+    let handle = std::thread::spawn(move || {
+        let result = ingest_file(&conn, &adapter, &source, &blobs);
+        tx.send(result.is_ok()).unwrap();
+    });
+
+    // With the lock held, ingest_file must block rather than completing (and
+    // sending) while another archive writer is mid-transaction. Without the
+    // guard this in-memory ingest finishes almost instantly and this assertion
+    // fails, catching the regression.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(
+        rx.try_recv().is_err(),
+        "ingest_file must serialize on the process write lock"
+    );
+
+    drop(guard);
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap(),
+        "ingest_file must complete once the lock is released"
+    );
+    handle.join().unwrap();
 }

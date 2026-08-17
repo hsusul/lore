@@ -174,16 +174,21 @@ export default function CommandPalette({
     setArchive({ query: normalized, items: [], status: "loading" });
     archiveTimerRef.current = setTimeout(() => {
       archiveTimerRef.current = null;
-      void searchRef.current?.(normalized).then(
-        (nextItems) => {
-          if (request !== archiveRequestRef.current) return;
-          setArchive({ query: normalized, items: nextItems, status: "settled" });
-        },
-        () => {
-          if (request !== archiveRequestRef.current) return;
-          setArchive({ query: normalized, items: [], status: "failed" });
-        },
-      );
+      try {
+        void Promise.resolve(searchRef.current?.(normalized)).then(
+          (nextItems) => {
+            if (request !== archiveRequestRef.current) return;
+            setArchive({ query: normalized, items: nextItems ?? [], status: "settled" });
+          },
+          () => {
+            if (request !== archiveRequestRef.current) return;
+            setArchive({ query: normalized, items: [], status: "failed" });
+          },
+        );
+      } catch {
+        if (request !== archiveRequestRef.current) return;
+        setArchive({ query: normalized, items: [], status: "failed" });
+      }
     }, ARCHIVE_SEARCH_DEBOUNCE_MS);
   }
 
@@ -238,10 +243,13 @@ export default function CommandPalette({
           id="palette-list"
           className="palette__list"
           role="listbox"
+          aria-label="Commands and search results"
           aria-busy={archiveLoading}
         >
           {filtered.length === 0 && !archiveLoading ? (
-            <li className="palette__empty">No matches</li>
+            <li className="palette__empty" role="status" aria-live="polite">
+              No matches
+            </li>
           ) : (
             filtered.map((command, index) => (
               <li

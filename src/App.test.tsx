@@ -40,7 +40,7 @@ vi.mock("./ipc", () => ({
   searchPage: vi.fn().mockResolvedValue({ hits: [], next_cursor: null }),
   getSetting: vi.fn().mockResolvedValue(null),
   setSetting: vi.fn().mockResolvedValue(undefined),
-  getBackupSchedule: vi.fn().mockResolvedValue({ interval: "off", keep: 5 }),
+  getBackupSchedule: vi.fn().mockResolvedValue({ interval: "off", keep: 7 }),
   setBackupSchedule: vi.fn().mockResolvedValue(undefined),
   backupNow: vi.fn().mockResolvedValue(undefined),
   rescan: vi.fn().mockResolvedValue({}),
@@ -230,6 +230,47 @@ describe("App shell", () => {
     await screen.findByRole("heading", { name: "Lore", level: 1 });
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     expect(screen.getByRole("dialog", { name: /command palette/i })).toBeTruthy();
+  });
+
+  it("focuses the search box on / when not already typing", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "Lore", level: 1 });
+    fireEvent.keyDown(window, { key: "/" });
+    expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: /search/i }));
+  });
+
+  it("renders scan progress as a bar with a percentage", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "Lore", level: 1 });
+    act(() => {
+      scan.handler?.({
+        discovered: 100,
+        ingested: 30,
+        skipped: 10,
+        failed: 10,
+        enriched: 5,
+        done: false,
+      });
+    });
+    const bar = screen.getByRole("progressbar", { name: /archive scan progress/i });
+    expect(bar.getAttribute("aria-valuenow")).toBe("50");
+    expect(screen.getByText(/50\/100 sessions · 50%/)).toBeTruthy();
+  });
+
+  it("shows a completion summary once the scan is done", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "Lore", level: 1 });
+    act(() => {
+      scan.handler?.({
+        discovered: 100,
+        ingested: 90,
+        skipped: 5,
+        failed: 5,
+        enriched: 40,
+        done: true,
+      });
+    });
+    expect(screen.getByText(/scan complete · 90 ingested/i)).toBeTruthy();
   });
 
   it("returns focus to the palette trigger after Escape", async () => {

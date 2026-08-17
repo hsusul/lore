@@ -5,14 +5,20 @@ const AGENT_LABELS: Record<string, string> = {
   codex: "Codex",
 };
 
+/** Clamp a number between min and max bounds. */
+export function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(Math.max(value, min), max);
+}
+
 /** Short, human agent label (falls back to the raw id). */
 export function agentLabel(agentId: string): string {
   return AGENT_LABELS[agentId] ?? agentId;
 }
 
-/** Absolute local time, or "" for null. */
+/** Absolute local time, or "" for null / non-finite timestamps. */
 export function formatTime(ms: number | null): string {
-  if (ms == null) return "";
+  if (ms == null || !Number.isFinite(ms)) return "";
   return new Date(ms).toLocaleString(undefined, {
     year: "numeric",
     month: "short",
@@ -22,15 +28,19 @@ export function formatTime(ms: number | null): string {
   });
 }
 
+function formatShortDate(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
 /** Compact relative time ("just now", "5m", "3h", "2d", "4w", or a date). */
 export function formatRelative(ms: number | null): string {
-  if (ms == null) return "";
+  if (ms == null || !Number.isFinite(ms)) return "";
   const diff = Date.now() - ms;
   if (diff < -60_000) {
-    return new Date(ms).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-    });
+    return formatShortDate(ms);
   }
   if (diff <= 45_000) return "just now";
   const seconds = Math.round(diff / 1000);
@@ -42,8 +52,5 @@ export function formatRelative(ms: number | null): string {
   if (days < 7) return `${days}d`;
   const weeks = Math.round(days / 7);
   if (weeks < 5) return `${weeks}w`;
-  return new Date(ms).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  return formatShortDate(ms);
 }

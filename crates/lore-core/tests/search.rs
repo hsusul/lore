@@ -174,6 +174,22 @@ fn path_filter_matches_touched_files() {
 }
 
 #[test]
+fn tool_filter_matches_invoked_tool_name() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    // A session whose assistant invoked Edit, and whose text says "the fix".
+    let jsonl = format!(
+        "{}{}",
+        user_message("t1", "/p", "here is the fix"),
+        "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"t1\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Edit\",\"input\":{\"file_path\":\"auth/login.ts\"}}]}}\n"
+    );
+    persist_claude(&conn, &blobs, &jsonl, "t1");
+
+    assert_eq!(search(&conn, "fix tool:Edit", 20).unwrap().len(), 1);
+    assert!(search(&conn, "fix tool:Bash", 20).unwrap().is_empty());
+}
+
+#[test]
 fn has_error_filter_selects_sessions_with_a_failed_tool() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let (_bd, blobs) = store();
@@ -463,7 +479,8 @@ fn oldest_sort_paginates_without_duplicates() {
     let mut paged = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
-        let page = search_page(&conn, "oldestterm", 2, cursor.as_deref(), SortOrder::Oldest).unwrap();
+        let page =
+            search_page(&conn, "oldestterm", 2, cursor.as_deref(), SortOrder::Oldest).unwrap();
         for h in &page.hits {
             paged.push(h.session_id.clone());
         }
@@ -505,4 +522,31 @@ fn search_page_with_only_zero_width_characters_returns_empty_page() {
     .unwrap();
     assert!(res.hits.is_empty());
     assert!(res.next_cursor.is_none());
+}
+
+#[test]
+fn search_page_sanitizes_structured_filters_with_zero_width_chars() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let id = persist_claude(
+        &conn,
+        &blobs,
+        &user_message("c1", "/p", "feature verification logic"),
+        "c1",
+    );
+
+    // Agent filter containing zero-width characters should be sanitized and match
+    let res = search(&conn, "agent:\u{200b}claude-code\u{200c} verification", 10).unwrap();
+    assert_eq!(res.len(), 1);
+    assert_eq!(res[0].session_id, id);
+
+    // Purely zero-width agent filter is ignored and falls back to term match
+    let res_fallback = search(&conn, "agent:\u{200b}\u{200c} verification", 10).unwrap();
+    assert_eq!(res_fallback.len(), 1);
+    assert_eq!(res_fallback[0].session_id, id);
+
+    // Search terms containing control characters are sanitized and matched
+    let res_ctrl = search(&conn, "ver\u{0007}ifi\u{001f}cation", 10).unwrap();
+    assert_eq!(res_ctrl.len(), 1);
+    assert_eq!(res_ctrl[0].session_id, id);
 }

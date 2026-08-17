@@ -30,7 +30,11 @@ use std::time::{Duration, Instant};
 #[must_use]
 pub fn normalize_remote_url(raw: &str) -> Option<String> {
     let raw = raw.trim();
-    if raw.is_empty() || raw.chars().any(|c| c.is_ascii_control() || c.is_ascii_whitespace()) {
+    if raw.is_empty()
+        || raw
+            .chars()
+            .any(|c| c.is_ascii_control() || c.is_ascii_whitespace())
+    {
         return None;
     }
 
@@ -180,9 +184,8 @@ pub struct Reverification {
 #[must_use]
 pub fn reverify(path: &Path, commit_sha: &str, branch: Option<&str>) -> Option<Reverification> {
     let repo = gix::discover(path).ok()?;
-    let commit_exists = gix::ObjectId::from_hex(commit_sha.as_bytes())
-        .ok()
-        .is_some_and(|oid| repo.find_object(oid).is_ok());
+    let parsed_oid = gix::ObjectId::from_hex(commit_sha.as_bytes()).ok();
+    let commit_exists = parsed_oid.is_some_and(|oid| repo.find_object(oid).is_ok());
 
     let (branch_exists, branch_at_recorded_commit) = match branch {
         Some(branch) => match repo.find_reference(&format!("refs/heads/{branch}")) {
@@ -190,7 +193,7 @@ pub fn reverify(path: &Path, commit_sha: &str, branch: Option<&str>) -> Option<R
                 let at = reference
                     .peel_to_id()
                     .ok()
-                    .map(|id| id.to_hex().to_string() == commit_sha);
+                    .map(|id| parsed_oid.is_some_and(|target| id.detach() == target));
                 (Some(true), at)
             }
             Err(_) => (Some(false), None),

@@ -232,6 +232,7 @@ type SessionViewProps = {
   loadPatch?: (id: string) => Promise<string | null>;
   secretCount?: number;
   onExport?: () => void;
+  onSaveFile?: () => void;
   onForget?: () => void;
 };
 
@@ -245,6 +246,7 @@ function SessionContent({
   loadPatch,
   secretCount = 0,
   onExport,
+  onSaveFile,
   onForget,
 }: SessionContentProps) {
   const [visibleMessages, setVisibleMessages] = useState(TIMELINE_PAGE);
@@ -277,11 +279,16 @@ function SessionContent({
             </span>
           )}
         </p>
-        {(onExport || onForget) && (
+        {(onExport || onSaveFile || onForget) && (
           <div className="session__actions">
             {onExport && (
               <button type="button" className="btn--ghost" onClick={onExport}>
-                Export
+                Copy Markdown
+              </button>
+            )}
+            {onSaveFile && (
+              <button type="button" className="btn--ghost" onClick={onSaveFile}>
+                Save file
               </button>
             )}
             {onForget && (

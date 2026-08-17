@@ -35,11 +35,9 @@ pub fn export_session_markdown(
     let mut out = String::with_capacity(estimated_capacity);
     let render = |text: &str| render_field(text, include_secrets);
 
-    let _ = writeln!(
-        out,
-        "# {}",
-        render(s.title.as_deref().unwrap_or("(untitled session)"))
-    );
+    let title = s.title.as_deref().unwrap_or("(untitled session)");
+    let clean_title = title.replace(['\r', '\n'], " ");
+    let _ = writeln!(out, "# {}", render(&clean_title));
     let _ = writeln!(
         out,
         "\n> {} · {} messages · {} tool calls{}\n",
@@ -69,7 +67,13 @@ pub fn export_session_markdown(
                     if let Some(text) = &part.text {
                         let _ = writeln!(out, "{}\n", render(text));
                     } else if let Some(json) = &part.content_json {
-                        let _ = writeln!(out, "```json\n{}\n```\n", render(json));
+                        let rendered_json = render(json);
+                        let fence = if rendered_json.contains("```") {
+                            "````"
+                        } else {
+                            "```"
+                        };
+                        let _ = writeln!(out, "{fence}json\n{rendered_json}\n{fence}\n");
                     }
                 }
             }
@@ -79,7 +83,8 @@ pub fn export_session_markdown(
     if !detail.file_events.is_empty() {
         let _ = writeln!(out, "### Files");
         for file in &detail.file_events {
-            let _ = writeln!(out, "- `{}` ({})", file.path, file.change_kind);
+            let clean_path = file.path.replace('`', "'").replace(['\r', '\n'], " ");
+            let _ = writeln!(out, "- `{clean_path}` ({})", file.change_kind);
         }
     }
 
@@ -188,5 +193,36 @@ mod tests {
             .unwrap();
         assert!(md.contains("```json"));
         assert!(md.contains("cargo test"));
+    }
+
+    #[test]
+    fn export_sanitizes_title_newlines_and_file_path_backticks() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"edit `file.rs`\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Edit\",\"input\":{\"file_path\":\"src/`malicious`.rs\"}}]}}\n"
+        );
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+        assert!(!md.contains("`src/`malicious`.rs`"));
+        assert!(md.contains("`src/'malicious'.rs`"));
+    }
+
+    #[test]
+    fn export_uses_four_backticks_when_json_contains_code_fence() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"explain\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"echo ```nested```\"}}]}}\n"
+        );
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+        assert!(md.contains("````json\n"));
+        assert!(md.contains("echo ```nested```"));
+        assert!(md.contains("\n````\n"));
     }
 }
