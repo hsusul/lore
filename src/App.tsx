@@ -253,6 +253,21 @@ export default function App() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen((open) => !open);
+        return;
+      }
+      // `/` focuses search (Linear/Notion convention) unless the user is already
+      // typing in a field, so `/` never hijacks a real keystroke.
+      if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const target = event.target as HTMLElement | null;
+        const editable =
+          target?.isContentEditable ||
+          target?.tagName === "INPUT" ||
+          target?.tagName === "TEXTAREA" ||
+          target?.tagName === "SELECT";
+        if (!editable) {
+          event.preventDefault();
+          searchInputRef.current?.focus();
+        }
       }
     }
     window.addEventListener("keydown", onKey);

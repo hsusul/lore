@@ -232,6 +232,13 @@ describe("App shell", () => {
     expect(screen.getByRole("dialog", { name: /command palette/i })).toBeTruthy();
   });
 
+  it("focuses the search box on / when not already typing", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "Lore", level: 1 });
+    fireEvent.keyDown(window, { key: "/" });
+    expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: /search/i }));
+  });
+
   it("returns focus to the palette trigger after Escape", async () => {
     render(<App />);
     const trigger = await screen.findByRole("button", { name: /open command palette/i });
