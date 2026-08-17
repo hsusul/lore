@@ -239,6 +239,40 @@ describe("App shell", () => {
     expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: /search/i }));
   });
 
+  it("renders scan progress as a bar with a percentage", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "Lore", level: 1 });
+    act(() => {
+      scan.handler?.({
+        discovered: 100,
+        ingested: 30,
+        skipped: 10,
+        failed: 10,
+        enriched: 5,
+        done: false,
+      });
+    });
+    const bar = screen.getByRole("progressbar", { name: /archive scan progress/i });
+    expect(bar.getAttribute("aria-valuenow")).toBe("50");
+    expect(screen.getByText(/50\/100 sessions · 50%/)).toBeTruthy();
+  });
+
+  it("shows a completion summary once the scan is done", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "Lore", level: 1 });
+    act(() => {
+      scan.handler?.({
+        discovered: 100,
+        ingested: 90,
+        skipped: 5,
+        failed: 5,
+        enriched: 40,
+        done: true,
+      });
+    });
+    expect(screen.getByText(/scan complete · 90 ingested/i)).toBeTruthy();
+  });
+
   it("returns focus to the palette trigger after Escape", async () => {
     render(<App />);
     const trigger = await screen.findByRole("button", { name: /open command palette/i });

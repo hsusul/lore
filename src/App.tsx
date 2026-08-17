@@ -704,6 +704,13 @@ export default function App() {
     sessions.length === 0 &&
     agents.every((agent) => agent.session_count === 0);
 
+  // Scan progress: processed vs discovered, so the header strip can show a real
+  // fraction and bar rather than bare counters. Discovered is the candidate
+  // count; processed is how many of those candidates have been resolved.
+  const scanProcessed = progress ? progress.ingested + progress.skipped + progress.failed : 0;
+  const scanTotal = progress ? Math.max(progress.discovered, scanProcessed, 0) : 0;
+  const scanPercent = scanTotal > 0 ? Math.min(100, Math.round((scanProcessed / scanTotal) * 100)) : 0;
+
   return (
     <div className="shell">
       <header className="shell__bar">
@@ -752,11 +759,23 @@ export default function App() {
       </header>
 
       {progress && (
-        <p className="shell__progress" role="status">
-          Discovered {progress.discovered} · ingested {progress.ingested} · skipped{" "}
-          {progress.skipped} · failed {progress.failed}
-          {progress.done ? " · done" : "…"}
-        </p>
+        <div className="shell__progress" role="status">
+          <div
+            className="shell__progress-bar"
+            role="progressbar"
+            aria-label="Archive scan progress"
+            aria-valuenow={scanPercent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="shell__progress-fill" style={{ width: `${scanPercent}%` }} />
+          </div>
+          <span className="shell__progress-text">
+            {progress.done
+              ? `Scan complete · ${progress.ingested} ingested · ${progress.skipped} skipped · ${progress.failed} failed`
+              : `${scanProcessed}/${scanTotal} sessions · ${scanPercent}% · ${progress.failed} failed`}
+          </span>
+        </div>
       )}
       {error && (
         <div className="shell__error" role="alert">
