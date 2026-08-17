@@ -68,14 +68,15 @@ struct ParsedQuery {
     terms: Vec<String>,
     agent: Option<String>,
     path: Option<String>,
+    tool: Option<String>,
     has_error: bool,
 }
 
 /// Search the archive, returning the first page only. `raw` is the user's query
-/// (plain terms plus optional `agent:`, `path:`, and `has:error` filters);
-/// returns up to `limit` hits ranked best-first. An empty term set yields no
-/// results. Convenience wrapper over [`search_page`] for callers that do not
-/// paginate.
+/// (plain terms plus optional `agent:`, `path:`, `tool:`, and `has:error`
+/// filters); returns up to `limit` hits ranked best-first. An empty term set
+/// yields no results. Convenience wrapper over [`search_page`] for callers that
+/// do not paginate.
 pub fn search(conn: &Connection, raw: &str, limit: i64) -> Result<Vec<SearchHit>> {
     Ok(search_page(conn, raw, limit, None, SortOrder::Relevance)?.hits)
 }
@@ -151,6 +152,13 @@ pub fn search_page(
                           WHERE fe.session_id = sd.session_id AND fe.path LIKE ?)",
         );
         params.push(Value::Text(format!("{path}%")));
+    }
+    if let Some(tool) = query.tool {
+        sql.push_str(
+            " AND EXISTS (SELECT 1 FROM tool_call tc
+                          WHERE tc.session_id = sd.session_id AND tc.name = ?)",
+        );
+        params.push(Value::Text(tool));
     }
     sql.push_str(") m");
 
@@ -349,6 +357,7 @@ fn parse_query(raw: &str) -> ParsedQuery {
     let mut terms = Vec::new();
     let mut agent = None;
     let mut path = None;
+    let mut tool = None;
     let mut has_error = false;
     for token in bounded.split_whitespace() {
         if let Some(value) = token.strip_prefix("agent:") {
@@ -367,6 +376,14 @@ fn parse_query(raw: &str) -> ParsedQuery {
             if !clean.is_empty() {
                 path = Some(clean);
             }
+        } else if let Some(value) = token.strip_prefix("tool:") {
+            let clean: String = value
+                .chars()
+                .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
+                .collect();
+            if !clean.is_empty() {
+                tool = Some(clean);
+            }
         } else if token == "has:error" {
             has_error = true;
         } else if terms.len() < MAX_TERMS {
@@ -377,6 +394,7 @@ fn parse_query(raw: &str) -> ParsedQuery {
         terms,
         agent,
         path,
+        tool,
         has_error,
     }
 }
@@ -425,10 +443,11 @@ mod tests {
 
     #[test]
     fn parses_terms_and_filters() {
-        let q = parse_query("retry backoff agent:codex path:auth/ has:error");
+        let q = parse_query("retry backoff agent:codex path:auth/ tool:Edit has:error");
         assert_eq!(q.terms, vec!["retry", "backoff"]);
         assert_eq!(q.agent.as_deref(), Some("codex"));
         assert_eq!(q.path.as_deref(), Some("auth/"));
+        assert_eq!(q.tool.as_deref(), Some("Edit"));
         assert!(q.has_error);
     }
 
@@ -547,9 +566,12 @@ mod tests {
 
     #[test]
     fn parse_query_sanitizes_structured_filters() {
-        let q1 = parse_query("agent:\u{200b}codex\u{200c} path:\0src/lib.rs term");
+        let q1 = parse_query(
+            "agent:\u{200b}codex\u{200c} path:\0src/lib.rs tool:\u{200b}Bash\u{200c} term",
+        );
         assert_eq!(q1.agent.as_deref(), Some("codex"));
         assert_eq!(q1.path.as_deref(), Some("src/lib.rs"));
+        assert_eq!(q1.tool.as_deref(), Some("Bash"));
         assert_eq!(q1.terms, vec!["term".to_string()]);
 
         let q2 = parse_query("agent:\u{200b} path:\0 has:error");

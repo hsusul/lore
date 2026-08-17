@@ -174,6 +174,22 @@ fn path_filter_matches_touched_files() {
 }
 
 #[test]
+fn tool_filter_matches_invoked_tool_name() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    // A session whose assistant invoked Edit, and whose text says "the fix".
+    let jsonl = format!(
+        "{}{}",
+        user_message("t1", "/p", "here is the fix"),
+        "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"t1\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Edit\",\"input\":{\"file_path\":\"auth/login.ts\"}}]}}\n"
+    );
+    persist_claude(&conn, &blobs, &jsonl, "t1");
+
+    assert_eq!(search(&conn, "fix tool:Edit", 20).unwrap().len(), 1);
+    assert!(search(&conn, "fix tool:Bash", 20).unwrap().is_empty());
+}
+
+#[test]
 fn has_error_filter_selects_sessions_with_a_failed_tool() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let (_bd, blobs) = store();

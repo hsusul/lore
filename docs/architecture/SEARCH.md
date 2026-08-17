@@ -49,8 +49,8 @@ Opaque/encrypted regions and scan-failed/quarantined blobs never produce SearchD
 
 Filters are indexed SQL predicates/joins, ANDed with FTS:
 
-- agent, has-error, `path:` — **implemented**;
-- repository, worktree, date, model, tool, Git evidence source (`agent_recorded`, `lore_captured`), branch/commit, and the context segment — **planned** (ROADMAP M6 remainder).
+- agent, has-error, `path:`, `tool:` (exact tool name) — **implemented**;
+- repository, worktree, date, model, Git evidence source (`agent_recorded`, `lore_captured`), branch/commit, and the context segment — **planned** (ROADMAP M6 remainder).
 
 Query syntax is progressive: plain terms first, then tokens such as `repo:lore branch:billing git-source:recorded agent:codex tool:apply_patch path:auth/ has:error before:2026-07-01 "exact phrase"`. Unknown/malformed tokens remain searchable text or produce a local validation hint; they never become raw SQL.
 
