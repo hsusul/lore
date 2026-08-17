@@ -111,12 +111,11 @@
 
 /* Scrollbars. macOS overlay scrollbars default to a light track that widens on
    hover, which reads as a white bar over our dark surfaces. Style them from the
-   theme tokens instead, at a fixed width so hovering doesn't resize them. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
-}
+   theme tokens instead, at a fixed width so hovering doesn't resize them.
 
+   Deliberately no `scrollbar-width`/`scrollbar-color`: setting either makes
+   WebKit and Chromium ignore the ::-webkit-scrollbar rules below and fall back
+   to the native overlay bar, which is the thing we're replacing. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
