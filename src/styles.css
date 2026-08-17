@@ -109,6 +109,36 @@
   box-sizing: border-box;
 }
 
+/* Scrollbars. macOS overlay scrollbars default to a light track that widens on
+   hover, which reads as a white bar over our dark surfaces. Style them from the
+   theme tokens instead, at a fixed width so hovering doesn't resize them. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  /* Pad the thumb inside the track without changing its box width. */
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-3);
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
