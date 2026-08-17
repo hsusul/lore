@@ -1347,6 +1347,12 @@ kbd {
   font-size: 0.72rem;
 }
 
+.results__time {
+  color: var(--text-3);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
 .hit__snippet {
   /* Clamp to a fixed two lines so every result row is the same height — a
      prerequisite for windowing the list, and denser/more scannable. Full text

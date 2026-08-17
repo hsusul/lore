@@ -244,6 +244,25 @@ describe("SearchResults", () => {
     expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
   });
 
+  it("shows how long ago a result was recorded", () => {
+    const { container } = render(
+      <SearchResults
+        hits={[
+          hit({ session_id: "a", source_id: "pa", started_at: Date.now() }),
+          hit({ session_id: "b", source_id: "pb", started_at: null }),
+        ]}
+        query="retry"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    // A recent result carries its relative time; a result with no timestamp
+    // renders no <time> element (so the row does not mislead about recency).
+    expect(screen.getByText("just now")).toBeTruthy();
+    expect(container.querySelectorAll("time.results__time").length).toBe(1);
+  });
+
   it("marks the opened session as selected without moving keyboard focus", () => {
     render(
       <SearchResults

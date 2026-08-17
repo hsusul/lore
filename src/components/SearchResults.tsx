@@ -1,6 +1,6 @@
 import { forwardRef, Fragment, useCallback, useEffect, useRef, useState } from "react";
 
-import { agentLabel } from "../format";
+import { agentLabel, formatRelative } from "../format";
 import { HIGHLIGHT_END, HIGHLIGHT_START, type SearchHit } from "../ipc";
 import { useWindowing } from "../virtual";
 
@@ -168,6 +168,9 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
               <div className="results__meta">
                 <span className="results__title">{hit.title ?? "(untitled)"}</span>
                 <span className="chip chip--agent">{agentLabel(hit.agent_id)}</span>
+                {hit.started_at != null && (
+                  <time className="results__time">{formatRelative(hit.started_at)}</time>
+                )}
                 <span className="results__field">{FIELD_LABEL[hit.field] ?? hit.field}</span>
               </div>
               <Snippet text={hit.snippet} />
