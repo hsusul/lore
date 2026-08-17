@@ -209,8 +209,9 @@ describe("SessionView", () => {
     expect(screen.getByRole("button", { name: /show more messages \(200 of 205\)/i })).toBeTruthy();
   });
 
-  it("shows a flagged-secret badge and wires export/forget", () => {
+  it("shows a flagged-secret badge and wires copy/save/forget", () => {
     const onExport = vi.fn();
+    const onSaveFile = vi.fn();
     const onForget = vi.fn();
     render(
       <SessionView
@@ -218,12 +219,15 @@ describe("SessionView", () => {
         git={git}
         secretCount={2}
         onExport={onExport}
+        onSaveFile={onSaveFile}
         onForget={onForget}
       />,
     );
     expect(screen.getByText(/2 flagged/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /export/i }));
+    fireEvent.click(screen.getByRole("button", { name: /copy markdown/i }));
     expect(onExport).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /save file/i }));
+    expect(onSaveFile).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /forget/i }));
     expect(onForget).toHaveBeenCalled();
   });

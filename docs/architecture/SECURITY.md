@@ -51,6 +51,7 @@ Lore's canonical archive is a faithful local copy and can contain cleartext secr
 - scan every persisted cleartext field/blob, including non-indexed thinking;
 - build only redacted SearchDocument projections;
 - default exports mask findings (including structured JSON message parts formatted in fenced code blocks) and require a fresh explicit override to include flagged content;
+- "Save file" writes that same masked Markdown to a path chosen in the OS save dialog; the written file is a user-chosen export, outside Lore's ownership, and is not swept by "Forget everything".
 - application logs accept no raw archive fields;
 - reveal canonical content only after a user action in the local UI.
 
@@ -59,7 +60,7 @@ Scanner false negatives remain possible. UI/copy must say “flagged secrets red
 ## 5. Filesystem and source handling
 
 - Resolve Claude/Codex configurable roots (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) plus defaults. Request only necessary macOS access and show denied adapters.
-- A custom source root requires an explicit native directory-picker action. The webview receives only the selected path, not a general filesystem API; the Tauri capability grants `dialog:allow-open` but no filesystem, shell, updater, or network permission. The Rust core accepts only a registered adapter and an existing absolute directory below the filesystem root, persists the canonical path locally, and opens matching source files read-only. Removing a custom root stops future scanning but does not delete archived sessions or original logs.
+- A custom source root requires an explicit native directory-picker action. The webview receives only the selected path, not a general filesystem API; the Tauri capability grants `dialog:allow-open` and `dialog:allow-save` (user-initiated open/save dialogs only) but no filesystem, shell, updater, or network permission. The Rust core accepts only a registered adapter and an existing absolute directory below the filesystem root, persists the canonical path locally, and opens matching source files read-only. Removing a custom root stops future scanning but does not delete archived sessions or original logs.
 - Open agent sources read-only; never rename/delete/lock them. Treat them as mutable and perishable: agents append, move, archive, truncate, and delete transcripts.
 - Cursor live SQLite (V1) uses `mode=ro` with WAL-aware reads and busy timeout, or the SQLite backup API to a Lore temp snapshot. `immutable=1` is allowed only for a proven closed/static copy, never the live database.
 - App-owned data lives under `~/Library/Application Support/Lore/` with restrictive permissions. Detect known sync roots, but acknowledge Time Machine/backup behavior cannot be inferred solely from path.

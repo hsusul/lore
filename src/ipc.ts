@@ -4,7 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { DetectedAgent } from "../crates/lore-ipc/bindings/DetectedAgent";
 import type { FileEventDto } from "../crates/lore-ipc/bindings/FileEventDto";
@@ -103,6 +103,14 @@ export function chooseAgentRootDirectory(displayName: string): Promise<string | 
     directory: true,
     multiple: false,
     title: `Choose ${displayName} session folder`,
+  });
+}
+
+/** Open the OS save dialog for a session export, or null when cancelled. */
+export function chooseExportFilePath(): Promise<string | null> {
+  return save({
+    defaultPath: "session.md",
+    filters: [{ name: "Markdown", extensions: ["md"] }],
   });
 }
 
@@ -234,6 +242,15 @@ export function exportSessionMarkdown(
     id,
     includeSecrets,
   });
+}
+
+/** Write a session's redacted Markdown export to a user-chosen file path. */
+export function saveSessionExport(
+  id: string,
+  path: string,
+  includeSecrets: boolean = false,
+): Promise<void> {
+  return invoke<void>("save_session_export", { id, path, includeSecrets });
 }
 
 /** Forget a session: remove its rows, projections, findings, and orphan blobs. */

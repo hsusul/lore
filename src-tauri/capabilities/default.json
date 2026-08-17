@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Minimal core permissions plus user-initiated folder selection. No updater, filesystem API, shell, or network plugins.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
 }

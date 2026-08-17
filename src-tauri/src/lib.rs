@@ -231,6 +231,35 @@ fn export_session_markdown(
         .map_err(|e| e.to_string())
 }
 
+/// Write a session's redacted Markdown export to the path chosen in the OS save
+/// dialog. The content is identical to the clipboard export (masked by default);
+/// writing to the user-selected file is the only side effect, and that file is
+/// outside Lore's ownership once written.
+#[tauri::command]
+fn save_session_export(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+    include_secrets: bool,
+) -> Result<(), String> {
+    if is_invalid_text_token(&id, 256) {
+        return Err("invalid session id".to_string());
+    }
+    if path.is_empty()
+        || path.len() > 4096
+        || path
+            .chars()
+            .any(|c| c.is_control() || lore_core::is_zero_width(c))
+    {
+        return Err("invalid export path".to_string());
+    }
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    let markdown = lore_core::export::export_session_markdown(&conn, &id, include_secrets)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "session not found".to_string())?;
+    std::fs::write(std::path::Path::new(&path), markdown).map_err(|e| e.to_string())
+}
+
 /// Forget a session: remove its rows, projections, findings, and orphan blobs.
 #[tauri::command]
 fn forget_session(state: State<'_, AppState>, id: String) -> Result<ForgetReport, String> {
@@ -682,6 +711,7 @@ pub fn run() {
             get_file_patch,
             session_secret_count,
             export_session_markdown,
+            save_session_export,
             forget_session,
             forget_everything,
             search,

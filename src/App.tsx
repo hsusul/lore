@@ -12,6 +12,7 @@ import { agentLabel } from "./format";
 import {
   addAgentRoot,
   chooseAgentRootDirectory,
+  chooseExportFilePath,
   createFolder,
   deleteFolder,
   exportSessionMarkdown,
@@ -31,6 +32,7 @@ import {
   removeAgentRoot,
   renameFolder,
   rescan,
+  saveSessionExport,
   searchPage,
   sessionSecretCount,
   setSessionFolder,
@@ -496,8 +498,24 @@ export default function App() {
     try {
       const markdown = await exportSessionMarkdown(selectedSession, false);
       if (markdown == null) return;
-      await navigator.clipboard?.writeText(markdown);
-      setNotice("Exported Markdown to the clipboard (flagged secrets redacted).");
+      if (!navigator.clipboard?.writeText) {
+        setError("Clipboard is unavailable here. Use “Save file” instead.");
+        return;
+      }
+      await navigator.clipboard.writeText(markdown);
+      setNotice("Copied Markdown to the clipboard (flagged secrets redacted).");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleSaveFile() {
+    if (!selectedSession) return;
+    try {
+      const path = await chooseExportFilePath();
+      if (path === null) return; // user cancelled the save dialog
+      await saveSessionExport(selectedSession, path, false);
+      setNotice("Saved session export.");
     } catch (e) {
       setError(String(e));
     }
@@ -878,6 +896,7 @@ export default function App() {
               loadPatch={getFilePatch}
               secretCount={secretCount}
               onExport={handleExport}
+              onSaveFile={handleSaveFile}
               onForget={handleForget}
             />
           )}
