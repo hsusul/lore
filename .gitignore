@@ -38,13 +38,11 @@ dist-ssr/
 *.p12
 *.provisionprofile
 
-# Root project documentation (allow documented root files only)
-/*.md
-!/README.md
-!/AGENTS.md
-!/CLAUDE.md
-!/RESEARCH_SUMMARY.md
-!/POLISH_LOG.md
+# Project documentation is local-only and must not be published.
+# README.md is the sole exception — it is the repo's public front page.
+*.md
+!README.md
+/docs/
 
 # Local agent instructions and design previews
 /.claude/
