@@ -217,5 +217,8 @@ describe("ipc contract", () => {
 
     const sortOrder: import("./ipc").SearchSortOrder = "relevance";
     expect(sortOrder).toBe("relevance");
+
+    const hitField: import("./ipc").SearchHitField = "title";
+    expect(hitField).toBe("title");
   });
 });

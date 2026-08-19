@@ -67,6 +67,7 @@ export type ResolutionConfidence = "high" | "medium" | "low" | "unresolved";
 export type SecretScanState = "clean" | "redacted" | "failed_quarantined";
 export type SecretSeverity = "low" | "medium" | "high" | "critical";
 export type SearchSourceKind = "message_part" | "file_event" | "session";
+export type SearchHitField = "title" | "text" | "patch" | "content_json";
 
 export type {
   BackupScheduleDto,
