@@ -1,6 +1,6 @@
 import { forwardRef, Fragment, useCallback, useEffect, useRef, useState } from "react";
 
-import { agentLabel, formatRelative } from "../format";
+import { agentLabel, clamp, formatRelative } from "../format";
 import { HIGHLIGHT_END, HIGHLIGHT_START, type SearchHit } from "../ipc";
 import { useWindowing } from "../virtual";
 
@@ -69,7 +69,7 @@ const SearchResults = forwardRef<HTMLUListElement, SearchResultsProps>(function 
   const last = hits.length - 1;
   const active =
     navigation.query === query
-      ? Math.min(navigation.index, Math.max(last, 0))
+      ? clamp(navigation.index, 0, Math.max(last, 0))
       : 0;
   const selectedIndex =
     selectedId === null ? -1 : hits.findIndex((hit) => hit.session_id === selectedId);

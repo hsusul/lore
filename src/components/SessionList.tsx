@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { agentLabel, formatRelative } from "../format";
+import { agentLabel, clamp, formatRelative } from "../format";
 import type { SessionSummary } from "../ipc";
 import { useWindowing } from "../virtual";
 
@@ -30,7 +30,7 @@ export default function SessionList({
   const [navigation, setNavigation] = useState({ listKey, index: 0 });
   const active =
     navigation.listKey === listKey
-      ? Math.min(navigation.index, Math.max(sessions.length - 1, 0))
+      ? clamp(navigation.index, 0, Math.max(sessions.length - 1, 0))
       : 0;
   const listRef = useRef<HTMLUListElement>(null);
   const { startIndex, endIndex, padTop, padBottom, scrollToIndex } = useWindowing(
