@@ -475,7 +475,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef> {
         let mut out = Vec::new();
         for root in Self::effective_roots(roots) {
-            collect_jsonl(&root, 3, &mut out);
+            collect_jsonl(&root, &mut out);
         }
         out
     }
@@ -485,17 +485,23 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 }
 
-/// Recursively collect `*.jsonl` files up to `depth` levels below `dir`.
-fn collect_jsonl(dir: &std::path::Path, depth: usize, out: &mut Vec<SessionRef>) {
+/// Recursively collect `*.jsonl` transcripts below `dir`.
+///
+/// There is no depth limit. Claude Code writes transcripts at several nesting
+/// levels — `<session>.jsonl` at the project root, `subagents/agent-<id>.jsonl`,
+/// and `subagents/workflows/<wf-id>/agent-<id>.jsonl` — and upstream has added
+/// levels before, so a hardcoded budget silently skips the deepest transcripts.
+/// Instead we walk the whole tree and select on the `.jsonl` extension. Only
+/// real directories are descended into: [`std::fs::DirEntry::file_type`] does not
+/// follow symlinks, so a symlink cycle cannot recurse forever.
+fn collect_jsonl(dir: &std::path::Path, out: &mut Vec<SessionRef>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            if depth > 0 {
-                collect_jsonl(&path, depth - 1, out);
-            }
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            collect_jsonl(&path, out);
         } else if path.extension().is_some_and(|e| e == "jsonl") {
             let meta = entry.metadata().ok();
             out.push(SessionRef {
@@ -688,5 +694,58 @@ mod tests {
         assert_eq!(s.messages[1].segment_ix, 0);
         assert_eq!(s.messages[2].segment_ix, 1);
         assert_eq!(s.messages[3].segment_ix, 1);
+    }
+
+    // Regression: a hardcoded recursion budget of 3 stopped at `subagents/` and
+    // never reached `subagents/workflows/<wf-id>/`, silently dropping workflow
+    // subagent transcripts. Discovery must reach every nesting level.
+    #[test]
+    fn discovers_workflow_subagent_transcripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("projects");
+        let project = root.join("encoded-repo");
+        let session_dir = project.join("aaaaaaaa-0000-4000-8000-000000000001");
+        let subagents = session_dir.join("subagents");
+        let workflow = subagents.join("workflows/wf-0001");
+        std::fs::create_dir_all(&workflow).unwrap();
+
+        std::fs::write(
+            project.join("aaaaaaaa-0000-4000-8000-000000000001.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        std::fs::write(subagents.join("agent-1.jsonl"), "{}\n").unwrap();
+        std::fs::write(workflow.join("agent-2.jsonl"), "{}\n").unwrap();
+
+        let sessions = ClaudeCodeAdapter::new().discover_sessions(&DiscoveryRoots::new(vec![root]));
+        let mut found: Vec<String> = sessions
+            .iter()
+            .filter_map(|s| s.path.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                "aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+                "agent-1.jsonl",
+                "agent-2.jsonl",
+            ]
+        );
+    }
+
+    // Removing the depth ceiling must not reintroduce unbounded recursion: a
+    // symlink pointing back at an ancestor must be skipped, not followed.
+    #[cfg(unix)]
+    #[test]
+    fn discovery_does_not_follow_symlinked_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("projects");
+        let project = root.join("encoded-repo");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("session.jsonl"), "{}\n").unwrap();
+        std::os::unix::fs::symlink(&root, project.join("loop")).unwrap();
+
+        let sessions = ClaudeCodeAdapter::new().discover_sessions(&DiscoveryRoots::new(vec![root]));
+        assert_eq!(sessions.len(), 1);
     }
 }

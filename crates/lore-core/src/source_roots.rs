@@ -310,4 +310,28 @@ mod tests {
         assert!(agents.iter().all(|agent| agent.installed));
         assert!(agents.iter().all(|agent| !agent.roots.is_empty()));
     }
+
+    #[test]
+    fn source_root_errors_format_cleanly() {
+        assert_eq!(
+            SourceRootError::UnknownAgent.to_string(),
+            "unknown agent adapter"
+        );
+        assert_eq!(
+            SourceRootError::InvalidPath.to_string(),
+            "selected folder path is invalid"
+        );
+        assert_eq!(
+            SourceRootError::NotDirectory.to_string(),
+            "selected folder does not exist or is not a directory"
+        );
+        assert_eq!(
+            SourceRootError::FilesystemRoot.to_string(),
+            "select a folder below the filesystem root"
+        );
+        assert_eq!(
+            SourceRootError::TooManyRoots.to_string(),
+            "too many custom folders for this agent"
+        );
+    }
 }

@@ -65,7 +65,7 @@ fn foreign_keys_are_enforced() {
 #[test]
 fn data_model_indexes_exist() {
     // DATA_MODEL.md §8 declares these as performance-critical; they are created
-    // by migrations 0004, 0005, and 0006. Assert the documented contract holds.
+    // by migrations 0004, 0005, and 0009. Assert the documented contract holds.
     let conn = db();
     let expected = [
         ("ix_repo_identity_kind_hash", "repository_identity_evidence"),
@@ -73,6 +73,9 @@ fn data_model_indexes_exist() {
         ("ix_source_artifact_agent_path", "source_artifact"),
         ("ix_source_artifact_agent_native_hash", "source_artifact"),
         ("ix_session_folder_folder", "session_folder"),
+        ("ix_secret_session", "secret_finding"),
+        ("ix_session_started", "agent_session"),
+        ("ix_session_source_artifact", "session_source"),
     ];
     for (idx, tbl) in expected {
         let n: i64 = conn

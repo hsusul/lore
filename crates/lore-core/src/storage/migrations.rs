@@ -58,6 +58,16 @@ const MIGRATIONS: &[Migration] = &[
         name: "folders",
         sql: include_str!("../../migrations/0008_folders.sql"),
     },
+    Migration {
+        version: 9,
+        name: "query_path_indexes",
+        sql: include_str!("../../migrations/0009_query_path_indexes.sql"),
+    },
+    Migration {
+        version: 10,
+        name: "blob_hash_algo",
+        sql: include_str!("../../migrations/0010_blob_hash_algo.sql"),
+    },
 ];
 
 /// Apply all pending migrations. Idempotent.
