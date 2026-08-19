@@ -141,7 +141,7 @@ fn quarantine(db_path: &Path, archive_dir: &Path) -> Result<PathBuf> {
         .unwrap_or("lore.db");
 
     let mut main_dst = None;
-    for suffix in ["", "-wal", "-shm"] {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
         let src = db_path.with_file_name(format!("{db_name}{suffix}"));
         if !src.exists() {
             continue;
