@@ -101,9 +101,13 @@ const ROOT_WALK_LIMIT: usize = 50_000;
 /// exists in an ancestor (so it really is a repository `gix` choked on), fall
 /// back to the hardened system-`git` reader. Returns `None` when `path` is not
 /// inside a git repository at all — without spawning any process in that case.
-/// Never mutates anything and never touches the network.
+/// Never mutates anything and never touches the network. Non-absolute paths are
+/// declined to prevent resolving relative paths against the host process.
 #[must_use]
 pub fn capture(path: &Path) -> Option<CapturedRepo> {
+    if !path.is_absolute() {
+        return None;
+    }
     if let Some(facts) = capture_gix(path) {
         return Some(facts);
     }
@@ -183,6 +187,9 @@ pub struct Reverification {
 /// the result as a separate `lore_reverified` observation.
 #[must_use]
 pub fn reverify(path: &Path, commit_sha: &str, branch: Option<&str>) -> Option<Reverification> {
+    if !path.is_absolute() {
+        return None;
+    }
     let repo = gix::discover(path).ok()?;
     let parsed_oid = gix::ObjectId::from_hex(commit_sha.as_bytes()).ok();
     let commit_exists = parsed_oid.is_some_and(|oid| repo.find_object(oid).is_ok());
@@ -299,15 +306,9 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// discarded so the child can finish, but never buffered).
 const OUTPUT_CAP: usize = 4 * 1024 * 1024;
 /// The only git subcommands the fallback may ever run — all local and read-only.
-/// Nothing that fetches, checks out, or mutates is representable.
-const ALLOWED_SUBCOMMANDS: &[&str] = &[
-    "rev-parse",
-    "rev-list",
-    "for-each-ref",
-    "cat-file",
-    "status",
-    "diff",
-];
+/// `status` and `diff` are excluded because repo-local `.gitattributes` clean/textconv
+/// filters could trigger executable helper execution under hostile clones.
+const ALLOWED_SUBCOMMANDS: &[&str] = &["rev-parse", "rev-list", "for-each-ref", "cat-file"];
 /// Config overrides that neutralize every executable-config vector git honors,
 /// applied on the command line so they win over hostile repo-local config.
 const SAFE_CONFIG: &[&str] = &[
@@ -325,9 +326,8 @@ const SAFE_CONFIG: &[&str] = &[
 ];
 
 /// Fallback capture via a hardened, read-only system-`git`. Provides the core
-/// facts (branch/HEAD/dirty/common dir/roots); remotes are not read here (that
-/// would need a non-allowlisted subcommand), so identity falls back to the
-/// common dir when only this path is available.
+/// facts (branch/HEAD/common dir/roots). Dirtiness is not read here (taking it
+/// exclusively from `gix` prevents running external filter scripts).
 #[must_use]
 pub fn capture_via_git(path: &Path) -> Option<CapturedRepo> {
     let common_raw = run_git(path, &["rev-parse", "--git-common-dir"])?;
@@ -341,7 +341,7 @@ pub fn capture_via_git(path: &Path) -> Option<CapturedRepo> {
     let detached = head_ref.trim() == "HEAD";
     let branch = (!detached).then(|| head_ref.trim().to_string());
     let head_commit = run_git(path, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string());
-    let is_dirty = run_git(path, &["status", "--porcelain"]).map(|s| !s.trim().is_empty());
+    let is_dirty = None;
     let root_commits = run_git(path, &["rev-list", "--max-parents=0", "HEAD"])
         .map(|s| {
             let mut roots: Vec<String> = s.split_whitespace().map(str::to_string).collect();
