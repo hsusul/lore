@@ -86,13 +86,19 @@ pub fn create_backup(conn: &Connection, backup_dir: &Path, keep: usize) -> Resul
     std::fs::create_dir_all(backup_dir)?;
     let path = backup_path(backup_dir);
 
-    let mut dst = Connection::open(&path).map_err(|_| BackupError::Io)?;
-    let backup = Backup::new(conn, &mut dst)?;
-    // Online copy with retry on BUSY/LOCKED so a concurrent writer (e.g. the
-    // background worker) never aborts the backup.
-    backup.run_to_completion(PAGES_PER_STEP, PAUSE_BETWEEN_STEPS, None)?;
-    drop(backup);
-    drop(dst);
+    let copy_res = (|| -> Result<()> {
+        let mut dst = Connection::open(&path).map_err(|_| BackupError::Io)?;
+        let backup = Backup::new(conn, &mut dst)?;
+        // Online copy with retry on BUSY/LOCKED so a concurrent writer (e.g. the
+        // background worker) never aborts the backup.
+        backup.run_to_completion(PAGES_PER_STEP, PAUSE_BETWEEN_STEPS, None)?;
+        Ok(())
+    })();
+
+    if let Err(e) = copy_res {
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
 
     if let Err(e) = set_private(&path) {
         let _ = std::fs::remove_file(&path);
