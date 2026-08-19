@@ -6,17 +6,20 @@
 //! Opaque/encrypted regions are never decoded or exported. Rendering reuses the
 //! canonical read path (`query::get_session`) and the same scanner as ingest.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use rusqlite::Connection;
 
+use crate::ingest::det_id;
 use crate::query;
 use crate::secrets;
 use crate::storage::Result;
 
 /// Render a session as Markdown. When `include_secrets` is false (the default
-/// posture) every flagged secret span is masked; `true` is an explicit opt-in to
-/// full-fidelity content. Returns `None` when the session is unknown.
+/// posture) every flagged secret span is masked using the findings stored during
+/// ingest; `true` is an explicit opt-in to full-fidelity content. Returns `None`
+/// when the session is unknown.
 pub fn export_session_markdown(
     conn: &Connection,
     session_id: &str,
@@ -33,11 +36,43 @@ pub fn export_session_markdown(
         .saturating_add(detail.file_events.len().saturating_mul(64))
         .saturating_add(512);
     let mut out = String::with_capacity(estimated_capacity);
-    let render = |text: &str| render_field(text, include_secrets);
+
+    let findings_map = if include_secrets {
+        HashMap::new()
+    } else {
+        session_findings(conn, session_id)?
+    };
+
+    let render = |source_id: &str, field: &str, text: &str| -> String {
+        if include_secrets {
+            text.to_string()
+        } else if let Some(findings) = findings_map.get(&(source_id.to_string(), field.to_string()))
+        {
+            secrets::redact(text, findings)
+        } else {
+            text.to_string()
+        }
+    };
+
+    let render_title = |title: &str| -> String {
+        if include_secrets {
+            title.to_string()
+        } else if let Some(findings) =
+            findings_map.get(&(session_id.to_string(), "title".to_string()))
+        {
+            secrets::redact(title, findings)
+        } else {
+            // Synthetic title was not indexed at ingest; scan this bounded title fallback.
+            match secrets::scan(title) {
+                Ok(findings) => secrets::redact(title, &findings),
+                Err(_) => "«field unavailable: scan failed»".to_string(),
+            }
+        }
+    };
 
     let title = s.title.as_deref().unwrap_or("(untitled session)");
     let clean_title = title.replace(['\r', '\n'], " ");
-    let _ = writeln!(out, "# {}", render(&clean_title));
+    let _ = writeln!(out, "# {}", render_title(&clean_title));
     let _ = writeln!(
         out,
         "\n> {} · {} messages · {} tool calls{}\n",
@@ -54,20 +89,21 @@ pub fn export_session_markdown(
     for message in &detail.messages {
         let _ = writeln!(out, "### {}", message.role);
         for part in &message.parts {
+            let pid = det_id("p", &[&message.id, &part.ordinal.to_string()]);
             match part.kind.as_str() {
                 "opaque" => {
                     let _ = writeln!(out, "_[encrypted content omitted]_\n");
                 }
                 "thinking" => {
                     if let Some(text) = &part.text {
-                        let _ = writeln!(out, "> _(thinking)_ {}\n", render(text));
+                        let _ = writeln!(out, "> _(thinking)_ {}\n", render(&pid, "text", text));
                     }
                 }
                 _ => {
                     if let Some(text) = &part.text {
-                        let _ = writeln!(out, "{}\n", render(text));
+                        let _ = writeln!(out, "{}\n", render(&pid, "text", text));
                     } else if let Some(json) = &part.content_json {
-                        let rendered_json = render(json);
+                        let rendered_json = render(&pid, "content_json", json);
                         let fence = markdown_fence(&rendered_json);
                         let _ = writeln!(out, "{fence}json\n{rendered_json}\n{fence}\n");
                     }
@@ -87,19 +123,67 @@ pub fn export_session_markdown(
     Ok(Some(out))
 }
 
-/// Mask flagged spans unless the caller explicitly opted into raw content. A
-/// scanner failure quarantines the field from the export: a content-free
-/// diagnostic replaces the text, never the un-scanned content
-/// (SECRET_SCANNING.md §6).
-fn render_field(text: &str, include_secrets: bool) -> String {
-    if include_secrets {
-        text.to_string()
-    } else {
-        match secrets::scan(text) {
-            Ok(findings) => secrets::redact(text, &findings),
-            Err(_) => "«field unavailable: scan failed»".to_string(),
-        }
+fn intern_rule(rule: &str) -> &'static str {
+    match rule {
+        "private-key-block" => "private-key-block",
+        "aws-access-key-id" => "aws-access-key-id",
+        "gcp-api-key" => "gcp-api-key",
+        "github-token" => "github-token",
+        "github-fine-grained-pat" => "github-fine-grained-pat",
+        "gitlab-pat" => "gitlab-pat",
+        "slack-token" => "slack-token",
+        "stripe-key" => "stripe-key",
+        "anthropic-key" => "anthropic-key",
+        "openai-key" => "openai-key",
+        "google-oauth-secret" => "google-oauth-secret",
+        "npm-token" => "npm-token",
+        "jwt" => "jwt",
+        "connection-string" => "connection-string",
+        "slack-webhook" => "slack-webhook",
+        "discord-webhook" => "discord-webhook",
+        "high-entropy" => "high-entropy",
+        _ => "secret",
     }
+}
+
+fn parse_severity(s: &str) -> secrets::Severity {
+    match s {
+        "critical" => secrets::Severity::Critical,
+        "high" => secrets::Severity::High,
+        "medium" => secrets::Severity::Medium,
+        _ => secrets::Severity::Low,
+    }
+}
+
+/// Load all stored secret findings for a session grouped by `(source_id, field)`.
+fn session_findings(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<HashMap<(String, String), Vec<secrets::Finding>>> {
+    let mut stmt = conn.prepare(
+        "SELECT source_id, field, rule, span_start, span_end, severity
+         FROM secret_finding
+         WHERE session_id = ?1
+         ORDER BY span_start ASC",
+    )?;
+    let mut map: HashMap<(String, String), Vec<secrets::Finding>> = HashMap::new();
+    let mut rows = stmt.query([session_id])?;
+    while let Some(row) = rows.next()? {
+        let source_id: String = row.get(0)?;
+        let field: String = row.get(1)?;
+        let rule_str: String = row.get(2)?;
+        let span_start: i64 = row.get(3)?;
+        let span_end: i64 = row.get(4)?;
+        let severity_str: String = row.get(5)?;
+        let finding = secrets::Finding {
+            rule: intern_rule(&rule_str),
+            start: usize::try_from(span_start).unwrap_or(0),
+            end: usize::try_from(span_end).unwrap_or(0),
+            severity: parse_severity(&severity_str),
+        };
+        map.entry((source_id, field)).or_default().push(finding);
+    }
+    Ok(map)
 }
 
 /// Determine an enclosing code fence length that exceeds any run of consecutive
@@ -181,22 +265,26 @@ mod tests {
     }
 
     #[test]
-    fn a_scan_failure_quarantines_field_content_from_export() {
+    fn export_uses_stored_findings_independent_of_live_scanner() {
+        let conn = crate::storage::open_in_memory().unwrap();
         let secret = format!("ghp{}", "_0123456789abcdefghijklmnopqrstuvwxyz");
-        let text = format!("deploy with {secret} now");
+        let jsonl = format!(
+            "{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{{\"role\":\"user\",\"content\":\"deploy with {secret} now\"}}}}\n"
+        );
+        let sid = persist(&conn, &jsonl);
 
+        // Arm the scan failure seam: live scanning would fail, but export reads stored findings.
         crate::secrets::set_fail_scans_for_test(true);
-        let rendered = render_field(&text, false);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
         crate::secrets::set_fail_scans_for_test(false);
 
         assert!(
-            !rendered.contains(&secret),
-            "un-scanned content must not reach an export"
+            !md.contains(&secret),
+            "export must mask the secret using stored finding"
         );
-        assert!(
-            rendered.contains("unavailable"),
-            "a content-free diagnostic is shown instead"
-        );
+        assert!(md.contains("«redacted:github-token»"));
     }
 
     #[test]
