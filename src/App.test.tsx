@@ -88,7 +88,14 @@ function summary(id: string, title: string): SessionSummary {
 }
 
 function detail(session: SessionSummary): SessionDetail {
-  return { summary: session, parse_note: null, segments: [], messages: [], file_events: [] };
+  return {
+    summary: session,
+    parse_note: null,
+    segments: [],
+    messages: [],
+    file_events: [],
+    next_message_cursor: null,
+  };
 }
 
 function repository(id: string, name: string): RepositorySummary {

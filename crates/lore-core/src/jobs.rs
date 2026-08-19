@@ -193,6 +193,7 @@ pub fn schedule_source(
             // Re-arm the finished job for another run with the latest payload.
             conn.execute(
                 "UPDATE job SET state = 'pending', redo = 0, error = NULL, error_kind = NULL,
+                                attempts = 0,
                                 priority = ?2, payload_json = ?3,
                                 updated_at = unixepoch('now')*1000
                  WHERE id = ?1",
@@ -317,8 +318,21 @@ pub fn queue_depth(conn: &Connection) -> Result<QueueDepth> {
     })
 }
 
-/// Return tasks left `running` by a terminated process to `pending`.
+/// Maximum consecutive execution attempts before a repeatedly crashed job is
+/// marked failed to prevent infinite restart crash loops.
+pub const MAX_JOB_ATTEMPTS: i64 = 5;
+
+/// Return tasks left `running` by a terminated process to `pending`, unless
+/// they have exceeded `MAX_JOB_ATTEMPTS` (in which case they are marked `failed`
+/// with `error_kind = 'poisoned'` to prevent restart crash loops).
 pub fn recover_running(conn: &Connection) -> Result<usize> {
+    conn.execute(
+        "UPDATE job SET state = 'failed', error_kind = 'poisoned',
+                        error = 'job exceeded maximum crash recovery attempts',
+                        updated_at = unixepoch('now')*1000
+         WHERE state = 'running' AND attempts >= ?1",
+        [MAX_JOB_ATTEMPTS],
+    )?;
     let changed = conn.execute(
         "UPDATE job SET state = 'pending', updated_at = unixepoch('now')*1000
          WHERE state = 'running'",
@@ -631,5 +645,23 @@ mod tests {
         let retried = claim_next(&conn).unwrap().unwrap();
         assert_eq!(retried.id, "running");
         assert_eq!(retried.attempts, 2);
+    }
+
+    #[test]
+    fn recover_running_fails_poisoned_jobs_exceeding_max_attempts() {
+        let conn = db();
+        enqueue(&conn, &new_job("poisoned", 1), 2).unwrap();
+        // Manually set attempts to MAX_JOB_ATTEMPTS and state to running.
+        conn.execute(
+            "UPDATE job SET state = 'running', attempts = ?1 WHERE id = 'poisoned'",
+            [MAX_JOB_ATTEMPTS],
+        )
+        .unwrap();
+
+        // Recovery should fail the poisoned job and return 0 requeued jobs.
+        assert_eq!(recover_running(&conn).unwrap(), 0);
+        let job = load(&conn, "poisoned").unwrap().unwrap();
+        assert_eq!(job.state, JobState::Failed);
+        assert_eq!(job.error_kind.as_deref(), Some("poisoned"));
     }
 }

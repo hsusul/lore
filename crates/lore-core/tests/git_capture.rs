@@ -123,18 +123,21 @@ fn hardened_fallback_reads_the_same_core_facts_as_gix() {
     assert_eq!(facts.branch.as_deref(), Some("main"));
     assert!(!facts.detached);
     assert_eq!(facts.head_commit.as_deref().map(str::len), Some(40));
-    assert_eq!(facts.is_dirty, Some(false));
+    assert_eq!(facts.is_dirty, None, "dirtiness is exclusive to gix");
     assert_eq!(facts.root_commits.len(), 1);
     assert!(facts.workdir.is_some());
 
-    // Dirty and detached behave the same via the fallback.
-    std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
-    assert_eq!(capture_via_git(dir.path()).unwrap().is_dirty, Some(true));
-    git(dir.path(), &["stash"]);
+    // Detached behaves the same via the fallback.
     git(dir.path(), &["checkout", "--detach", "HEAD"]);
     let detached = capture_via_git(dir.path()).unwrap();
     assert!(detached.detached);
     assert_eq!(detached.branch, None);
+}
+
+#[test]
+fn capture_declines_relative_paths() {
+    assert!(capture(Path::new(".")).is_none());
+    assert!(capture(Path::new("relative/repo")).is_none());
 }
 
 #[test]

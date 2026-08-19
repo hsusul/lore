@@ -19,6 +19,11 @@ lore-ipc = { path = "../lore-ipc" }
 # Bundled SQLite (compiles the amalgamation with FTS5 enabled) so we never
 # depend on a system libsqlite3 and FTS5 is always present.
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+# Content addressing for the blob store. A cryptographic digest is required:
+# blob paths are dedupe keys and carry a `scan_state`, so a forgeable address
+# would let colliding content inherit another blob's "clean" scan. No network,
+# no default-off features needed.
+blake3 = "1"
 thiserror = "1"
 serde_json = "1"
 # RFC3339 timestamp parsing only (no networking/std feature creep).

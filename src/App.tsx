@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import CommandPalette, { type Command } from "./components/CommandPalette";
 import ArchiveOnboarding from "./components/ArchiveOnboarding";
+import CommandPalette, { type Command } from "./components/CommandPalette";
+import ErrorBoundary from "./components/ErrorBoundary";
 import FolderList from "./components/FolderList";
 import RepositoryList from "./components/RepositoryList";
 import SearchResults from "./components/SearchResults";
@@ -12,7 +13,6 @@ import { agentLabel } from "./format";
 import {
   addAgentRoot,
   chooseAgentRootDirectory,
-  chooseExportFilePath,
   createFolder,
   deleteFolder,
   exportSessionMarkdown,
@@ -512,10 +512,10 @@ export default function App() {
   async function handleSaveFile() {
     if (!selectedSession) return;
     try {
-      const path = await chooseExportFilePath();
-      if (path === null) return; // user cancelled the save dialog
-      await saveSessionExport(selectedSession, path, false);
-      setNotice("Saved session export.");
+      const saved = await saveSessionExport(selectedSession, null, false);
+      if (saved) {
+        setNotice("Saved session export.");
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -909,15 +909,17 @@ export default function App() {
               <p role="status">Loading session…</p>
             </section>
           ) : (
-            <SessionView
-              detail={detail}
-              git={git}
-              loadPatch={getFilePatch}
-              secretCount={secretCount}
-              onExport={handleExport}
-              onSaveFile={handleSaveFile}
-              onForget={handleForget}
-            />
+            <ErrorBoundary>
+              <SessionView
+                detail={detail}
+                git={git}
+                loadPatch={getFilePatch}
+                secretCount={secretCount}
+                onExport={handleExport}
+                onSaveFile={handleSaveFile}
+                onForget={handleForget}
+              />
+            </ErrorBoundary>
           )}
         </section>
       </div>

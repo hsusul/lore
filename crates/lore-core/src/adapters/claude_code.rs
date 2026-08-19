@@ -197,7 +197,11 @@ fn file_event_from_tool(name: &str, block: &Value, call_id: String) -> Option<Pa
     };
     let raw = block
         .get("input")
-        .and_then(|inp| inp.get("file_path"))
+        .and_then(|inp| {
+            inp.get("file_path")
+                .or_else(|| inp.get("notebook_path"))
+                .or_else(|| inp.get("path"))
+        })
         .and_then(Value::as_str)?;
     Some(ParsedFileEvent {
         segment_ix: 0,
@@ -222,7 +226,11 @@ fn tool_result_text(block: &Value) -> Option<String> {
     if let Some(arr) = content.as_array() {
         let joined: Vec<String> = arr
             .iter()
-            .filter_map(|b| b.get("text").and_then(Value::as_str).map(str::to_string))
+            .filter_map(|b| {
+                b.as_str()
+                    .map(str::to_string)
+                    .or_else(|| b.get("text").and_then(Value::as_str).map(str::to_string))
+            })
             .collect();
         if !joined.is_empty() {
             return Some(joined.join("\n"));
@@ -747,5 +755,23 @@ mod tests {
 
         let sessions = ClaudeCodeAdapter::new().discover_sessions(&DiscoveryRoots::new(vec![root]));
         assert_eq!(sessions.len(), 1);
+    }
+
+    #[test]
+    fn extracts_notebook_edit_file_events() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"edit notebook"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_nb","name":"NotebookEdit","input":{"notebook_path":"analysis.ipynb"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_nb","content":["Cell 1 updated","Cell 2 updated"]}]}}
+"#;
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "dedupe");
+        assert_eq!(session.file_events.len(), 1);
+        assert_eq!(session.file_events[0].path, "analysis.ipynb");
+        assert_eq!(session.file_events[0].change_kind, FileChangeKind::Edit);
+
+        assert_eq!(session.tool_calls.len(), 1);
+        assert_eq!(
+            session.tool_calls[0].output_text.as_deref(),
+            Some("Cell 1 updated\nCell 2 updated")
+        );
     }
 }

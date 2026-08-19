@@ -203,6 +203,14 @@ pub struct GitObservationDto {
     pub commit_exists: Option<bool>,
 }
 
+/// Paginated list of messages with a keyset cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MessagePage {
+    pub messages: Vec<MessageDto>,
+    pub next_cursor: Option<String>,
+}
+
 /// The full read of one session in context. Payload of `get_session`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -214,6 +222,7 @@ pub struct SessionDetail {
     pub segments: Vec<SegmentDto>,
     pub messages: Vec<MessageDto>,
     pub file_events: Vec<FileEventDto>,
+    pub next_message_cursor: Option<String>,
 }
 
 /// Content-free progress for a running scan. Payload of the `scan_progress`

@@ -12,6 +12,7 @@ import type { FolderSummary } from "../crates/lore-ipc/bindings/FolderSummary";
 import type { ForgetReport } from "../crates/lore-ipc/bindings/ForgetReport";
 import type { GitObservationDto } from "../crates/lore-ipc/bindings/GitObservationDto";
 import type { MessageDto } from "../crates/lore-ipc/bindings/MessageDto";
+import type { MessagePage } from "../crates/lore-ipc/bindings/MessagePage";
 import type { MessagePartDto } from "../crates/lore-ipc/bindings/MessagePartDto";
 import type { RepositorySummary } from "../crates/lore-ipc/bindings/RepositorySummary";
 import type { RescanResult } from "../crates/lore-ipc/bindings/RescanResult";
@@ -67,6 +68,7 @@ export type ResolutionConfidence = "high" | "medium" | "low" | "unresolved";
 export type SecretScanState = "clean" | "redacted" | "failed_quarantined";
 export type SecretSeverity = "low" | "medium" | "high" | "critical";
 export type SearchSourceKind = "message_part" | "file_event" | "session";
+export type SearchHitField = "title" | "text" | "patch" | "content_json";
 
 export type {
   BackupScheduleDto,
@@ -76,6 +78,7 @@ export type {
   ForgetReport,
   GitObservationDto,
   MessageDto,
+  MessagePage,
   MessagePartDto,
   RepositorySummary,
   RescanResult,
@@ -164,6 +167,15 @@ export function getSession(id: string): Promise<SessionDetail | null> {
   return invoke<SessionDetail | null>("get_session", { id });
 }
 
+/** List one stable page of messages for a session. */
+export function listSessionMessagesPage(
+  id: string,
+  limit: number = 200,
+  cursor: string | null = null,
+): Promise<MessagePage> {
+  return invoke<MessagePage>("list_session_messages_page", { id, limit, cursor });
+}
+
 /** The user-defined folders, with thread counts. */
 export function listFolders(): Promise<FolderSummary[]> {
   return invoke<FolderSummary[]>("list_folders");
@@ -244,13 +256,16 @@ export function exportSessionMarkdown(
   });
 }
 
-/** Write a session's redacted Markdown export to a user-chosen file path. */
+/**
+ * Write a session's redacted Markdown export. If `path` is omitted/null,
+ * Lore opens the native save dialog in Rust. Returns true if saved, false if cancelled.
+ */
 export function saveSessionExport(
   id: string,
-  path: string,
+  path: string | null = null,
   includeSecrets: boolean = false,
-): Promise<void> {
-  return invoke<void>("save_session_export", { id, path, includeSecrets });
+): Promise<boolean> {
+  return invoke<boolean>("save_session_export", { id, path, includeSecrets });
 }
 
 /** Forget a session: remove its rows, projections, findings, and orphan blobs. */

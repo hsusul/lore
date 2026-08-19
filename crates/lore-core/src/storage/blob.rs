@@ -10,10 +10,24 @@
 //! content-addressed final path **before** the write transaction that
 //! references it opens. A staged file whose referencing row never commits is a
 //! self-healing orphan — the identical content re-ingested resolves to the same
-//! path, and unreferenced files can be swept later. Content addressing keys on
-//! byte length plus an FNV-1a digest (the same non-cryptographic fingerprint the
-//! source-artifact layer uses); a reference is only created inside the caller's
-//! transaction.
+//! path, and unreferenced files can be swept later. A reference is only created
+//! inside the caller's transaction.
+//!
+//! ## Why the address must be a cryptographic digest
+//!
+//! The address is not merely a filename. `stage` treats an existing path as
+//! proof that the identical bytes are already stored and skips the write, and
+//! the `blob` row keyed by that address carries the `scan_state` gating
+//! search/export. Two distinct payloads sharing an address therefore means the
+//! second one's bytes are never written *and* it inherits the first one's
+//! completed secret scan. Under the previous 64-bit FNV-1a address that
+//! collision was constructible, not merely improbable, and session content is
+//! attacker-influenceable (fetched pages, pasted material, files in a cloned
+//! repo). Addresses are BLAKE3 (`ADDRESS_ALGO`), still prefixed by the byte
+//! length. Pre-existing `fnv1a` rows stay readable — reads resolve
+//! `storage_relpath`, which never changes — and are re-addressed lazily the next
+//! time their source artifact is re-ingested; `blob.hash_algo` records which
+//! algorithm produced each address (migration 0010).
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -114,8 +128,9 @@ impl BlobStore {
         let id = blob_id(&staged.content_hash);
         tx.execute(
             "INSERT INTO blob
-                (id, content_hash, media_type, byte_len, storage_relpath, scan_state, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'pending', unixepoch('now') * 1000)
+                (id, content_hash, media_type, byte_len, storage_relpath, scan_state,
+                 hash_algo, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, unixepoch('now') * 1000)
              ON CONFLICT(content_hash) DO NOTHING",
             params![
                 id,
@@ -123,6 +138,7 @@ impl BlobStore {
                 media_type,
                 staged.byte_len,
                 staged.relpath,
+                ADDRESS_ALGO,
             ],
         )?;
         // The id is a deterministic function of the content hash, so the row now
@@ -177,10 +193,15 @@ fn write_all_synced(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Content address: byte length followed by a 64-bit FNV-1a digest. Including
-/// the length means a collision requires both the same size and the same digest.
+/// Content address: byte length followed by a BLAKE3 digest. The length prefix
+/// is redundant against a cryptographic digest but is kept so an address remains
+/// self-describing and cheaply sanity-checkable against the file on disk.
 fn content_hash(bytes: &[u8]) -> String {
-    format!("{:016x}{:016x}", bytes.len() as u64, fnv1a_64(bytes))
+    format!(
+        "{:016x}{}",
+        bytes.len() as u64,
+        blake3::hash(bytes).to_hex()
+    )
 }
 
 /// Deterministic blob id derived from the content hash (blob ids are opaque; a
@@ -189,17 +210,10 @@ fn blob_id(content_hash: &str) -> String {
     format!("blob_{content_hash}")
 }
 
-/// FNV-1a 64-bit digest (a content fingerprint, not a security primitive).
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
-}
+/// The algorithm every address written by this build uses. Recorded on the row
+/// so pre-0010 `fnv1a` addresses remain identifiable (and sweepable) while
+/// staying readable.
+const ADDRESS_ALGO: &str = "blake3";
 
 #[cfg(test)]
 mod tests {
@@ -267,6 +281,54 @@ mod tests {
         assert_eq!(hash, staged.content_hash());
         assert_eq!(state, "pending", "unscanned blobs are not yet searchable");
         assert_eq!(relpath, staged.relpath());
+    }
+
+    #[test]
+    fn address_is_a_labeled_cryptographic_digest() {
+        // Regression: the address gates dedupe *and* inherits `scan_state`, so a
+        // forgeable one lets colliding content ride another blob's clean scan.
+        let (_dir, store) = store();
+        let conn = crate::storage::open_in_memory().unwrap();
+        let staged = store.stage(b"diff payload").unwrap();
+        // 16 hex chars of length prefix + a 256-bit digest.
+        assert_eq!(staged.content_hash().len(), 16 + 64);
+
+        let id = BlobStore::reference(&conn, &staged, "text/x-patch").unwrap();
+        let algo: String = conn
+            .query_row("SELECT hash_algo FROM blob WHERE id = ?1", [&id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(algo, "blake3");
+    }
+
+    #[test]
+    fn legacy_fnv1a_addressed_blob_stays_readable() {
+        // Migration 0010 is lazy: pre-existing rows keep their weak address and
+        // must keep resolving, because reads go through `storage_relpath`.
+        let (_dir, store) = store();
+        let conn = crate::storage::open_in_memory().unwrap();
+        let legacy_hash = "0000000000000004deadbeefdeadbeef";
+        let relpath = format!("{}/{legacy_hash}", &legacy_hash[..2]);
+        fs::create_dir_all(store.root().join(&legacy_hash[..2])).unwrap();
+        fs::write(store.root().join(&relpath), b"old!").unwrap();
+        conn.execute(
+            "INSERT INTO blob
+                (id, content_hash, media_type, byte_len, storage_relpath, scan_state, created_at)
+             VALUES ('blob_legacy', ?1, 'text/x-patch', 4, ?2, 'clean', 0)",
+            params![legacy_hash, relpath],
+        )
+        .unwrap();
+
+        let (stored_relpath, algo): (String, String) = conn
+            .query_row(
+                "SELECT storage_relpath, hash_algo FROM blob WHERE id = 'blob_legacy'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(algo, "fnv1a", "pre-0010 rows default to the old algorithm");
+        assert_eq!(store.read(&stored_relpath).unwrap(), b"old!");
     }
 
     #[test]

@@ -30,7 +30,7 @@ const IDLE_ARCHIVE: ArchiveState = { query: "", items: [], status: "idle" };
  * subsequence of the candidate at all.
  */
 function fuzzyScore(query: string, candidate: string): number | null {
-  const needle = query.trim().toLowerCase();
+  const needle = query.trim().slice(0, 256).toLowerCase();
   const haystack = candidate.toLowerCase();
   if (needle === "") return 0;
 
@@ -227,6 +227,7 @@ export default function CommandPalette({
         <input
           ref={inputRef}
           type="text"
+          maxLength={256}
           className="palette__input"
           placeholder="Search actions, repositories, and sessions…"
           value={query}
@@ -258,6 +259,8 @@ export default function CommandPalette({
                 id={command.id}
                 role="option"
                 aria-selected={index === activeIndex}
+                aria-setsize={filtered.length}
+                aria-posinset={index + 1}
                 className={`palette__item${index === activeIndex ? " is-active" : ""}`}
                 onMouseEnter={() => setActive(index)}
                 onClick={() => run(index)}

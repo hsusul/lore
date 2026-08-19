@@ -42,7 +42,7 @@ export function computeWindow(
     return { startIndex: 0, endIndex: safeCount, padTop: 0, padBottom: 0 };
   }
   const safeScrollTop = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0;
-  const safeOverscan = Number.isFinite(overscan) ? Math.max(0, overscan) : 0;
+  const safeOverscan = Number.isFinite(overscan) ? Math.max(0, Math.floor(overscan)) : 0;
   const first = Math.max(0, Math.floor(safeScrollTop / rowHeight) - safeOverscan);
   const last = Math.min(
     safeCount,

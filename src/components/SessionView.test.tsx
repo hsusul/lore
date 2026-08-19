@@ -56,6 +56,7 @@ const detail: SessionDetail = {
       has_patch: true,
     },
   ],
+  next_message_cursor: null,
 };
 
 const git: GitObservationDto[] = [
@@ -242,5 +243,16 @@ describe("SessionView", () => {
     fireEvent.click(screen.getByRole("button", { name: /view patch/i }));
     expect(loadPatch).toHaveBeenCalledWith("fe0");
     await waitFor(() => expect(screen.getByText(/\+new/)).toBeTruthy());
+  });
+
+  it("bounds oversized diffs to 1,000 lines with a truncation note", async () => {
+    const largeDiff = Array.from({ length: 1_200 }, (_, i) => `+line ${i}`).join("\n");
+    const loadPatch = vi.fn().mockResolvedValue(largeDiff);
+    render(<SessionView detail={detail} git={git} loadPatch={loadPatch} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /view patch/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/… truncated \(200 more lines\)/)).toBeTruthy(),
+    );
   });
 });

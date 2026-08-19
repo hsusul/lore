@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { agentLabel, formatRelative, formatTime } from "../format";
-import type {
-  FileEventDto,
-  GitObservationDto,
-  MessageDto,
-  MessagePartDto,
-  SessionDetail,
+import {
+  listSessionMessagesPage,
+  type FileEventDto,
+  type GitObservationDto,
+  type MessageDto,
+  type MessagePartDto,
+  type SessionDetail,
 } from "../ipc";
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -23,9 +24,12 @@ const FILE_SOURCE_LABEL: Record<string, string> = {
 };
 
 const TIMELINE_PAGE = 200;
+const MAX_DIFF_LINES = 1_000;
 
 function DiffBlock({ text }: { text: string }) {
-  const lines = text.replace(/\n$/, "").split("\n");
+  const allLines = text.replace(/\n$/, "").split("\n");
+  const truncated = allLines.length > MAX_DIFF_LINES;
+  const lines = truncated ? allLines.slice(0, MAX_DIFF_LINES) : allLines;
   return (
     <div className="diff" role="group" aria-label="patch">
       {lines.map((line, index) => {
@@ -41,6 +45,11 @@ function DiffBlock({ text }: { text: string }) {
           </span>
         );
       })}
+      {truncated && (
+        <span className="diff__line diff__line--hunk">
+          {`… truncated (${allLines.length - MAX_DIFF_LINES} more lines)`}
+        </span>
+      )}
     </div>
   );
 }
@@ -249,9 +258,34 @@ function SessionContent({
   onSaveFile,
   onForget,
 }: SessionContentProps) {
+  const [messages, setMessages] = useState<MessageDto[]>(detail.messages);
+  const [nextCursor, setNextCursor] = useState<string | null>(detail.next_message_cursor ?? null);
   const [visibleMessages, setVisibleMessages] = useState(TIMELINE_PAGE);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const { summary, segments, messages, file_events } = detail;
+  const { summary, segments, file_events } = detail;
+
+  const handleShowMore = useCallback(async () => {
+    if (visibleMessages < messages.length) {
+      setVisibleMessages((count) => count + TIMELINE_PAGE);
+      return;
+    }
+    if (nextCursor && !loadingMore) {
+      setLoadingMore(true);
+      try {
+        const page = await listSessionMessagesPage(summary.id, TIMELINE_PAGE, nextCursor);
+        setMessages((prev) => [...prev, ...page.messages]);
+        setNextCursor(page.next_cursor);
+        setVisibleMessages((count) => count + page.messages.length);
+      } finally {
+        setLoadingMore(false);
+      }
+    }
+  }, [visibleMessages, messages.length, nextCursor, loadingMore, summary.id]);
+
+  const totalMessages = Math.max(summary.message_count, messages.length);
+  const hasMore = visibleMessages < totalMessages || nextCursor !== null;
+
   return (
     <section className="session" aria-label="Session detail">
       <header className="session__header">
@@ -259,7 +293,7 @@ function SessionContent({
         <p className="session__meta">
           <span className="chip chip--agent">{agentLabel(summary.agent_id)}</span>
           {summary.primary_model && <span className="mono">{summary.primary_model}</span>}
-          <span>{summary.message_count} messages</span>
+          <span>{totalMessages} messages</span>
           <span>{summary.tool_call_count} tools</span>
           {segments.length > 1 && <span>{segments.length} segments</span>}
           {summary.started_at != null && <span>{formatRelative(summary.started_at)}</span>}
@@ -331,13 +365,16 @@ function SessionContent({
             <Message key={message.id} message={message} />
           ))}
         </div>
-        {visibleMessages < messages.length && (
+        {hasMore && (
           <button
             type="button"
             className="timeline__more btn--ghost"
-            onClick={() => setVisibleMessages((count) => count + TIMELINE_PAGE)}
+            disabled={loadingMore}
+            onClick={handleShowMore}
           >
-            Show more messages ({Math.min(visibleMessages, messages.length)} of {messages.length})
+            {loadingMore
+              ? "Loading messages..."
+              : `Show more messages (${Math.min(visibleMessages, totalMessages)} of ${totalMessages})`}
           </button>
         )}
       </section>

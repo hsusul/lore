@@ -289,3 +289,35 @@ fn rewrite_to_new_native_session_removes_orphaned_logical_session() {
     assert_eq!(sessions, 1, "the old source-only session must be removed");
     assert_eq!(native_id, "new-native");
 }
+
+#[test]
+fn oversized_source_degrades_gracefully_to_partial() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("giant.jsonl");
+    let conn = lore_core::storage::open_in_memory().unwrap();
+
+    let mut file = fs::File::create(&path).unwrap();
+    use std::io::Write;
+    file.write_all(USER_LINE.as_bytes()).unwrap();
+    // Sparse resize to 65 MiB (above MAX_SOURCE_BYTES cap)
+    file.set_len(65 * 1024 * 1024).unwrap();
+    drop(file);
+
+    let outcome = ingest(&conn, &path);
+    assert!(matches!(outcome, IngestOutcome::Ingested { .. }));
+
+    let (status, note): (String, Option<String>) = conn
+        .query_row(
+            "SELECT parse_status, parse_note FROM agent_session",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "partial");
+    assert!(
+        note.as_deref()
+            .unwrap_or("")
+            .contains("exceeds maximum supported size"),
+        "must record content-free size cap diagnostic"
+    );
+}
