@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import CommandPalette, { type Command } from "./components/CommandPalette";
 import ArchiveOnboarding from "./components/ArchiveOnboarding";
+import CommandPalette, { type Command } from "./components/CommandPalette";
+import ErrorBoundary from "./components/ErrorBoundary";
 import FolderList from "./components/FolderList";
 import RepositoryList from "./components/RepositoryList";
 import SearchResults from "./components/SearchResults";
@@ -908,15 +909,17 @@ export default function App() {
               <p role="status">Loading session…</p>
             </section>
           ) : (
-            <SessionView
-              detail={detail}
-              git={git}
-              loadPatch={getFilePatch}
-              secretCount={secretCount}
-              onExport={handleExport}
-              onSaveFile={handleSaveFile}
-              onForget={handleForget}
-            />
+            <ErrorBoundary>
+              <SessionView
+                detail={detail}
+                git={git}
+                loadPatch={getFilePatch}
+                secretCount={secretCount}
+                onExport={handleExport}
+                onSaveFile={handleSaveFile}
+                onForget={handleForget}
+              />
+            </ErrorBoundary>
           )}
         </section>
       </div>

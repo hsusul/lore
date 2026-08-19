@@ -1677,6 +1677,46 @@ kbd {
   color: var(--text-3);
 }
 
+.error-boundary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  height: 100%;
+  padding: 2rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.error-boundary__content {
+  max-width: 480px;
+  padding: 1.5rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  text-align: center;
+}
+
+.error-boundary__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.error-boundary__message {
+  margin: 0 0 1.25rem;
+  font-size: 0.85rem;
+  color: var(--text-2);
+  word-break: break-word;
+}
+
+.error-boundary__actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
