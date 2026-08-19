@@ -1110,6 +1110,9 @@ mod tests {
             s.messages[1].parts[1].text.as_deref(),
             Some("thinking step 2")
         );
-        assert_eq!(s.messages[1].parts[2].text.as_deref(), Some("detailed step"));
+        assert_eq!(
+            s.messages[1].parts[2].text.as_deref(),
+            Some("detailed step")
+        );
     }
 }
