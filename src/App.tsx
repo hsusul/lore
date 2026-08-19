@@ -12,7 +12,6 @@ import { agentLabel } from "./format";
 import {
   addAgentRoot,
   chooseAgentRootDirectory,
-  chooseExportFilePath,
   createFolder,
   deleteFolder,
   exportSessionMarkdown,
@@ -512,10 +511,10 @@ export default function App() {
   async function handleSaveFile() {
     if (!selectedSession) return;
     try {
-      const path = await chooseExportFilePath();
-      if (path === null) return; // user cancelled the save dialog
-      await saveSessionExport(selectedSession, path, false);
-      setNotice("Saved session export.");
+      const saved = await saveSessionExport(selectedSession, null, false);
+      if (saved) {
+        setNotice("Saved session export.");
+      }
     } catch (e) {
       setError(String(e));
     }
