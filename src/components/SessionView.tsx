@@ -24,9 +24,12 @@ const FILE_SOURCE_LABEL: Record<string, string> = {
 };
 
 const TIMELINE_PAGE = 200;
+const MAX_DIFF_LINES = 1_000;
 
 function DiffBlock({ text }: { text: string }) {
-  const lines = text.replace(/\n$/, "").split("\n");
+  const allLines = text.replace(/\n$/, "").split("\n");
+  const truncated = allLines.length > MAX_DIFF_LINES;
+  const lines = truncated ? allLines.slice(0, MAX_DIFF_LINES) : allLines;
   return (
     <div className="diff" role="group" aria-label="patch">
       {lines.map((line, index) => {
@@ -42,6 +45,11 @@ function DiffBlock({ text }: { text: string }) {
           </span>
         );
       })}
+      {truncated && (
+        <span className="diff__line diff__line--hunk">
+          {`… truncated (${allLines.length - MAX_DIFF_LINES} more lines)`}
+        </span>
+      )}
     </div>
   );
 }
