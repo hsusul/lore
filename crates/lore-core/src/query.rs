@@ -280,17 +280,24 @@ impl SessionCursor {
             value => Some(value.parse().ok()?),
         };
         let mut id = String::with_capacity(encoded_id.len());
-        let mut chars = encoded_id.chars().peekable();
+        let mut chars = encoded_id.chars();
         while let Some(c) = chars.next() {
             if c == '%' {
-                let next_two: String = chars.by_ref().take(2).collect();
-                match next_two.as_str() {
-                    "25" => id.push('%'),
-                    "3A" | "3a" => id.push(':'),
-                    _ => {
+                let c1 = chars.next();
+                let c2 = chars.next();
+                match (c1, c2) {
+                    (Some('2'), Some('5')) => id.push('%'),
+                    (Some('3'), Some('A' | 'a')) => id.push(':'),
+                    (Some(a), Some(b)) => {
                         id.push('%');
-                        id.push_str(&next_two);
+                        id.push(a);
+                        id.push(b);
                     }
+                    (Some(a), None) => {
+                        id.push('%');
+                        id.push(a);
+                    }
+                    _ => id.push('%'),
                 }
             } else {
                 id.push(c);
@@ -827,6 +834,16 @@ mod tests {
             assert_eq!(decoded.started_at, started_at);
             assert_eq!(decoded.id, id);
         }
+
+        // Test percent decode fallback for partial or non-escaped '%'
+        let decoded_partial = SessionCursor::decode("100:id%2").expect("cursor decodes");
+        assert_eq!(decoded_partial.id, "id%2");
+
+        let decoded_trailing = SessionCursor::decode("100:id%").expect("cursor decodes");
+        assert_eq!(decoded_trailing.id, "id%");
+
+        let decoded_unknown = SessionCursor::decode("100:id%99").expect("cursor decodes");
+        assert_eq!(decoded_unknown.id, "id%99");
     }
 
     #[test]
