@@ -609,6 +609,19 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+/// True if `needle` appears in `haystack`, ignoring ASCII case, without allocating.
+fn contains_ignore_ascii_case_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 /// True if a `key=`/`token:`/`secret …` keyword appears shortly before `pos`.
 fn near_secret_keyword(bytes: &[u8], pos: usize) -> bool {
     const KEYWORDS: &[&[u8]] = &[
@@ -621,22 +634,17 @@ fn near_secret_keyword(bytes: &[u8], pos: usize) -> bool {
         b"apikey",
     ];
     let window_start = pos.saturating_sub(24);
-    let ctx = to_lower(&bytes[window_start..pos]);
-    KEYWORDS.iter().any(|kw| contains(&ctx, kw))
+    let ctx = &bytes[window_start..pos];
+    KEYWORDS
+        .iter()
+        .any(|&kw| contains_ignore_ascii_case_bytes(ctx, kw))
 }
 
 fn preceded_by_data_uri(bytes: &[u8], pos: usize) -> bool {
     let window_start = pos.saturating_sub(16);
-    let ctx = to_lower(&bytes[window_start..pos]);
-    contains(&ctx, b"data:") || contains(&ctx, b"base64,")
-}
-
-fn to_lower(bytes: &[u8]) -> Vec<u8> {
-    bytes.iter().map(u8::to_ascii_lowercase).collect()
-}
-
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    find(haystack, needle).is_some()
+    let ctx = &bytes[window_start..pos];
+    contains_ignore_ascii_case_bytes(ctx, b"data:")
+        || contains_ignore_ascii_case_bytes(ctx, b"base64,")
 }
 
 /// Shannon entropy in bits per character over the token bytes.
