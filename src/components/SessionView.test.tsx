@@ -56,6 +56,7 @@ const detail: SessionDetail = {
       has_patch: true,
     },
   ],
+  next_message_cursor: null,
 };
 
 const git: GitObservationDto[] = [

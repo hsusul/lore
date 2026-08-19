@@ -9,8 +9,8 @@
 use std::collections::HashMap;
 
 use lore_ipc::{
-    FileEventDto, GitObservationDto, MessageDto, MessagePartDto, RepositorySummary, SegmentDto,
-    SessionDetail, SessionPage, SessionSummary,
+    FileEventDto, GitObservationDto, MessageDto, MessagePage, MessagePartDto, RepositorySummary,
+    SegmentDto, SessionDetail, SessionPage, SessionSummary,
 };
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension};
@@ -307,16 +307,43 @@ impl SessionCursor {
     }
 }
 
-/// The full read of one session: header, context segments, the ordered-part
-/// message timeline, and touched files. Returns `None` when the session is
-/// unknown. Opaque/encrypted parts are returned without readable content and
-/// are never rendered or exported.
+/// Number of initial messages returned in [`get_session`].
+const INITIAL_MESSAGE_LIMIT: i64 = 200;
+
+/// Keyset cursor for messages in a session, ordered by `seq ASC`.
+struct MessageCursor {
+    seq: i64,
+}
+
+impl MessageCursor {
+    fn encode(&self) -> String {
+        self.seq.to_string()
+    }
+
+    fn decode(s: &str) -> Option<Self> {
+        s.parse::<i64>().ok().map(|seq| Self { seq })
+    }
+}
+
+/// The read of one session in context: header, context segments, the initial
+/// page of messages (up to 200), touched files, and a cursor for subsequent
+/// message pages when available. Returns `None` when the session is unknown.
+/// Opaque/encrypted parts are returned without readable content and are never
+/// rendered or exported.
 pub fn get_session(conn: &Connection, session_id: &str) -> Result<Option<SessionDetail>> {
     let Some((summary, parse_note)) = session_summary(conn, session_id)? else {
         return Ok(None);
     };
     let segments = session_segments(conn, session_id)?;
-    let messages = session_messages(conn, session_id)?;
+    let (messages, has_more) =
+        query_session_messages_window(conn, session_id, INITIAL_MESSAGE_LIMIT, None)?;
+    let next_message_cursor = if has_more {
+        messages
+            .last()
+            .map(|m| MessageCursor { seq: m.seq }.encode())
+    } else {
+        None
+    };
     let file_events = session_file_events(conn, session_id)?;
     Ok(Some(SessionDetail {
         summary,
@@ -324,7 +351,35 @@ pub fn get_session(conn: &Connection, session_id: &str) -> Result<Option<Session
         segments,
         messages,
         file_events,
+        next_message_cursor,
     }))
+}
+
+/// List one stable page of messages for `session_id`, ordered by `seq ASC`.
+/// Used by the UI timeline to stream subsequent message batches without
+/// crossing IPC in a single unbounded DTO.
+pub fn list_session_messages_page(
+    conn: &Connection,
+    session_id: &str,
+    limit: i64,
+    cursor: Option<&str>,
+) -> Result<MessagePage> {
+    let limit = limit.clamp(1, 1_000);
+    let after_seq = cursor.and_then(MessageCursor::decode).map(|c| c.seq);
+
+    let (messages, has_more) = query_session_messages_window(conn, session_id, limit, after_seq)?;
+    let next_cursor = if has_more {
+        messages
+            .last()
+            .map(|m| MessageCursor { seq: m.seq }.encode())
+    } else {
+        None
+    };
+
+    Ok(MessagePage {
+        messages,
+        next_cursor,
+    })
 }
 
 fn session_summary(
@@ -365,18 +420,89 @@ fn session_segments(conn: &Connection, session_id: &str) -> Result<Vec<SegmentDt
     Ok(rows)
 }
 
-fn session_messages(conn: &Connection, session_id: &str) -> Result<Vec<MessageDto>> {
-    // Parts are fetched once for the whole session and grouped by message seq to
-    // avoid an N+1 query. Opaque parts are stripped of readable content here.
+struct RawMessageRow {
+    id: String,
+    seq: i64,
+    role: String,
+    event_kind: String,
+    is_sidechain: bool,
+    ts: Option<i64>,
+    model: Option<String>,
+}
+
+fn query_session_messages_window(
+    conn: &Connection,
+    session_id: &str,
+    limit: i64,
+    after_seq: Option<i64>,
+) -> Result<(Vec<MessageDto>, bool)> {
+    let fetch_limit = limit.saturating_add(1);
+
+    let mut raw_messages: Vec<RawMessageRow> = Vec::new();
+    match after_seq {
+        Some(seq) => {
+            let mut stmt = conn.prepare(
+                "SELECT id, seq, role, event_kind, is_sidechain, ts, model
+                 FROM message
+                 WHERE session_id = ?1 AND seq > ?2
+                 ORDER BY seq LIMIT ?3",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![session_id, seq, fetch_limit])?;
+            while let Some(row) = rows.next()? {
+                raw_messages.push(RawMessageRow {
+                    id: row.get(0)?,
+                    seq: row.get(1)?,
+                    role: row.get(2)?,
+                    event_kind: row.get(3)?,
+                    is_sidechain: row.get::<_, i64>(4)? != 0,
+                    ts: row.get(5)?,
+                    model: row.get(6)?,
+                });
+            }
+        }
+        None => {
+            let mut stmt = conn.prepare(
+                "SELECT id, seq, role, event_kind, is_sidechain, ts, model
+                 FROM message
+                 WHERE session_id = ?1
+                 ORDER BY seq LIMIT ?2",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![session_id, fetch_limit])?;
+            while let Some(row) = rows.next()? {
+                raw_messages.push(RawMessageRow {
+                    id: row.get(0)?,
+                    seq: row.get(1)?,
+                    role: row.get(2)?,
+                    event_kind: row.get(3)?,
+                    is_sidechain: row.get::<_, i64>(4)? != 0,
+                    ts: row.get(5)?,
+                    model: row.get(6)?,
+                });
+            }
+        }
+    };
+
+    let has_more = raw_messages.len() as i64 > limit;
+    if has_more {
+        raw_messages.truncate(limit as usize);
+    }
+
+    if raw_messages.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+
+    let min_seq = raw_messages.first().map(|m| m.seq).unwrap_or(0);
+    let max_seq = raw_messages.last().map(|m| m.seq).unwrap_or(0);
+
     let mut parts_by_seq: HashMap<i64, Vec<MessagePartDto>> = HashMap::new();
     {
         let mut stmt = conn.prepare(
             "SELECT m.seq, mp.ordinal, mp.kind, mp.text, mp.content_json, mp.searchable
              FROM message_part mp JOIN message m ON m.id = mp.message_id
-             WHERE m.session_id = ?1
+             WHERE m.session_id = ?1 AND m.seq >= ?2 AND m.seq <= ?3
              ORDER BY m.seq, mp.ordinal",
         )?;
-        let mut rows = stmt.query([session_id])?;
+        let mut rows = stmt.query(rusqlite::params![session_id, min_seq, max_seq])?;
         while let Some(row) = rows.next()? {
             let seq: i64 = row.get(0)?;
             let kind: String = row.get(2)?;
@@ -391,28 +517,24 @@ fn session_messages(conn: &Connection, session_id: &str) -> Result<Vec<MessageDt
         }
     }
 
-    let mut stmt = conn.prepare(
-        "SELECT id, seq, role, event_kind, is_sidechain, ts, model
-         FROM message WHERE session_id = ?1 ORDER BY seq",
-    )?;
-    let mut rows = stmt.query([session_id])?;
-    let mut messages = Vec::with_capacity(parts_by_seq.len());
-    while let Some(row) = rows.next()? {
-        let seq: i64 = row.get(1)?;
-        let parts = parts_by_seq.remove(&seq).unwrap_or_default();
-        messages.push(MessageDto {
-            id: row.get(0)?,
-            seq,
-            role: row.get(2)?,
-            event_kind: row.get(3)?,
-            is_sidechain: row.get::<_, i64>(4)? != 0,
-            ts: row.get(5)?,
-            model: row.get(6)?,
-            parts,
-        });
-    }
+    let messages = raw_messages
+        .into_iter()
+        .map(|row| {
+            let parts = parts_by_seq.remove(&row.seq).unwrap_or_default();
+            MessageDto {
+                id: row.id,
+                seq: row.seq,
+                role: row.role,
+                event_kind: row.event_kind,
+                is_sidechain: row.is_sidechain,
+                ts: row.ts,
+                model: row.model,
+                parts,
+            }
+        })
+        .collect();
 
-    Ok(messages)
+    Ok((messages, has_more))
 }
 
 fn session_file_events(conn: &Connection, session_id: &str) -> Result<Vec<FileEventDto>> {
