@@ -690,6 +690,10 @@ struct SessionSourceRow {
     last_seq: Option<i64>,
 }
 
+/// Maximum source file size in bytes (64 MiB) that Lore will load into memory for full parsing.
+/// Files exceeding this cap degrade gracefully to `partial` with a content-free note.
+pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Discover, classify, parse, and persist one source file recoverably.
 ///
 /// Idempotent by construction: a changed file is fully re-parsed and its session
@@ -705,8 +709,18 @@ pub fn ingest_file(
     blobs: &BlobStore,
 ) -> Result<IngestOutcome> {
     let meta = std::fs::metadata(path).map_err(|_| StorageError::Io)?;
-    let content = std::fs::read_to_string(path).map_err(|_| StorageError::Io)?;
-    let snapshot = source_snapshot(path, &meta, &content);
+    let is_oversized = meta.len() > MAX_SOURCE_BYTES;
+
+    let (content_opt, snapshot) = if is_oversized {
+        let prefix_bytes = read_prefix(path, PREFIX_BYTES).map_err(|_| StorageError::Io)?;
+        let snap = oversized_source_snapshot(path, &meta, &prefix_bytes);
+        (None, snap)
+    } else {
+        let content = std::fs::read_to_string(path).map_err(|_| StorageError::Io)?;
+        let snap = source_snapshot(path, &meta, &content);
+        (Some(content), snap)
+    };
+
     let agent_id = adapter.id().0;
 
     let prev = find_source(
@@ -745,7 +759,10 @@ pub fn ingest_file(
         }
         Some(row) => {
             let same_content = row.full_hash.as_deref() == Some(snapshot.full_hash.as_str());
-            let appended = !same_content && is_append(row, content.as_bytes());
+            let appended = !same_content
+                && content_opt
+                    .as_ref()
+                    .is_some_and(|c| is_append(row, c.as_bytes()));
             let change = if same_content {
                 ChangeClass::Unchanged
             } else if appended {
@@ -764,12 +781,19 @@ pub fn ingest_file(
         }
     };
 
-    // Parse the bytes already read above; do not re-read the file from disk.
     let fallback = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| snapshot.path.clone());
-    let parsed = adapter.parse_content(&content, &fallback);
+
+    let parsed = match content_opt {
+        Some(content) => adapter.parse_content(&content, &fallback),
+        None => {
+            let mut p = ParsedSession::new(&fallback);
+            p.note_partial("source file exceeds maximum supported size (64MB)");
+            p
+        }
+    };
 
     // Stage blob files before opening the transaction (DATA_MODEL.md §3).
     let patch_blobs = stage_patch_blobs(blobs, &parsed)?;
@@ -1015,6 +1039,41 @@ fn add_path_alias(tx: &Connection, source_artifact_id: &str, path: &str) -> Resu
         params![source_artifact_id, path],
     )?;
     Ok(())
+}
+
+fn read_prefix(path: &Path, max_bytes: usize) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let f = std::fs::File::open(path)?;
+    let mut buf = Vec::with_capacity(max_bytes);
+    f.take(max_bytes as u64).read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+fn oversized_source_snapshot(
+    path: &Path,
+    meta: &std::fs::Metadata,
+    prefix_bytes: &[u8],
+) -> SourceSnapshot {
+    let prefix_hash = fnv1a_hex(prefix_bytes);
+    let full_hash = fnv1a_hex(
+        format!(
+            "{}:{}:{}",
+            meta.len(),
+            mtime_ms(meta).unwrap_or(0),
+            prefix_hash
+        )
+        .as_bytes(),
+    );
+    SourceSnapshot {
+        path: path.to_string_lossy().into_owned(),
+        native_file_id: file_id(meta),
+        size: i64::try_from(meta.len()).unwrap_or(i64::MAX),
+        mtime: mtime_ms(meta),
+        full_hash,
+        prefix_hash,
+        last_offset: 0,
+        last_line: 0,
+    }
 }
 
 fn source_snapshot(path: &Path, meta: &std::fs::Metadata, content: &str) -> SourceSnapshot {
