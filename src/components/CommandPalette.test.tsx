@@ -218,4 +218,18 @@ describe("CommandPalette", () => {
 
     expect(option?.className).toContain("is-active");
   });
+
+  it("sets aria-setsize and aria-posinset on listbox options", () => {
+    const items = makeItems();
+    renderPalette({ items });
+
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(3);
+    expect(options[0].getAttribute("aria-setsize")).toBe("3");
+    expect(options[0].getAttribute("aria-posinset")).toBe("1");
+    expect(options[1].getAttribute("aria-setsize")).toBe("3");
+    expect(options[1].getAttribute("aria-posinset")).toBe("2");
+    expect(options[2].getAttribute("aria-setsize")).toBe("3");
+    expect(options[2].getAttribute("aria-posinset")).toBe("3");
+  });
 });

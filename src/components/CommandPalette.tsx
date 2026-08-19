@@ -258,6 +258,8 @@ export default function CommandPalette({
                 id={command.id}
                 role="option"
                 aria-selected={index === activeIndex}
+                aria-setsize={filtered.length}
+                aria-posinset={index + 1}
                 className={`palette__item${index === activeIndex ? " is-active" : ""}`}
                 onMouseEnter={() => setActive(index)}
                 onClick={() => run(index)}
