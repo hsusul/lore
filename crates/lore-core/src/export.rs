@@ -68,11 +68,7 @@ pub fn export_session_markdown(
                         let _ = writeln!(out, "{}\n", render(text));
                     } else if let Some(json) = &part.content_json {
                         let rendered_json = render(json);
-                        let fence = if rendered_json.contains("```") {
-                            "````"
-                        } else {
-                            "```"
-                        };
+                        let fence = markdown_fence(&rendered_json);
                         let _ = writeln!(out, "{fence}json\n{rendered_json}\n{fence}\n");
                     }
                 }
@@ -104,6 +100,29 @@ fn render_field(text: &str, include_secrets: bool) -> String {
             Err(_) => "«field unavailable: scan failed»".to_string(),
         }
     }
+}
+
+/// Determine an enclosing code fence length that exceeds any run of consecutive
+/// backticks in the content, ensuring code blocks cannot break out of their fence.
+fn markdown_fence(content: &str) -> String {
+    let mut max_backticks = 0;
+    let mut current_backticks = 0;
+    for b in content.bytes() {
+        if b == b'`' {
+            current_backticks += 1;
+            if current_backticks > max_backticks {
+                max_backticks = current_backticks;
+            }
+        } else {
+            current_backticks = 0;
+        }
+    }
+    let fence_len = if max_backticks < 3 {
+        3
+    } else {
+        max_backticks + 1
+    };
+    "`".repeat(fence_len)
 }
 
 #[cfg(test)]
@@ -224,5 +243,14 @@ mod tests {
         assert!(md.contains("````json\n"));
         assert!(md.contains("echo ```nested```"));
         assert!(md.contains("\n````\n"));
+    }
+
+    #[test]
+    fn markdown_fence_scales_with_consecutive_backticks() {
+        assert_eq!(markdown_fence("plain text"), "```");
+        assert_eq!(markdown_fence("some `inline` code"), "```");
+        assert_eq!(markdown_fence("code ``` block"), "````");
+        assert_eq!(markdown_fence("code ```` block"), "`````");
+        assert_eq!(markdown_fence("code ````` block"), "``````");
     }
 }
