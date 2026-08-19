@@ -468,7 +468,10 @@ fn text_parts(content: Option<&Value>) -> Vec<ParsedPart> {
     };
     let mut parts = Vec::new();
     for block in arr {
-        if let Some(t) = block.get("text").and_then(Value::as_str) {
+        let text = block
+            .as_str()
+            .or_else(|| block.get("text").and_then(Value::as_str));
+        if let Some(t) = text {
             parts.push(ParsedPart {
                 ordinal: parts.len() as i64,
                 kind: PartKind::Text,
@@ -501,7 +504,9 @@ fn push_reasoning_text(value: Option<&Value>, parts: &mut Vec<ParsedPart>, ord: 
         push(s);
     } else if let Some(arr) = value.as_array() {
         for block in arr {
-            if let Some(t) = block.get("text").and_then(Value::as_str) {
+            if let Some(s) = block.as_str() {
+                push(s);
+            } else if let Some(t) = block.get("text").and_then(Value::as_str) {
                 push(t);
             }
         }
@@ -1082,5 +1087,29 @@ mod tests {
         let s = CodexAdapter::new().parse_str(content, "truncated");
         assert_eq!(s.status, crate::model::ParseStatus::Partial);
         assert_eq!(s.messages.len(), 1, "the complete record is kept");
+    }
+
+    #[test]
+    fn parses_string_arrays_in_message_content_and_reasoning() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[\"first line\",\"second line\"]}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":[\"thinking step 1\",\"thinking step 2\"],\"content\":[\"detailed step\"]}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "arrays");
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.messages[0].parts.len(), 2);
+        assert_eq!(s.messages[0].parts[0].text.as_deref(), Some("first line"));
+        assert_eq!(s.messages[0].parts[1].text.as_deref(), Some("second line"));
+
+        assert_eq!(s.messages[1].parts.len(), 3);
+        assert_eq!(
+            s.messages[1].parts[0].text.as_deref(),
+            Some("thinking step 1")
+        );
+        assert_eq!(
+            s.messages[1].parts[1].text.as_deref(),
+            Some("thinking step 2")
+        );
+        assert_eq!(s.messages[1].parts[2].text.as_deref(), Some("detailed step"));
     }
 }
