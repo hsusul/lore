@@ -65,6 +65,10 @@ describe("computeWindow", () => {
     const nonNegativeOverscan = computeWindow(100, 400, 400, 40, -3);
     expect(nonNegativeOverscan.startIndex).toBe(10);
     expect(nonNegativeOverscan.endIndex).toBe(20);
+
+    const fractionalOverscan = computeWindow(100, 400, 400, 40, 2.7);
+    expect(fractionalOverscan.startIndex).toBe(8); // 10 - floor(2.7) = 8
+    expect(fractionalOverscan.endIndex).toBe(22); // 20 + floor(2.7) = 22
   });
 
   it("handles NaN and non-finite dimensions safely", () => {
