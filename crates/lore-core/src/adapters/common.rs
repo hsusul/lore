@@ -224,6 +224,14 @@ mod tests {
         let diff = "--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-old\n+new\n ctx";
         assert_eq!(unified_diff_line_counts(diff), Some((1, 1)));
         assert_eq!(unified_diff_line_counts(""), None);
+
+        // Multiple hunks, CRLF line endings, and "\\ No newline at end of file"
+        let complex_diff = "--- a/file.rs\r\n+++ b/file.rs\r\n@@ -1,3 +1,4 @@\r\n-first\r\n-second\r\n+first updated\r\n+second updated\r\n+third added\r\n\\ No newline at end of file\r\n";
+        assert_eq!(unified_diff_line_counts(complex_diff), Some((3, 2)));
+
+        // Pure addition diff
+        let add_only = "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+line 1\n+line 2\n";
+        assert_eq!(unified_diff_line_counts(add_only), Some((2, 0)));
     }
 
     #[test]
