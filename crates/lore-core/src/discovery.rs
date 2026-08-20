@@ -245,4 +245,23 @@ mod tests {
             "a canonical event path must resolve through a symlinked root"
         );
     }
+
+    #[test]
+    fn discovery_tolerates_non_existent_custom_roots() {
+        let mut config = DiscoveryConfig::new();
+        config.set_roots(
+            "claude-code",
+            DiscoveryRoots::new(vec![std::path::PathBuf::from("/non/existent/claude/root")]),
+        );
+        config.set_roots(
+            "codex",
+            DiscoveryRoots::new(vec![std::path::PathBuf::from("/non/existent/codex/root")]),
+        );
+
+        let report = discover(&AdapterRegistry::v0(), &config);
+        assert_eq!(report.agents.len(), 2);
+        assert!(!report.agents[0].detection.installed);
+        assert!(!report.agents[1].detection.installed);
+        assert!(report.sessions.is_empty());
+    }
 }
