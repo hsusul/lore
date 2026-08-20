@@ -832,4 +832,30 @@ mod tests {
         );
         assert!(session.messages[1].is_sidechain);
     }
+
+    #[test]
+    fn parses_thinking_content_blocks_with_and_without_signatures() {
+        let jsonl = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"contemplating solution\",\"signature\":\"sig123\"},{\"type\":\"thinking\",\"thinking\":\"second thought\"}]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "thinking-blocks");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].parts.len(), 2);
+
+        let part1 = &session.messages[0].parts[0];
+        assert_eq!(part1.kind, PartKind::Thinking);
+        assert_eq!(part1.text.as_deref(), Some("contemplating solution"));
+        assert!(!part1.searchable);
+        assert_eq!(
+            part1.metadata_json.as_deref(),
+            Some("{\"signature\":\"sig123\"}")
+        );
+
+        let part2 = &session.messages[0].parts[1];
+        assert_eq!(part2.kind, PartKind::Thinking);
+        assert_eq!(part2.text.as_deref(), Some("second thought"));
+        assert!(!part2.searchable);
+        assert_eq!(part2.metadata_json, None);
+    }
 }
