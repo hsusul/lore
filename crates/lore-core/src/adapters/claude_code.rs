@@ -973,4 +973,22 @@ mod tests {
         assert_eq!(session_ok.status, crate::model::ParseStatus::Ok);
         assert_eq!(session_ok.tool_calls[0].is_error, Some(false));
     }
+
+    #[test]
+    fn parses_user_message_with_null_content_and_whitespace_tool_result() {
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"sessionId\":\"s1\",\"message\":{\"role\":\"user\",\"content\":null}}\n",
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c_ws\",\"name\":\"Bash\",\"input\":{}}]}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s1\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"c_ws\",\"content\":\"   \\n\\t  \"}]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "null-content-ws-result");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 3);
+        assert_eq!(session.messages[0].parts.len(), 0);
+        assert_eq!(session.tool_calls.len(), 1);
+        assert_eq!(
+            session.tool_calls[0].output_text.as_deref(),
+            Some("   \n\t  ")
+        );
+    }
 }

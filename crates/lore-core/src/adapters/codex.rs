@@ -1320,4 +1320,13 @@ mod tests {
         assert_eq!(s.messages[1].role, Role::User);
         assert_eq!(s.messages[1].parts.len(), 0);
     }
+
+    #[test]
+    fn parses_empty_reasoning_payload_object() {
+        let content = "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"reasoning\"}}\n";
+        let s = CodexAdapter::new().parse_str(content, "empty-reasoning-obj");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.messages.len(), 1);
+        assert_eq!(s.messages[0].parts.len(), 0);
+    }
 }
