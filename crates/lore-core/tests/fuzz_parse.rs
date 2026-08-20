@@ -119,12 +119,34 @@ fn assert_consistent(parsed: &ParsedSession) {
             "messages present but no segment assigned"
         );
     }
+    let mut prev_seq: Option<i64> = None;
     for message in &parsed.messages {
+        assert!(message.seq >= 0, "message seq must be non-negative");
+        if let Some(prev) = prev_seq {
+            assert!(
+                message.seq > prev,
+                "message seq must strictly increase: {} <= {}",
+                message.seq,
+                prev
+            );
+        }
+        prev_seq = Some(message.seq);
         assert!(
             message.segment_ix < parsed.segments.len(),
             "segment_ix {} out of bounds ({} segments)",
             message.segment_ix,
             parsed.segments.len()
+        );
+        for part in &message.parts {
+            assert!(part.ordinal >= 0, "part ordinal must be non-negative");
+        }
+    }
+    for segment in &parsed.segments {
+        assert!(
+            segment.seq_start <= segment.seq_end,
+            "segment seq_start {} exceeds seq_end {}",
+            segment.seq_start,
+            segment.seq_end
         );
     }
     // Tool-call refs point at (seq, ordinal) coordinates that must be plausible.
