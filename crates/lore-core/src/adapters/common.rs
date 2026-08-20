@@ -205,6 +205,9 @@ mod tests {
         assert_eq!(sanitize_path(r"..\..\a\b"), "a/b");
         assert_eq!(sanitize_path(r"src\..\src\app.ts"), "src/app.ts");
         assert_eq!(sanitize_path(r"foo/bar\baz"), "foo/bar/baz");
+        assert_eq!(sanitize_path("foo///bar\\\\baz"), "foo/bar/baz");
+        assert_eq!(sanitize_path("./a/./b/./c.ts"), "a/b/c.ts");
+        assert_eq!(sanitize_path("a/b/c/../../d.ts"), "a/d.ts");
         assert_eq!(
             sanitize_path(r"C:\Users\dev\project\file.ts"),
             "Users/dev/project/file.ts"
