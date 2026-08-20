@@ -251,6 +251,10 @@ mod tests {
         // Git headers only diff (0 additions, 0 deletions)
         let headers_only = "diff --git a/f.rs b/f.rs\nindex 0000000..1234567\n--- a/f.rs\n+++ b/f.rs\n";
         assert_eq!(unified_diff_line_counts(headers_only), Some((0, 0)));
+
+        // Hunk headers only (0 additions, 0 deletions)
+        let hunk_only = "@@ -1,0 +1,0 @@\n";
+        assert_eq!(unified_diff_line_counts(hunk_only), Some((0, 0)));
     }
 
     #[test]
