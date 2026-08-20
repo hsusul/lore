@@ -415,4 +415,14 @@ mod tests {
         assert_eq!(sanitize_path("/absolute/path/file.rs"), "absolute/path/file.rs");
         assert_eq!(sanitize_path("a/b/c/../../d.rs"), "a/d.rs");
     }
+
+    #[test]
+    fn bounded_safely_truncates_multibyte_characters() {
+        let ascii = "a".repeat(100);
+        assert_eq!(bounded(&ascii), "a".repeat(40));
+        let cjk = "测".repeat(100);
+        assert_eq!(bounded(&cjk), "测".repeat(40));
+        let short = "custom_event";
+        assert_eq!(bounded(short), "custom_event");
+    }
 }
