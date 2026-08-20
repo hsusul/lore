@@ -362,5 +362,11 @@ mod tests {
 
         let micros_ts = "2026-08-11T10:00:00.123456Z";
         assert_eq!(epoch_ms(micros_ts), Some(base + 123));
+
+        // Leap year and invalid calendar date handling
+        assert!(epoch_ms("2024-02-29T12:00:00Z").is_some());
+        assert_eq!(epoch_ms("2025-02-29T12:00:00Z"), None);
+        assert_eq!(epoch_ms("2026-13-01T00:00:00Z"), None);
+        assert_eq!(epoch_ms("2026-08-11T25:00:00Z"), None);
     }
 }
