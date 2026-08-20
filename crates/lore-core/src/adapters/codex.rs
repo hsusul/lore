@@ -965,6 +965,16 @@ mod tests {
             .patch_text
             .as_deref()
             .is_some_and(|t| t.contains("-line one")));
+
+        let remove_content = concat!(
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{",
+            "\"type\":\"patch_apply_end\",\"call_id\":\"c\",\"changes\":{\"src/removed.ts\":{",
+            "\"type\":\"remove\",\"content\":\"old content\"}}}}\n"
+        );
+        let s2 = CodexAdapter::new().parse_str(remove_content, "remove-action");
+        assert_eq!(s2.file_events.len(), 1);
+        assert_eq!(s2.file_events[0].change_kind, FileChangeKind::Delete);
+        assert_eq!(s2.file_events[0].path, "src/removed.ts");
     }
 
     #[test]

@@ -940,4 +940,13 @@ mod tests {
         assert_eq!(session.tool_calls[0].native_call_id, "call_meta");
         assert_eq!(session.tool_calls[0].name, "Glob");
     }
+
+    #[test]
+    fn parses_user_message_with_empty_content_array() {
+        let jsonl = "{\"type\":\"user\",\"sessionId\":\"s1\",\"message\":{\"role\":\"user\",\"content\":[]}}\n";
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "empty-user-content");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].parts.len(), 0);
+    }
 }
