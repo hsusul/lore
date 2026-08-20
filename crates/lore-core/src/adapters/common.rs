@@ -220,6 +220,10 @@ mod tests {
             sanitize_path("src/\0poison\r/app\u{200b}.ts"),
             "src/poison/app.ts"
         );
+        assert_eq!(
+            sanitize_path("\u{feff}src/\x1b[31mred\x1b[0m/\u{2060}main\u{200d}.rs"),
+            "src/[31mred[0m/main.rs"
+        );
     }
 
     #[test]
