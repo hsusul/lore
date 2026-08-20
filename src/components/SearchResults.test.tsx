@@ -417,4 +417,30 @@ describe("SearchResults", () => {
     expect(marks[0].textContent).toBe("foo");
     expect(marks[1].textContent).toBe("bar");
   });
+
+  it("navigates with j and k keys and sets accessibility attributes", () => {
+    const hits = [
+      hit({ session_id: "s1", source_id: "p1", title: "First" }),
+      hit({ session_id: "s2", source_id: "p2", title: "Second" }),
+    ];
+    render(
+      <SearchResults
+        hits={hits}
+        query="test"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    const listbox = screen.getByRole("listbox", { name: /search results/i });
+    const options = screen.getAllByRole("option");
+    expect(options[0].getAttribute("aria-setsize")).toBe("2");
+    expect(options[0].getAttribute("aria-posinset")).toBe("1");
+
+    fireEvent.keyDown(listbox, { key: "j" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+
+    fireEvent.keyDown(listbox, { key: "k" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+  });
 });
