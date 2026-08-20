@@ -211,3 +211,37 @@ fn linked_worktrees_group_by_common_dir() {
     );
     assert_eq!(linked_facts.branch.as_deref(), Some("feature"));
 }
+
+#[test]
+fn capture_handles_multiple_remotes_and_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    // Add a second commit
+    std::fs::write(dir.path().join("file2.txt"), "second commit\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "second"]);
+
+    // Add multiple remotes with credentials
+    git(
+        dir.path(),
+        &["remote", "add", "upstream", "https://token@gitlab.com/group/proj.git"],
+    );
+    git(
+        dir.path(),
+        &["remote", "add", "origin", "git@github.com:user/repo.git"],
+    );
+
+    let facts = capture(dir.path()).expect("capture succeeds");
+    assert_eq!(facts.branch.as_deref(), Some("main"));
+    assert_eq!(facts.remotes.len(), 2);
+    assert_eq!(
+        facts.remotes,
+        vec![
+            "github.com/user/repo".to_string(),
+            "gitlab.com/group/proj".to_string()
+        ]
+    );
+    assert_eq!(facts.root_commits.len(), 1);
+    assert!(!facts.history_truncated);
+}
