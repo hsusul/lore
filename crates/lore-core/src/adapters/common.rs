@@ -429,6 +429,9 @@ mod tests {
         assert_eq!(sanitize_path("./src/./main.rs"), "src/main.rs");
         assert_eq!(sanitize_path("/absolute/path/file.rs"), "absolute/path/file.rs");
         assert_eq!(sanitize_path("a/b/c/../../d.rs"), "a/d.rs");
+        assert_eq!(sanitize_path("src/app/"), "src/app");
+        assert_eq!(sanitize_path(r"src\app\"), "src/app");
+        assert_eq!(sanitize_path(r"\\server\share\file.rs"), "server/share/file.rs");
     }
 
     #[test]
