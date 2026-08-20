@@ -316,6 +316,17 @@ fn parts_from_content(content: &Value, session: &mut ParsedSession) -> Vec<Parse
     let mut parts = Vec::with_capacity(blocks.len());
     for (i, block) in blocks.iter().enumerate() {
         let ordinal = i as i64;
+        if let Some(s) = block.as_str() {
+            parts.push(ParsedPart {
+                ordinal,
+                kind: PartKind::Text,
+                text: Some(s.to_string()),
+                content_json: None,
+                searchable: true,
+                metadata_json: None,
+            });
+            continue;
+        }
         let btype = block.get("type").and_then(Value::as_str).unwrap_or("");
         let part = match btype {
             "text" => ParsedPart {
@@ -339,11 +350,7 @@ fn parts_from_content(content: &Value, session: &mut ParsedSession) -> Vec<Parse
             },
             "tool_use" => raw_part(ordinal, PartKind::ToolUse, block),
             "tool_result" => {
-                // Result content may be a string or a structured array.
-                let text = block
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
+                let text = tool_result_text(block);
                 ParsedPart {
                     ordinal,
                     kind: PartKind::ToolResult,
@@ -771,6 +778,13 @@ mod tests {
         assert_eq!(session.tool_calls.len(), 1);
         assert_eq!(
             session.tool_calls[0].output_text.as_deref(),
+            Some("Cell 1 updated\nCell 2 updated")
+        );
+
+        // Tool result message part must also carry the parsed concatenated text.
+        assert_eq!(session.messages[2].parts.len(), 1);
+        assert_eq!(
+            session.messages[2].parts[0].text.as_deref(),
             Some("Cell 1 updated\nCell 2 updated")
         );
     }
