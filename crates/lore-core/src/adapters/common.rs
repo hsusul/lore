@@ -239,6 +239,10 @@ mod tests {
         // Pure addition diff with git headers
         let add_only = "diff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000..1234567\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+line 1\n+line 2\n";
         assert_eq!(unified_diff_line_counts(add_only), Some((2, 0)));
+
+        // Single character filenames in diff headers
+        let single_char_diff = "--- a/x\n+++ b/x\n@@ -1,1 +1,2 @@\n-old\n+new 1\n+new 2\n";
+        assert_eq!(unified_diff_line_counts(single_char_diff), Some((2, 1)));
     }
 
     #[test]
