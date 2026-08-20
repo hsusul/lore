@@ -297,6 +297,16 @@ mod tests {
             title_from_text("\n\n   Update README documentation   \n\n"),
             Some("Update README documentation".to_string())
         );
+
+        // Markdown inline backticks and bullet asterisks
+        assert_eq!(
+            title_from_text("`cargo test` failure in `lore-core`\nstack trace"),
+            Some("`cargo test` failure in `lore-core`".to_string())
+        );
+        assert_eq!(
+            title_from_text("* Implement background indexing worker\nDetails"),
+            Some("Implement background indexing worker".to_string())
+        );
     }
 
     #[test]
