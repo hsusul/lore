@@ -325,4 +325,42 @@ describe("SearchResults", () => {
     expect(busyButton.getAttribute("aria-busy")).toBe("true");
     expect(busyButton.hasAttribute("disabled")).toBe(true);
   });
+
+  it("resets active index to first result when query prop changes", () => {
+    const hitsA = [
+      hit({ session_id: "a1", source_id: "p1", title: "First A" }),
+      hit({ session_id: "a2", source_id: "p2", title: "Second A" }),
+    ];
+    const { rerender } = render(
+      <SearchResults
+        hits={hitsA}
+        query="queryA"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    const listbox = screen.getByRole("listbox", { name: /search results/i });
+
+    // Navigate to second result
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-1");
+
+    // Change query prop
+    const hitsB = [
+      hit({ session_id: "b1", source_id: "pb1", title: "First B" }),
+      hit({ session_id: "b2", source_id: "pb2", title: "Second B" }),
+    ];
+    rerender(
+      <SearchResults
+        hits={hitsB}
+        query="queryB"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    const updatedListbox = screen.getByRole("listbox", { name: /search results/i });
+    expect(updatedListbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+  });
 });
