@@ -354,5 +354,13 @@ mod tests {
         assert_eq!(epoch_ms(offset_ts), expected);
         let negative_offset_ts = "2026-08-11T05:00:00-05:00";
         assert_eq!(epoch_ms(negative_offset_ts), expected);
+
+        // Subsecond millisecond precision
+        let base = expected.unwrap();
+        let ms_ts = "2026-08-11T10:00:00.123Z";
+        assert_eq!(epoch_ms(ms_ts), Some(base + 123));
+
+        let micros_ts = "2026-08-11T10:00:00.123456Z";
+        assert_eq!(epoch_ms(micros_ts), Some(base + 123));
     }
 }
