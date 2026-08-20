@@ -243,6 +243,10 @@ mod tests {
         // Single character filenames in diff headers
         let single_char_diff = "--- a/x\n+++ b/x\n@@ -1,1 +1,2 @@\n-old\n+new 1\n+new 2\n";
         assert_eq!(unified_diff_line_counts(single_char_diff), Some((2, 1)));
+
+        // Context only diff (0 additions, 0 deletions)
+        let context_only = "--- a/f.rs\n+++ b/f.rs\n@@ -1,3 +1,3 @@\n ctx1\n ctx2\n ctx3\n";
+        assert_eq!(unified_diff_line_counts(context_only), Some((0, 0)));
     }
 
     #[test]
