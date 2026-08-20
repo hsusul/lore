@@ -255,4 +255,41 @@ describe("SessionView", () => {
       expect(screen.getByText(/… truncated \(200 more lines\)/)).toBeTruthy(),
     );
   });
+
+  it("displays segment count for multi-segment sessions and handles untitled fallback", () => {
+    render(
+      <SessionView
+        detail={{
+          ...detail,
+          summary: { ...detail.summary, title: null },
+          segments: [
+            {
+              id: "seg0",
+              seq_start: 0,
+              seq_end: 0,
+              cwd: "/repo/a",
+              model: "gpt-4",
+              provider: null,
+              repository_id: null,
+              resolution_confidence: "unresolved",
+            },
+            {
+              id: "seg1",
+              seq_start: 1,
+              seq_end: 1,
+              cwd: "/repo/b",
+              model: "gpt-4",
+              provider: null,
+              repository_id: null,
+              resolution_confidence: "unresolved",
+            },
+          ],
+        }}
+        git={[]}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "(untitled session)" })).toBeTruthy();
+    expect(screen.getByText("2 segments")).toBeTruthy();
+  });
 });
