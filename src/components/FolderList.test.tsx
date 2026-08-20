@@ -147,4 +147,14 @@ describe("FolderList", () => {
     fireEvent.blur(editField);
     expect(props.onRename).toHaveBeenCalledWith("f1", "Inbox Renamed");
   });
+
+  it("does not call onRename when submitted name is blank", () => {
+    const props = setup();
+    const folderBtn = screen.getByRole("button", { name: /^Inbox/ });
+    fireEvent.keyDown(folderBtn, { key: "F2" });
+    const editField = screen.getByLabelText("Rename folder Inbox");
+    fireEvent.change(editField, { target: { value: "   " } });
+    fireEvent.keyDown(editField, { key: "Enter" });
+    expect(props.onRename).not.toHaveBeenCalled();
+  });
 });
