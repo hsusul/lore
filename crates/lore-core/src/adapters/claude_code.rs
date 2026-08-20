@@ -915,4 +915,19 @@ mod tests {
         assert_eq!(session.file_events[0].tool_native_call_id.as_deref(), Some("c_empty"));
         assert_eq!(session.file_events[0].path, "");
     }
+
+    #[test]
+    fn parses_tool_use_with_missing_and_empty_name() {
+        let jsonl = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":\"c_noname\",\"input\":{}},",
+            "{\"type\":\"tool_use\",\"id\":\"c_blankname\",\"name\":\"\",\"input\":{}}",
+            "]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "empty-name-tools");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.tool_calls.len(), 2);
+        assert_eq!(session.tool_calls[0].name, "");
+        assert_eq!(session.tool_calls[1].name, "");
+    }
 }
