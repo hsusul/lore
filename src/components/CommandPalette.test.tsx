@@ -232,4 +232,20 @@ describe("CommandPalette", () => {
     expect(options[2].getAttribute("aria-setsize")).toBe("3");
     expect(options[2].getAttribute("aria-posinset")).toBe("3");
   });
+
+  it("restores focus to previous element on unmount", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    const { unmount } = renderPalette();
+    expect(document.activeElement).toBe(
+      screen.getByRole("combobox", { name: /search commands and sessions/i }),
+    );
+
+    unmount();
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
 });
