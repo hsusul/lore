@@ -856,4 +856,31 @@ mod tests {
         assert!(!part2.searchable);
         assert_eq!(part2.metadata_json, None);
     }
+
+    #[test]
+    fn parses_tool_use_with_non_object_and_primitive_inputs() {
+        let jsonl = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":\"call_str\",\"name\":\"Bash\",\"input\":\"echo hello\"},",
+            "{\"type\":\"tool_use\",\"id\":\"call_num\",\"name\":\"Compute\",\"input\":42},",
+            "{\"type\":\"tool_use\",\"id\":\"call_null\",\"name\":\"Status\",\"input\":null},",
+            "{\"type\":\"tool_use\",\"name\":\"MissingId\",\"input\":{}}",
+            "]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "primitive-tools");
+        assert_eq!(session.status, crate::model::ParseStatus::Partial);
+        assert_eq!(session.tool_calls.len(), 3);
+
+        assert_eq!(session.tool_calls[0].native_call_id, "call_str");
+        assert_eq!(
+            session.tool_calls[0].input_json.as_deref(),
+            Some("\"echo hello\"")
+        );
+
+        assert_eq!(session.tool_calls[1].native_call_id, "call_num");
+        assert_eq!(session.tool_calls[1].input_json.as_deref(), Some("42"));
+
+        assert_eq!(session.tool_calls[2].native_call_id, "call_null");
+        assert_eq!(session.tool_calls[2].input_json.as_deref(), Some("null"));
+    }
 }
