@@ -1141,4 +1141,15 @@ mod tests {
             Some("single thought")
         );
     }
+
+    #[test]
+    fn unknown_response_item_type_degrades_partial() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"hello\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"unknown_future_item\",\"payload\":{}}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "unknown-item");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert_eq!(s.messages.len(), 1, "known message before unknown item is preserved");
+    }
 }
