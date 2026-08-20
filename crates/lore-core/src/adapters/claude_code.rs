@@ -964,5 +964,13 @@ mod tests {
             session.tool_calls[0].output_text.as_deref(),
             Some("error[E0425]: cannot find value")
         );
+
+        let jsonl_ok = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_ok\",\"name\":\"Bash\",\"input\":{\"command\":\"echo ok\"}}]}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s1\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call_ok\",\"content\":\"ok\",\"is_error\":false}]}}\n"
+        );
+        let session_ok = ClaudeCodeAdapter::new().parse_str(jsonl_ok, "tool-ok");
+        assert_eq!(session_ok.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session_ok.tool_calls[0].is_error, Some(false));
     }
 }
