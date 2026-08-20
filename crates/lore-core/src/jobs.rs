@@ -341,6 +341,23 @@ pub fn recover_running(conn: &Connection) -> Result<usize> {
     Ok(changed)
 }
 
+/// Prune oldest terminal (`done` or `failed`) jobs, keeping at most `keep` newest
+/// terminal rows. Active (`pending` and `running`) jobs are never pruned.
+/// Returns the number of pruned rows.
+pub fn prune_terminal_jobs(conn: &Connection, keep: usize) -> Result<usize> {
+    let changed = conn.execute(
+        "DELETE FROM job
+         WHERE id IN (
+             SELECT id FROM job
+             WHERE state IN ('done', 'failed')
+             ORDER BY updated_at DESC, rowid DESC
+             LIMIT -1 OFFSET ?1
+         )",
+        [keep],
+    )?;
+    Ok(changed)
+}
+
 pub fn load(conn: &Connection, id: &str) -> Result<Option<Job>> {
     load_job(conn, id)
 }
@@ -663,5 +680,37 @@ mod tests {
         let job = load(&conn, "poisoned").unwrap().unwrap();
         assert_eq!(job.state, JobState::Failed);
         assert_eq!(job.error_kind.as_deref(), Some("poisoned"));
+    }
+
+    #[test]
+    fn prune_terminal_jobs_keeps_newest_and_ignores_active() {
+        let conn = db();
+        enqueue(&conn, &new_job("pending-1", 0), 20).unwrap();
+
+        // Enqueue, claim, and complete 5 jobs
+        for i in 1..=5 {
+            let id = format!("done-{i}");
+            enqueue(&conn, &new_job(&id, 0), 20).unwrap();
+            assert_eq!(claim_next(&conn).unwrap().unwrap().id, id);
+            complete(&conn, &id).unwrap();
+        }
+
+        // Pruning keeping 2 newest should remove the oldest 3 terminal jobs
+        assert_eq!(prune_terminal_jobs(&conn, 2).unwrap(), 3);
+
+        // Active pending job is untouched
+        assert_eq!(
+            load(&conn, "pending-1").unwrap().unwrap().state,
+            JobState::Pending
+        );
+
+        // 2 newest completed jobs exist
+        assert!(load(&conn, "done-5").unwrap().is_some());
+        assert!(load(&conn, "done-4").unwrap().is_some());
+
+        // Oldest 3 completed jobs are pruned
+        assert!(load(&conn, "done-1").unwrap().is_none());
+        assert!(load(&conn, "done-2").unwrap().is_none());
+        assert!(load(&conn, "done-3").unwrap().is_none());
     }
 }
