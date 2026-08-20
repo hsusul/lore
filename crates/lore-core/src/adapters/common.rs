@@ -281,6 +281,16 @@ mod tests {
         let cjk_title = title_from_text(&"测".repeat(100)).unwrap();
         assert_eq!(cjk_title.chars().count(), TITLE_MAX_CHARS + 1);
         assert!(cjk_title.ends_with('…'));
+
+        // Tab and whitespace collapsing
+        assert_eq!(
+            title_from_text("\t\t\tRefactor\t\tnetwork module\twith tabs\n"),
+            Some("Refactor network module with tabs".to_string())
+        );
+        assert_eq!(
+            title_from_text("\n\n   Update README documentation   \n\n"),
+            Some("Update README documentation".to_string())
+        );
     }
 
     #[test]
