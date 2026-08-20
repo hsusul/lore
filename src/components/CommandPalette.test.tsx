@@ -257,4 +257,15 @@ describe("CommandPalette", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("closes on Escape key press without executing any item", () => {
+    const onClose = vi.fn();
+    const items = makeItems();
+    renderPalette({ items, onClose });
+    const input = screen.getByRole("combobox");
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(items[0].run).not.toHaveBeenCalled();
+  });
 });
