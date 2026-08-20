@@ -300,5 +300,11 @@ mod tests {
         assert_eq!(epoch_ms(&format!("  {ts}  ")), expected);
         assert_eq!(epoch_ms("not-a-date"), None);
         assert_eq!(epoch_ms(""), None);
+
+        // Explicit positive and negative timezone offsets
+        let offset_ts = "2026-08-11T12:00:00+02:00";
+        assert_eq!(epoch_ms(offset_ts), expected);
+        let negative_offset_ts = "2026-08-11T05:00:00-05:00";
+        assert_eq!(epoch_ms(negative_offset_ts), expected);
     }
 }
