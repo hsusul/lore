@@ -60,4 +60,21 @@ describe("BackupSettings", () => {
     const keep = (await screen.findByLabelText("Keep newest")) as HTMLInputElement;
     expect(keep.disabled).toBe(true);
   });
+
+  it("persists changed retention count and clamps out-of-bounds input", async () => {
+    render(<BackupSettings />);
+    const keep = await screen.findByLabelText("Keep newest");
+    
+    // Valid input change
+    fireEvent.change(keep, { target: { value: "14" } });
+    await waitFor(() => expect(setBackupSchedule).toHaveBeenCalledWith("weekly", 14));
+
+    // Below minimum (0) -> clamps to 1
+    fireEvent.change(keep, { target: { value: "0" } });
+    await waitFor(() => expect(setBackupSchedule).toHaveBeenCalledWith("weekly", 1));
+
+    // Above maximum (200) -> clamps to 100
+    fireEvent.change(keep, { target: { value: "200" } });
+    await waitFor(() => expect(setBackupSchedule).toHaveBeenCalledWith("weekly", 100));
+  });
 });
