@@ -394,4 +394,23 @@ describe("SearchResults", () => {
     fireEvent.keyDown(listbox, { key: "Enter" });
     expect(onOpen).toHaveBeenCalledWith("s1");
   });
+
+  it("handles multiple highlighted segments within the same snippet", () => {
+    const multiHit = hit({
+      snippet: `check ${HIGHLIGHT_START}foo${HIGHLIGHT_END} and ${HIGHLIGHT_START}bar${HIGHLIGHT_END} functions`,
+    });
+    render(
+      <SearchResults
+        hits={[multiHit]}
+        query="foo bar"
+        selectedId={null}
+        onOpen={() => {}}
+        {...idle}
+      />,
+    );
+    const marks = screen.getAllByRole("mark", { hidden: true });
+    expect(marks.length).toBe(2);
+    expect(marks[0].textContent).toBe("foo");
+    expect(marks[1].textContent).toBe("bar");
+  });
 });
