@@ -307,12 +307,19 @@ mod tests {
             title_from_text("* Implement background indexing worker\nDetails"),
             Some("Implement background indexing worker".to_string())
         );
+
+        // CRLF line endings
+        assert_eq!(
+            title_from_text("\r\n\r\nFix windows CRLF line endings\r\nSecond line"),
+            Some("Fix windows CRLF line endings".to_string())
+        );
     }
 
     #[test]
     fn non_negative_int_field_validates_bounds() {
         let json: serde_json::Value = serde_json::json!({
             "zero": 0,
+            "neg_zero": -0,
             "positive": 42,
             "negative": -5,
             "string": "123",
@@ -323,6 +330,7 @@ mod tests {
             "bool": true
         });
         assert_eq!(non_negative_int_field(&json, "zero"), Some(0));
+        assert_eq!(non_negative_int_field(&json, "neg_zero"), Some(0));
         assert_eq!(non_negative_int_field(&json, "positive"), Some(42));
         assert_eq!(non_negative_int_field(&json, "negative"), None);
         assert_eq!(non_negative_int_field(&json, "string"), None);
