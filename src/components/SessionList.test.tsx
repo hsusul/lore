@@ -130,4 +130,10 @@ describe("SessionList", () => {
     });
     expect(setData).toHaveBeenCalledWith("application/x-lore-session", "a");
   });
+
+  it("renders fallback text for null session title", () => {
+    const untitledSession = [summary("u1", null as unknown as string)];
+    render(<SessionList sessions={untitledSession} selectedId={null} onOpen={() => {}} />);
+    expect(screen.getByText("(untitled)")).toBeTruthy();
+  });
 });
