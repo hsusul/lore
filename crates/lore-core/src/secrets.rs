@@ -919,4 +919,18 @@ mod tests {
             "GitHub: «redacted:github-token»\nSlack: «redacted:slack-token»"
         );
     }
+
+    #[test]
+    fn shannon_entropy_bounds_and_allowlist_precedence() {
+        // Repeated single char has 0.0 entropy
+        assert_eq!(shannon_per_char(b""), 0.0);
+        assert_eq!(shannon_per_char(b"AAAAAAAAAAAA"), 0.0);
+
+        // High entropy tokens with allowlisted terms (e.g. changeme / example / your_) are suppressed
+        let placeholder = "key=your_random_high_entropy_token_xyz123456";
+        assert!(scan_ok(placeholder).is_empty());
+
+        let changeme = "secret=changeme_987654321_abc_xyz_qwert";
+        assert!(scan_ok(changeme).is_empty());
+    }
 }
