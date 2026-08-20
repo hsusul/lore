@@ -835,9 +835,7 @@ mod tests {
 
     #[test]
     fn parses_thinking_content_blocks_with_and_without_signatures() {
-        let jsonl = concat!(
-            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"contemplating solution\",\"signature\":\"sig123\"},{\"type\":\"thinking\",\"thinking\":\"second thought\"}]}}\n"
-        );
+        let jsonl = "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"contemplating solution\",\"signature\":\"sig123\"},{\"type\":\"thinking\",\"thinking\":\"second thought\"}]}}\n";
         let session = ClaudeCodeAdapter::new().parse_str(jsonl, "thinking-blocks");
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
         assert_eq!(session.messages.len(), 1);

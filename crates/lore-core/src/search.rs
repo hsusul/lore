@@ -475,10 +475,24 @@ mod tests {
         assert_eq!(m, "\"foo\"\" OR bar\"");
         assert!(fts_match(&[]).is_none());
 
-        // Null bytes are stripped and empty terms are discarded.
-        let m_clean = fts_match(&["hello\0world".to_string(), "\0".to_string()]).unwrap();
+        // Null bytes and zero-width characters are stripped and empty terms are discarded.
+        let m_clean = fts_match(&[
+            "hello\0world".to_string(),
+            "\0".to_string(),
+            "\u{200b}\u{feff}".to_string(),
+        ])
+        .unwrap();
         assert_eq!(m_clean, "\"helloworld\"");
-        assert!(fts_match(&["\0".to_string()]).is_none());
+        assert!(fts_match(&["\0".to_string(), "\u{200b}".to_string()]).is_none());
+
+        // Parentheses and boolean keywords become safe quoted phrases
+        let m_bool = fts_match(&[
+            "(auth".to_string(),
+            "AND".to_string(),
+            "session)".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(m_bool, "\"(auth\" \"AND\" \"session)\"");
     }
 
     #[test]
