@@ -77,4 +77,22 @@ describe("BackupSettings", () => {
     fireEvent.change(keep, { target: { value: "200" } });
     await waitFor(() => expect(setBackupSchedule).toHaveBeenCalledWith("weekly", 100));
   });
+
+  it("displays error messages when backupNow or setBackupSchedule fails", async () => {
+    backupNow.mockRejectedValueOnce(new Error("Disk full"));
+    setBackupSchedule.mockRejectedValueOnce(new Error("Write error"));
+
+    render(<BackupSettings />);
+    await screen.findByLabelText("Automatic backups");
+
+    // backupNow failure
+    const button = screen.getByRole("button", { name: /back up now/i });
+    fireEvent.click(button);
+    expect(await screen.findByText(/Backup failed: Error: Disk full/i)).toBeTruthy();
+
+    // setBackupSchedule failure
+    const select = screen.getByLabelText("Automatic backups");
+    fireEvent.change(select, { target: { value: "daily" } });
+    expect(await screen.findByText(/Could not save: Error: Write error/i)).toBeTruthy();
+  });
 });
