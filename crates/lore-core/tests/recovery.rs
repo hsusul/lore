@@ -260,3 +260,20 @@ fn recover_archive_quarantines_all_sidecar_files_including_wal_shm_journal() {
     assert!(!shm.exists());
     assert!(!journal.exists());
 }
+
+#[test]
+fn recover_archive_fails_cleanly_when_quarantine_dir_is_blocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+
+    let db = dir.path().join("lore.db");
+    std::fs::write(&db, b"corrupted db").unwrap();
+
+    // Create a regular file named "quarantine" so create_dir_all fails
+    let quarantine_file = dir.path().join("quarantine");
+    std::fs::write(&quarantine_file, b"blocking file").unwrap();
+
+    let res = recover_archive(dir.path(), &backups);
+    assert!(matches!(res, Err(lore_core::recovery::RecoveryError::Io)));
+}
