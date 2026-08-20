@@ -193,4 +193,19 @@ describe("SettingsPanel", () => {
     );
     expect(screen.getByText("Agent status is unavailable.")).toBeTruthy();
   });
+
+  it("disables root action buttons when rootBusy matches agent id", () => {
+    render(
+      <SettingsPanel
+        open
+        {...baseProps}
+        rootBusy="codex"
+      />,
+    );
+    const addBtn = screen.getByRole("button", { name: /updating folders/i });
+    expect(addBtn.hasAttribute("disabled")).toBe(true);
+
+    const removeBtn = screen.getByRole("button", { name: /remove .* from codex/i });
+    expect(removeBtn.hasAttribute("disabled")).toBe(true);
+  });
 });
