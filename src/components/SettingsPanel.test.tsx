@@ -182,4 +182,15 @@ describe("SettingsPanel", () => {
     if (backdrop) fireEvent.click(backdrop);
     expect(onClose).toHaveBeenCalledTimes(2);
   });
+
+  it("renders agent status unavailable message when agents list is empty", () => {
+    render(
+      <SettingsPanel
+        open
+        {...baseProps}
+        agents={[]}
+      />,
+    );
+    expect(screen.getByText("Agent status is unavailable.")).toBeTruthy();
+  });
 });
