@@ -403,4 +403,16 @@ mod tests {
         let tabs_ts = "\t\n2026-08-11T10:00:00.000Z\n\t";
         assert_eq!(epoch_ms(tabs_ts), expected);
     }
+
+    #[test]
+    fn sanitize_path_neutralizes_traversal_and_drive_letters() {
+        assert_eq!(sanitize_path("../../foo/bar.rs"), "foo/bar.rs");
+        assert_eq!(
+            sanitize_path("C:\\Users\\test\\file.txt"),
+            "Users/test/file.txt"
+        );
+        assert_eq!(sanitize_path("./src/./main.rs"), "src/main.rs");
+        assert_eq!(sanitize_path("/absolute/path/file.rs"), "absolute/path/file.rs");
+        assert_eq!(sanitize_path("a/b/c/../../d.rs"), "a/d.rs");
+    }
 }
