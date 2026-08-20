@@ -384,5 +384,13 @@ mod tests {
         assert_eq!(epoch_ms("2025-02-29T12:00:00Z"), None);
         assert_eq!(epoch_ms("2026-13-01T00:00:00Z"), None);
         assert_eq!(epoch_ms("2026-08-11T25:00:00Z"), None);
+
+        // UTC offset zero representations and tab/newline trimming
+        let plus_zero = "2026-08-11T10:00:00+00:00";
+        assert_eq!(epoch_ms(plus_zero), expected);
+        let minus_zero = "2026-08-11T10:00:00-00:00";
+        assert_eq!(epoch_ms(minus_zero), expected);
+        let tabs_ts = "\t\n2026-08-11T10:00:00.000Z\n\t";
+        assert_eq!(epoch_ms(tabs_ts), expected);
     }
 }
