@@ -1283,4 +1283,16 @@ mod tests {
         assert_eq!(s.file_events[0].change_kind, FileChangeKind::Patch);
         assert_eq!(s.file_events[0].path, "src/file.txt");
     }
+
+    #[test]
+    fn parses_reasoning_with_mixed_text_and_encrypted_content() {
+        let content = "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Planning steps\"}],\"encrypted_content\":\"enc-payload-123\"}}\n";
+        let s = CodexAdapter::new().parse_str(content, "mixed-reasoning");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.messages.len(), 1);
+        assert_eq!(s.messages[0].parts.len(), 2);
+        assert_eq!(s.messages[0].parts[0].kind, PartKind::Thinking);
+        assert_eq!(s.messages[0].parts[0].text.as_deref(), Some("Planning steps"));
+        assert_eq!(s.messages[0].parts[1].kind, PartKind::Opaque);
+    }
 }
