@@ -363,4 +363,35 @@ describe("SearchResults", () => {
     const updatedListbox = screen.getByRole("listbox", { name: /search results/i });
     expect(updatedListbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
   });
+
+  it("navigates to first and last items using Home and End keys", () => {
+    const hits = [
+      hit({ session_id: "s1", source_id: "p1", title: "First" }),
+      hit({ session_id: "s2", source_id: "p2", title: "Second" }),
+      hit({ session_id: "s3", source_id: "p3", title: "Third" }),
+    ];
+    const onOpen = vi.fn();
+    render(
+      <SearchResults
+        hits={hits}
+        query="test"
+        selectedId={null}
+        onOpen={onOpen}
+        {...idle}
+      />,
+    );
+    const listbox = screen.getByRole("listbox", { name: /search results/i });
+
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-2");
+
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onOpen).toHaveBeenCalledWith("s3");
+
+    fireEvent.keyDown(listbox, { key: "Home" });
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("search-result-0");
+
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onOpen).toHaveBeenCalledWith("s1");
+  });
 });
