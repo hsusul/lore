@@ -930,4 +930,14 @@ mod tests {
         assert_eq!(session.tool_calls[0].name, "");
         assert_eq!(session.tool_calls[1].name, "");
     }
+
+    #[test]
+    fn parses_tool_use_with_extra_metadata_attributes() {
+        let jsonl = "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_meta\",\"name\":\"Glob\",\"input\":{\"pattern\":\"*.rs\"},\"extra_field\":true,\"caller\":\"subagent_42\"}]}}\n";
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "extra-meta");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.tool_calls.len(), 1);
+        assert_eq!(session.tool_calls[0].native_call_id, "call_meta");
+        assert_eq!(session.tool_calls[0].name, "Glob");
+    }
 }

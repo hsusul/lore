@@ -1273,4 +1273,14 @@ mod tests {
         assert!(s.title_is_synthetic);
         assert_eq!(s.messages.len(), 1);
     }
+
+    #[test]
+    fn parses_patch_apply_end_with_unknown_type_and_patch_fallback() {
+        let content = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"patch_apply_end\",\"call_id\":\"call_custom\",\"changes\":{\"src/file.txt\":{\"type\":\"custom_action\"}}}}\n";
+        let s = CodexAdapter::new().parse_str(content, "custom-action");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.file_events.len(), 1);
+        assert_eq!(s.file_events[0].change_kind, FileChangeKind::Patch);
+        assert_eq!(s.file_events[0].path, "src/file.txt");
+    }
 }
