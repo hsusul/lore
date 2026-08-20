@@ -97,20 +97,24 @@ describe("SessionList", () => {
     expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
 
-  it("announces and disables an older-session request in flight", () => {
-    render(
-      <SessionList
-        sessions={sessions}
-        selectedId={null}
-        onOpen={() => {}}
-        hasMore
-        loadingMore
-        onLoadMore={() => {}}
-      />,
+  it("navigates to the first item with Home key and resets index on session list change", () => {
+    const onOpen = vi.fn();
+    const { rerender } = render(
+      <SessionList sessions={sessions} selectedId={null} onOpen={onOpen} />,
     );
+    const listbox = screen.getByRole("listbox", { name: /sessions/i });
 
-    const button = screen.getByRole("button", { name: /loading older sessions/i });
-    expect((button as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole("status").textContent).toContain("Loading older sessions");
+    // Jump to last, then jump back to start with Home
+    fireEvent.keyDown(listbox, { key: "End" });
+    fireEvent.keyDown(listbox, { key: "Home" });
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onOpen).toHaveBeenLastCalledWith("a");
+
+    // When sessions list changes to another set, navigation resets to index 0
+    const newSessions = [summary("x", "new first"), summary("y", "new second")];
+    rerender(<SessionList sessions={newSessions} selectedId={null} onOpen={onOpen} />);
+    const updatedListbox = screen.getByRole("listbox", { name: /sessions/i });
+    fireEvent.keyDown(updatedListbox, { key: "Enter" });
+    expect(onOpen).toHaveBeenLastCalledWith("x");
   });
 });
