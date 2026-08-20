@@ -1219,4 +1219,17 @@ mod tests {
         assert_eq!(s.messages[2].parts.len(), 1);
         assert_eq!(s.messages[2].parts[0].text.as_deref(), Some("fallback to user"));
     }
+
+    #[test]
+    fn parses_reasoning_with_empty_arrays_and_non_string_types() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":[],\"content\":[]}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":12345,\"content\":[{\"invalid\":true}]}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "empty-reasoning");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.messages[0].parts.len(), 0);
+        assert_eq!(s.messages[1].parts.len(), 0);
+    }
 }
