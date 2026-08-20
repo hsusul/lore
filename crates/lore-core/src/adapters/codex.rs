@@ -879,6 +879,18 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_and_output_without_call_id_degrade_partial() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T12:00:00.000Z\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T12:00:01.000Z\",\"payload\":{\"type\":\"function_call_output\",\"output\":\"done\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "missing-call-id");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert!(s.tool_calls.is_empty());
+        assert_eq!(s.messages.len(), 2, "messages are still retained");
+    }
+
+    #[test]
     fn patch_apply_end_yields_file_events() {
         let s = CodexAdapter::new().parse_str(&fixture("patch_apply.jsonl"), "fallback");
         assert_eq!(s.file_events.len(), 3);
