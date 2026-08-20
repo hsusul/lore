@@ -788,4 +788,23 @@ mod tests {
             Some("Cell 1 updated\nCell 2 updated")
         );
     }
+
+    #[test]
+    fn parses_empty_and_null_content_blocks_cleanly() {
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":null}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"\"}]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "empty-content");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 4);
+        assert_eq!(session.messages[0].parts.len(), 1);
+        assert_eq!(session.messages[0].parts[0].text.as_deref(), Some(""));
+        assert_eq!(session.messages[1].parts.len(), 0);
+        assert_eq!(session.messages[2].parts.len(), 0);
+        assert_eq!(session.messages[3].parts.len(), 1);
+        assert_eq!(session.messages[3].parts[0].text.as_deref(), Some(""));
+    }
 }
