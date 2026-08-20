@@ -292,4 +292,40 @@ describe("SessionView", () => {
     expect(screen.getByRole("heading", { name: "(untitled session)" })).toBeTruthy();
     expect(screen.getByText("2 segments")).toBeTruthy();
   });
+
+  it("renders timeline without crashing when messages have null timestamps and null models", () => {
+    const minimalDetail: SessionDetail = {
+      summary: {
+        id: "s_min",
+        agent_id: "claude_code",
+        title: "Quick prompt",
+        started_at: null,
+        ended_at: null,
+        message_count: 1,
+        tool_call_count: 0,
+        primary_model: null,
+        parse_status: "ok",
+      },
+      parse_note: null,
+      segments: [],
+      next_message_cursor: null,
+      messages: [
+        {
+          id: "m_null",
+          seq: 0,
+          role: "user",
+          event_kind: "message",
+          is_sidechain: false,
+          ts: null,
+          model: null,
+          parts: [{ ordinal: 0, kind: "text", text: "hello world", content_json: null, searchable: true }],
+        },
+      ],
+      file_events: [],
+    };
+
+    render(<SessionView detail={minimalDetail} git={[]} />);
+    expect(screen.getByText("Quick prompt")).toBeTruthy();
+    expect(screen.getByText("hello world")).toBeTruthy();
+  });
 });
