@@ -290,11 +290,17 @@ mod tests {
         let json: serde_json::Value = serde_json::json!({
             "name": "test-adapter",
             "nested": { "key": "value" },
-            "empty_str": ""
+            "empty_str": "",
+            "boolean": true,
+            "arr": [1, 2, 3],
+            "null_field": null
         });
         assert_eq!(str_field(&json, "name"), Some("test-adapter".to_string()));
         assert_eq!(str_field(&json, "empty_str"), Some("".to_string()));
         assert_eq!(str_field(&json, "nested"), None);
+        assert_eq!(str_field(&json, "boolean"), None);
+        assert_eq!(str_field(&json, "arr"), None);
+        assert_eq!(str_field(&json, "null_field"), None);
         assert_eq!(str_field(&json, "missing"), None);
 
         assert_eq!(
@@ -305,6 +311,9 @@ mod tests {
             json_field(&json, "name"),
             Some("\"test-adapter\"".to_string())
         );
+        assert_eq!(json_field(&json, "boolean"), Some("true".to_string()));
+        assert_eq!(json_field(&json, "arr"), Some("[1,2,3]".to_string()));
+        assert_eq!(json_field(&json, "null_field"), Some("null".to_string()));
         assert_eq!(json_field(&json, "missing"), None);
     }
 
