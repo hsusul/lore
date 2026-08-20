@@ -807,4 +807,25 @@ mod tests {
         assert_eq!(session.messages[3].parts.len(), 1);
         assert_eq!(session.messages[3].parts[0].text.as_deref(), Some(""));
     }
+
+    #[test]
+    fn parses_sidechain_subagent_messages_with_parent_uuids() {
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u-root\",\"sessionId\":\"s1\",\"message\":{\"role\":\"user\",\"content\":\"launch subagent\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a-side\",\"parentUuid\":\"u-root\",\"sessionId\":\"s1\",\"isSidechain\":true,\"message\":{\"role\":\"assistant\",\"content\":\"subagent working\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "sidechain");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 2);
+        assert_eq!(session.messages[0].native_uuid.as_deref(), Some("u-root"));
+        assert_eq!(session.messages[0].parent_native_uuid, None);
+        assert!(!session.messages[0].is_sidechain);
+
+        assert_eq!(session.messages[1].native_uuid.as_deref(), Some("a-side"));
+        assert_eq!(
+            session.messages[1].parent_native_uuid.as_deref(),
+            Some("u-root")
+        );
+        assert!(session.messages[1].is_sidechain);
+    }
 }
