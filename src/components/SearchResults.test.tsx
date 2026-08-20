@@ -71,6 +71,10 @@ describe("SearchResults", () => {
 
     fireEvent.click(screen.getByRole("option"));
     expect(onOpen).toHaveBeenCalledWith("s1");
+
+    fireEvent.click(screen.getByText("Add retry backoff"));
+    expect(onOpen).toHaveBeenCalledTimes(2);
+    expect(onOpen).toHaveBeenLastCalledWith("s1");
   });
 
   it("shows a Load more control only when more pages exist and fires it on click", () => {
