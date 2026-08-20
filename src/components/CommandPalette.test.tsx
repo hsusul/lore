@@ -248,4 +248,13 @@ describe("CommandPalette", () => {
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
   });
+
+  it("does not throw or close when Enter is pressed on an empty results list", () => {
+    const onClose = vi.fn();
+    renderPalette({ items: [], onClose });
+    const input = screen.getByRole("combobox");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
