@@ -1262,4 +1262,15 @@ mod tests {
         assert_eq!(s.messages[0].parts.len(), 1);
         assert_eq!(s.messages[0].parts[0].text.as_deref(), Some("?"));
     }
+
+    #[test]
+    fn parses_user_prompt_with_unicode_whitespace_and_newlines() {
+        // Non-breaking spaces (\u{00a0}) and escaped JSON newlines
+        let content = "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"\\n\\n\u{00a0}\u{00a0}Fix\u{00a0}caching\u{00a0}race\\n\\nDetails...\"}}\n";
+        let s = CodexAdapter::new().parse_str(content, "unicode-ws");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.title.as_deref(), Some("Fix caching race"));
+        assert!(s.title_is_synthetic);
+        assert_eq!(s.messages.len(), 1);
+    }
 }
