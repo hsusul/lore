@@ -268,4 +268,13 @@ describe("CommandPalette", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(items[0].run).not.toHaveBeenCalled();
   });
+
+  it("renders command items without hints cleanly", () => {
+    const itemsWithoutHint: Command[] = [
+      { id: "nohint", group: "Actions", label: "Toggle Dark Mode", run: vi.fn() },
+    ];
+    renderPalette({ items: itemsWithoutHint });
+    expect(screen.getByText("Toggle Dark Mode")).toBeTruthy();
+    expect(screen.queryByText("12 sessions")).toBeNull();
+  });
 });
