@@ -223,3 +223,40 @@ fn recover_archive_handles_zero_byte_empty_file() {
     };
     assert_eq!(std::fs::read(&quarantine_path).unwrap(), b"");
 }
+
+#[test]
+fn recover_archive_quarantines_all_sidecar_files_including_wal_shm_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+
+    let db = dir.path().join("lore.db");
+    let wal = dir.path().join("lore.db-wal");
+    let shm = dir.path().join("lore.db-shm");
+    let journal = dir.path().join("lore.db-journal");
+
+    std::fs::write(&db, b"corrupted db").unwrap();
+    std::fs::write(&wal, b"wal data").unwrap();
+    std::fs::write(&shm, b"shm data").unwrap();
+    std::fs::write(&journal, b"journal data").unwrap();
+
+    let outcome = recover_archive(dir.path(), &backups).unwrap();
+    let quarantine_path = match outcome {
+        RecoveryOutcome::QuarantinedOnly { quarantine_path } => quarantine_path,
+        other => panic!("expected QuarantinedOnly, got {other:?}"),
+    };
+
+    let q_stem = quarantine_path.file_name().unwrap().to_str().unwrap();
+    let q_dir = quarantine_path.parent().unwrap();
+
+    assert_eq!(std::fs::read(&quarantine_path).unwrap(), b"corrupted db");
+    assert_eq!(std::fs::read(q_dir.join(format!("{q_stem}-wal"))).unwrap(), b"wal data");
+    assert_eq!(std::fs::read(q_dir.join(format!("{q_stem}-shm"))).unwrap(), b"shm data");
+    assert_eq!(std::fs::read(q_dir.join(format!("{q_stem}-journal"))).unwrap(), b"journal data");
+
+    // All original files in archive_dir must be cleanly moved
+    assert!(!db.exists());
+    assert!(!wal.exists());
+    assert!(!shm.exists());
+    assert!(!journal.exists());
+}
