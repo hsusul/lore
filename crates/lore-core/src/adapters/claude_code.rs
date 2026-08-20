@@ -922,15 +922,17 @@ mod tests {
             "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[",
             "{\"type\":\"tool_use\",\"id\":\"c_noname\",\"input\":{}},",
             "{\"type\":\"tool_use\",\"id\":\"c_blankname\",\"name\":\"\",\"input\":{}},",
-            "{\"type\":\"tool_use\",\"id\":\"c_numname\",\"name\":123,\"input\":{}}",
+            "{\"type\":\"tool_use\",\"id\":\"c_numname\",\"name\":123,\"input\":{}},",
+            "{\"type\":\"tool_use\",\"id\":\"c_boolname\",\"name\":true,\"input\":{}}",
             "]}}\n"
         );
         let session = ClaudeCodeAdapter::new().parse_str(jsonl, "empty-name-tools");
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
-        assert_eq!(session.tool_calls.len(), 3);
+        assert_eq!(session.tool_calls.len(), 4);
         assert_eq!(session.tool_calls[0].name, "");
         assert_eq!(session.tool_calls[1].name, "");
         assert_eq!(session.tool_calls[2].name, "");
+        assert_eq!(session.tool_calls[3].name, "");
     }
 
     #[test]
