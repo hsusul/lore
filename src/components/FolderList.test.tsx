@@ -122,13 +122,29 @@ describe("FolderList", () => {
     expect(props.onCreate).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("New folder name")).toBeNull();
 
-    // Cancel edit
+    expect(props.onRename).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Rename folder Inbox")).toBeNull();
+  });
+
+  it("ignores dragOver events with non-session MIME types", () => {
+    setup();
+    const row = screen.getByText("Inbox").closest("li")!;
+    const dataTransfer = {
+      types: ["text/plain"],
+      dropEffect: "",
+    };
+    fireEvent.dragOver(row, { dataTransfer });
+    expect(row.classList.contains("is-dragover")).toBe(false);
+    expect(dataTransfer.dropEffect).toBe("");
+  });
+
+  it("commits folder rename on blur", () => {
+    const props = setup();
     const folderBtn = screen.getByRole("button", { name: /^Inbox/ });
     fireEvent.keyDown(folderBtn, { key: "F2" });
     const editField = screen.getByLabelText("Rename folder Inbox");
-    fireEvent.change(editField, { target: { value: "Abandoned Rename" } });
-    fireEvent.keyDown(editField, { key: "Escape" });
-    expect(props.onRename).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("Rename folder Inbox")).toBeNull();
+    fireEvent.change(editField, { target: { value: "Inbox Renamed" } });
+    fireEvent.blur(editField);
+    expect(props.onRename).toHaveBeenCalledWith("f1", "Inbox Renamed");
   });
 });
