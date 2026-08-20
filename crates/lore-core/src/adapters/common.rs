@@ -282,7 +282,11 @@ mod tests {
             "positive": 42,
             "negative": -5,
             "string": "123",
-            "null_val": null
+            "null_val": null,
+            "i64_max": i64::MAX,
+            "u64_overflow": u64::MAX,
+            "float": 12.34,
+            "bool": true
         });
         assert_eq!(non_negative_int_field(&json, "zero"), Some(0));
         assert_eq!(non_negative_int_field(&json, "positive"), Some(42));
@@ -290,6 +294,10 @@ mod tests {
         assert_eq!(non_negative_int_field(&json, "string"), None);
         assert_eq!(non_negative_int_field(&json, "null_val"), None);
         assert_eq!(non_negative_int_field(&json, "missing"), None);
+        assert_eq!(non_negative_int_field(&json, "i64_max"), Some(i64::MAX));
+        assert_eq!(non_negative_int_field(&json, "u64_overflow"), None);
+        assert_eq!(non_negative_int_field(&json, "float"), None);
+        assert_eq!(non_negative_int_field(&json, "bool"), None);
     }
 
     #[test]
