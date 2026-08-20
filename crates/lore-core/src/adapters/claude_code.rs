@@ -883,4 +883,19 @@ mod tests {
         assert_eq!(session.tool_calls[2].native_call_id, "call_null");
         assert_eq!(session.tool_calls[2].input_json.as_deref(), Some("null"));
     }
+
+    #[test]
+    fn parses_tool_result_with_mixed_text_array_and_empty_elements() {
+        let jsonl = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c_arr\",\"name\":\"Bash\",\"input\":{}}]}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s1\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"c_arr\",\"content\":[\"stdout line 1\",{\"text\":\"stdout line 2\"},{\"invalid\":123}]}]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "tool-result-arrays");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.tool_calls.len(), 1);
+        assert_eq!(
+            session.tool_calls[0].output_text.as_deref(),
+            Some("stdout line 1\nstdout line 2")
+        );
+    }
 }
