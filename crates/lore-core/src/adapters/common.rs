@@ -440,6 +440,7 @@ mod tests {
         assert_eq!(sanitize_path("src/app/"), "src/app");
         assert_eq!(sanitize_path(r"src\app\"), "src/app");
         assert_eq!(sanitize_path(r"\\server\share\file.rs"), "server/share/file.rs");
+        assert_eq!(sanitize_path(".../src/lib.rs"), ".../src/lib.rs");
     }
 
     #[test]
