@@ -1329,4 +1329,12 @@ mod tests {
         assert_eq!(s.messages.len(), 1);
         assert_eq!(s.messages[0].parts.len(), 0);
     }
+
+    #[test]
+    fn parses_response_item_with_empty_string_type_and_notes_partial() {
+        let content = "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"\"}}\n";
+        let s = CodexAdapter::new().parse_str(content, "empty-type");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert!(s.notes.iter().any(|n| n.message.contains("unknown response_item")));
+    }
 }

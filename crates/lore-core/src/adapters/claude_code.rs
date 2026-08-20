@@ -991,4 +991,13 @@ mod tests {
             Some("   \n\t  ")
         );
     }
+
+    #[test]
+    fn parses_assistant_message_with_null_content_field() {
+        let jsonl = "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":null}}\n";
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "null-assistant-content");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].parts.len(), 0);
+    }
 }
