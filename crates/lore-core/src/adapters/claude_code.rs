@@ -949,4 +949,20 @@ mod tests {
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].parts.len(), 0);
     }
+
+    #[test]
+    fn parses_tool_result_with_is_error_flag() {
+        let jsonl = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_err\",\"name\":\"Bash\",\"input\":{\"command\":\"cargo test\"}}]}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s1\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call_err\",\"content\":\"error[E0425]: cannot find value\",\"is_error\":true}]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "tool-err");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.tool_calls.len(), 1);
+        assert_eq!(session.tool_calls[0].is_error, Some(true));
+        assert_eq!(
+            session.tool_calls[0].output_text.as_deref(),
+            Some("error[E0425]: cannot find value")
+        );
+    }
 }
