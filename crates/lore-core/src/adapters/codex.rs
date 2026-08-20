@@ -1119,4 +1119,26 @@ mod tests {
             Some("detailed step")
         );
     }
+
+    #[test]
+    fn parses_empty_or_null_reasoning_and_message_content() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":null}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:02.000Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":null,\"content\":[]}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:03.000Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":\"single thought\",\"content\":null}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "null-reasoning");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.messages.len(), 4);
+        assert_eq!(s.messages[0].parts.len(), 1);
+        assert_eq!(s.messages[0].parts[0].text.as_deref(), Some(""));
+        assert_eq!(s.messages[1].parts.len(), 0);
+        assert_eq!(s.messages[2].parts.len(), 0);
+        assert_eq!(s.messages[3].parts.len(), 1);
+        assert_eq!(
+            s.messages[3].parts[0].text.as_deref(),
+            Some("single thought")
+        );
+    }
 }
