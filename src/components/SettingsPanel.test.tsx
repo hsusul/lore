@@ -161,4 +161,25 @@ describe("SettingsPanel", () => {
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(last);
   });
+
+  it("closes when clicking the close button or backdrop", () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <SettingsPanel
+        open
+        {...baseProps}
+        onClose={onClose}
+      />,
+    );
+
+    // Click close icon button
+    fireEvent.click(screen.getByRole("button", { name: /close settings/i }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Click backdrop
+    const backdrop = container.querySelector(".modal-backdrop");
+    expect(backdrop).toBeTruthy();
+    if (backdrop) fireEvent.click(backdrop);
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
 });
