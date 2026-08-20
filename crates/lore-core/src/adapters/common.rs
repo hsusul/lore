@@ -270,9 +270,17 @@ mod tests {
             title_from_text("### Fix authentication token refresh\nBody"),
             Some("Fix authentication token refresh".to_string())
         );
+        assert_eq!(
+            title_from_text("  * 修复数据库迁移中的并发写入冲突\n详细信息"),
+            Some("修复数据库迁移中的并发写入冲突".to_string())
+        );
         let title = title_from_text(&"x".repeat(100)).unwrap();
         assert_eq!(title.chars().count(), TITLE_MAX_CHARS + 1);
         assert!(title.ends_with('…'));
+
+        let cjk_title = title_from_text(&"测".repeat(100)).unwrap();
+        assert_eq!(cjk_title.chars().count(), TITLE_MAX_CHARS + 1);
+        assert!(cjk_title.ends_with('…'));
     }
 
     #[test]
