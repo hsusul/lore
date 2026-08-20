@@ -95,6 +95,7 @@ export default function FolderList({
           type="text"
           className="folder__field"
           autoFocus
+          maxLength={100}
           placeholder="Folder name"
           aria-label="New folder name"
           value={newName}
@@ -144,6 +145,7 @@ export default function FolderList({
                   type="text"
                   className="folder__field"
                   autoFocus
+                  maxLength={100}
                   aria-label={`Rename folder ${folder.name}`}
                   value={editName}
                   onChange={(event) => setEditName(event.target.value)}
