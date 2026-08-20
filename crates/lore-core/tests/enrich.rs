@@ -415,3 +415,44 @@ fn enrich_is_idempotent() {
         .unwrap();
     assert_eq!(captured, 1);
 }
+
+#[test]
+fn multi_segment_session_in_same_repo_resolves_to_single_repository() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let sub = repo.path().join("subdir");
+    std::fs::create_dir(&sub).unwrap();
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+
+    // Two messages in different directories of the same repository (two segments).
+    let content = format!(
+        "{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"multi-seg\",\"cwd\":\"{}\",\"gitBranch\":\"main\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n\
+         {{\"type\":\"user\",\"uuid\":\"u2\",\"sessionId\":\"multi-seg\",\"cwd\":\"{}\",\"gitBranch\":\"main\",\"message\":{{\"role\":\"user\",\"content\":\"in sub\"}}}}\n",
+        repo.path().to_string_lossy(),
+        sub.to_string_lossy()
+    );
+    let parsed = ClaudeCodeAdapter::new().parse_str(&content, "multi-seg");
+    assert_eq!(parsed.segments.len(), 2);
+
+    let sid = persist_session(&conn, "claude-code", "Claude Code", &parsed, &store).unwrap();
+    let linked = enrich_session(&conn, &sid).unwrap();
+    assert_eq!(linked, 2, "both segments must be linked");
+
+    // Both segments must link to the EXACT same repository row.
+    let repo_ids: Vec<String> = conn
+        .prepare("SELECT repository_id FROM session_segment WHERE session_id = ?1 ORDER BY seq_start")
+        .unwrap()
+        .query_map([&sid], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(repo_ids.len(), 2);
+    assert_eq!(repo_ids[0], repo_ids[1]);
+
+    let total_repos: i64 = conn
+        .query_row("SELECT count(*) FROM repository", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(total_repos, 1, "exactly one repository should exist");
+}
