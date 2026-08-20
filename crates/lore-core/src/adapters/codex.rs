@@ -1194,4 +1194,29 @@ mod tests {
         assert_eq!(null_event.change_kind, FileChangeKind::Create);
         assert_eq!(null_event.patch_text, None);
     }
+
+    #[test]
+    fn parses_message_with_system_and_custom_roles_and_mixed_content_array() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"system\",\"content\":\"system prompt\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[\"first line\",{\"text\":\"second line\"}]}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:02.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"custom_unknown\",\"content\":\"fallback to user\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "roles-and-arrays");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.messages.len(), 3);
+
+        assert_eq!(s.messages[0].role, Role::System);
+        assert_eq!(s.messages[0].parts.len(), 1);
+        assert_eq!(s.messages[0].parts[0].text.as_deref(), Some("system prompt"));
+
+        assert_eq!(s.messages[1].role, Role::User);
+        assert_eq!(s.messages[1].parts.len(), 2);
+        assert_eq!(s.messages[1].parts[0].text.as_deref(), Some("first line"));
+        assert_eq!(s.messages[1].parts[1].text.as_deref(), Some("second line"));
+
+        assert_eq!(s.messages[2].role, Role::User);
+        assert_eq!(s.messages[2].parts.len(), 1);
+        assert_eq!(s.messages[2].parts[0].text.as_deref(), Some("fallback to user"));
+    }
 }
