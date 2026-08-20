@@ -321,3 +321,34 @@ fn oversized_source_degrades_gracefully_to_partial() {
         "must record content-free size cap diagnostic"
     );
 }
+
+#[test]
+fn identical_reingest_of_multi_segment_session_is_a_noop() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("multi-segment.jsonl");
+    let conn = lore_core::storage::open_in_memory().unwrap();
+
+    let content = concat!(
+        r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"multi","cwd":"/repo/a","gitBranch":"main","message":{"role":"user","content":"start in a"}}"#,
+        "\n",
+        r#"{"type":"user","uuid":"u2","parentUuid":"u1","sessionId":"multi","cwd":"/repo/b","gitBranch":"feature","message":{"role":"user","content":"switched to b"}}"#,
+        "\n"
+    );
+    fs::write(&path, content).unwrap();
+
+    let outcome1 = ingest(&conn, &path);
+    assert!(matches!(outcome1, IngestOutcome::Ingested { change: ChangeClass::New, .. }));
+
+    let segments1: i64 = conn.query_row("SELECT count(*) FROM session_segment", [], |r| r.get(0)).unwrap();
+    let messages1: i64 = conn.query_row("SELECT count(*) FROM message", [], |r| r.get(0)).unwrap();
+    assert_eq!(segments1, 2);
+    assert_eq!(messages1, 2);
+
+    let outcome2 = ingest(&conn, &path);
+    assert!(matches!(outcome2, IngestOutcome::Skipped { .. }));
+
+    let segments2: i64 = conn.query_row("SELECT count(*) FROM session_segment", [], |r| r.get(0)).unwrap();
+    let messages2: i64 = conn.query_row("SELECT count(*) FROM message", [], |r| r.get(0)).unwrap();
+    assert_eq!(segments1, segments2);
+    assert_eq!(messages1, messages2);
+}
