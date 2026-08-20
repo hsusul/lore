@@ -232,8 +232,8 @@ mod tests {
         let complex_diff = "--- a/file.rs\r\n+++ b/file.rs\r\n@@ -1,3 +1,4 @@\r\n-first\r\n-second\r\n+first updated\r\n+second updated\r\n+third added\r\n\\ No newline at end of file\r\n";
         assert_eq!(unified_diff_line_counts(complex_diff), Some((3, 2)));
 
-        // Pure addition diff
-        let add_only = "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+line 1\n+line 2\n";
+        // Pure addition diff with git headers
+        let add_only = "diff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000..1234567\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+line 1\n+line 2\n";
         assert_eq!(unified_diff_line_counts(add_only), Some((2, 0)));
     }
 
