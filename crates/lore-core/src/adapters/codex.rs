@@ -193,7 +193,9 @@ impl CodexAdapter {
                         | "agent_message"
                         | "agent_reasoning"
                         | "thread_settings_applied"
+                        | "mcp_tool_call_start"
                         | "mcp_tool_call_end"
+                        | "web_search_start"
                         | "web_search_end"
                         | "task_complete"
                         | "turn_aborted" => {}
@@ -1061,6 +1063,8 @@ mod tests {
         // Documented telemetry keeps the session Ok...
         let known = concat!(
             "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"task_started\"}}\n",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.100Z\",\"payload\":{\"type\":\"mcp_tool_call_start\"}}\n",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.500Z\",\"payload\":{\"type\":\"web_search_start\"}}\n",
             "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"task_complete\"}}\n"
         );
         assert_eq!(
