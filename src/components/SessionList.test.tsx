@@ -117,4 +117,17 @@ describe("SessionList", () => {
     fireEvent.keyDown(updatedListbox, { key: "Enter" });
     expect(onOpen).toHaveBeenLastCalledWith("x");
   });
+
+  it("sets session dnd data on drag start", () => {
+    render(<SessionList sessions={sessions} selectedId={null} onOpen={() => {}} />);
+    const row = screen.getByText("first").closest("li")!;
+    const setData = vi.fn();
+    fireEvent.dragStart(row, {
+      dataTransfer: {
+        setData,
+        effectAllowed: "",
+      },
+    });
+    expect(setData).toHaveBeenCalledWith("application/x-lore-session", "a");
+  });
 });
