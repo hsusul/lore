@@ -254,6 +254,12 @@ mod tests {
             Some("Fix repository discovery".to_string())
         );
         assert_eq!(title_from_text("<empty_tag>\n</empty_tag>"), None);
+        assert_eq!(title_from_text("<environment_context>\nOS: Mac\nCwd: /repo\n"), None);
+        assert_eq!(title_from_text("<skill>\nName: rust-dev\n"), None);
+        assert_eq!(
+            title_from_text("<context>repository info</context>\nRefactor SQLite queries"),
+            Some("Refactor SQLite queries".to_string())
+        );
     }
 
     #[test]
