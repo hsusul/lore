@@ -1175,4 +1175,23 @@ mod tests {
         assert_eq!(s.status, crate::model::ParseStatus::Partial);
         assert_eq!(s.messages.len(), 1, "known message before unknown item is preserved");
     }
+
+    #[test]
+    fn parses_patch_apply_end_with_null_and_empty_content_and_empty_changes() {
+        let content = concat!(
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"patch_apply_end\",\"call_id\":\"c1\",\"changes\":{}}}\n",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"patch_apply_end\",\"call_id\":\"c2\",\"changes\":{\"src/empty.txt\":{\"type\":\"add\",\"content\":\"\"},\"src/null.txt\":{\"type\":\"create\",\"content\":null}}}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "empty-patch");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.file_events.len(), 2);
+
+        let empty_event = s.file_events.iter().find(|e| e.path == "src/empty.txt").unwrap();
+        assert_eq!(empty_event.change_kind, FileChangeKind::Create);
+        assert_eq!(empty_event.patch_text.as_deref(), Some(""));
+
+        let null_event = s.file_events.iter().find(|e| e.path == "src/null.txt").unwrap();
+        assert_eq!(null_event.change_kind, FileChangeKind::Create);
+        assert_eq!(null_event.patch_text, None);
+    }
 }
