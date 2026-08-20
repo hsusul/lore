@@ -255,6 +255,14 @@ mod tests {
             title_from_text("  #   Improve   session   titles\nMore detail"),
             Some("Improve session titles".to_string())
         );
+        assert_eq!(
+            title_from_text("- Add database migrations\nAdditional text"),
+            Some("Add database migrations".to_string())
+        );
+        assert_eq!(
+            title_from_text("### Fix authentication token refresh\nBody"),
+            Some("Fix authentication token refresh".to_string())
+        );
         let title = title_from_text(&"x".repeat(100)).unwrap();
         assert_eq!(title.chars().count(), TITLE_MAX_CHARS + 1);
         assert!(title.ends_with('…'));
