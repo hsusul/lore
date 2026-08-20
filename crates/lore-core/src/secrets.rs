@@ -902,4 +902,21 @@ mod tests {
         assert!(!redacted.contains(&s2));
         assert_eq!(redacted, "«redacted:github-token» «redacted:stripe-key»");
     }
+
+    #[test]
+    fn scan_detects_multiple_distinct_tokens_in_one_pass() {
+        let gh = t("ghp", "_0123456789abcdefghijklmnopqrstuvwxyz");
+        let slack = t("xoxb", "-123456789012-abcdefABCDEF");
+        let combined = format!("GitHub: {gh}\nSlack: {slack}");
+        let findings = scan_ok(&combined);
+        assert_eq!(findings.len(), 2);
+        assert!(findings.iter().any(|f| f.rule == "github-token"));
+        assert!(findings.iter().any(|f| f.rule == "slack-token"));
+
+        let redacted = redact(&combined, &findings);
+        assert_eq!(
+            redacted,
+            "GitHub: «redacted:github-token»\nSlack: «redacted:slack-token»"
+        );
+    }
 }
