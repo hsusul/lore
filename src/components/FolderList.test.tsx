@@ -111,4 +111,24 @@ describe("FolderList", () => {
     fireEvent.dragLeave(row);
     expect(row.classList.contains("is-dragover")).toBe(false);
   });
+
+  it("cancels folder creation and renaming on Escape key", () => {
+    const props = setup();
+    // Cancel create
+    fireEvent.click(screen.getByLabelText("New folder"));
+    const createField = screen.getByLabelText("New folder name");
+    fireEvent.change(createField, { target: { value: "Abandoned" } });
+    fireEvent.keyDown(createField, { key: "Escape" });
+    expect(props.onCreate).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("New folder name")).toBeNull();
+
+    // Cancel edit
+    const folderBtn = screen.getByRole("button", { name: /^Inbox/ });
+    fireEvent.keyDown(folderBtn, { key: "F2" });
+    const editField = screen.getByLabelText("Rename folder Inbox");
+    fireEvent.change(editField, { target: { value: "Abandoned Rename" } });
+    fireEvent.keyDown(editField, { key: "Escape" });
+    expect(props.onRename).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Rename folder Inbox")).toBeNull();
+  });
 });
