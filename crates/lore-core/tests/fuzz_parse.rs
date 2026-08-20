@@ -194,3 +194,48 @@ fn adapters_and_secret_scan_never_panic_on_adversarial_input() {
         }
     }
 }
+
+#[test]
+fn search_and_cursor_fuzz_never_panic_on_adversarial_queries() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let blobs = lore_core::storage::blob::BlobStore::open(dir.path().join("blobs")).unwrap();
+
+    // Ingest a couple of sample sessions so the FTS index has searchable data.
+    let claude = ClaudeCodeAdapter::new();
+    let sample = "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"s1\",\"cwd\":\"/repo\",\"message\":{\"role\":\"user\",\"content\":\"hello search token\"}}\n{\"type\":\"assistant\",\"uuid\":\"a1\",\"parentUuid\":\"u1\",\"sessionId\":\"s1\",\"cwd\":\"/repo\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"response text\"}]}}\n";
+    let parsed = claude.parse_str(sample, "dedupe");
+    lore_core::ingest::persist_session(&conn, "claude-code", "Claude Code", &parsed, &blobs)
+        .unwrap();
+
+    let frags = fragments();
+    let mut rng = Rng(0xCAFE_BABE_1234_5678);
+
+    let sorts = [
+        lore_core::search::SortOrder::Relevance,
+        lore_core::search::SortOrder::Newest,
+        lore_core::search::SortOrder::Oldest,
+    ];
+
+    for _ in 0..2000u32 {
+        let k = 1 + rng.below(20);
+        let query_text = build_doc(&mut rng, &frags, k);
+        let cursor_candidate = if rng.below(3) == 0 {
+            let count = rng.below(10);
+            Some(build_doc(&mut rng, &frags, count))
+        } else {
+            None
+        };
+        let sort = sorts[rng.below(sorts.len())];
+
+        // search_page must never panic, leak SQL errors, or crash on arbitrary queries and cursors.
+        let page = lore_core::search::search_page(
+            &conn,
+            &query_text,
+            20,
+            cursor_candidate.as_deref(),
+            sort,
+        );
+        assert!(page.is_ok(), "search_page must succeed for all queries");
+    }
+}
