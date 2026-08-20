@@ -309,6 +309,8 @@ mod tests {
             title_from_text("\n\n   Update README documentation   \n\n"),
             Some("Update README documentation".to_string())
         );
+        assert_eq!(title_from_text("   \t  \n  \r\n  \t  "), None);
+        assert_eq!(title_from_text(""), None);
 
         // Markdown inline backticks and bullet asterisks
         assert_eq!(
