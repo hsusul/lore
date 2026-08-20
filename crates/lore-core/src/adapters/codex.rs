@@ -1305,4 +1305,19 @@ mod tests {
         assert_eq!(s.messages[0].parts[0].text.as_deref(), Some("Planning steps"));
         assert_eq!(s.messages[0].parts[1].kind, PartKind::Opaque);
     }
+
+    #[test]
+    fn parses_message_item_with_empty_payload_and_null_role() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"message\",\"role\":null,\"content\":null}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "empty-msg");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.messages[0].role, Role::User);
+        assert_eq!(s.messages[0].parts.len(), 0);
+        assert_eq!(s.messages[1].role, Role::User);
+        assert_eq!(s.messages[1].parts.len(), 0);
+    }
 }
