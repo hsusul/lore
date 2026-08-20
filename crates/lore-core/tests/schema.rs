@@ -211,3 +211,22 @@ fn fts_tracks_search_document() {
         .unwrap();
     assert_eq!(after, 0, "deleting a search_document must de-index it");
 }
+
+#[test]
+fn schema_migrations_records_all_applied_migrations_with_checksums() {
+    let conn = db();
+    let rows: Vec<(i64, String, String)> = conn
+        .prepare("SELECT version, name, checksum FROM schema_migrations ORDER BY version ASC")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+
+    assert_eq!(rows.len(), 10, "all 10 migrations must be recorded");
+    for (i, (version, name, checksum)) in rows.iter().enumerate() {
+        assert_eq!(*version, (i + 1) as i64);
+        assert!(!name.is_empty());
+        assert_eq!(checksum.len(), 16, "checksum must be a 16-hex FNV-1a hash");
+    }
+}
