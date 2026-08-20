@@ -1232,4 +1232,22 @@ mod tests {
         assert_eq!(s.messages[0].parts.len(), 0);
         assert_eq!(s.messages[1].parts.len(), 0);
     }
+
+    #[test]
+    fn title_derivation_from_multipart_user_prompt_and_synthetic_flag() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"Refactor session store\"}]}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "multipart-title");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.title.as_deref(), Some("Refactor session store"));
+        assert!(s.title_is_synthetic);
+
+        let system_only = concat!(
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"system\",\"content\":\"system prompt\"}}\n"
+        );
+        let s2 = CodexAdapter::new().parse_str(system_only, "system-only");
+        assert_eq!(s2.title, None);
+        assert!(!s2.title_is_synthetic);
+    }
 }
