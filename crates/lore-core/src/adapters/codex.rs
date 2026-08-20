@@ -987,6 +987,15 @@ mod tests {
     }
 
     #[test]
+    fn token_count_sparse_or_partial_fields_are_captured() {
+        let content = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"cached_input_tokens\":50}}}}\n";
+        let session = CodexAdapter::new().parse_str(content, "sparse-tokens");
+        assert_eq!(session.total_tokens.input, None);
+        assert_eq!(session.total_tokens.output, None);
+        assert_eq!(session.total_tokens.cache, Some(50));
+    }
+
+    #[test]
     fn top_level_compacted_and_context_compacted_become_markers() {
         // A mid-session compaction (both the top-level `compacted` record and the
         // `event_msg.context_compacted` marker) must be represented, not dropped.
