@@ -938,6 +938,19 @@ mod tests {
     }
 
     #[test]
+    fn tool_use_with_null_or_missing_id_degrades_to_partial() {
+        let jsonl = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":null,\"name\":\"Bash\",\"input\":{}},",
+            "{\"type\":\"tool_use\",\"name\":\"Glob\",\"input\":{}}",
+            "]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "null-id-tools");
+        assert_eq!(session.status, crate::model::ParseStatus::Partial);
+        assert!(session.notes.iter().any(|n| n.message == "tool_use without id"));
+    }
+
+    #[test]
     fn parses_tool_use_with_extra_metadata_attributes() {
         let jsonl = "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_meta\",\"name\":\"Glob\",\"input\":{\"pattern\":\"*.rs\"},\"extra_field\":true,\"caller\":\"subagent_42\"}]}}\n";
         let session = ClaudeCodeAdapter::new().parse_str(jsonl, "extra-meta");
