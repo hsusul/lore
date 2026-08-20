@@ -247,6 +247,10 @@ mod tests {
         // Context only diff (0 additions, 0 deletions)
         let context_only = "--- a/f.rs\n+++ b/f.rs\n@@ -1,3 +1,3 @@\n ctx1\n ctx2\n ctx3\n";
         assert_eq!(unified_diff_line_counts(context_only), Some((0, 0)));
+
+        // Git headers only diff (0 additions, 0 deletions)
+        let headers_only = "diff --git a/f.rs b/f.rs\nindex 0000000..1234567\n--- a/f.rs\n+++ b/f.rs\n";
+        assert_eq!(unified_diff_line_counts(headers_only), Some((0, 0)));
     }
 
     #[test]
