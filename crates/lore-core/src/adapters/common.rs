@@ -406,6 +406,8 @@ mod tests {
         assert_eq!(epoch_ms("2025-02-29T12:00:00Z"), None);
         assert_eq!(epoch_ms("2026-13-01T00:00:00Z"), None);
         assert_eq!(epoch_ms("2026-08-11T25:00:00Z"), None);
+        assert_eq!(epoch_ms("2026-08-11T10:65:00Z"), None);
+        assert_eq!(epoch_ms("2026-08-11T10:00:65Z"), None);
         assert_eq!(epoch_ms("2026-08-11T10:00:00+25:00"), None);
 
         // UTC offset zero representations and tab/newline trimming
