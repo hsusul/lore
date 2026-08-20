@@ -898,4 +898,21 @@ mod tests {
             Some("stdout line 1\nstdout line 2")
         );
     }
+
+    #[test]
+    fn parses_file_mutating_tools_with_missing_and_empty_paths() {
+        let jsonl = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":\"c_empty\",\"name\":\"Edit\",\"input\":{\"file_path\":\"\"}},",
+            "{\"type\":\"tool_use\",\"id\":\"c_nopath\",\"name\":\"Write\",\"input\":{\"content\":\"hello\"}},",
+            "{\"type\":\"tool_use\",\"id\":\"c_nullinput\",\"name\":\"NotebookEdit\",\"input\":null}",
+            "]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "empty-paths");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.tool_calls.len(), 3);
+        assert_eq!(session.file_events.len(), 1);
+        assert_eq!(session.file_events[0].tool_native_call_id.as_deref(), Some("c_empty"));
+        assert_eq!(session.file_events[0].path, "");
+    }
 }
