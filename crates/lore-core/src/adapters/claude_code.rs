@@ -663,16 +663,19 @@ mod tests {
     fn tool_result_error_flag_is_captured() {
         let a = ClaudeCodeAdapter::new();
         let content = concat!(
-            "{\"type\":\"assistant\",\"uuid\":\"u1\",\"sessionId\":\"s\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c9\",\"name\":\"Bash\",\"input\":{\"command\":\"npm test\"}},{\"type\":\"tool_use\",\"id\":\"c10\",\"name\":\"Bash\",\"input\":{\"command\":\"cargo check\"}}]}}\n",
-            "{\"type\":\"user\",\"uuid\":\"u2\",\"sessionId\":\"s\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"c9\",\"is_error\":true,\"content\":\"1 failing\"},{\"type\":\"tool_result\",\"tool_use_id\":\"c10\",\"is_error\":true,\"content\":null}]}}\n"
+            "{\"type\":\"assistant\",\"uuid\":\"u1\",\"sessionId\":\"s\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"c9\",\"name\":\"Bash\",\"input\":{\"command\":\"npm test\"}},{\"type\":\"tool_use\",\"id\":\"c10\",\"name\":\"Bash\",\"input\":{\"command\":\"cargo check\"}},{\"type\":\"tool_use\",\"id\":\"c11\",\"name\":\"Bash\",\"input\":{\"command\":\"echo ok\"}}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"sessionId\":\"s\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"c9\",\"is_error\":true,\"content\":\"1 failing\"},{\"type\":\"tool_result\",\"tool_use_id\":\"c10\",\"is_error\":true,\"content\":null},{\"type\":\"tool_result\",\"tool_use_id\":\"c11\",\"is_error\":\"false\",\"content\":\"ok\"}]}}\n"
         );
         let s = a.parse_str(content, "fallback");
-        assert_eq!(s.tool_calls.len(), 2);
+        assert_eq!(s.tool_calls.len(), 3);
         assert_eq!(s.tool_calls[0].is_error, Some(true));
         assert_eq!(s.tool_calls[0].output_text.as_deref(), Some("1 failing"));
 
         assert_eq!(s.tool_calls[1].is_error, Some(true));
         assert_eq!(s.tool_calls[1].output_text, None);
+
+        assert_eq!(s.tool_calls[2].is_error, None);
+        assert_eq!(s.tool_calls[2].output_text.as_deref(), Some("ok"));
         // Bash is not a file-mutating tool: no file event.
         assert!(s.file_events.is_empty());
     }
