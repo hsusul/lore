@@ -451,5 +451,6 @@ mod tests {
         assert_eq!(bounded(&cjk), "测".repeat(40));
         let short = "custom_event";
         assert_eq!(bounded(short), "custom_event");
+        assert_eq!(bounded(""), "");
     }
 }
