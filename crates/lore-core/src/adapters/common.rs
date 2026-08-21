@@ -488,6 +488,7 @@ mod tests {
         assert_eq!(sanitize_path("///..///"), "");
         assert_eq!(sanitize_path(r"\\\..\\\"), "");
         assert_eq!(sanitize_path(r"///..\\\\"), "");
+        assert_eq!(sanitize_path(r"\\\..///"), "");
         assert_eq!(sanitize_path("."), "");
         assert_eq!(sanitize_path("./"), "");
         assert_eq!(sanitize_path(".."), "");
