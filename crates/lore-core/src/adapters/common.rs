@@ -452,6 +452,7 @@ mod tests {
         assert_eq!(sanitize_path(r"a\\\b\\\c.rs"), "a/b/c.rs");
         assert_eq!(sanitize_path("a"), "a");
         assert_eq!(sanitize_path("x.rs"), "x.rs");
+        assert_eq!(sanitize_path("app.min...js"), "app.min...js");
         assert_eq!(sanitize_path("a/b/c.rs"), "a/b/c.rs");
         assert_eq!(sanitize_path(r"a/b\c/d\file.rs"), "a/b/c/d/file.rs");
         assert_eq!(sanitize_path("///"), "");
