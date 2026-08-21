@@ -475,6 +475,7 @@ mod tests {
         assert_eq!(sanitize_path(r"\a\...\b\"), "a/.../b");
         assert_eq!(sanitize_path(r"\a\....\b\"), "a/..../b");
         assert_eq!(sanitize_path(r"a/b\c/d\file.rs"), "a/b/c/d/file.rs");
+        assert_eq!(sanitize_path("a/b.c/d.rs"), "a/b.c/d.rs");
         assert_eq!(sanitize_path("a/b////"), "a/b");
         assert_eq!(sanitize_path(r"a\b\\\\"), "a/b");
         assert_eq!(sanitize_path("///a/b///"), "a/b");
