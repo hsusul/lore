@@ -15,10 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1 # pinned; keep in sync with rust-toolchain.toml
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Toolchain pin is consistent
+        run: ./scripts/toolchain-pin-check.sh
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy (deny warnings)
@@ -57,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1 # pinned; keep in sync with rust-toolchain.toml
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2

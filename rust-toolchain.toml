@@ -1,0 +1,18 @@
+# Pinned Rust toolchain — the single source of truth for local development.
+#
+# Why pin: CI runs `cargo clippy -- -D warnings`, so every new clippy lint in a
+# stable release turns into a build failure on a commit that changed nothing.
+# That is exactly how `main` broke on rustc 1.97.1 (`useless_concat` and
+# `unneeded_struct_pattern` were both new). Pinning makes a toolchain upgrade an
+# explicit, reviewable change instead of an ambient one.
+#
+# To upgrade: bump `channel` here AND the `dtolnay/rust-toolchain@<version>` refs
+# in .github/workflows/{ci,release}.yml. CI's "toolchain pin is consistent" step
+# fails if the two ever disagree.
+#
+# Note this is NOT the MSRV. `rust-version` in Cargo.toml (1.90) is the minimum
+# supported compiler; this is the exact one we build and lint with.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
