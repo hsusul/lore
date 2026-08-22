@@ -31,6 +31,8 @@ Everything in the archive stays on the machine. V0 has no accounts, telemetry, c
 
 You will need Rust, Node.js, the Xcode command-line tools, and the Tauri 2 prerequisites for macOS.
 
+The Rust toolchain is pinned in `rust-toolchain.toml`, so rustup selects the right compiler automatically. CI lints with `-D warnings`, and pinning keeps a new clippy lint in a stable release from breaking the build on an unrelated commit.
+
 ```bash
 npm install
 npm run build
