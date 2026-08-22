@@ -250,9 +250,18 @@ fn recover_archive_quarantines_all_sidecar_files_including_wal_shm_journal() {
     let q_dir = quarantine_path.parent().unwrap();
 
     assert_eq!(std::fs::read(&quarantine_path).unwrap(), b"corrupted db");
-    assert_eq!(std::fs::read(q_dir.join(format!("{q_stem}-wal"))).unwrap(), b"wal data");
-    assert_eq!(std::fs::read(q_dir.join(format!("{q_stem}-shm"))).unwrap(), b"shm data");
-    assert_eq!(std::fs::read(q_dir.join(format!("{q_stem}-journal"))).unwrap(), b"journal data");
+    assert_eq!(
+        std::fs::read(q_dir.join(format!("{q_stem}-wal"))).unwrap(),
+        b"wal data"
+    );
+    assert_eq!(
+        std::fs::read(q_dir.join(format!("{q_stem}-shm"))).unwrap(),
+        b"shm data"
+    );
+    assert_eq!(
+        std::fs::read(q_dir.join(format!("{q_stem}-journal"))).unwrap(),
+        b"journal data"
+    );
 
     // All original files in archive_dir must be cleanly moved
     assert!(!db.exists());

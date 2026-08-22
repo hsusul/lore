@@ -249,7 +249,8 @@ mod tests {
         assert_eq!(unified_diff_line_counts(context_only), Some((0, 0)));
 
         // Git headers only diff (0 additions, 0 deletions)
-        let headers_only = "diff --git a/f.rs b/f.rs\nindex 0000000..1234567\n--- a/f.rs\n+++ b/f.rs\n";
+        let headers_only =
+            "diff --git a/f.rs b/f.rs\nindex 0000000..1234567\n--- a/f.rs\n+++ b/f.rs\n";
         assert_eq!(unified_diff_line_counts(headers_only), Some((0, 0)));
 
         // Hunk headers only (0 additions, 0 deletions)
@@ -270,7 +271,10 @@ mod tests {
             Some("Fix repository discovery".to_string())
         );
         assert_eq!(title_from_text("<empty_tag>\n</empty_tag>"), None);
-        assert_eq!(title_from_text("<environment_context>\nOS: Mac\nCwd: /repo\n"), None);
+        assert_eq!(
+            title_from_text("<environment_context>\nOS: Mac\nCwd: /repo\n"),
+            None
+        );
         assert_eq!(title_from_text("<skill>\nName: rust-dev\n"), None);
         assert_eq!(
             title_from_text("<context>repository info</context>\nRefactor SQLite queries"),
@@ -441,11 +445,17 @@ mod tests {
             "Users/test/file.txt"
         );
         assert_eq!(sanitize_path("./src/./main.rs"), "src/main.rs");
-        assert_eq!(sanitize_path("/absolute/path/file.rs"), "absolute/path/file.rs");
+        assert_eq!(
+            sanitize_path("/absolute/path/file.rs"),
+            "absolute/path/file.rs"
+        );
         assert_eq!(sanitize_path("a/b/c/../../d.rs"), "a/d.rs");
         assert_eq!(sanitize_path("src/app/"), "src/app");
         assert_eq!(sanitize_path(r"src\app\"), "src/app");
-        assert_eq!(sanitize_path(r"\\server\share\file.rs"), "server/share/file.rs");
+        assert_eq!(
+            sanitize_path(r"\\server\share\file.rs"),
+            "server/share/file.rs"
+        );
         assert_eq!(sanitize_path(".../src/lib.rs"), ".../src/lib.rs");
         assert_eq!(sanitize_path("..../src/lib.rs"), "..../src/lib.rs");
         assert_eq!(sanitize_path("a///b///c.rs"), "a/b/c.rs");

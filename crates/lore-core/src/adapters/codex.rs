@@ -1183,7 +1183,11 @@ mod tests {
         );
         let s = CodexAdapter::new().parse_str(content, "unknown-item");
         assert_eq!(s.status, crate::model::ParseStatus::Partial);
-        assert_eq!(s.messages.len(), 1, "known message before unknown item is preserved");
+        assert_eq!(
+            s.messages.len(),
+            1,
+            "known message before unknown item is preserved"
+        );
     }
 
     #[test]
@@ -1196,11 +1200,19 @@ mod tests {
         assert_eq!(s.status, crate::model::ParseStatus::Ok);
         assert_eq!(s.file_events.len(), 2);
 
-        let empty_event = s.file_events.iter().find(|e| e.path == "src/empty.txt").unwrap();
+        let empty_event = s
+            .file_events
+            .iter()
+            .find(|e| e.path == "src/empty.txt")
+            .unwrap();
         assert_eq!(empty_event.change_kind, FileChangeKind::Create);
         assert_eq!(empty_event.patch_text.as_deref(), Some(""));
 
-        let null_event = s.file_events.iter().find(|e| e.path == "src/null.txt").unwrap();
+        let null_event = s
+            .file_events
+            .iter()
+            .find(|e| e.path == "src/null.txt")
+            .unwrap();
         assert_eq!(null_event.change_kind, FileChangeKind::Create);
         assert_eq!(null_event.patch_text, None);
     }
@@ -1218,7 +1230,10 @@ mod tests {
 
         assert_eq!(s.messages[0].role, Role::System);
         assert_eq!(s.messages[0].parts.len(), 1);
-        assert_eq!(s.messages[0].parts[0].text.as_deref(), Some("system prompt"));
+        assert_eq!(
+            s.messages[0].parts[0].text.as_deref(),
+            Some("system prompt")
+        );
 
         assert_eq!(s.messages[1].role, Role::User);
         assert_eq!(s.messages[1].parts.len(), 2);
@@ -1227,7 +1242,10 @@ mod tests {
 
         assert_eq!(s.messages[2].role, Role::User);
         assert_eq!(s.messages[2].parts.len(), 1);
-        assert_eq!(s.messages[2].parts[0].text.as_deref(), Some("fallback to user"));
+        assert_eq!(
+            s.messages[2].parts[0].text.as_deref(),
+            Some("fallback to user")
+        );
     }
 
     #[test]
@@ -1245,17 +1263,13 @@ mod tests {
 
     #[test]
     fn title_derivation_from_multipart_user_prompt_and_synthetic_flag() {
-        let content = concat!(
-            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"Refactor session store\"}]}}\n"
-        );
+        let content = "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"Refactor session store\"}]}}\n";
         let s = CodexAdapter::new().parse_str(content, "multipart-title");
         assert_eq!(s.status, crate::model::ParseStatus::Ok);
         assert_eq!(s.title.as_deref(), Some("Refactor session store"));
         assert!(s.title_is_synthetic);
 
-        let system_only = concat!(
-            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"system\",\"content\":\"system prompt\"}}\n"
-        );
+        let system_only = "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"system\",\"content\":\"system prompt\"}}\n";
         let s2 = CodexAdapter::new().parse_str(system_only, "system-only");
         assert_eq!(s2.title, None);
         assert!(!s2.title_is_synthetic);
@@ -1302,7 +1316,10 @@ mod tests {
         assert_eq!(s.messages.len(), 1);
         assert_eq!(s.messages[0].parts.len(), 2);
         assert_eq!(s.messages[0].parts[0].kind, PartKind::Thinking);
-        assert_eq!(s.messages[0].parts[0].text.as_deref(), Some("Planning steps"));
+        assert_eq!(
+            s.messages[0].parts[0].text.as_deref(),
+            Some("Planning steps")
+        );
         assert_eq!(s.messages[0].parts[1].kind, PartKind::Opaque);
     }
 
@@ -1335,6 +1352,9 @@ mod tests {
         let content = "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"\"}}\n";
         let s = CodexAdapter::new().parse_str(content, "empty-type");
         assert_eq!(s.status, crate::model::ParseStatus::Partial);
-        assert!(s.notes.iter().any(|n| n.message.contains("unknown response_item")));
+        assert!(s
+            .notes
+            .iter()
+            .any(|n| n.message.contains("unknown response_item")));
     }
 }

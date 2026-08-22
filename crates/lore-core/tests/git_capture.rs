@@ -225,7 +225,12 @@ fn capture_handles_multiple_remotes_and_commits() {
     // Add multiple remotes with credentials
     git(
         dir.path(),
-        &["remote", "add", "upstream", "https://token@gitlab.com/group/proj.git"],
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://token@gitlab.com/group/proj.git",
+        ],
     );
     git(
         dir.path(),
