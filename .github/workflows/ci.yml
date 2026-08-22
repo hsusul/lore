@@ -55,15 +55,26 @@ jobs:
         run: npm test
 
   desktop-shell:
-    name: Desktop shell — Tauri build
-    runs-on: ubuntu-latest
+    # macOS is the only target we actually ship (see .github/workflows/release.yml),
+    # so it must be built on every PR — not first exercised at tag time. Linux stays
+    # in the matrix because it is the cheap lane and it keeps the non-macOS webview
+    # path honest for the eventual Windows/Linux builds.
+    name: Desktop shell — Tauri build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report both platforms on a failure; a macOS-only break is the interesting
+      # signal and fail-fast would hide it behind the faster Linux job.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1 # pinned; keep in sync with rust-toolchain.toml
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install Tauri system dependencies
+      - name: Install Tauri system dependencies (Linux only)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -72,6 +83,8 @@ jobs:
             librsvg2-dev \
             libsoup-3.0-dev \
             patchelf
+      # macOS needs no equivalent: WebKit ships with the OS and the Xcode
+      # command-line tools are preinstalled on the runner image.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
