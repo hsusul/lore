@@ -37,3 +37,8 @@ gix = { version = "0.86", default-features = false, features = ["sha1", "status"
 
 [dev-dependencies]
 tempfile = "3"
+# Property testing for pure input-sanitizing functions (adapters::common).
+# default-features off drops the `fork`/`timeout` machinery (and its rusty-fork
+# + wait-timeout deps): we only need the generator + shrinker, and a leaner dev
+# tree keeps the egress dependency audit small.
+proptest = { version = "1", default-features = false, features = ["std"] }

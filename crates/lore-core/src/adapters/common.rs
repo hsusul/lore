@@ -127,18 +127,21 @@ pub(crate) fn non_negative_int_field(obj: &serde_json::Value, key: &str) -> Opti
 pub(crate) fn sanitize_path(raw: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for seg in raw.split(['/', '\\']) {
-        let clean_seg = if seg.len() == 2
-            && seg.as_bytes()[1] == b':'
-            && seg.as_bytes()[0].is_ascii_alphabetic()
-        {
-            ""
-        } else {
-            seg
-        };
-        let filtered: String = clean_seg
+        // Filter BEFORE the drive-letter check, not after. Testing the raw
+        // segment lets a control or zero-width character sit between the letter
+        // and the colon ("A\x7f:", "C\u{200b}:"): the length check then fails,
+        // the character is stripped a moment later, and a drive prefix survives
+        // into the output. Found by `sanitize_path_invariants`.
+        let filtered: String = seg
             .chars()
             .filter(|c| !c.is_control() && !crate::is_zero_width(*c))
             .collect();
+        let bytes = filtered.as_bytes();
+        let filtered = if bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+            String::new()
+        } else {
+            filtered
+        };
         match filtered.as_str() {
             "" | "." => {}
             ".." => {
@@ -199,31 +202,192 @@ pub(crate) fn resolve_file_event_segments(session: &mut crate::model::ParsedSess
 mod tests {
     use super::*;
 
+    /// Every `sanitize_path` case, as data.
+    ///
+    /// This replaces two hand-written assertion lists (`sanitize_strips_traversal`
+    /// and `sanitize_path_neutralizes_traversal_and_drive_letters`) that had grown
+    /// to 88 `assert_eq!` lines between them, 69 of which arrived one per commit.
+    /// Each row below is one of those cases, preserved verbatim — a table is the
+    /// right shape for enumerated inputs, and adding a case is now a row, not a
+    /// commit. Invariants that should hold for *all* input are property-tested in
+    /// `sanitize_path_invariants` below rather than enumerated here.
     #[test]
-    fn sanitize_strips_traversal() {
-        assert_eq!(sanitize_path("../../a/b"), "a/b");
-        assert_eq!(sanitize_path(r"..\..\a\b"), "a/b");
-        assert_eq!(sanitize_path(r"src\..\src\app.ts"), "src/app.ts");
-        assert_eq!(sanitize_path(r"foo/bar\baz"), "foo/bar/baz");
-        assert_eq!(sanitize_path("foo///bar\\\\baz"), "foo/bar/baz");
-        assert_eq!(sanitize_path("./a/./b/./c.ts"), "a/b/c.ts");
-        assert_eq!(sanitize_path("a/b/c/../../d.ts"), "a/d.ts");
-        assert_eq!(
-            sanitize_path(r"C:\Users\dev\project\file.ts"),
-            "Users/dev/project/file.ts"
-        );
-        assert_eq!(
-            sanitize_path(r"d:/project/src/index.js"),
-            "project/src/index.js"
-        );
-        assert_eq!(
-            sanitize_path("src/\0poison\r/app\u{200b}.ts"),
-            "src/poison/app.ts"
-        );
-        assert_eq!(
-            sanitize_path("\u{feff}src/\x1b[31mred\x1b[0m/\u{2060}main\u{200d}.rs"),
-            "src/[31mred[0m/main.rs"
-        );
+    fn sanitize_path_table() {
+        // (input, expected)
+        const CASES: &[(&str, &str)] = &[
+            // parent-directory traversal is neutralized.
+            ("../../a/b", "a/b"),
+            (r"..\..\a\b", "a/b"),
+            (r"src\..\src\app.ts", "src/app.ts"),
+            ("a/b/c/../../d.ts", "a/d.ts"),
+            ("../../foo/bar.rs", "foo/bar.rs"),
+            ("a/b/c/../../d.rs", "a/d.rs"),
+            ("my..dir/file.rs", "my..dir/file.rs"),
+            ("/a/../b/", "b"),
+            ("/a/./../b/", "b"),
+            (r"\a\..\b\", "b"),
+            (r"\a\.\..\b\", "b"),
+            ("///..///", ""),
+            (r"\\\..\\\", ""),
+            (r"///..\\\\", ""),
+            (r"\\\..///", ""),
+            ("..", ""),
+            // Windows drive prefixes are dropped — including when a control or
+            // zero-width character is used to hide the prefix from the check
+            // (regressions for the bypass `sanitize_path_invariants` found).
+            ("A\u{7f}:", ""),
+            ("C\u{200b}:", ""),
+            ("C\u{200b}:/Users/dev/x.rs", "Users/dev/x.rs"),
+            ("a/C\u{feff}:/b.rs", "a/b.rs"),
+            // Windows drive prefixes are dropped.
+            (r"C:\Users\dev\project\file.ts", "Users/dev/project/file.ts"),
+            (r"d:/project/src/index.js", "project/src/index.js"),
+            ("C:\\Users\\test\\file.txt", "Users/test/file.txt"),
+            // control and zero-width characters are filtered out.
+            ("src/\0poison\r/app\u{200b}.ts", "src/poison/app.ts"),
+            (
+                "\u{feff}src/\x1b[31mred\x1b[0m/\u{2060}main\u{200d}.rs",
+                "src/[31mred[0m/main.rs",
+            ),
+            // three or more dots are ordinary name characters, not traversal.
+            (".../src/lib.rs", ".../src/lib.rs"),
+            ("..../src/lib.rs", "..../src/lib.rs"),
+            ("app.min...js", "app.min...js"),
+            ("/a/./.../b/", "a/.../b"),
+            ("/a/.../b/", "a/.../b"),
+            ("/a/..../b/", "a/..../b"),
+            (r"\a\.\...\b\", "a/.../b"),
+            (r"\a\...\b\", "a/.../b"),
+            (r"\a\....\b\", "a/..../b"),
+            ("a/b...c/d.rs", "a/b...c/d.rs"),
+            (r"a\b...c\d.rs", "a/b...c/d.rs"),
+            ("a/b....c/d.rs", "a/b....c/d.rs"),
+            (r"a\b....c\d.rs", "a/b....c/d.rs"),
+            ("///...///", "..."),
+            (r"\\\...\\\", "..."),
+            (r"///...\\\\", "..."),
+            (r"\\\...///", "..."),
+            ("///....///", "...."),
+            (r"\\\....\\\", "...."),
+            (r"///....\\\\", "...."),
+            (r"\\\....///", "...."),
+            ("...", "..."),
+            ("....", "...."),
+            // single dots: segment-only `.` is dropped, dots inside names are kept.
+            ("./a/./b/./c.ts", "a/b/c.ts"),
+            ("./src/./main.rs", "src/main.rs"),
+            ("/absolute/path/file.rs", "absolute/path/file.rs"),
+            (r"\\server\share\file.rs", "server/share/file.rs"),
+            ("a///b///c.rs", "a/b/c.rs"),
+            (r"a\\\b\\\c.rs", "a/b/c.rs"),
+            ("x.rs", "x.rs"),
+            ("a.b", "a.b"),
+            ("./file.rs", "file.rs"),
+            (".file.rs", ".file.rs"),
+            (".dir/.file.rs", ".dir/.file.rs"),
+            ("a./b.rs", "a./b.rs"),
+            ("a.rs.", "a.rs."),
+            ("a/b/c.rs", "a/b/c.rs"),
+            ("a/./b/./c.rs", "a/b/c.rs"),
+            ("/a/./b/", "a/b"),
+            (r"\a\.\b\", "a/b"),
+            (r"a/b\c/d\file.rs", "a/b/c/d/file.rs"),
+            ("a/b.c/d.rs", "a/b.c/d.rs"),
+            (r"a\b.c\d.rs", "a/b.c/d.rs"),
+            ("archive.tar.gz", "archive.tar.gz"),
+            ("a/b/archive.tar.gz", "a/b/archive.tar.gz"),
+            (r"a\b\archive.tar.gz", "a/b/archive.tar.gz"),
+            ("///.///", ""),
+            (r"\\\.\\\", ""),
+            (r"///.\\\\", ""),
+            (r"\\\.///", ""),
+            (".", ""),
+            ("./", ""),
+            // separators are normalized and redundant ones collapsed.
+            (r"foo/bar\baz", "foo/bar/baz"),
+            ("foo///bar\\\\baz", "foo/bar/baz"),
+            ("src/app/", "src/app"),
+            (r"src\app\", "src/app"),
+            ("a", "a"),
+            ("a/b////", "a/b"),
+            (r"a\b\\\\", "a/b"),
+            ("///a/b///", "a/b"),
+            (r"\\\a\b\\\", "a/b"),
+            ("///", ""),
+            (r"\\\", ""),
+            (r"\", ""),
+            (r"\\", ""),
+            (r"////\\\\", ""),
+        ];
+
+        for (input, expected) in CASES {
+            assert_eq!(
+                sanitize_path(input),
+                *expected,
+                "sanitize_path({input:?}) should be {expected:?}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        /// Properties that must hold for *every* input, including inputs no one
+        /// thought to enumerate. These are the actual security contract of
+        /// `sanitize_path`: its output is joined onto a display path, so it must
+        /// never escape upward, never re-anchor to a root or a drive, and never
+        /// carry characters that can forge what a path looks like on screen.
+        #[test]
+        fn sanitize_path_invariants(raw in ".{0,120}") {
+            let out = sanitize_path(&raw);
+
+            // An empty output is a legitimate result: input that is entirely
+            // separators, dot-segments, or stripped characters sanitizes to "".
+            // Segment checks only apply once there is a path to check, because
+            // "".split('/') yields a single empty segment.
+            if !out.is_empty() {
+                // 1. No traversal survives. A literal ".." segment is what lets a
+                //    path escape its parent, so it must never appear in the output.
+                proptest::prop_assert!(
+                    !out.split('/').any(|seg| seg == ".."),
+                    "output {out:?} contains a `..` segment (from {raw:?})"
+                );
+
+                // 2. No empty or bare-`.` segments: both are meaningless, and an
+                //    empty leading segment would make the path absolute.
+                proptest::prop_assert!(
+                    !out.split('/').any(|seg| seg.is_empty() || seg == "."),
+                    "output {out:?} contains an empty or `.` segment (from {raw:?})"
+                );
+            }
+
+            // 3. Never absolute, on either separator convention.
+            proptest::prop_assert!(!out.starts_with('/'), "output {out:?} is absolute");
+            proptest::prop_assert!(!out.contains('\\'), "output {out:?} kept a backslash");
+
+            // 4. No control or zero-width characters. These are the characters
+            //    that let a recorded path lie about itself in the UI.
+            proptest::prop_assert!(
+                !out.chars().any(|c| c.is_control() || crate::is_zero_width(c)),
+                "output {out:?} kept a control or zero-width char (from {raw:?})"
+            );
+
+            // 5. No Windows drive prefix is re-anchored.
+            let first = out.split('/').next().unwrap_or("");
+            proptest::prop_assert!(
+                !(first.len() == 2
+                    && first.as_bytes()[1] == b':'
+                    && first.as_bytes()[0].is_ascii_alphabetic()),
+                "output {out:?} still starts with a drive prefix"
+            );
+
+            // 6. Idempotent — re-sanitizing a sanitized path changes nothing.
+            //    Without this, output could still be an input that needs cleaning.
+            proptest::prop_assert_eq!(
+                sanitize_path(&out),
+                out.clone(),
+                "sanitize_path is not idempotent for {:?}",
+                raw
+            );
+        }
     }
 
     #[test]
@@ -435,96 +599,6 @@ mod tests {
         assert_eq!(epoch_ms(minus_zero), expected);
         let tabs_ts = "\t\n2026-08-11T10:00:00.000Z\n\t";
         assert_eq!(epoch_ms(tabs_ts), expected);
-    }
-
-    #[test]
-    fn sanitize_path_neutralizes_traversal_and_drive_letters() {
-        assert_eq!(sanitize_path("../../foo/bar.rs"), "foo/bar.rs");
-        assert_eq!(
-            sanitize_path("C:\\Users\\test\\file.txt"),
-            "Users/test/file.txt"
-        );
-        assert_eq!(sanitize_path("./src/./main.rs"), "src/main.rs");
-        assert_eq!(
-            sanitize_path("/absolute/path/file.rs"),
-            "absolute/path/file.rs"
-        );
-        assert_eq!(sanitize_path("a/b/c/../../d.rs"), "a/d.rs");
-        assert_eq!(sanitize_path("src/app/"), "src/app");
-        assert_eq!(sanitize_path(r"src\app\"), "src/app");
-        assert_eq!(
-            sanitize_path(r"\\server\share\file.rs"),
-            "server/share/file.rs"
-        );
-        assert_eq!(sanitize_path(".../src/lib.rs"), ".../src/lib.rs");
-        assert_eq!(sanitize_path("..../src/lib.rs"), "..../src/lib.rs");
-        assert_eq!(sanitize_path("a///b///c.rs"), "a/b/c.rs");
-        assert_eq!(sanitize_path(r"a\\\b\\\c.rs"), "a/b/c.rs");
-        assert_eq!(sanitize_path("a"), "a");
-        assert_eq!(sanitize_path("x.rs"), "x.rs");
-        assert_eq!(sanitize_path("a.b"), "a.b");
-        assert_eq!(sanitize_path("./file.rs"), "file.rs");
-        assert_eq!(sanitize_path(".file.rs"), ".file.rs");
-        assert_eq!(sanitize_path(".dir/.file.rs"), ".dir/.file.rs");
-        assert_eq!(sanitize_path("app.min...js"), "app.min...js");
-        assert_eq!(sanitize_path("my..dir/file.rs"), "my..dir/file.rs");
-        assert_eq!(sanitize_path("a./b.rs"), "a./b.rs");
-        assert_eq!(sanitize_path("a.rs."), "a.rs.");
-        assert_eq!(sanitize_path("a/b/c.rs"), "a/b/c.rs");
-        assert_eq!(sanitize_path("a/./b/./c.rs"), "a/b/c.rs");
-        assert_eq!(sanitize_path("/a/./b/"), "a/b");
-        assert_eq!(sanitize_path("/a/../b/"), "b");
-        assert_eq!(sanitize_path("/a/./../b/"), "b");
-        assert_eq!(sanitize_path("/a/./.../b/"), "a/.../b");
-        assert_eq!(sanitize_path("/a/.../b/"), "a/.../b");
-        assert_eq!(sanitize_path("/a/..../b/"), "a/..../b");
-        assert_eq!(sanitize_path(r"\a\.\b\"), "a/b");
-        assert_eq!(sanitize_path(r"\a\..\b\"), "b");
-        assert_eq!(sanitize_path(r"\a\.\..\b\"), "b");
-        assert_eq!(sanitize_path(r"\a\.\...\b\"), "a/.../b");
-        assert_eq!(sanitize_path(r"\a\...\b\"), "a/.../b");
-        assert_eq!(sanitize_path(r"\a\....\b\"), "a/..../b");
-        assert_eq!(sanitize_path(r"a/b\c/d\file.rs"), "a/b/c/d/file.rs");
-        assert_eq!(sanitize_path("a/b.c/d.rs"), "a/b.c/d.rs");
-        assert_eq!(sanitize_path(r"a\b.c\d.rs"), "a/b.c/d.rs");
-        assert_eq!(sanitize_path("archive.tar.gz"), "archive.tar.gz");
-        assert_eq!(sanitize_path("a/b/archive.tar.gz"), "a/b/archive.tar.gz");
-        assert_eq!(sanitize_path(r"a\b\archive.tar.gz"), "a/b/archive.tar.gz");
-        assert_eq!(sanitize_path("a/b...c/d.rs"), "a/b...c/d.rs");
-        assert_eq!(sanitize_path(r"a\b...c\d.rs"), "a/b...c/d.rs");
-        assert_eq!(sanitize_path("a/b....c/d.rs"), "a/b....c/d.rs");
-        assert_eq!(sanitize_path(r"a\b....c\d.rs"), "a/b....c/d.rs");
-        assert_eq!(sanitize_path("a/b////"), "a/b");
-        assert_eq!(sanitize_path(r"a\b\\\\"), "a/b");
-        assert_eq!(sanitize_path("///a/b///"), "a/b");
-        assert_eq!(sanitize_path(r"\\\a\b\\\"), "a/b");
-        assert_eq!(sanitize_path("///"), "");
-        assert_eq!(sanitize_path("///.///"), "");
-        assert_eq!(sanitize_path(r"\\\"), "");
-        assert_eq!(sanitize_path(r"\\\.\\\"), "");
-        assert_eq!(sanitize_path(r"///.\\\\"), "");
-        assert_eq!(sanitize_path(r"\\\.///"), "");
-        assert_eq!(sanitize_path("///..///"), "");
-        assert_eq!(sanitize_path(r"\\\..\\\"), "");
-        assert_eq!(sanitize_path(r"///..\\\\"), "");
-        assert_eq!(sanitize_path(r"\\\..///"), "");
-        assert_eq!(sanitize_path("///...///"), "...");
-        assert_eq!(sanitize_path(r"\\\...\\\"), "...");
-        assert_eq!(sanitize_path(r"///...\\\\"), "...");
-        assert_eq!(sanitize_path(r"\\\...///"), "...");
-        assert_eq!(sanitize_path("///....///"), "....");
-        assert_eq!(sanitize_path(r"\\\....\\\"), "....");
-        assert_eq!(sanitize_path(r"///....\\\\"), "....");
-        assert_eq!(sanitize_path(r"\\\....///"), "....");
-        assert_eq!(sanitize_path("."), "");
-        assert_eq!(sanitize_path("./"), "");
-        assert_eq!(sanitize_path(".."), "");
-        assert_eq!(sanitize_path("..."), "...");
-        assert_eq!(sanitize_path("...."), "....");
-        assert_eq!(sanitize_path(r"\"), "");
-        assert_eq!(sanitize_path(r"\\"), "");
-        assert_eq!(sanitize_path(r"\\\"), "");
-        assert_eq!(sanitize_path(r"////\\\\"), "");
     }
 
     #[test]
