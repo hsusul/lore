@@ -337,18 +337,32 @@ fn identical_reingest_of_multi_segment_session_is_a_noop() {
     fs::write(&path, content).unwrap();
 
     let outcome1 = ingest(&conn, &path);
-    assert!(matches!(outcome1, IngestOutcome::Ingested { change: ChangeClass::New, .. }));
+    assert!(matches!(
+        outcome1,
+        IngestOutcome::Ingested {
+            change: ChangeClass::New,
+            ..
+        }
+    ));
 
-    let segments1: i64 = conn.query_row("SELECT count(*) FROM session_segment", [], |r| r.get(0)).unwrap();
-    let messages1: i64 = conn.query_row("SELECT count(*) FROM message", [], |r| r.get(0)).unwrap();
+    let segments1: i64 = conn
+        .query_row("SELECT count(*) FROM session_segment", [], |r| r.get(0))
+        .unwrap();
+    let messages1: i64 = conn
+        .query_row("SELECT count(*) FROM message", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(segments1, 2);
     assert_eq!(messages1, 2);
 
     let outcome2 = ingest(&conn, &path);
-    assert!(matches!(outcome2, IngestOutcome::Skipped { .. }));
+    assert!(matches!(outcome2, IngestOutcome::Skipped));
 
-    let segments2: i64 = conn.query_row("SELECT count(*) FROM session_segment", [], |r| r.get(0)).unwrap();
-    let messages2: i64 = conn.query_row("SELECT count(*) FROM message", [], |r| r.get(0)).unwrap();
+    let segments2: i64 = conn
+        .query_row("SELECT count(*) FROM session_segment", [], |r| r.get(0))
+        .unwrap();
+    let messages2: i64 = conn
+        .query_row("SELECT count(*) FROM message", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(segments1, segments2);
     assert_eq!(messages1, messages2);
 }
