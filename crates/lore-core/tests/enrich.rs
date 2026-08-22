@@ -442,7 +442,9 @@ fn multi_segment_session_in_same_repo_resolves_to_single_repository() {
 
     // Both segments must link to the EXACT same repository row.
     let repo_ids: Vec<String> = conn
-        .prepare("SELECT repository_id FROM session_segment WHERE session_id = ?1 ORDER BY seq_start")
+        .prepare(
+            "SELECT repository_id FROM session_segment WHERE session_id = ?1 ORDER BY seq_start",
+        )
         .unwrap()
         .query_map([&sid], |r| r.get(0))
         .unwrap()

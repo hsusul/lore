@@ -918,7 +918,10 @@ mod tests {
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
         assert_eq!(session.tool_calls.len(), 3);
         assert_eq!(session.file_events.len(), 1);
-        assert_eq!(session.file_events[0].tool_native_call_id.as_deref(), Some("c_empty"));
+        assert_eq!(
+            session.file_events[0].tool_native_call_id.as_deref(),
+            Some("c_empty")
+        );
         assert_eq!(session.file_events[0].path, "");
     }
 
@@ -953,7 +956,10 @@ mod tests {
         );
         let session = ClaudeCodeAdapter::new().parse_str(jsonl, "null-id-tools");
         assert_eq!(session.status, crate::model::ParseStatus::Partial);
-        assert!(session.notes.iter().any(|n| n.message == "tool_use without id"));
+        assert!(session
+            .notes
+            .iter()
+            .any(|n| n.message == "tool_use without id"));
     }
 
     #[test]
