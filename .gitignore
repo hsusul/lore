@@ -40,11 +40,25 @@ dist-ssr/
 *.p12
 *.provisionprofile
 
-# Project documentation is local-only and must not be published.
-# README.md is the sole exception — it is the repo's public front page.
-*.md
-!README.md
-/docs/
+# Documentation.
+#
+# Contributor-essential docs ARE tracked: AGENTS.md, CLAUDE.md, docs/DOCS_INDEX.md,
+# and docs/{architecture,agents,development}. Someone cloning this repository needs
+# them to build correctly, and AGENTS.md is referenced as the canonical contributor
+# guide, so it has to exist in a fresh clone.
+#
+# These stay local-only. This repository is public; product strategy, unshipped
+# design, decision rationale, and competitor research are not published.
+/docs/product/
+/docs/design/
+/docs/decisions/
+/docs/research/
+/RESEARCH_SUMMARY.md
+
+# Working logs and scratch notes — long, machine-generated, not part of the project.
+/AUDIT_LOG.md
+/POLISH_LOG.md
+/audit-goal.txt
 
 # Local agent instructions and design previews
 /.claude/
