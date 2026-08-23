@@ -550,3 +550,221 @@ fn search_page_sanitizes_structured_filters_with_zero_width_chars() {
     assert_eq!(res_ctrl.len(), 1);
     assert_eq!(res_ctrl[0].session_id, id);
 }
+
+// ── Git-dimension filters (I1, migration 0011) ───────────────────────────────
+
+/// A Codex session recording `branch`/`commit` in `session_meta.git`, so the
+/// evidence lands as `agent_recorded` without needing a real repository.
+fn codex_recorded(session: &str, cwd: &str, branch: &str, commit: &str, text: &str) -> String {
+    format!(
+        concat!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{{\"id\":\"{id}\",\"cli_version\":\"1\",\"cwd\":\"{cwd}\",\"model_provider\":\"openai\",\"git\":{{\"branch\":\"{branch}\",\"commit_hash\":\"{commit}\"}}}}}}\n",
+            "{{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":\"{text}\"}}}}\n"
+        ),
+        id = session, cwd = cwd, branch = branch, commit = commit, text = text
+    )
+}
+
+fn persist_codex(conn: &Connection, blobs: &BlobStore, jsonl: &str, dedupe: &str) -> String {
+    let parsed = CodexAdapter::new().parse_str(jsonl, dedupe);
+    persist_session(conn, "codex", "Codex", &parsed, blobs).unwrap()
+}
+
+#[test]
+fn branch_filter_matches_the_recorded_branch() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    persist_codex(
+        &conn,
+        &blobs,
+        &codex_recorded("g1", "/p", "billing", sha, "webhook signature mismatch"),
+        "g1",
+    );
+    persist_codex(
+        &conn,
+        &blobs,
+        &codex_recorded("g2", "/p", "main", sha, "webhook signature mismatch"),
+        "g2",
+    );
+
+    assert_eq!(search(&conn, "webhook", 20).unwrap().len(), 2);
+    let billing = search(&conn, "webhook branch:billing", 20).unwrap();
+    assert_eq!(billing.len(), 1, "only the billing session matches");
+    assert_eq!(search(&conn, "webhook branch:nope", 20).unwrap().len(), 0);
+}
+
+#[test]
+fn commit_filter_accepts_a_short_prefix_and_does_not_wildcard() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    persist_codex(
+        &conn,
+        &blobs,
+        &codex_recorded("g1", "/p", "main", sha, "signature mismatch"),
+        "g1",
+    );
+
+    assert_eq!(
+        search(&conn, "signature commit:01234567", 20)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        search(&conn, &format!("signature commit:{sha}"), 20)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        search(&conn, "signature commit:99999999", 20)
+            .unwrap()
+            .len(),
+        0
+    );
+    // A LIKE wildcard in the value is escaped, not honoured.
+    assert_eq!(search(&conn, "signature commit:%", 20).unwrap().len(), 0);
+    assert_eq!(
+        search(&conn, "signature commit:_1234567", 20)
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn git_source_constrains_the_branch_it_is_paired_with() {
+    // THE point of the search_git design: the agent recorded `billing`, and a
+    // filter naming a *different* provenance class must not match it. A
+    // flattened branch column could not express this.
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    persist_codex(
+        &conn,
+        &blobs,
+        &codex_recorded("g1", "/p", "billing", sha, "webhook mismatch"),
+        "g1",
+    );
+
+    assert_eq!(
+        search(
+            &conn,
+            "webhook branch:billing git-source:agent_recorded",
+            20
+        )
+        .unwrap()
+        .len(),
+        1,
+        "the agent did record this branch"
+    );
+    assert_eq!(
+        search(&conn, "webhook branch:billing git-source:lore_captured", 20)
+            .unwrap()
+            .len(),
+        0,
+        "Lore never observed this branch itself — the classes must not mix"
+    );
+    assert_eq!(
+        search(&conn, "webhook git-source:agent_recorded", 20)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn an_unknown_git_source_is_ignored_rather_than_matching_nothing() {
+    // A typo must not look like "no session has this evidence".
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    persist_codex(
+        &conn,
+        &blobs,
+        &codex_recorded("g1", "/p", "billing", sha, "webhook mismatch"),
+        "g1",
+    );
+    assert_eq!(
+        search(&conn, "webhook git-source:agent_recorderd", 20)
+            .unwrap()
+            .len(),
+        1,
+        "an unrecognized class is dropped, leaving the rest of the query intact"
+    );
+}
+
+#[test]
+fn git_filters_do_not_duplicate_a_session_with_many_observations() {
+    // A semi-join must not fan out: one session with several observations is
+    // still one hit per matching document.
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let sid = persist_codex(
+        &conn,
+        &blobs,
+        &codex_recorded("g1", "/p", "billing", sha, "webhook mismatch"),
+        "g1",
+    );
+    // Plant extra observations for the same session, as re-verification would.
+    for (i, class) in ["lore_captured", "lore_reverified"].iter().enumerate() {
+        conn.execute(
+            "INSERT INTO git_observation
+                (id, session_id, segment_id, source, observed_at, temporal_confidence, branch)
+             SELECT 'extra' || ?2, ?1, s.id, ?3, 1, 'retrospective', 'billing'
+             FROM session_segment s WHERE s.session_id = ?1 LIMIT 1",
+            rusqlite::params![&sid, i as i64, class],
+        )
+        .unwrap();
+    }
+    lore_core::search::reproject_for_test(&conn, &sid).unwrap();
+
+    let hits = search(&conn, "webhook branch:billing", 20).unwrap();
+    assert_eq!(hits.len(), 1, "three observations, still one hit");
+}
+
+#[test]
+fn repo_filter_matches_a_segment_with_no_observation_of_its_own() {
+    // `segment_link` rows carry repository resolution even when no git
+    // observation was recorded, so repo: still finds the session.
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let sid = persist_claude(
+        &conn,
+        &blobs,
+        &user_message("s1", "/p", "retryBackoff helper"),
+        "s1",
+    );
+    conn.execute(
+        "INSERT INTO repository (id, identity_key, display_name, identity_confidence,
+                                 created_at, updated_at)
+         VALUES ('repo_x', 'gcd:test', 'x', 'high', 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE session_segment SET repository_id = 'repo_x' WHERE session_id = ?1",
+        [&sid],
+    )
+    .unwrap();
+    lore_core::search::reproject_for_test(&conn, &sid).unwrap();
+
+    assert_eq!(
+        search(&conn, "retryBackoff repo:repo_x", 20).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        search(&conn, "retryBackoff repo:repo_y", 20).unwrap().len(),
+        0
+    );
+    // …but a branch filter must not be satisfied by a link row's NULL branch.
+    assert_eq!(
+        search(&conn, "retryBackoff repo:repo_x branch:main", 20)
+            .unwrap()
+            .len(),
+        0
+    );
+}

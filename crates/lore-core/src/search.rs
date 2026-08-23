@@ -19,6 +19,56 @@ pub const HIGHLIGHT_START: &str = "\u{e000}";
 /// Marker inserted after a matched term in a snippet.
 pub const HIGHLIGHT_END: &str = "\u{e001}";
 
+/// Rebuild the `search_git` filter rows for one session from canonical
+/// evidence (migration 0011).
+///
+/// Delete-then-insert per session, mirroring how `search_document` is
+/// maintained: it is idempotent, it cannot leave a stale row behind when a
+/// session is replaced, and it keeps the projection reconstructible from the
+/// archive alone — no agent log is reread (`SEARCH.md` §5).
+///
+/// **Must be called inside the same transaction as the canonical rows it
+/// projects.** Every write site that touches `git_observation` or a segment's
+/// repository linkage calls it before committing: session replace in `ingest`,
+/// `enrich_session`, and `write_outcomes`.
+///
+/// The `segment_link` class carries a segment's repository/worktree resolution
+/// even when no observation was recorded for it, so `repo:` matches a session
+/// whose repository is known but which produced no git evidence of its own.
+pub(crate) fn project_session_git(tx: &Connection, session_id: &str) -> Result<()> {
+    tx.execute("DELETE FROM search_git WHERE session_id = ?1", [session_id])?;
+    tx.execute(
+        "INSERT OR IGNORE INTO search_git
+            (session_id, segment_id, repository_id, worktree_id, source_class,
+             branch, commit_sha, observed_at)
+         SELECT o.session_id, o.segment_id, s.repository_id, s.worktree_id,
+                o.source, o.branch, o.commit_sha, o.observed_at
+         FROM git_observation o
+         LEFT JOIN session_segment s ON s.id = o.segment_id
+         WHERE o.session_id = ?1",
+        [session_id],
+    )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO search_git
+            (session_id, segment_id, repository_id, worktree_id, source_class,
+             branch, commit_sha, observed_at)
+         SELECT s.session_id, s.id, s.repository_id, s.worktree_id,
+                'segment_link', NULL, NULL, 0
+         FROM session_segment s
+         WHERE s.session_id = ?1 AND s.repository_id IS NOT NULL",
+        [session_id],
+    )?;
+    Ok(())
+}
+
+/// Test-only re-projection hook: rebuild one session's `search_git` rows after
+/// a test has planted evidence directly. Production code calls
+/// [`project_session_git`] inside the transaction that wrote the evidence.
+#[doc(hidden)]
+pub fn reproject_for_test(conn: &Connection, session_id: &str) -> Result<()> {
+    project_session_git(conn, session_id)
+}
+
 /// Caps to keep pathological queries bounded.
 const MAX_QUERY_LEN: usize = 512;
 const MAX_TERMS: usize = 16;
@@ -70,7 +120,41 @@ struct ParsedQuery {
     path: Option<String>,
     tool: Option<String>,
     has_error: bool,
+    /// Git-dimension filters, resolved against `search_git` (migration 0011).
+    git: GitFilters,
 }
+
+/// Filters over provenance-labelled Git evidence.
+///
+/// `source_class` is a **constraint on the other three**, not a filter in its
+/// own right: `branch:billing git-source:agent_recorded` must match only
+/// sessions where *the agent recorded* that branch, never one where Lore merely
+/// observed it later. Keeping them in one struct is what makes that expressible
+/// — a flattened branch column could not distinguish the two
+/// (`GIT_INTEGRATION.md` §1, §7).
+#[derive(Default)]
+struct GitFilters {
+    repo: Option<String>,
+    worktree: Option<String>,
+    branch: Option<String>,
+    commit: Option<String>,
+    source_class: Option<String>,
+}
+
+impl GitFilters {
+    fn is_empty(&self) -> bool {
+        self.repo.is_none()
+            && self.worktree.is_none()
+            && self.branch.is_none()
+            && self.commit.is_none()
+            && self.source_class.is_none()
+    }
+}
+
+/// The provenance classes a `git-source:` filter may name. An unrecognised
+/// value is rejected at parse time rather than silently matching nothing, so a
+/// typo cannot look like "no sessions have this".
+const GIT_SOURCE_CLASSES: &[&str] = &["agent_recorded", "lore_captured", "lore_reverified"];
 
 /// Search the archive, returning the first page only. `raw` is the user's query
 /// (plain terms plus optional `agent:`, `path:`, `tool:`, and `has:error`
@@ -159,6 +243,43 @@ pub fn search_page(
                           WHERE tc.session_id = sd.session_id AND tc.name = ?)",
         );
         params.push(Value::Text(tool));
+    }
+    // Git-dimension filters (migration 0011). ONE semi-join carries all of them,
+    // which is the whole point: `branch:billing git-source:agent_recorded` must
+    // be satisfied by a SINGLE search_git row, so the branch and the provenance
+    // class have to be true of the same piece of evidence. Splitting them into
+    // separate EXISTS clauses would match a session where the agent recorded
+    // some branch and Lore separately observed `billing` — exactly the
+    // conflation GIT_INTEGRATION.md §1 forbids. A semi-join also cannot fan out,
+    // so a session with many observations still counts once.
+    if !query.git.is_empty() {
+        sql.push_str(" AND EXISTS (SELECT 1 FROM search_git g WHERE g.session_id = sd.session_id");
+        if let Some(repo) = query.git.repo {
+            sql.push_str(" AND g.repository_id = ?");
+            params.push(Value::Text(repo));
+        }
+        if let Some(worktree) = query.git.worktree {
+            sql.push_str(" AND g.worktree_id = ?");
+            params.push(Value::Text(worktree));
+        }
+        if let Some(branch) = query.git.branch {
+            sql.push_str(" AND g.branch = ?");
+            params.push(Value::Text(branch));
+        }
+        if let Some(commit) = query.git.commit {
+            // Prefix match so a short sha works, anchored so it cannot wildcard.
+            sql.push_str(" AND g.commit_sha LIKE ? ESCAPE '\\'");
+            params.push(Value::Text(format!("{}%", like_escape(&commit))));
+        }
+        if let Some(class) = query.git.source_class {
+            sql.push_str(" AND g.source_class = ?");
+            params.push(Value::Text(class));
+        }
+        // No guard is needed against the synthetic `segment_link` rows: they
+        // carry NULL branch and NULL commit_sha, and `NULL = ?` is never true,
+        // so they can only ever satisfy repo:/worktree: — which is exactly what
+        // they exist for.
+        sql.push(')');
     }
     sql.push_str(") m");
 
@@ -359,6 +480,7 @@ fn parse_query(raw: &str) -> ParsedQuery {
     let mut path = None;
     let mut tool = None;
     let mut has_error = false;
+    let mut git = GitFilters::default();
     for token in bounded.split_whitespace() {
         if let Some(value) = token.strip_prefix("agent:") {
             let clean: String = value
@@ -384,6 +506,21 @@ fn parse_query(raw: &str) -> ParsedQuery {
             if !clean.is_empty() {
                 tool = Some(clean);
             }
+        } else if let Some(value) = token.strip_prefix("repo:") {
+            git.repo = clean_filter(value);
+        } else if let Some(value) = token.strip_prefix("worktree:") {
+            git.worktree = clean_filter(value);
+        } else if let Some(value) = token.strip_prefix("branch:") {
+            git.branch = clean_filter(value);
+        } else if let Some(value) = token.strip_prefix("commit:") {
+            // Commit shas are matched by prefix, so normalise case here rather
+            // than forcing every caller to type the full 40 hex characters.
+            git.commit = clean_filter(value).map(|v| v.to_ascii_lowercase());
+        } else if let Some(value) = token.strip_prefix("git-source:") {
+            // An unknown class is dropped rather than applied, so a typo cannot
+            // silently produce "no results" and read as "no such evidence".
+            git.source_class =
+                clean_filter(value).filter(|v| GIT_SOURCE_CLASSES.contains(&v.as_str()));
         } else if token == "has:error" {
             has_error = true;
         } else if terms.len() < MAX_TERMS {
@@ -396,7 +533,27 @@ fn parse_query(raw: &str) -> ParsedQuery {
         path,
         tool,
         has_error,
+        git,
     }
+}
+
+/// Escape LIKE wildcards so a user-supplied value cannot widen its own match.
+fn like_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// Strip control and zero-width characters from a filter value; `None` when
+/// nothing printable survives, so `branch:` alone is ignored rather than
+/// matching the empty string.
+fn clean_filter(value: &str) -> Option<String> {
+    let clean: String = value
+        .chars()
+        .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
+        .collect();
+    (!clean.is_empty()).then_some(clean)
 }
 
 /// Build a safe FTS5 MATCH expression: each plain term becomes a quoted phrase

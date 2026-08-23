@@ -418,6 +418,12 @@ fn persist_rows(
         )?;
     }
 
+    // Git filter projection, in the same transaction as the evidence it
+    // projects (migration 0011). Enrichment refreshes it again once repository
+    // identity is resolved; this pass makes agent-recorded branches and commits
+    // searchable even for a session Lore never manages to enrich.
+    crate::search::project_session_git(tx, &session_id)?;
+
     Ok(session_id)
 }
 
@@ -711,14 +717,19 @@ pub fn ingest_file(
     let meta = std::fs::metadata(path).map_err(|_| StorageError::Io)?;
     let is_oversized = meta.len() > MAX_SOURCE_BYTES;
 
-    let (content_opt, snapshot) = if is_oversized {
-        let prefix_bytes = read_prefix(path, PREFIX_BYTES).map_err(|_| StorageError::Io)?;
-        let snap = oversized_source_snapshot(path, &meta, &prefix_bytes);
-        (None, snap)
+    let (content, snapshot, oversized_note) = if is_oversized {
+        // Parse a bounded prefix (cut at a complete line) so a multi-hundred-MiB
+        // rollout still yields its earliest messages rather than nothing; the
+        // session is marked partial and the note says how much was left out (F6).
+        let content = read_bounded_content(path, MAX_SOURCE_BYTES).map_err(|_| StorageError::Io)?;
+        let prefix_slice = &content.as_bytes()[..content.len().min(PREFIX_BYTES)];
+        let snap = oversized_source_snapshot(path, &meta, prefix_slice);
+        let note = oversized_note(&meta, content.len());
+        (content, snap, Some(note))
     } else {
         let content = std::fs::read_to_string(path).map_err(|_| StorageError::Io)?;
         let snap = source_snapshot(path, &meta, &content);
-        (Some(content), snap)
+        (content, snap, None)
     };
 
     let agent_id = adapter.id().0;
@@ -759,10 +770,7 @@ pub fn ingest_file(
         }
         Some(row) => {
             let same_content = row.full_hash.as_deref() == Some(snapshot.full_hash.as_str());
-            let appended = !same_content
-                && content_opt
-                    .as_ref()
-                    .is_some_and(|c| is_append(row, c.as_bytes()));
+            let appended = !same_content && is_append(row, content.as_bytes());
             let change = if same_content {
                 ChangeClass::Unchanged
             } else if appended {
@@ -786,14 +794,10 @@ pub fn ingest_file(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| snapshot.path.clone());
 
-    let parsed = match content_opt {
-        Some(content) => adapter.parse_content(&content, &fallback),
-        None => {
-            let mut p = ParsedSession::new(&fallback);
-            p.note_partial("source file exceeds maximum supported size (64MB)");
-            p
-        }
-    };
+    let mut parsed = adapter.parse_content(&content, &fallback);
+    if let Some(note) = oversized_note {
+        parsed.note_partial(note);
+    }
 
     // Stage blob files before opening the transaction (DATA_MODEL.md §3).
     let patch_blobs = stage_patch_blobs(blobs, &parsed)?;
@@ -1047,6 +1051,42 @@ fn read_prefix(path: &Path, max_bytes: usize) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(max_bytes);
     f.take(max_bytes as u64).read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+/// Read the first `max_bytes` of `path`, truncated to a complete line boundary,
+/// as UTF-8. A multi-hundred-MiB rollout still yields its earliest messages
+/// rather than an empty session; the caller marks the parse partial (F6).
+fn read_bounded_content(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    let mut bytes = read_prefix(path, usize::try_from(max_bytes).unwrap_or(usize::MAX))?;
+    // Cut at the last complete line so the JSONL prefix parses cleanly. `\n` is
+    // a single byte that never appears inside a multi-byte UTF-8 sequence, so
+    // this is always a valid char boundary too.
+    //
+    // With NO newline in the prefix the file is one line longer than the cap —
+    // a single enormous message. There is no complete line to keep, so yield
+    // nothing rather than cutting mid-character: slicing at `bytes.len()` could
+    // split a code point and surface as "source is not UTF-8", which would be a
+    // lie about a perfectly valid file. An empty prefix degrades the session to
+    // `partial` with the oversized note, which is the honest outcome.
+    let end = match bytes.iter().rposition(|&b| b == b'\n') {
+        Some(i) => i + 1,
+        None => 0,
+    };
+    bytes.truncate(end); // truncate in place; a copy here would double peak RSS
+    String::from_utf8(bytes)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "source is not UTF-8"))
+}
+
+/// Human-readable truncation note for an oversized source (F6): states the real
+/// size and how much of it was indexed, so the user can tell data was left out
+/// and roughly how much.
+fn oversized_note(meta: &std::fs::Metadata, indexed_bytes: usize) -> String {
+    let cap_mib = MAX_SOURCE_BYTES / (1024 * 1024);
+    let size_mib = meta.len() as f64 / (1024.0 * 1024.0);
+    let indexed_mib = indexed_bytes as f64 / (1024.0 * 1024.0);
+    format!(
+        "source file is {size_mib:.1} MiB, exceeding the {cap_mib} MiB cap; indexed only the first {indexed_mib:.1} MiB"
+    )
 }
 
 fn oversized_source_snapshot(

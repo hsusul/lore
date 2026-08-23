@@ -68,7 +68,23 @@ const MIGRATIONS: &[Migration] = &[
         name: "blob_hash_algo",
         sql: include_str!("../../migrations/0010_blob_hash_algo.sql"),
     },
+    Migration {
+        version: 11,
+        name: "search_git",
+        sql: include_str!("../../migrations/0011_search_git.sql"),
+    },
+    Migration {
+        version: 12,
+        name: "search_git_filter_indexes",
+        sql: include_str!("../../migrations/0012_search_git_filter_indexes.sql"),
+    },
 ];
+
+/// How many migrations exist. Tests assert against this rather than a literal
+/// so adding a migration does not require editing an unrelated assertion — the
+/// interesting property is "every migration is recorded exactly once", not the
+/// number itself.
+pub const COUNT: i64 = MIGRATIONS.len() as i64;
 
 /// Apply all pending migrations. Idempotent.
 pub fn run(conn: &Connection) -> Result<()> {

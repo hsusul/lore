@@ -1,0 +1,5 @@
+{"type":"session_meta","timestamp":"2026-08-15T10:00:00.000Z","payload":{"id":"019e0001-0000-7000-8000-000000000001","cwd":"/proj","cli_version":"0.136.0","source":"cli","model_provider":"openai","git":{"branch":"main","commit_hash":"4c8a2d","repository_url":"github.com/x/proj"}}}
+{"type":"turn_context","timestamp":"2026-08-15T10:00:00.500Z","payload":{"cwd":"/proj","model":"gpt-x","effort":"medium","turn_id":"t1"}}
+{"type":"response_item","timestamp":"2026-08-15T10:00:01.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"add a retry to the client"}]}}
+{"type":"response_item","timestamp":"2026-08-15T10:00:03.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I'll add exponential backoff with jitter."}]}}
+{"type":"event_msg","timestamp":"2026-08-15T10:00:04.000Z","payload":{"type":"task_complete","last_agent_message":"done","duration_ms":4200,"turn_id":"t1"}}

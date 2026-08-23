@@ -223,7 +223,11 @@ fn schema_migrations_records_all_applied_migrations_with_checksums() {
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
 
-    assert_eq!(rows.len(), 10, "all 10 migrations must be recorded");
+    assert_eq!(
+        i64::try_from(rows.len()).unwrap(),
+        lore_core::storage::migrations::COUNT,
+        "every migration must be recorded exactly once"
+    );
     for (i, (version, name, checksum)) in rows.iter().enumerate() {
         assert_eq!(*version, (i + 1) as i64);
         assert!(!name.is_empty());

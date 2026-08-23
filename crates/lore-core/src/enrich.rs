@@ -61,6 +61,9 @@ pub fn enrich_session(conn: &Connection, session_id: &str) -> Result<usize> {
         link_segment(&tx, session_id, segment_id, facts)?;
         enriched += 1;
     }
+    // Repository/worktree linkage and the lore_captured observations just
+    // changed, so refresh the git filter projection in the same transaction.
+    crate::search::project_session_git(&tx, session_id)?;
     tx.commit()?;
     Ok(enriched)
 }
@@ -221,6 +224,15 @@ fn write_outcomes(conn: &Connection, outcomes: &[ReverifyOutcome]) -> Result<()>
                 }
             }
             WorktreeState::Unchanged => {}
+        }
+    }
+    // New lore_reverified rows are searchable evidence too — refresh the git
+    // filter projection for every session these outcomes touched, in the same
+    // transaction (migration 0011).
+    let mut projected: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for outcome in outcomes {
+        if projected.insert(outcome.session_id.as_str()) {
+            crate::search::project_session_git(&tx, &outcome.session_id)?;
         }
     }
     tx.commit()?;

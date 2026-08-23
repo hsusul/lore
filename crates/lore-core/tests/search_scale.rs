@@ -167,6 +167,12 @@ fn fts_query_latency_at_one_million_messages() {
         ("multi-term AND", "add health check"),
         ("agent filter", "add agent:codex"),
         ("path filter", "add path:/repo"),
+        ("git branch filter", "add branch:main"),
+        ("git source filter", "add git-source:agent_recorded"),
+        (
+            "git branch+source",
+            "add branch:main git-source:agent_recorded",
+        ),
     ];
 
     // WARM: steady state on one hot connection; drop the first (compile) run.

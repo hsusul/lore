@@ -834,7 +834,7 @@ export default function App() {
             ref={searchInputRef}
             className="search-box"
             type="search"
-            placeholder="Search… (e.g. retryBackoff agent:codex path:auth/)"
+            placeholder="Search… (filters: agent: path: tool: has:error repo: branch: commit: git-source:)"
             aria-label="Search"
             value={query}
             onChange={(event) => updateSearch(event.target.value)}

@@ -1,0 +1,23 @@
+{
+  "claude_code": {
+    "agent_version": "1.2.3",
+    "note": "Claude Code transcript JSONL, anonymized. The transcript format is internal and changes between releases; each fixture is tagged with the agent version whose shape it represents.",
+    "fixtures": {
+      "basic_text.jsonl": "1.2.3",
+      "tool_use.jsonl": "1.2.3",
+      "segments.jsonl": "1.2.3",
+      "v2.1.0_sample.jsonl": "2.1.0"
+    }
+  },
+  "codex": {
+    "agent_version": "0.133.0",
+    "note": "Codex rollout JSONL, anonymized. Same version-keying contract as Claude Code.",
+    "fixtures": {
+      "minimal.jsonl": "0.133.0",
+      "function_call.jsonl": "0.133.0",
+      "patch_apply.jsonl": "0.133.0",
+      "token_count.jsonl": "0.133.0",
+      "v0.136.0_sample.jsonl": "0.136.0"
+    }
+  }
+}

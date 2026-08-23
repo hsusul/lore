@@ -315,10 +315,58 @@ fn oversized_source_degrades_gracefully_to_partial() {
         .unwrap();
     assert_eq!(status, "partial");
     assert!(
-        note.as_deref()
-            .unwrap_or("")
-            .contains("exceeds maximum supported size"),
-        "must record content-free size cap diagnostic"
+        note.as_deref().unwrap_or("").contains("MiB cap"),
+        "must record a quantitative size-cap diagnostic: {note:?}"
+    );
+    // F6: the bounded prefix was actually parsed — the first line is indexed,
+    // rather than the whole file being silently dropped.
+    let messages: i64 = conn
+        .query_row("SELECT count(*) FROM message", [], |r| r.get(0))
+        .unwrap();
+    assert!(
+        messages >= 1,
+        "the earliest message from the prefix is indexed"
+    );
+}
+
+#[test]
+fn an_oversized_single_line_source_is_partial_not_a_utf8_error() {
+    // One JSONL line longer than the cap: there is no complete line inside the
+    // 64 MiB prefix. Cutting at the raw byte length could split a multi-byte
+    // character and surface as "source is not UTF-8" — a lie about a perfectly
+    // valid file. The honest outcome is an empty prefix and a partial session
+    // carrying the size note.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("one-huge-line.jsonl");
+    let conn = lore_core::storage::open_in_memory().unwrap();
+
+    use std::io::Write;
+    let mut file = fs::File::create(&path).unwrap();
+    // Multi-byte characters so a naive byte-length cut would land mid-sequence.
+    let chunk = "€".repeat(1024 * 1024); // 3-byte chars: 64 MiB is not a multiple of 3,
+                                         // so a naive byte-length cut is guaranteed to land mid-character.
+    for _ in 0..40 {
+        file.write_all(chunk.as_bytes()).unwrap();
+    }
+    // No trailing newline anywhere: the whole file is a single line.
+    drop(file);
+
+    let outcome = ingest(&conn, &path);
+    assert!(
+        matches!(outcome, IngestOutcome::Ingested { .. }),
+        "an oversized single-line source must ingest as partial, not error"
+    );
+    let (status, note): (String, Option<String>) = conn
+        .query_row(
+            "SELECT parse_status, parse_note FROM agent_session",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "partial");
+    assert!(
+        note.as_deref().unwrap_or("").contains("MiB cap"),
+        "the size cap is still reported: {note:?}"
     );
 }
 
