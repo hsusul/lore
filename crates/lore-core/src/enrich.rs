@@ -69,8 +69,18 @@ pub fn enrich_session(conn: &Connection, session_id: &str) -> Result<usize> {
 /// exist now, recording `lore_reverified` observations. This never modifies the
 /// original `agent_recorded` rows: a rebased/GC'd/deleted commit yields a new
 /// observation with `commit_exists = 0`, and history is preserved
-/// (`GIT_INTEGRATION.md` §6). Intended as a batch/background pass, not part of
-/// ingest. Returns the number of observations recorded.
+/// (`GIT_INTEGRATION.md` §6).
+///
+/// Observations are **appended when the verdict changes**, not on every run: the
+/// conclusion is folded into the observation id, so re-checking an unchanged
+/// commit refreshes that row's `last_checked_at` metadata while a commit that
+/// has since disappeared adds a second row beside the first. The transition is
+/// therefore recoverable ("existed on the 3rd, gone by the 20th") without the
+/// row count growing with the number of background passes.
+///
+/// Intended as a batch/background pass, not part of ingest. **Nothing schedules
+/// it yet** — see `ROADMAP.md` (Phase 1 `I2`). Returns the number of targets
+/// checked, which is not the number of rows added.
 pub fn reverify_session(conn: &Connection, session_id: &str) -> Result<usize> {
     let targets = reverify_targets(conn, session_id)?;
     if targets.is_empty() {
@@ -83,11 +93,14 @@ pub fn reverify_session(conn: &Connection, session_id: &str) -> Result<usize> {
         .map(|target| {
             let path = Path::new(&target.path);
             if !path.exists() {
-                return ReverifyOutcome::unavailable(target, "path_missing");
+                // The checkout is gone: this is the one case that marks the
+                // worktree missing.
+                return ReverifyOutcome::unavailable(target, "path_missing", true);
             }
             match git::reverify(path, &target.commit_sha, target.branch.as_deref()) {
                 Some(result) => ReverifyOutcome::verified(target, &result),
-                None => ReverifyOutcome::unavailable(target, "repository_unreadable"),
+                // Present but unreadable — transient, so the worktree stands.
+                None => ReverifyOutcome::unavailable(target, "repository_unreadable", false),
             }
         })
         .collect();
@@ -95,9 +108,20 @@ pub fn reverify_session(conn: &Connection, session_id: &str) -> Result<usize> {
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
     for outcome in &outcomes {
+        // The verdict is part of the id, so an unchanged conclusion collides
+        // with its own earlier row (refreshing only `last_checked_at`) while a
+        // changed conclusion appends a new observation. `observed_at` therefore
+        // always means "when this conclusion was *first* reached" and is never
+        // rewritten — history is appended, never overwritten (`DATA_MODEL.md`
+        // §5, `GIT_INTEGRATION.md` §6).
         let obs_id = det_id(
             "gr",
-            &[session_id, &outcome.segment_id, &outcome.commit_sha],
+            &[
+                session_id,
+                &outcome.segment_id,
+                &outcome.commit_sha,
+                &outcome.verdict,
+            ],
         );
         tx.execute(
             "INSERT INTO git_observation
@@ -106,8 +130,6 @@ pub fn reverify_session(conn: &Connection, session_id: &str) -> Result<usize> {
              VALUES (?1, ?2, ?3, 'lore_reverified', unixepoch('now')*1000, 'retrospective',
                      ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET
-                observed_at = unixepoch('now')*1000,
-                commit_exists = excluded.commit_exists,
                 metadata_json = excluded.metadata_json",
             params![
                 obs_id,
@@ -149,6 +171,26 @@ struct ReverifyOutcome {
     commit_exists: Option<i64>,
     metadata: String,
     worktree_missing: bool,
+    /// Short stable fingerprint of *what this check concluded*. It is part of
+    /// the observation id, so re-running with the same conclusion refreshes one
+    /// row while a changed conclusion appends a new one (`DATA_MODEL.md` §5).
+    verdict: String,
+}
+
+/// Render an optional flag for a verdict fingerprint: `1`, `0`, or `-` (unknown).
+fn flag(value: Option<bool>) -> char {
+    match value {
+        Some(true) => '1',
+        Some(false) => '0',
+        None => '-',
+    }
+}
+
+/// Wall-clock milliseconds since the Unix epoch, saturating at 0 before it.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 impl ReverifyOutcome {
@@ -157,8 +199,15 @@ impl ReverifyOutcome {
             "commit_exists": result.commit_exists,
             "branch_exists": result.branch_exists,
             "branch_at_recorded_commit": result.branch_at_recorded_commit,
+            "last_checked_at": now_ms(),
         })
         .to_string();
+        let verdict = format!(
+            "v:{}:{}:{}",
+            flag(Some(result.commit_exists)),
+            flag(result.branch_exists),
+            flag(result.branch_at_recorded_commit),
+        );
         ReverifyOutcome {
             segment_id: target.segment_id,
             worktree_id: target.worktree_id,
@@ -167,11 +216,20 @@ impl ReverifyOutcome {
             commit_exists: Some(i64::from(result.commit_exists)),
             metadata,
             worktree_missing: false,
+            verdict,
         }
     }
 
-    fn unavailable(target: ReverifyTarget, reason: &str) -> Self {
-        let metadata = serde_json::json!({ "unavailable": reason }).to_string();
+    /// The repository could not be checked. `worktree_missing` is set **only**
+    /// when the checkout is genuinely gone: a repository that is present but
+    /// unreadable (a permission error, a lock, an unmounted volume) is a
+    /// transient condition and must not flag a live worktree as missing.
+    fn unavailable(target: ReverifyTarget, reason: &str, worktree_missing: bool) -> Self {
+        let metadata = serde_json::json!({
+            "unavailable": reason,
+            "last_checked_at": now_ms(),
+        })
+        .to_string();
         ReverifyOutcome {
             segment_id: target.segment_id,
             worktree_id: target.worktree_id,
@@ -179,7 +237,8 @@ impl ReverifyOutcome {
             commit_sha: target.commit_sha,
             commit_exists: None,
             metadata,
-            worktree_missing: true,
+            worktree_missing,
+            verdict: format!("u:{reason}"),
         }
     }
 }

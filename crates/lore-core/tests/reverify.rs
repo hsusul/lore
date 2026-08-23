@@ -2,6 +2,12 @@
 //! recorded commits/branches without ever overwriting the historical
 //! `agent_recorded` rows — a rebased/GC'd commit is flagged missing, a deleted
 //! branch is flagged gone, and a vanished checkout marks its worktree missing.
+//!
+//! It also pins the two properties that make the observations *evidence* rather
+//! than a status light: a changed verdict **appends** a row (so the transition
+//! stays recoverable) while an unchanged verdict refreshes one in place, and a
+//! repository that is present but unreadable is treated as transient rather
+//! than flagging a live worktree missing.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::Path;
@@ -220,6 +226,126 @@ fn reverify_flags_a_deleted_branch_but_keeps_the_recorded_branch() {
     assert!(
         meta.contains("\"branch_exists\":false"),
         "deleted branch is flagged: {meta}"
+    );
+}
+
+#[test]
+fn reverify_appends_a_row_when_the_verdict_changes_and_refreshes_when_it_does_not() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let head = git_out(repo.path(), &["rev-parse", "HEAD"]);
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let sid = persist_and_enrich(&conn, &store, repo.path(), &head);
+
+    let reverified = "SELECT count(*) FROM git_observation
+                      WHERE session_id=?1 AND source='lore_reverified'";
+
+    // First pass: the commit exists and so does its branch.
+    reverify_session(&conn, &sid).unwrap();
+    assert_eq!(count(&conn, reverified, &sid), 1);
+
+    // Re-running with nothing changed must NOT append: the verdict is part of
+    // the observation id, so the row is refreshed in place.
+    reverify_session(&conn, &sid).unwrap();
+    assert_eq!(
+        count(&conn, reverified, &sid),
+        1,
+        "an unchanged verdict refreshes its row instead of appending"
+    );
+
+    // The branch is deleted (as after a merge): the verdict changes.
+    git(repo.path(), &["checkout", "--detach", "HEAD"]);
+    git(repo.path(), &["branch", "-D", "main"]);
+    reverify_session(&conn, &sid).unwrap();
+
+    assert_eq!(
+        count(&conn, reverified, &sid),
+        2,
+        "a changed verdict appends a second observation instead of overwriting"
+    );
+
+    // Both verdicts are recoverable, and the earlier one kept its own
+    // observation time — this is the transition the audit found was being lost.
+    let mut stmt = conn
+        .prepare(
+            "SELECT metadata_json, observed_at FROM git_observation
+             WHERE session_id=?1 AND source='lore_reverified'
+             ORDER BY observed_at, id",
+        )
+        .unwrap();
+    let rows: Vec<(String, i64)> = stmt
+        .query_map([&sid], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .any(|(meta, _)| meta.contains("\"branch_exists\":true")),
+        "the original 'branch present' verdict survives: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|(meta, _)| meta.contains("\"branch_exists\":false")),
+        "the new 'branch gone' verdict is recorded: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .all(|(meta, _)| meta.contains("last_checked_at")),
+        "every observation records when it was last confirmed: {rows:?}"
+    );
+
+    // The agent-recorded row is still untouched by any of this.
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT count(*) FROM git_observation
+             WHERE session_id=?1 AND source='agent_recorded'",
+            &sid
+        ),
+        1
+    );
+}
+
+#[test]
+fn an_unreadable_repository_does_not_mark_the_worktree_missing() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let head = git_out(repo.path(), &["rev-parse", "HEAD"]);
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let sid = persist_and_enrich(&conn, &store, repo.path(), &head);
+
+    // The checkout is still there, but the repository cannot be opened. A
+    // dangling `gitdir:` pointer reproduces this deterministically on every
+    // platform, unlike a permission change (which root would bypass).
+    std::fs::remove_dir_all(repo.path().join(".git")).unwrap();
+    std::fs::write(repo.path().join(".git"), "gitdir: /nonexistent/lore-test\n").unwrap();
+
+    reverify_session(&conn, &sid).unwrap();
+
+    let missing: i64 = conn
+        .query_row("SELECT is_missing FROM worktree", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        missing, 0,
+        "a present-but-unreadable repository is transient and must not flag the worktree missing"
+    );
+
+    let meta: String = conn
+        .query_row(
+            "SELECT metadata_json FROM git_observation
+             WHERE session_id=?1 AND source='lore_reverified'",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        meta.contains("repository_unreadable"),
+        "the reason is still recorded as evidence: {meta}"
     );
 }
 
