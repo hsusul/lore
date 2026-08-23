@@ -28,25 +28,15 @@
 //!
 //! # Reference result (M6 acceptance)
 //!
-//! Apple M4 Pro (14 cores), 24 GB, macOS 15.7.3, SQLite 3.46.0. Corpus: 9,804
-//! sessions / 1,076,658 messages / 1,076,658 search documents.
+//! The committed reference report — machine, corpus size, per-query-class p50
+//! and p95, the two edges that graze the target, and what is deliberately still
+//! unmeasured — lives in `docs/development/PERFORMANCE.md`. It is a document
+//! rather than a comment so it can be cited and reviewed; keep the two in sync
+//! when re-running on new hardware.
 //!
-//! | Query class | p50 | p95 |
-//! |---|---:|---:|
-//! | warm (steady state) | 12.0 ms | 16.9 ms |
-//! | cold (fresh connection) | 43.3 ms | 232.6 ms |
-//! | common term `add` (ranks ~all docs) | 168.9 ms | 174.7 ms |
-//! | multi-term AND | 18.0 ms | 18.9 ms |
-//! | agent filter | 108.7 ms | 122.8 ms |
-//! | deep keyset (page 20, match-everything term) | — | 202.6 ms |
-//!
-//! Verdict: interactive queries are ~17 ms at 1M messages (10× under target) and
-//! even a match-everything term stays under 200 ms — FTS5 is sufficient for V0,
-//! no `sqlite-vec` needed (ADR-0004 holds). The two edges that graze 200 ms are
-//! the very first cold query (p50 43 ms) and deep-paging a term that matches the
-//! whole corpus; both are extreme, non-typical cases with documented optional
-//! mitigations. Ingest ran ~2,137 msgs/s (per-message cost rises with index
-//! size); that is a background one-time cost, not the query target.
+//! Headline, for orientation only: ~17 ms p95 warm at 1,076,658 messages on an
+//! M4 Pro — roughly 10× under the 200 ms target, which is what substantiates
+//! ADR-0004 (FTS5 is sufficient; no `sqlite-vec` needed for latency).
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::io::Write as _;

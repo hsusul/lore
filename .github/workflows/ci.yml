@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The heavy scale lane below runs only on these two triggers.
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,6 +34,11 @@ jobs:
       - name: Network-boundary guard (call-site)
         run: cargo test -p lore-core --test no_network_in_archive
       - name: Egress guard (dependency graph + runtime network-deny)
+        # REQUIRE_RUNTIME makes an unavailable sandbox wrapper a failure rather
+        # than a silent skip: a green job must mean the runtime check actually
+        # ran, not that it was quietly stepped over.
+        env:
+          LORE_EGRESS_REQUIRE_RUNTIME: "1"
         run: ./scripts/egress-check.sh
       - name: Generated IPC bindings are in sync
         run: |
@@ -99,3 +108,19 @@ jobs:
         run: cargo build --locked -p lore-app
       - name: Network-boundary guard (shell call-site)
         run: cargo test -p lore-app --test no_egress
+
+  scale:
+    # The ~1M-message search benchmark. Heavy (minutes), hardware-sensitive, and
+    # not a per-PR gate — it exists to catch a super-linear regression, so it
+    # runs weekly and on demand. The committed reference figures live in
+    # docs/development/PERFORMANCE.md; the in-test assertion is only a generous
+    # p95 < 1s sanity ceiling so this lane never goes flaky over hardware.
+    name: Scale — FTS latency at ~1M messages
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1 # pinned; keep in sync with rust-toolchain.toml
+      - uses: Swatinem/rust-cache@v2
+      - name: Search scale harness
+        run: cargo test -p lore-core --release --test search_scale -- --ignored --nocapture
