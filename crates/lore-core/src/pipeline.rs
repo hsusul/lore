@@ -10,12 +10,13 @@
 //! content-free — an adapter id, an outcome, and counts — so they can be relayed
 //! straight to Tauri IPC without leaking session content or paths.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, ErrorCode};
+use rusqlite::{params, Connection, ErrorCode, OptionalExtension};
 use serde_json::Value;
 
-use crate::adapters::AdapterRegistry;
+use crate::adapters::{AdapterRegistry, SessionRef};
 use crate::discovery::{discover, owner_of, DiscoveryConfig};
 use crate::ingest::{ingest_file, ChangeClass, IngestFailureKind, IngestOutcome};
 use crate::jobs::{self, FinishOutcome, NewJob, SourceSchedule};
@@ -24,6 +25,12 @@ use crate::storage::StorageError;
 
 /// Durable job kind for a single source-file ingest.
 const JOB_KIND: &str = "ingest_source";
+/// Durable job kind for a coalesced commit re-verification pass (I2).
+const JOB_KIND_REVERIFY: &str = "reverify";
+/// Re-verification runs at the lowest priority so it never jumps ahead of
+/// transcript ingest; it must never block transcript reads or search
+/// (`GIT_INTEGRATION.md` §8).
+const REVERIFY_PRIORITY: i64 = 0;
 /// Must advance whenever parser output changes so terminal jobs are reconsidered.
 /// Keep aligned with the ingest checkpoint parser version.
 const JOB_PARSER_VERSION: &str = "2";
@@ -78,12 +85,14 @@ pub struct DrainSummary {
     /// Ingests whose (best-effort) enrichment errored. The session is still
     /// persisted; enrichment can be retried on a later ingest.
     pub enrich_failed: usize,
+    /// Coalesced commit re-verification jobs drained this pass (I2).
+    pub reverified: usize,
 }
 
 impl DrainSummary {
     #[must_use]
     pub fn processed(&self) -> usize {
-        self.ingested + self.skipped + self.failed
+        self.ingested + self.skipped + self.failed + self.reverified
     }
 }
 
@@ -132,6 +141,7 @@ impl<'a> Pipeline<'a> {
                 enqueued += 1;
             }
         }
+        self.reconcile_source_presence(&report.sessions)?;
         sink.emit(ProgressEvent::ScanEnqueued {
             discovered,
             enqueued,
@@ -147,6 +157,65 @@ impl<'a> Pipeline<'a> {
             return Ok(None);
         };
         Ok(Some(self.schedule(agent.0, path)?))
+    }
+
+    /// Schedule one low-priority re-verification job per distinct recorded
+    /// `(worktree, commit)` pair, coalescing by a stable id (I2). A finished job
+    /// is re-armed so each trigger re-checks the live repository; a
+    /// pending/running job is left alone. Returns the number newly enqueued.
+    pub fn enqueue_reverify(&self) -> jobs::Result<usize> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT s.worktree_id, o.commit_sha
+             FROM session_segment s
+             JOIN git_observation o ON o.segment_id = s.id
+                AND o.source = 'agent_recorded' AND o.commit_sha IS NOT NULL
+             WHERE s.worktree_id IS NOT NULL",
+        )?;
+        let pairs: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut enqueued = 0usize;
+        for (worktree_id, commit_sha) in pairs {
+            let id = reverify_job_id(&worktree_id, &commit_sha);
+            let payload = serde_json::json!({
+                "worktree_id": worktree_id,
+                "commit_sha": commit_sha,
+            })
+            .to_string();
+            let state: Option<String> = self
+                .conn
+                .query_row("SELECT state FROM job WHERE id = ?1", [&id], |r| r.get(0))
+                .optional()?;
+            match state.as_deref() {
+                None => {
+                    jobs::enqueue(
+                        self.conn,
+                        &NewJob {
+                            id: &id,
+                            kind: JOB_KIND_REVERIFY,
+                            priority: REVERIFY_PRIORITY,
+                            payload_json: Some(&payload),
+                        },
+                        self.capacity,
+                    )?;
+                    enqueued += 1;
+                }
+                Some("pending") | Some("running") => { /* coalesce onto existing work */ }
+                Some("done" | "failed") => {
+                    self.conn.execute(
+                        "UPDATE job SET state = 'pending', redo = 0, error = NULL,
+                                error_kind = NULL, attempts = 0, priority = ?2,
+                                payload_json = ?3, updated_at = unixepoch('now')*1000
+                         WHERE id = ?1",
+                        params![id, REVERIFY_PRIORITY, payload],
+                    )?;
+                    enqueued += 1;
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(enqueued)
     }
 
     fn schedule(&self, agent_id: &str, path: &Path) -> jobs::Result<SourceSchedule> {
@@ -182,6 +251,68 @@ impl<'a> Pipeline<'a> {
         )
     }
 
+    /// Reconcile `source_artifact.state` against a fresh discovery pass: an
+    /// artifact whose file has disappeared from a still-readable, non-empty root
+    /// is marked `missing` (with `last_seen_at` bumped); one that reappeared is
+    /// restored to `active`. A root that is absent, unreadable, or empty is
+    /// skipped entirely, so a transient failure (unmounted volume, lost
+    /// permission, removed custom root) never mass-marks its artifacts missing
+    /// (N7a). Returns the number of rows whose state changed.
+    fn reconcile_source_presence(&self, discovered: &[SessionRef]) -> rusqlite::Result<usize> {
+        let now_ms = || -> i64 {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+        let mut changed = 0usize;
+
+        for adapter in self.registry.iter() {
+            let agent_id = adapter.id().0;
+            let mut roots = adapter.roots(&self.config.roots_for(agent_id));
+            roots.sort();
+            roots.dedup();
+
+            let present: BTreeSet<&Path> = discovered
+                .iter()
+                .filter(|s| s.agent.0 == agent_id)
+                .map(|s| s.path.as_path())
+                .collect();
+
+            for root in roots {
+                if !root_readable_and_nonempty(&root) {
+                    continue;
+                }
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, current_path, state FROM source_artifact WHERE agent_id = ?1",
+                )?;
+                let rows: Vec<(String, String, String)> = stmt
+                    .query_map([agent_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for (id, current_path, state) in rows {
+                    let cp = Path::new(&current_path);
+                    if !cp.starts_with(&root) {
+                        // Under a root we no longer manage; not ours to judge.
+                        continue;
+                    }
+                    let next = if present.contains(cp) {
+                        "active"
+                    } else {
+                        "missing"
+                    };
+                    if next != state {
+                        self.conn.execute(
+                            "UPDATE source_artifact
+                             SET state = ?2, last_seen_at = ?3 WHERE id = ?1",
+                            params![id, next, now_ms()],
+                        )?;
+                        changed += 1;
+                    }
+                }
+            }
+        }
+        Ok(changed)
+    }
+
     /// Claim and process up to `max` pending jobs. Each source ingests in its
     /// own transaction (one failure never stops peers) and the job completes
     /// redo-aware, so a change observed mid-run reprocesses. Progress is emitted
@@ -193,6 +324,33 @@ impl<'a> Pipeline<'a> {
             let Some(job) = jobs::claim_next(self.conn)? else {
                 break;
             };
+            if job.kind == JOB_KIND_REVERIFY {
+                let Some((worktree_id, commit_sha)) = job
+                    .payload_json
+                    .as_deref()
+                    .and_then(decode_reverify_payload)
+                else {
+                    jobs::fail_with_kind(
+                        self.conn,
+                        &job.id,
+                        "invalid_payload",
+                        "unreadable reverify job payload",
+                    )?;
+                    summary.reverified += 1;
+                    continue;
+                };
+                match crate::enrich::reverify_commit(self.conn, &worktree_id, &commit_sha) {
+                    Ok(_) => jobs::complete(self.conn, &job.id)?,
+                    Err(error) => jobs::fail_with_kind(
+                        self.conn,
+                        &job.id,
+                        "reverify_failed",
+                        &error.to_string(),
+                    )?,
+                }
+                summary.reverified += 1;
+                continue;
+            }
             let Some((agent_id, path)) = job.payload_json.as_deref().and_then(decode_payload)
             else {
                 jobs::fail_with_kind(
@@ -319,6 +477,42 @@ fn decode_payload(payload: &str) -> Option<(String, PathBuf)> {
     let agent_id = value.get("agent_id")?.as_str()?.to_string();
     let path = value.get("path")?.as_str()?;
     Some((agent_id, PathBuf::from(path)))
+}
+
+/// Stable, compact job id for a `(worktree, commit)` re-verification unit, so
+/// re-triggering coalesces onto the same job (I2).
+fn reverify_job_id(worktree_id: &str, commit_sha: &str) -> String {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET;
+    let mut mix = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+    };
+    mix(worktree_id.as_bytes());
+    mix(&[0x1f]);
+    mix(commit_sha.as_bytes());
+    format!("reverify_{hash:016x}")
+}
+
+fn decode_reverify_payload(payload: &str) -> Option<(String, String)> {
+    let value: Value = serde_json::from_str(payload).ok()?;
+    let worktree_id = value.get("worktree_id")?.as_str()?.to_string();
+    let commit_sha = value.get("commit_sha")?.as_str()?.to_string();
+    Some((worktree_id, commit_sha))
+}
+
+/// A root we are allowed to draw conclusions from: it exists, is readable, and
+/// has at least one entry. An unmounted volume commonly appears as an existing
+/// but empty directory, so emptiness is treated as "don't know" rather than
+/// "genuinely empty" — the same conservative stance as an absent root (N7a).
+fn root_readable_and_nonempty(root: &Path) -> bool {
+    match std::fs::read_dir(root) {
+        Ok(mut entries) => entries.next().is_some(),
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]

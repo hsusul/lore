@@ -690,6 +690,20 @@ fn rescan(app: AppHandle, state: State<'_, AppState>) -> Result<RescanResult, St
     })
 }
 
+/// Ask the background worker to schedule a low-priority commit re-verification
+/// pass (I2). Non-blocking: the worker enqueues and drains the coalesced jobs on
+/// its own thread and connection, so this never holds the UI database lock while
+/// reading git.
+#[tauri::command]
+fn reverify(state: State<'_, AppState>) -> Result<(), String> {
+    let worker = state.worker.lock().map_err(|_| "state lock poisoned")?;
+    let handle = worker
+        .as_ref()
+        .ok_or_else(|| "background ingestion worker unavailable".to_string())?;
+    handle.trigger_reverify();
+    Ok(())
+}
+
 /// Build the discovery configuration.
 ///
 /// In release builds this combines the adapters' documented defaults with
@@ -824,7 +838,8 @@ pub fn run() {
             backup_now,
             add_agent_root,
             remove_agent_root,
-            rescan
+            rescan,
+            reverify
         ])
         .build(tauri::generate_context!());
     let app = match app {

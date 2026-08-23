@@ -79,6 +79,16 @@ pub struct CapturedRepo {
     pub detached: bool,
     /// Working tree has uncommitted changes at capture, when determinable.
     pub is_dirty: Option<bool>,
+    /// Repository-relative paths of the uncommitted working-tree changes, capped
+    /// at [`CHANGED_FILES_CAP`]. `None` when the status could not be read safely.
+    pub changed_files: Option<Vec<String>>,
+    /// Commits the local branch is ahead of its tracking branch, when both exist
+    /// and the count is bounded. `None` when detached, no upstream, or too large.
+    pub ahead: Option<i64>,
+    /// Commits the local branch is behind its tracking branch (see `ahead`).
+    pub behind: Option<i64>,
+    /// Subject (first line) of the HEAD commit, when HEAD exists and decodes.
+    pub commit_subject: Option<String>,
     /// Normalized (credential-free) fetch remotes, sorted and deduped. Empty for
     /// a local-only repository.
     pub remotes: Vec<String>,
@@ -94,6 +104,15 @@ pub struct CapturedRepo {
 /// Upper bound on commits walked to find the root set, so a very large history
 /// cannot make capture unbounded. Beyond this the root set is treated as unknown.
 const ROOT_WALK_LIMIT: usize = 50_000;
+
+/// Upper bound on the number of changed files recorded in a capture, so a huge
+/// dirty working tree cannot make capture unbounded or its summary unbounded
+/// (F9). Beyond this the list is truncated to the first entries.
+const CHANGED_FILES_CAP: usize = 500;
+
+/// Upper bound on the ahead/behind commit walk. Beyond this the counts are
+/// treated as unknown rather than walking an unbounded history (F9).
+const AHEAD_BEHIND_LIMIT: i64 = 10_000;
 
 /// Capture read-only repository facts for the repository containing `path`.
 ///
@@ -152,6 +171,14 @@ fn capture_gix(path: &Path) -> Option<CapturedRepo> {
         .filter(|_| !detached);
     let head_commit = repo.head_id().ok().map(|id| id.to_hex().to_string());
     let is_dirty = repo.is_dirty().ok();
+    let commit_subject = repo.head_commit().ok().and_then(|commit| {
+        commit
+            .message()
+            .ok()
+            .map(|m| m.title.to_string().trim_end().to_string())
+    });
+    let changed_files = collect_changed_files(&repo);
+    let (ahead, behind) = collect_ahead_behind(&repo);
     let remotes = collect_remotes(&repo);
     let (root_commits, history_truncated) = collect_root_commits(&repo);
 
@@ -162,6 +189,10 @@ fn capture_gix(path: &Path) -> Option<CapturedRepo> {
         head_commit,
         detached,
         is_dirty,
+        changed_files,
+        ahead,
+        behind,
+        commit_subject,
         remotes,
         root_commits,
         history_truncated,
@@ -232,6 +263,74 @@ fn collect_remotes(repo: &gix::Repository) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// Repository-relative paths of uncommitted working-tree changes, capped at
+/// [`CHANGED_FILES_CAP`]. Reads the index-vs-worktree status via `gix` only —
+/// never the hardened system-`git` fallback, which deliberately excludes
+/// `status`/`diff` so hostile `.gitattributes` filters cannot execute (F9).
+fn collect_changed_files(repo: &gix::Repository) -> Option<Vec<String>> {
+    let platform = repo.status(gix::progress::Discard).ok()?;
+    let iter = platform.into_index_worktree_iter(Vec::new()).ok()?;
+    let mut out = Vec::new();
+    for item in iter {
+        let Ok(item) = item else { break };
+        // `summary() == None` means "no real change" (a stat refresh or a
+        // non-untracked directory walk entry) — not a changed file.
+        if item.summary().is_none() {
+            continue;
+        }
+        out.push(item.rela_path().to_string());
+        if out.len() >= CHANGED_FILES_CAP {
+            break;
+        }
+    }
+    Some(out)
+}
+
+/// Ahead/behind commit counts relative to the branch's tracking branch, bounded
+/// by [`AHEAD_BEHIND_LIMIT`]. `None` when detached/unborn, when there is no
+/// configured upstream, or when the walk exceeds the bound — leave NULL rather
+/// than approximate (F9).
+fn collect_ahead_behind(repo: &gix::Repository) -> (Option<i64>, Option<i64>) {
+    let Some((ahead, behind)) = (|| {
+        let head = repo.head().ok()?;
+        let head_id = head.id()?;
+        let branch_ref = head.try_into_referent()?;
+        let tracking_name = branch_ref
+            .remote_tracking_ref_name(gix::remote::Direction::Fetch)?
+            .ok()?;
+        let mut tracking_ref = repo.find_reference(tracking_name.as_ref()).ok()?;
+        let tracking_id = tracking_ref.peel_to_id().ok()?;
+        let base = repo
+            .merge_base(head_id.detach(), tracking_id.detach())
+            .ok()?;
+        let base_oid = base.detach();
+        let ahead = count_until(repo, head_id.detach(), &base_oid)?;
+        let behind = count_until(repo, tracking_id.detach(), &base_oid)?;
+        Some((ahead, behind))
+    })() else {
+        return (None, None);
+    };
+    (Some(ahead), Some(behind))
+}
+
+/// Number of commits reachable from `from` before reaching `stop` (exclusive),
+/// or `None` if the walk errors or exceeds [`AHEAD_BEHIND_LIMIT`].
+fn count_until(repo: &gix::Repository, from: gix::ObjectId, stop: &gix::ObjectId) -> Option<i64> {
+    let walk = repo.rev_walk(Some(from)).all().ok()?;
+    let mut count = 0i64;
+    for item in walk {
+        let Ok(info) = item else { return None };
+        if info.id == *stop {
+            return Some(count);
+        }
+        count += 1;
+        if count > AHEAD_BEHIND_LIMIT {
+            return None;
+        }
+    }
+    None
 }
 
 /// Sorted set of parentless (root) commits reachable from HEAD, bounded by
@@ -358,6 +457,12 @@ pub fn capture_via_git(path: &Path) -> Option<CapturedRepo> {
         head_commit,
         detached,
         is_dirty,
+        // The hardened fallback never runs `status`/`diff`, so these stay NULL
+        // (F9: gix-only, never approximate).
+        changed_files: None,
+        ahead: None,
+        behind: None,
+        commit_subject: None,
         remotes: Vec::new(),
         root_commits,
         history_truncated: false,

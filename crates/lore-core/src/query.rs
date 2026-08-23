@@ -643,8 +643,17 @@ pub fn get_git_snapshot(conn: &Connection, session_id: &str) -> Result<Vec<GitOb
 /// Repositories resolved by git enrichment, with session and worktree counts,
 /// ordered by display name for a stable list.
 pub fn list_repositories(conn: &Connection) -> Result<Vec<RepositorySummary>> {
+    // `is_missing` is derived, not stored: a repository is missing only when it
+    // has at least one worktree and every one of them is missing (F15). The
+    // stored `repository.is_missing` column is never written and is ignored
+    // here, so the two flags cannot drift.
     let mut stmt = conn.prepare(
-        "SELECT r.id, r.display_name, r.identity_confidence, r.primary_path, r.is_missing,
+        "SELECT r.id, r.display_name, r.identity_confidence, r.primary_path,
+                (SELECT CASE
+                    WHEN count(*) = 0 THEN 0
+                    WHEN count(*) FILTER (WHERE w.is_missing = 1) = count(*) THEN 1
+                    ELSE 0 END
+                 FROM worktree w WHERE w.repository_id = r.id),
                 (SELECT count(DISTINCT sg.session_id) FROM session_segment sg
                  WHERE sg.repository_id = r.id),
                 (SELECT count(*) FROM worktree w WHERE w.repository_id = r.id)

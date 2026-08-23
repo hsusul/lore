@@ -78,46 +78,103 @@ pub fn enrich_session(conn: &Connection, session_id: &str) -> Result<usize> {
 /// therefore recoverable ("existed on the 3rd, gone by the 20th") without the
 /// row count growing with the number of background passes.
 ///
-/// Intended as a batch/background pass, not part of ingest. **Nothing schedules
-/// it yet** — see `ROADMAP.md` (Phase 1 `I2`). Returns the number of targets
-/// checked, which is not the number of rows added.
+/// Intended as a batch/background pass, not part of ingest — scheduled by the
+/// low-priority `reverify` job drained from the pipeline (Phase 1 `I2`), and
+/// callable on demand. Returns the number of targets checked, which is not the
+/// number of rows added.
 pub fn reverify_session(conn: &Connection, session_id: &str) -> Result<usize> {
     let targets = reverify_targets(conn, session_id)?;
     if targets.is_empty() {
         return Ok(0);
     }
-
     // Filesystem/git reads happen before the write transaction opens.
-    let outcomes: Vec<ReverifyOutcome> = targets
+    let outcomes: Vec<ReverifyOutcome> = targets.into_iter().map(outcome_for_target).collect();
+    write_outcomes(conn, &outcomes)?;
+    Ok(outcomes.len())
+}
+
+/// Re-verify a recorded `(worktree, commit)` against the live repository,
+/// coalescing the git read across every segment — of any session — that recorded
+/// that commit in that worktree (I2). This is the batch primitive the background
+/// reverify job drains: one repository read per distinct branch, not per session
+/// and not per segment.
+pub fn reverify_commit(conn: &Connection, worktree_id: &str, commit_sha: &str) -> Result<usize> {
+    let targets = commit_targets(conn, worktree_id, commit_sha)?;
+    if targets.is_empty() {
+        return Ok(0);
+    }
+    let outcomes = outcomes_for_commit(targets);
+    write_outcomes(conn, &outcomes)?;
+    Ok(outcomes.len())
+}
+
+/// Read git for one target without any cross-target coalescing.
+fn outcome_for_target(target: ReverifyTarget) -> ReverifyOutcome {
+    let path = Path::new(&target.path);
+    if !path.exists() {
+        // The checkout is gone: this is the one case that marks the worktree missing.
+        return ReverifyOutcome::unavailable(target, "path_missing", WorktreeState::Missing);
+    }
+    match git::reverify(path, &target.commit_sha, target.branch.as_deref()) {
+        Some(result) => ReverifyOutcome::verified(target, &result),
+        // Present but unreadable — transient, so the worktree stands.
+        None => {
+            ReverifyOutcome::unavailable(target, "repository_unreadable", WorktreeState::Unchanged)
+        }
+    }
+}
+
+/// Read git once per distinct branch across a `(worktree, commit)` group. Every
+/// target here shares one path and commit, so the only read variance is the
+/// recorded branch; a cache turns N segments into one read per branch.
+fn outcomes_for_commit(targets: Vec<ReverifyTarget>) -> Vec<ReverifyOutcome> {
+    let mut cache: HashMap<Option<String>, Option<crate::git::Reverification>> = HashMap::new();
+    targets
         .into_iter()
         .map(|target| {
             let path = Path::new(&target.path);
             if !path.exists() {
-                // The checkout is gone: this is the one case that marks the
-                // worktree missing.
-                return ReverifyOutcome::unavailable(target, "path_missing", true);
+                return ReverifyOutcome::unavailable(
+                    target,
+                    "path_missing",
+                    WorktreeState::Missing,
+                );
             }
-            match git::reverify(path, &target.commit_sha, target.branch.as_deref()) {
+            let result = cache
+                .entry(target.branch.clone())
+                .or_insert_with(|| {
+                    git::reverify(path, &target.commit_sha, target.branch.as_deref())
+                })
+                .clone();
+            match result {
                 Some(result) => ReverifyOutcome::verified(target, &result),
-                // Present but unreadable — transient, so the worktree stands.
-                None => ReverifyOutcome::unavailable(target, "repository_unreadable", false),
+                None => ReverifyOutcome::unavailable(
+                    target,
+                    "repository_unreadable",
+                    WorktreeState::Unchanged,
+                ),
             }
         })
-        .collect();
+        .collect()
+}
 
+/// Persist a set of re-verification outcomes in one transaction. The verdict is
+/// part of the id, so an unchanged conclusion collides with its own earlier row
+/// (refreshing only `last_checked_at`) while a changed conclusion appends a new
+/// observation — history is appended, never overwritten (`DATA_MODEL.md` §5,
+/// `GIT_INTEGRATION.md` §6). `observed_at` therefore always means "when this
+/// conclusion was *first* reached" and is never rewritten.
+fn write_outcomes(conn: &Connection, outcomes: &[ReverifyOutcome]) -> Result<()> {
+    if outcomes.is_empty() {
+        return Ok(());
+    }
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
-    for outcome in &outcomes {
-        // The verdict is part of the id, so an unchanged conclusion collides
-        // with its own earlier row (refreshing only `last_checked_at`) while a
-        // changed conclusion appends a new observation. `observed_at` therefore
-        // always means "when this conclusion was *first* reached" and is never
-        // rewritten — history is appended, never overwritten (`DATA_MODEL.md`
-        // §5, `GIT_INTEGRATION.md` §6).
+    for outcome in outcomes {
         let obs_id = det_id(
             "gr",
             &[
-                session_id,
+                &outcome.session_id,
                 &outcome.segment_id,
                 &outcome.commit_sha,
                 &outcome.verdict,
@@ -133,7 +190,7 @@ pub fn reverify_session(conn: &Connection, session_id: &str) -> Result<usize> {
                 metadata_json = excluded.metadata_json",
             params![
                 obs_id,
-                session_id,
+                outcome.session_id,
                 outcome.segment_id,
                 outcome.branch,
                 outcome.commit_sha,
@@ -141,21 +198,37 @@ pub fn reverify_session(conn: &Connection, session_id: &str) -> Result<usize> {
                 outcome.metadata,
             ],
         )?;
-        // A vanished checkout marks its worktree missing (sessions/evidence kept).
-        if outcome.worktree_missing {
-            if let Some(worktree_id) = &outcome.worktree_id {
-                tx.execute(
-                    "UPDATE worktree SET is_missing = 1 WHERE id = ?1",
-                    params![worktree_id],
-                )?;
+        // Re-verification maintains the worktree missing latch: a vanished
+        // checkout marks it missing, a successfully re-checked checkout clears
+        // any previous latch, and a transient unreadable state leaves it
+        // untouched. Repository-level missingness is derived from these flags in
+        // `query::list_repositories`, never stored as a second value (F15).
+        match outcome.worktree_state {
+            WorktreeState::Missing => {
+                if let Some(worktree_id) = &outcome.worktree_id {
+                    tx.execute(
+                        "UPDATE worktree SET is_missing = 1 WHERE id = ?1",
+                        params![worktree_id],
+                    )?;
+                }
             }
+            WorktreeState::Present => {
+                if let Some(worktree_id) = &outcome.worktree_id {
+                    tx.execute(
+                        "UPDATE worktree SET is_missing = 0 WHERE id = ?1",
+                        params![worktree_id],
+                    )?;
+                }
+            }
+            WorktreeState::Unchanged => {}
         }
     }
     tx.commit()?;
-    Ok(outcomes.len())
+    Ok(())
 }
 
 struct ReverifyTarget {
+    session_id: String,
     segment_id: String,
     worktree_id: Option<String>,
     path: String,
@@ -164,17 +237,33 @@ struct ReverifyTarget {
 }
 
 struct ReverifyOutcome {
+    session_id: String,
     segment_id: String,
     worktree_id: Option<String>,
     branch: Option<String>,
     commit_sha: String,
     commit_exists: Option<i64>,
     metadata: String,
-    worktree_missing: bool,
+    worktree_state: WorktreeState,
     /// Short stable fingerprint of *what this check concluded*. It is part of
     /// the observation id, so re-running with the same conclusion refreshes one
     /// row while a changed conclusion appends a new one (`DATA_MODEL.md` §5).
     verdict: String,
+}
+
+/// What a re-check concluded about the checkout itself, used to maintain the
+/// `worktree.is_missing` latch without conflating "gone" with "transiently
+/// unreadable" (F15/F1b). Repository-level missingness is derived from these
+/// flags in `query::list_repositories`, never stored as a second value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorktreeState {
+    /// The checkout path is gone: mark the worktree missing.
+    Missing,
+    /// The checkout is present and was re-checked: clear any missing latch.
+    Present,
+    /// The checkout could not be read (permission, lock, unmounted volume):
+    /// leave the latch untouched.
+    Unchanged,
 }
 
 /// Render an optional flag for a verdict fingerprint: `1`, `0`, or `-` (unknown).
@@ -209,35 +298,38 @@ impl ReverifyOutcome {
             flag(result.branch_at_recorded_commit),
         );
         ReverifyOutcome {
+            session_id: target.session_id,
             segment_id: target.segment_id,
             worktree_id: target.worktree_id,
             branch: target.branch,
             commit_sha: target.commit_sha,
             commit_exists: Some(i64::from(result.commit_exists)),
             metadata,
-            worktree_missing: false,
+            worktree_state: WorktreeState::Present,
             verdict,
         }
     }
 
-    /// The repository could not be checked. `worktree_missing` is set **only**
-    /// when the checkout is genuinely gone: a repository that is present but
+    /// The repository could not be checked. `Missing` is passed **only** when
+    /// the checkout is genuinely gone: a repository that is present but
     /// unreadable (a permission error, a lock, an unmounted volume) is a
-    /// transient condition and must not flag a live worktree as missing.
-    fn unavailable(target: ReverifyTarget, reason: &str, worktree_missing: bool) -> Self {
+    /// transient condition (`Unchanged`) and must not flag a live worktree as
+    /// missing.
+    fn unavailable(target: ReverifyTarget, reason: &str, state: WorktreeState) -> Self {
         let metadata = serde_json::json!({
             "unavailable": reason,
             "last_checked_at": now_ms(),
         })
         .to_string();
         ReverifyOutcome {
+            session_id: target.session_id,
             segment_id: target.segment_id,
             worktree_id: target.worktree_id,
             branch: target.branch,
             commit_sha: target.commit_sha,
             commit_exists: None,
             metadata,
-            worktree_missing,
+            worktree_state: state,
             verdict: format!("u:{reason}"),
         }
     }
@@ -257,11 +349,44 @@ fn reverify_targets(conn: &Connection, session_id: &str) -> Result<Vec<ReverifyT
     let rows = stmt
         .query_map([session_id], |row| {
             Ok(ReverifyTarget {
+                session_id: session_id.to_string(),
                 segment_id: row.get(0)?,
                 worktree_id: row.get(1)?,
                 path: row.get(2)?,
                 branch: row.get(3)?,
                 commit_sha: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Every segment — across any session — whose agent-recorded evidence points at
+/// one `(worktree, commit)`, with the local path to re-check it against. This is
+/// the coalescing unit for the background reverify job (I2).
+fn commit_targets(
+    conn: &Connection,
+    worktree_id: &str,
+    commit_sha: &str,
+) -> Result<Vec<ReverifyTarget>> {
+    let mut stmt = conn.prepare(
+        "SELECT o.session_id, o.segment_id, s.worktree_id, COALESCE(w.path, s.cwd),
+                o.branch, o.commit_sha
+         FROM git_observation o
+         JOIN session_segment s ON s.id = o.segment_id
+         LEFT JOIN worktree w ON w.id = s.worktree_id
+         WHERE s.worktree_id = ?1 AND o.source = 'agent_recorded' AND o.commit_sha = ?2
+           AND COALESCE(w.path, s.cwd) IS NOT NULL",
+    )?;
+    let rows = stmt
+        .query_map(params![worktree_id, commit_sha], |row| {
+            Ok(ReverifyTarget {
+                session_id: row.get(0)?,
+                segment_id: row.get(1)?,
+                worktree_id: row.get(2)?,
+                path: row.get(3)?,
+                branch: row.get(4)?,
+                commit_sha: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -390,16 +515,23 @@ fn link_segment(
     )?;
 
     // lore_captured observation: current repository state, never session-time.
+    let changed_files_json = facts
+        .changed_files
+        .as_ref()
+        .map(|files| serde_json::json!(files).to_string());
     let obs_id = det_id("gc", &[session_id, segment_id]);
     tx.execute(
         "INSERT INTO git_observation
             (id, session_id, segment_id, source, observed_at, temporal_confidence,
-             branch, commit_sha, is_dirty)
+             branch, commit_sha, is_dirty, ahead, behind, changed_files_json, commit_subject)
          VALUES (?1, ?2, ?3, 'lore_captured', unixepoch('now')*1000, 'current_only',
-                 ?4, ?5, ?6)
+                 ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(id) DO UPDATE SET
             observed_at = unixepoch('now')*1000, branch = excluded.branch,
-            commit_sha = excluded.commit_sha, is_dirty = excluded.is_dirty",
+            commit_sha = excluded.commit_sha, is_dirty = excluded.is_dirty,
+            ahead = excluded.ahead, behind = excluded.behind,
+            changed_files_json = excluded.changed_files_json,
+            commit_subject = excluded.commit_subject",
         params![
             obs_id,
             session_id,
@@ -407,6 +539,10 @@ fn link_segment(
             facts.branch,
             facts.head_commit,
             facts.is_dirty.map(i64::from),
+            facts.ahead,
+            facts.behind,
+            changed_files_json,
+            facts.commit_subject,
         ],
     )?;
     Ok(())

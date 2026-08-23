@@ -64,15 +64,29 @@ fn blobs() -> (tempfile::TempDir, BlobStore) {
 
 /// Persist a Codex session recording `commit`/branch main at `cwd`, then enrich.
 fn persist_and_enrich(conn: &Connection, blobs: &BlobStore, cwd: &Path, commit: &str) -> String {
+    persist_and_enrich_id(conn, blobs, cwd, commit, "rv")
+}
+
+/// Like [`persist_and_enrich`] with an explicit native session id, so tests that
+/// need several distinct sessions in one archive do not collide on the shared
+/// id "rv".
+fn persist_and_enrich_id(
+    conn: &Connection,
+    blobs: &BlobStore,
+    cwd: &Path,
+    commit: &str,
+    id: &str,
+) -> String {
     let content = format!(
         concat!(
-            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{{\"id\":\"rv\",\"cli_version\":\"1\",\"cwd\":\"{cwd}\",\"model_provider\":\"openai\",\"git\":{{\"branch\":\"main\",\"commit_hash\":\"{commit}\"}}}}}}\n",
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{{\"id\":\"{id}\",\"cli_version\":\"1\",\"cwd\":\"{cwd}\",\"model_provider\":\"openai\",\"git\":{{\"branch\":\"main\",\"commit_hash\":\"{commit}\"}}}}}}\n",
             "{{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":\"hi\"}}}}\n"
         ),
+        id = id,
         cwd = cwd.to_string_lossy(),
         commit = commit
     );
-    let parsed = CodexAdapter::new().parse_str(&content, "rv");
+    let parsed = CodexAdapter::new().parse_str(&content, id);
     let sid = persist_session(conn, "codex", "Codex", &parsed, blobs).unwrap();
     enrich_session(conn, &sid).unwrap();
     sid
@@ -386,5 +400,122 @@ fn reverify_marks_the_worktree_missing_when_the_checkout_is_gone() {
     assert!(
         exists.is_none(),
         "commit existence is unknown when the repo is gone"
+    );
+}
+
+#[test]
+fn worktree_disappearing_and_returning_clears_the_missing_latch() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let head = git_out(repo.path(), &["rev-parse", "HEAD"]);
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let sid = persist_and_enrich(&conn, &store, repo.path(), &head);
+
+    let missing = || -> i64 {
+        conn.query_row("SELECT is_missing FROM worktree", [], |r| r.get(0))
+            .unwrap()
+    };
+
+    // The checkout disappears: the worktree is flagged missing.
+    std::fs::remove_dir_all(repo.path()).unwrap();
+    reverify_session(&conn, &sid).unwrap();
+    assert_eq!(
+        missing(),
+        1,
+        "a vanished checkout marks its worktree missing"
+    );
+
+    // The checkout returns (a fresh repository at the same path): the latch
+    // clears rather than staying stuck at missing. Recreate the directory first
+    // — `init_repo` runs git with `current_dir` set, which must exist.
+    std::fs::create_dir_all(repo.path()).unwrap();
+    init_repo(repo.path());
+    reverify_session(&conn, &sid).unwrap();
+    assert_eq!(
+        missing(),
+        0,
+        "a returning checkout clears the missing latch (F15)"
+    );
+}
+
+#[test]
+fn repository_whose_only_worktree_is_gone_surfaces_missing() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let head = git_out(repo.path(), &["rev-parse", "HEAD"]);
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let sid = persist_and_enrich(&conn, &store, repo.path(), &head);
+
+    // The repository's only checkout disappears.
+    std::fs::remove_dir_all(repo.path()).unwrap();
+    reverify_session(&conn, &sid).unwrap();
+
+    let repos = lore_core::query::list_repositories(&conn).unwrap();
+    assert_eq!(repos.len(), 1);
+    assert!(
+        repos[0].is_missing,
+        "a repository whose only worktree is gone surfaces as missing (F15)"
+    );
+}
+
+#[test]
+fn repository_with_one_live_and_one_dead_worktree_is_not_missing() {
+    let main = tempfile::tempdir().unwrap();
+    init_repo(main.path());
+    let head = git_out(main.path(), &["rev-parse", "HEAD"]);
+
+    // A linked worktree shares the repository's git common dir but is its own
+    // checkout directory.
+    let linked = tempfile::tempdir().unwrap();
+    let linked_path = linked.path().join("wt2");
+    git(
+        main.path(),
+        &[
+            "worktree",
+            "add",
+            linked_path.to_str().unwrap(),
+            "-b",
+            "wt2",
+        ],
+    );
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+
+    // Two sessions, one per checkout, both grouped under one repository.
+    let sid_main = persist_and_enrich_id(&conn, &store, main.path(), &head, "rv-main");
+    let sid_linked = persist_and_enrich_id(&conn, &store, &linked_path, &head, "rv-linked");
+
+    let repos = lore_core::query::list_repositories(&conn).unwrap();
+    assert_eq!(
+        repos.len(),
+        1,
+        "linked worktrees group under one repository"
+    );
+    assert_eq!(repos[0].worktree_count, 2);
+    assert!(!repos[0].is_missing);
+
+    // Delete the linked checkout and re-verify its session.
+    std::fs::remove_dir_all(&linked_path).unwrap();
+    reverify_session(&conn, &sid_linked).unwrap();
+
+    let repos = lore_core::query::list_repositories(&conn).unwrap();
+    assert!(
+        !repos[0].is_missing,
+        "one live worktree keeps the repository alive (F15)"
+    );
+
+    // Delete the primary too: every worktree gone -> the repository is missing.
+    std::fs::remove_dir_all(main.path()).unwrap();
+    reverify_session(&conn, &sid_main).unwrap();
+
+    let repos = lore_core::query::list_repositories(&conn).unwrap();
+    assert!(
+        repos[0].is_missing,
+        "all worktrees gone -> the repository surfaces as missing (F15)"
     );
 }

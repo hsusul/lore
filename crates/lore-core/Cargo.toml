@@ -33,7 +33,9 @@ notify = "8.2"
 # Read-only local git inspection (gitoxide). default-features disabled so no
 # network transport (blocking/async network clients) is ever compiled in — the
 # archive core stays network-incapable. Only local repository reads are used.
-gix = { version = "0.86", default-features = false, features = ["sha1", "status"] }
+# `revision` enables merge-base/ahead-behind commit-graph walking (pure local
+# computation, no network).
+gix = { version = "0.86", default-features = false, features = ["sha1", "status", "revision"] }
 
 [dev-dependencies]
 tempfile = "3"

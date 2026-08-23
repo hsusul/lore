@@ -142,6 +142,13 @@ impl Worker {
         Ok(enqueued)
     }
 
+    /// Schedule one coalesced, low-priority re-verification job per recorded
+    /// `(worktree, commit)` (I2). Draining happens on the next bounded pass, so
+    /// this never blocks transcript reads or search.
+    pub fn enqueue_reverify(&self) -> jobs::Result<usize> {
+        self.pipeline().enqueue_reverify()
+    }
+
     /// Enqueue `paths` then drain a single bounded batch. This is the per-tick
     /// unit of live ingestion: coalesce observed changes into durable jobs and
     /// make bounded forward progress.
@@ -180,6 +187,7 @@ impl Worker {
             total.requeued += batch.requeued;
             total.enriched += batch.enriched;
             total.enrich_failed += batch.enrich_failed;
+            total.reverified += batch.reverified;
             if !made_progress {
                 break;
             }
@@ -199,6 +207,8 @@ enum Signal {
     Rescan,
     /// Wake up now and process any pending watcher/queue work.
     Wake,
+    /// Schedule a low-priority commit re-verification pass (I2).
+    Reverify,
     /// Replace the discovery roots and watcher, then scan the new roots. This
     /// lets the desktop add/remove custom folders without restarting Lore.
     Reconfigure(Box<Reconfiguration>),
@@ -223,6 +233,12 @@ impl WorkerHandle {
     /// its next idle tick. Non-blocking.
     pub fn wake(&self) {
         let _ = self.tx.send(Signal::Wake);
+    }
+
+    /// Ask the worker to schedule a low-priority commit re-verification pass,
+    /// drained by the normal bounded loop (I2). Non-blocking.
+    pub fn trigger_reverify(&self) {
+        let _ = self.tx.send(Signal::Reverify);
     }
 
     /// Replace the worker's discovery roots and live watcher, then run an
@@ -283,6 +299,9 @@ where
                 Ok(Signal::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(Signal::Rescan) => {
                     let _ = worker.scan(&sink);
+                }
+                Ok(Signal::Reverify) => {
+                    let _ = worker.enqueue_reverify();
                 }
                 Ok(Signal::Reconfigure(next)) => {
                     let Reconfiguration {
