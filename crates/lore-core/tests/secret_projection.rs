@@ -82,6 +82,47 @@ fn message_text_secret_is_found_and_never_indexed() {
 }
 
 #[test]
+fn generic_assignment_secret_is_found_and_never_indexed() {
+    // An assigned value in the 8–19 character band: too short for the entropy
+    // detector, and with no provider prefix to key off. This is the shape the
+    // `generic-assignment` rule exists for (SECRET_SCANNING.md §3).
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let assigned = "9f3Kd0Lq7v";
+    let content = format!("run it with password = {assigned} please");
+    let jsonl = format!(
+        "{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"sec\",\"cwd\":\"/p\",\"message\":{{\"role\":\"user\",\"content\":\"{content}\"}}}}\n"
+    );
+    let sid = persist_claude(&conn, &blobs, &jsonl);
+
+    let (findings, rule): (i64, String) = conn
+        .query_row(
+            "SELECT count(*), min(rule) FROM secret_finding
+             WHERE session_id=?1 AND source_kind='message_part'",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(findings, 1);
+    assert_eq!(rule, "generic-assignment");
+
+    let redacted: String = conn
+        .query_row(
+            "SELECT redacted_text FROM search_document
+             WHERE session_id=?1 AND source_kind='message_part'",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(redacted.contains("password") && redacted.contains("please"));
+    assert!(
+        !redacted.contains(assigned),
+        "the assigned value must not survive into the projection: {redacted}"
+    );
+    assert_eq!(fts_matches(&conn, assigned), 0);
+}
+
+#[test]
 fn thinking_secret_is_scanned_but_not_indexed() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let (_bd, blobs) = store();

@@ -252,7 +252,12 @@ fn scan_inner(text: &str) -> Vec<Finding> {
     scan_jwt(bytes, &mut raw);
     scan_connection_strings(text, bytes, &mut raw);
     scan_webhooks(text, bytes, &mut raw);
+    scan_aws_secret_key(text, bytes, &mut raw);
+    scan_gcp_service_account(text, bytes, &mut raw);
     scan_entropy(text, bytes, &mut raw);
+    // Last, and strictly additive: it only reports spans no other detector
+    // already covers (see `scan_generic_assignment`).
+    scan_generic_assignment(text, bytes, &mut raw);
 
     // Drop allowlisted values.
     raw.retain(|f| !is_allowlisted(&text[f.start..f.end]));
@@ -468,6 +473,239 @@ fn is_url_token(b: u8) -> bool {
     !b.is_ascii_whitespace() && !matches!(b, b'"' | b'\'' | b'<' | b'>' | b')' | b']')
 }
 
+/// AWS secret access keys are exactly 40 base64 characters with **no prefix**,
+/// so shape alone is far too common to flag — hashes, ids, and encoded blobs all
+/// match. The `aws` context gate does all the precision work here.
+const AWS_SECRET_LEN: usize = 40;
+/// How far back to look for `aws`. `aws_secret_access_key = ` is 24 bytes, so
+/// this covers the usual assignment plus quoting and indentation.
+const AWS_CONTEXT_WINDOW: usize = 48;
+
+fn is_base64_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')
+}
+
+/// AWS secret access keys (`SECRET_SCANNING.md` §3, rule `aws-secret-key`).
+///
+/// Unlike `aws-access-key-id` (`AKIA…`) there is no prefix to key off, so this
+/// requires an exactly-40-character base64 run **and** `aws` nearby. The context
+/// check is deliberately local rather than an extension of
+/// [`near_secret_keyword`]: widening that shared helper would silently change
+/// the severity the entropy detector assigns everywhere else.
+fn scan_aws_secret_key(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
+    let mut i = 0;
+    while i < bytes.len() {
+        if !is_base64_byte(bytes[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && is_base64_byte(bytes[i]) {
+            i += 1;
+        }
+        if i - start != AWS_SECRET_LEN {
+            continue;
+        }
+        let window = &bytes[start.saturating_sub(AWS_CONTEXT_WINDOW)..start];
+        if !contains_ignore_ascii_case_bytes(window, b"aws") {
+            continue;
+        }
+        // A run of only hex is a digest, not a key, whatever the context.
+        if is_hexish(&text[start..i]) {
+            continue;
+        }
+        out.push(Finding {
+            rule: "aws-secret-key",
+            start,
+            end: i,
+            severity: Severity::High,
+        });
+    }
+}
+
+/// GCP service-account JSON (`SECRET_SCANNING.md` §3, rule `gcp-sa-key`).
+///
+/// Structural rather than token-shaped: the file is only a credential when the
+/// `service_account` marker and a `private_key` field appear together. The span
+/// covers the private-key value, which subsumes the PEM block that
+/// [`scan_private_key_blocks`] would otherwise report on its own — de-overlap
+/// then keeps this finding, which names the provider.
+///
+/// **Span choice (deliberate).** The span starts at the `"private_key"` field
+/// name, not at the value. Both rules are `Critical` and both start at the PEM
+/// header, so a value-only span would lose the de-overlap tie-break to the
+/// greedier `private-key-block` and the provider would never be named. Fifteen
+/// characters of field name are redacted along with the key; naming the
+/// credential is worth more than preserving the label of the field it sat in.
+fn scan_gcp_service_account(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
+    if find(bytes, b"\"service_account\"").is_none() {
+        return;
+    }
+    let Some(key_at) = find(bytes, b"\"private_key\"") else {
+        return;
+    };
+    let mut i = key_at + b"\"private_key\"".len();
+    i += run_len(bytes, i, |b| b == b' ' || b == b'\t');
+    if i >= bytes.len() || bytes[i] != b':' {
+        return;
+    }
+    i += 1;
+    i += run_len(bytes, i, |b| b == b' ' || b == b'\t');
+    if i >= bytes.len() || bytes[i] != b'"' {
+        return;
+    }
+    let value_start = i + 1;
+    // JSON string: stop at the first unescaped quote.
+    let mut end = value_start;
+    while end < bytes.len() {
+        match bytes[end] {
+            b'\\' => end += 2,
+            b'"' => break,
+            _ => end += 1,
+        }
+    }
+    let end = end.min(bytes.len());
+    if end <= value_start || !text.is_char_boundary(key_at) || !text.is_char_boundary(end) {
+        return;
+    }
+    out.push(Finding {
+        rule: "gcp-sa-key",
+        start: key_at,
+        end,
+        severity: Severity::Critical,
+    });
+}
+
+/// Shortest assigned value worth flagging (`SECRET_SCANNING.md` §3).
+const ASSIGN_MIN_LEN: usize = 8;
+/// Entropy floor for an assigned value, in bits per character.
+///
+/// This number is the whole precision story for `generic-assignment`, so it is
+/// deliberately explicit rather than inlined. [`scan_entropy`] already covers
+/// tokens of 20+ characters at 4.0 bits/char, so this rule exists for the 8–19
+/// character band — where a naive length-only match would flag ordinary prose,
+/// config samples, and documentation. 3.0 bits/char means an 8-character value
+/// must be near-maximally varied to qualify.
+///
+/// The tradeoff is a known and accepted miss: a repetitive weak value such as
+/// `password = supersecret` scores ≈2.75 and is not flagged. Raising recall
+/// there costs precision across a corpus that is mostly source code and prose;
+/// retune against the corpus in `mod tests`, not by intuition.
+const ASSIGN_MIN_ENTROPY: f64 = 3.0;
+
+/// `keyword = value` / `"keyword": "value"` assignments — the shape most
+/// credentials actually take in an agent transcript (`SECRET_SCANNING.md` §3,
+/// rule `generic-assignment`).
+///
+/// The span covers the **value only**, so the shared allowlist in [`scan_inner`]
+/// sees the candidate secret rather than the surrounding syntax.
+///
+/// This detector is **strictly additive**: it runs last and skips any span another
+/// detector already reported, so a provider-shaped token keeps its own specific,
+/// higher-severity rule and this one never displaces it. Relying on [`de_overlap`]
+/// alone would not be enough — an equal span at equal severity would be decided by
+/// detector order rather than by specificity.
+fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
+    // Only spans present before this detector ran count as "already covered".
+    let already = out.len();
+    const KEYWORDS: &[&str] = &[
+        "password",
+        "passwd",
+        "secret",
+        "api_key",
+        "api-key",
+        "apikey",
+        "access_token",
+        "access-token",
+        "auth_token",
+        "auth-token",
+        "token",
+    ];
+    for keyword in KEYWORDS {
+        let needle = keyword.as_bytes();
+        let mut from = 0;
+        while let Some(rel) = find_ignore_ascii_case(&bytes[from..], needle) {
+            let start = from + rel;
+            from = start + 1;
+
+            // Word boundary: `token` must not match inside `access_token`,
+            // which has its own (longer, earlier) keyword entry.
+            if start > 0 && is_word_byte(bytes[start - 1]) {
+                continue;
+            }
+            let mut i = start + needle.len();
+            if i < bytes.len() && is_word_byte(bytes[i]) {
+                continue;
+            }
+
+            // Optional closing quote (`"api_key": …`), whitespace, separator.
+            if i < bytes.len() && matches!(bytes[i], b'"' | b'\'') {
+                i += 1;
+            }
+            i += run_len(bytes, i, |b| b == b' ' || b == b'\t');
+            if i >= bytes.len() || !matches!(bytes[i], b':' | b'=') {
+                continue;
+            }
+            i += 1;
+            i += run_len(bytes, i, |b| b == b' ' || b == b'\t');
+
+            // Optional opening quote; when present it also terminates the value.
+            let quote = bytes.get(i).copied().filter(|b| matches!(b, b'"' | b'\''));
+            if quote.is_some() {
+                i += 1;
+            }
+            let value_start = i;
+            // A template hole (`${VAR}`, `{{var}}`, `<placeholder>`) must be
+            // captured whole, including its closer, so the allowlist can
+            // recognise it — otherwise the closing brace terminates the value
+            // and the truncated fragment looks like a credential.
+            let template_close = match (bytes.get(value_start), bytes.get(value_start + 1)) {
+                (Some(b'$'), Some(b'{')) | (Some(b'{'), Some(b'{')) => Some(b'}'),
+                (Some(b'<'), _) => Some(b'>'),
+                _ => None,
+            };
+            let len = match template_close {
+                Some(closer) => {
+                    let run = run_until(bytes, value_start, |b| b == closer);
+                    // Include the closer when it is actually there.
+                    if value_start + run < bytes.len() {
+                        run + 1
+                    } else {
+                        run
+                    }
+                }
+                None => run_until(bytes, value_start, |b| match quote {
+                    Some(q) => b == q || b.is_ascii_whitespace(),
+                    None => {
+                        b.is_ascii_whitespace()
+                            || matches!(b, b'"' | b'\'' | b',' | b';' | b'}' | b')' | b']')
+                    }
+                }),
+            };
+            let value_end = value_start + len;
+            if len < ASSIGN_MIN_LEN {
+                continue;
+            }
+            let value = &text[value_start..value_end];
+            if shannon_per_char(value.as_bytes()) < ASSIGN_MIN_ENTROPY {
+                continue;
+            }
+            let covered = out[..already]
+                .iter()
+                .any(|f| f.start < value_end && value_start < f.end);
+            if covered {
+                continue;
+            }
+            out.push(Finding {
+                rule: "generic-assignment",
+                start: value_start,
+                end: value_end,
+                severity: Severity::Medium,
+            });
+        }
+    }
+}
+
 fn scan_entropy(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
     let mut i = 0;
     while i < bytes.len() {
@@ -555,6 +793,11 @@ fn is_allowlisted(value: &str) -> bool {
         return true;
     }
     // Placeholder shapes: <...>, ${...}, all-x, common placeholders.
+    // A value that is *wholly* delimited is a template hole, not a credential.
+    let wrapped = |open: &str, close: char| value.starts_with(open) && value.ends_with(close);
+    if wrapped("${", '}') || wrapped("<", '>') || wrapped("{{", '}') {
+        return true;
+    }
     if contains_ignore_ascii_case(value, "example")
         || contains_ignore_ascii_case(value, "your_")
         || contains_ignore_ascii_case(value, "changeme")
@@ -609,17 +852,19 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-/// True if `needle` appears in `haystack`, ignoring ASCII case, without allocating.
-fn contains_ignore_ascii_case_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    if haystack.len() < needle.len() {
-        return false;
+/// Position of `needle` in `haystack`, ignoring ASCII case, without allocating.
+fn find_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
     }
     haystack
         .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle))
+        .position(|window| window.eq_ignore_ascii_case(needle))
+}
+
+/// True if `needle` appears in `haystack`, ignoring ASCII case, without allocating.
+fn contains_ignore_ascii_case_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty() || find_ignore_ascii_case(haystack, needle).is_some()
 }
 
 /// True if a `key=`/`token:`/`secret …` keyword appears shortly before `pos`.
@@ -783,6 +1028,165 @@ mod tests {
             p = "PRIVATE"
         );
         assert!(rules_in(&pem).contains(&"private-key-block"));
+    }
+
+    #[test]
+    fn aws_secret_key_needs_both_shape_and_context() {
+        // 40 base64 characters, varied enough not to be hex.
+        let key = t("wJalrXUtnFEMI", "/K7MDENG/bPxRfiCYzzzKEY1234");
+        assert_eq!(key.len(), 40, "the fixture must be exactly 40 chars");
+
+        let with_ctx = format!("aws_secret_access_key = {key}");
+        assert!(
+            rules_in(&with_ctx).contains(&"aws-secret-key"),
+            "got {:?}",
+            rules_in(&with_ctx)
+        );
+
+        // The same shape with no `aws` nearby is not an AWS finding. It may
+        // still be caught by another detector; assert only this rule's absence.
+        let no_ctx = format!("blob = {key}");
+        assert!(!rules_in(&no_ctx).contains(&"aws-secret-key"));
+    }
+
+    #[test]
+    fn aws_secret_key_ignores_a_forty_char_digest() {
+        // A 40-hex SHA-1 next to `aws` is a digest, not a key.
+        let sha = t("9f1c2d3e4b5a", "69788c9daebf0011223344556677");
+        assert_eq!(sha.len(), 40, "the fixture must be exactly 40 chars");
+        assert!(!rules_in(&format!("aws artifact sha {sha}")).contains(&"aws-secret-key"));
+    }
+
+    #[test]
+    fn gcp_service_account_json_is_flagged_critical() {
+        let json = concat!(
+            "{\"type\": \"service_account\", \"project_id\": \"p\", ",
+            "\"private_key\": \"-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADAN\\n-----END PRIVATE KEY-----\\n\"}"
+        );
+        let findings = scan_ok(json);
+        let hit = findings
+            .iter()
+            .find(|f| f.rule == "gcp-sa-key")
+            .unwrap_or_else(|| panic!("expected gcp-sa-key, got {:?}", rules_in(json)));
+        assert_eq!(hit.severity, Severity::Critical);
+        assert!(
+            json[hit.start..hit.end].contains("MIIEvQIBADAN"),
+            "the span must cover the key material"
+        );
+        // It wins over the generic PEM rule, so the provider is named.
+        assert!(!rules_in(json).contains(&"private-key-block"));
+    }
+
+    #[test]
+    fn a_service_account_marker_without_a_private_key_is_not_flagged() {
+        let json = "{\"type\": \"service_account\", \"project_id\": \"p\"}";
+        assert!(!rules_in(json).contains(&"gcp-sa-key"));
+        // …and a private_key with no service-account marker stays a plain
+        // private-key block rather than being labelled as GCP.
+        let pem = "key: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n-----END PRIVATE KEY-----";
+        let rules = rules_in(pem);
+        assert!(rules.contains(&"private-key-block"), "got {rules:?}");
+        assert!(!rules.contains(&"gcp-sa-key"));
+    }
+
+    #[test]
+    fn generic_assignment_flags_short_assigned_values() {
+        // The 8–19 character band the entropy detector deliberately skips.
+        for text in [
+            "password = hunter2xyz",
+            "api_key: 9f3Kd0Lq7v",
+            "auth-token='aB3xY7pQ2m'",
+            "\"apikey\": \"Zq4vN8wR1t\"",
+        ] {
+            assert!(
+                rules_in(text).contains(&"generic-assignment"),
+                "expected a generic-assignment finding in {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_assignment_spans_only_the_value() {
+        let findings = scan_ok("password = hunter2xyz");
+        let hit = findings
+            .iter()
+            .find(|f| f.rule == "generic-assignment")
+            .expect("flagged");
+        assert_eq!(&"password = hunter2xyz"[hit.start..hit.end], "hunter2xyz");
+        assert_eq!(hit.severity, Severity::Medium);
+
+        // Quotes are delimiters, not part of the secret.
+        let quoted = "auth-token='aB3xY7pQ2m'";
+        let findings = scan_ok(quoted);
+        let hit = findings
+            .iter()
+            .find(|f| f.rule == "generic-assignment")
+            .expect("flagged");
+        assert_eq!(&quoted[hit.start..hit.end], "aB3xY7pQ2m");
+    }
+
+    #[test]
+    fn generic_assignment_does_not_flag_placeholders_or_prose() {
+        // Extends the negative corpus: these are the shapes that make a naive
+        // length-only assignment rule unshippable.
+        for text in [
+            "API_KEY=YOUR_API_KEY_HERE",
+            "TOKEN=xxxxxxxxxxxxxxxxxxxx",
+            "password=changeme123",
+            "secret=placeholder_value",
+            "the password is required",
+            "token: true",
+            "api_key = ${MY_API_KEY}",
+        ] {
+            assert!(
+                !rules_in(text).contains(&"generic-assignment"),
+                "must not flag {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_assignment_requires_a_word_boundary_and_a_separator() {
+        // `token` inside `access_token` is covered by the longer keyword, not
+        // matched twice, and a keyword with no separator is not an assignment.
+        let findings = scan_ok("access_token = Kd0Lq7vN8wR1");
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.rule == "generic-assignment")
+                .count(),
+            1,
+            "one finding, not one per overlapping keyword"
+        );
+        assert!(!rules_in("mytoken means something").contains(&"generic-assignment"));
+    }
+
+    #[test]
+    fn generic_assignment_defers_to_a_specific_rule() {
+        // A provider-shaped token in an assignment keeps its own specific,
+        // higher-severity rule; the fallback never displaces it.
+        let gh = t("ghp", "_0123456789abcdefghijklmnopqrstuvwxyz");
+        let rules = rules_in(&format!("api_key: {gh}"));
+        assert!(rules.contains(&"github-token"), "got {rules:?}");
+        assert!(!rules.contains(&"generic-assignment"), "got {rules:?}");
+
+        // Nor does it displace the entropy detector on a span that detector
+        // already owns (the regression that caught the ordering bug).
+        let token = t("Zm9vYmFy", "QmF6UXV4MTIzNDU2Nzg5MFFXZXJ0eVpY");
+        let rules = rules_in(&format!("api_key: {token}"));
+        assert!(rules.contains(&"high-entropy"), "got {rules:?}");
+        assert!(!rules.contains(&"generic-assignment"), "got {rules:?}");
+    }
+
+    #[test]
+    fn generic_assignment_entropy_floor_is_pinned() {
+        // The floor is a tuning decision, so pin both sides of it. An 8-char
+        // value must be near-maximally varied; a repetitive one is a known,
+        // documented miss (see ASSIGN_MIN_ENTROPY).
+        assert!(rules_in("secret = aB3xY7pQ").contains(&"generic-assignment"));
+        assert!(!rules_in("password = supersecret").contains(&"generic-assignment"));
+        // Below the length floor regardless of entropy.
+        assert!(!rules_in("secret = aB3xY7p").contains(&"generic-assignment"));
     }
 
     #[test]
