@@ -41,10 +41,12 @@ impl CodexAdapter {
     }
 
     fn default_roots() -> Vec<PathBuf> {
-        let Some(home) = std::env::var_os("HOME") else {
+        let base = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")));
+        let Some(base) = base else {
             return Vec::new();
         };
-        let base = PathBuf::from(home).join(".codex");
         vec![base.join("sessions"), base.join("archived_sessions")]
     }
 
@@ -717,17 +719,23 @@ impl AgentAdapter for CodexAdapter {
 }
 
 /// Recursively collect `rollout-*.jsonl` files up to `depth` levels below `dir`.
+///
+/// Only real directories are descended into: [`std::fs::DirEntry::file_type`] does not
+/// follow symlinks, so a symlink cycle cannot recurse forever or escape the root.
 fn collect_rollouts(dir: &Path, depth: usize, out: &mut Vec<SessionRef>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         let path = entry.path();
-        if path.is_dir() {
+        if file_type.is_dir() {
             if depth > 0 {
                 collect_rollouts(&path, depth - 1, out);
             }
-        } else {
+        } else if file_type.is_file() {
             let is_rollout = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1356,5 +1364,37 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.message.contains("unknown response_item")));
+    }
+
+    #[test]
+    fn codex_home_environment_variable_overrides_default_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let codex_home = temp.path().join("custom_codex");
+        std::env::set_var("CODEX_HOME", &codex_home);
+        let roots = CodexAdapter::default_roots();
+        std::env::remove_var("CODEX_HOME");
+
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0], codex_home.join("sessions"));
+        assert_eq!(roots[1], codex_home.join("archived_sessions"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_does_not_follow_symlinked_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        let date_dir = root.join("2026/08/26");
+        std::fs::create_dir_all(&date_dir).unwrap();
+        std::fs::write(date_dir.join("rollout-2026-08-26-test.jsonl"), "{}\n").unwrap();
+        // Create a symlink loop pointing back to root
+        std::os::unix::fs::symlink(&root, date_dir.join("loop")).unwrap();
+
+        let sessions = CodexAdapter::new().discover_sessions(&DiscoveryRoots::new(vec![root]));
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].path.file_name().unwrap(),
+            "rollout-2026-08-26-test.jsonl"
+        );
     }
 }
