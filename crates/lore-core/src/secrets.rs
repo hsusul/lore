@@ -659,28 +659,43 @@ fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
             // captured whole, including its closer, so the allowlist can
             // recognise it — otherwise the closing brace terminates the value
             // and the truncated fragment looks like a credential.
+            let is_double_brace = matches!(
+                (bytes.get(value_start), bytes.get(value_start + 1)),
+                (Some(b'{'), Some(b'{'))
+            );
             let template_close = match (bytes.get(value_start), bytes.get(value_start + 1)) {
-                (Some(b'$'), Some(b'{')) | (Some(b'{'), Some(b'{')) => Some(b'}'),
+                (Some(b'$'), Some(b'{')) => Some(b'}'),
                 (Some(b'<'), _) => Some(b'>'),
                 _ => None,
             };
-            let len = match template_close {
-                Some(closer) => {
-                    let run = run_until(bytes, value_start, |b| b == closer);
-                    // Include the closer when it is actually there.
-                    if value_start + run < bytes.len() {
-                        run + 1
-                    } else {
-                        run
-                    }
+            let len = if is_double_brace {
+                if let Some(pos) = find(&bytes[value_start + 2..], b"}}") {
+                    pos + 4
+                } else {
+                    run_until(bytes, value_start, |b| match quote {
+                        Some(q) => b == q || b.is_ascii_whitespace(),
+                        None => {
+                            b.is_ascii_whitespace()
+                                || matches!(b, b'"' | b'\'' | b',' | b';' | b')' | b']')
+                        }
+                    })
                 }
-                None => run_until(bytes, value_start, |b| match quote {
+            } else if let Some(closer) = template_close {
+                let run = run_until(bytes, value_start, |b| b == closer);
+                // Include the closer when it is actually there.
+                if value_start + run < bytes.len() {
+                    run + 1
+                } else {
+                    run
+                }
+            } else {
+                run_until(bytes, value_start, |b| match quote {
                     Some(q) => b == q || b.is_ascii_whitespace(),
                     None => {
                         b.is_ascii_whitespace()
                             || matches!(b, b'"' | b'\'' | b',' | b';' | b'}' | b')' | b']')
                     }
-                }),
+                })
             };
             let value_end = value_start + len;
             if len < ASSIGN_MIN_LEN {
@@ -792,10 +807,10 @@ fn is_allowlisted(value: &str) -> bool {
     if ALLOWLIST_VALUES.contains(&value) {
         return true;
     }
-    // Placeholder shapes: <...>, ${...}, all-x, common placeholders.
+    // Placeholder shapes: <...>, ${...}, {{...}}, all-x, common placeholders.
     // A value that is *wholly* delimited is a template hole, not a credential.
-    let wrapped = |open: &str, close: char| value.starts_with(open) && value.ends_with(close);
-    if wrapped("${", '}') || wrapped("<", '>') || wrapped("{{", '}') {
+    let wrapped = |open: &str, close: &str| value.starts_with(open) && value.ends_with(close);
+    if wrapped("${", "}") || wrapped("<", ">") || wrapped("{{", "}}") {
         return true;
     }
     if contains_ignore_ascii_case(value, "example")
@@ -1137,6 +1152,9 @@ mod tests {
             "the password is required",
             "token: true",
             "api_key = ${MY_API_KEY}",
+            "api_key = {{MY_API_KEY}}",
+            "api_key = \"{{MY_API_KEY}}\"",
+            "auth_token: <MY_AUTH_TOKEN>",
         ] {
             assert!(
                 !rules_in(text).contains(&"generic-assignment"),
