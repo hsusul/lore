@@ -272,6 +272,9 @@ fn validate_export_path(
     if let Some(claude_dir) = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from) {
         forbidden_roots.push(claude_dir);
     }
+    if let Some(codex_dir) = std::env::var_os("CODEX_HOME").map(std::path::PathBuf::from) {
+        forbidden_roots.push(codex_dir);
+    }
     for agent_id in ["claude-code", "codex"] {
         for root in config.roots_for(agent_id).roots {
             forbidden_roots.push(root);
@@ -899,5 +902,70 @@ mod tests {
         assert!(is_invalid_folder_id(""));
         assert!(is_invalid_folder_id("0123\u{200d}456"));
         assert!(is_invalid_folder_id(&"f".repeat(65)));
+    }
+
+    struct TestTempDir(std::path::PathBuf);
+    impl TestTempDir {
+        fn new(name: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!(
+                "lore_test_{}_{}_{}",
+                std::process::id(),
+                name,
+                nanos
+            ));
+            let _ = std::fs::create_dir_all(&path);
+            Self(path)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn test_validate_export_path() {
+        let temp = TestTempDir::new("export_guard");
+        let archive_dir = temp.path().join("archive");
+        let codex_home = temp.path().join("codex_home");
+        let valid_export_dir = temp.path().join("exports");
+        std::fs::create_dir_all(&archive_dir).unwrap();
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::create_dir_all(&valid_export_dir).unwrap();
+
+        let config = DiscoveryConfig::new();
+
+        // 1. Relative path rejected
+        let rel = std::path::Path::new("export.md");
+        assert_eq!(
+            validate_export_path(rel, &archive_dir, &config).unwrap_err(),
+            "export path must be absolute"
+        );
+
+        // 2. Archive dir rejected
+        let inside_archive = archive_dir.join("export.md");
+        assert_eq!(
+            validate_export_path(&inside_archive, &archive_dir, &config).unwrap_err(),
+            "cannot export inside the Lore archive directory"
+        );
+
+        // 3. CODEX_HOME root rejected
+        std::env::set_var("CODEX_HOME", &codex_home);
+        let inside_codex = codex_home.join("export.md");
+        let codex_err = validate_export_path(&inside_codex, &archive_dir, &config).unwrap_err();
+        std::env::remove_var("CODEX_HOME");
+        assert_eq!(codex_err, "cannot export inside agent session directories");
+
+        // 4. Valid destination accepted
+        let valid_path = valid_export_dir.canonicalize().unwrap().join("export.md");
+        let res = validate_export_path(&valid_path, &archive_dir, &config).unwrap();
+        assert_eq!(res, valid_path);
     }
 }
