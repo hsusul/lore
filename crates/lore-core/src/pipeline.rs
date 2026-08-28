@@ -538,4 +538,27 @@ mod tests {
         assert_eq!(path, PathBuf::from("/x/rollout.jsonl"));
         assert!(decode_payload("not json").is_none());
     }
+
+    #[test]
+    fn reverify_job_id_and_payload_round_trip() {
+        let id1 = reverify_job_id("wt_1", "commit_abc");
+        let id2 = reverify_job_id("wt_1", "commit_abc");
+        let id3 = reverify_job_id("wt_1", "commit_def");
+        let id4 = reverify_job_id("wt_2", "commit_abc");
+
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+        assert_ne!(id1, id4);
+        assert!(id1.starts_with("reverify_"));
+
+        let payload = serde_json::json!({
+            "worktree_id": "wt_1",
+            "commit_sha": "commit_abc",
+        })
+        .to_string();
+        let (wt, commit) = decode_reverify_payload(&payload).unwrap();
+        assert_eq!(wt, "wt_1");
+        assert_eq!(commit, "commit_abc");
+        assert!(decode_reverify_payload("not json").is_none());
+    }
 }
