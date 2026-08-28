@@ -341,4 +341,19 @@ mod tests {
         assert_eq!(markdown_fence("code ```` block"), "`````");
         assert_eq!(markdown_fence("code ````` block"), "``````");
     }
+
+    #[test]
+    fn export_renders_thinking_blocks_cleanly() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"think about it\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"contemplating options...\"},{\"type\":\"text\",\"text\":\"here is the plan\"}]}}\n"
+        );
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+        assert!(md.contains("> _(thinking)_ contemplating options..."));
+        assert!(md.contains("here is the plan"));
+    }
 }
