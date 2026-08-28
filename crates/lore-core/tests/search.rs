@@ -768,3 +768,126 @@ fn repo_filter_matches_a_segment_with_no_observation_of_its_own() {
         0
     );
 }
+
+#[test]
+fn before_and_after_date_filters_scope_search_results() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+
+    let jsonl_early = "{\"type\":\"user\",\"uuid\":\"u_early\",\"sessionId\":\"s_early\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"database connection pooling\"}}\n";
+    let jsonl_late = "{\"type\":\"user\",\"uuid\":\"u_late\",\"sessionId\":\"s_late\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"database connection retry\"}}\n";
+
+    let sid_early = persist_claude(&conn, &blobs, jsonl_early, "s_early");
+    let sid_late = persist_claude(&conn, &blobs, jsonl_late, "s_late");
+
+    // s_early at 2026-08-01T10:00:00Z (epoch ms: 1785578400000)
+    // s_late at 2026-08-20T10:00:00Z (epoch ms: 1787220000000)
+    let early_ms = 1_785_578_400_000_i64;
+    let late_ms = 1_787_220_000_000_i64;
+
+    conn.execute(
+        "UPDATE agent_session SET started_at = ?1 WHERE id = ?2",
+        rusqlite::params![early_ms, sid_early],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE search_document SET started_at = ?1 WHERE session_id = ?2",
+        rusqlite::params![early_ms, sid_early],
+    )
+    .unwrap();
+
+    conn.execute(
+        "UPDATE agent_session SET started_at = ?1 WHERE id = ?2",
+        rusqlite::params![late_ms, sid_late],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE search_document SET started_at = ?1 WHERE session_id = ?2",
+        rusqlite::params![late_ms, sid_late],
+    )
+    .unwrap();
+
+    // Query with before filter
+    let hits_before = search(&conn, "database before:2026-08-15", 20).unwrap();
+    assert_eq!(hits_before.len(), 1);
+    assert_eq!(hits_before[0].session_id, sid_early);
+
+    // Query with after filter
+    let hits_after = search(&conn, "database after:2026-08-15", 20).unwrap();
+    assert_eq!(hits_after.len(), 1);
+    assert_eq!(hits_after[0].session_id, sid_late);
+
+    // Query with range (both after and before)
+    let hits_range = search(
+        &conn,
+        "database after:2026-08-01 before:2026-08-10",
+        20,
+    )
+    .unwrap();
+    assert_eq!(hits_range.len(), 1);
+    assert_eq!(hits_range[0].session_id, sid_early);
+}
+
+#[test]
+fn model_filter_matches_session_and_segment_models() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+
+    let sid1 = persist_claude(
+        &conn,
+        &blobs,
+        &user_message("m1", "/p", "optimize vector operations"),
+        "m1",
+    );
+    let sid2 = persist_claude(
+        &conn,
+        &blobs,
+        &user_message("m2", "/p", "optimize matrix multiplication"),
+        "m2",
+    );
+
+    conn.execute(
+        "UPDATE agent_session SET primary_model = 'claude-3-5-sonnet-20241022' WHERE id = ?1",
+        [&sid1],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE session_segment SET model = 'gpt-4o', provider = 'openai' WHERE session_id = ?1",
+        [&sid2],
+    )
+    .unwrap();
+
+    let hits_claude = search(&conn, "optimize model:claude-3-5", 20).unwrap();
+    assert_eq!(hits_claude.len(), 1);
+    assert_eq!(hits_claude[0].session_id, sid1);
+
+    let hits_openai = search(&conn, "optimize model:openai", 20).unwrap();
+    assert_eq!(hits_openai.len(), 1);
+    assert_eq!(hits_openai[0].session_id, sid2);
+}
+
+#[test]
+fn title_matches_are_ranked_higher_than_body_matches() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+
+    // Session 1 has keyword in body text only
+    let s1 = user_message("s1", "/p", "refactor auth token caching layer");
+    let sid1 = persist_claude(&conn, &blobs, &s1, "s1");
+
+    // Session 2 has keyword in its native title
+    let s2 = format!(
+        "{}{}",
+        "{\"type\":\"custom-title\",\"sessionId\":\"s2\",\"customTitle\":\"Auth token refactoring\"}\n",
+        user_message("s2", "/p", "general conversation without the keyword")
+    );
+    let sid2 = persist_claude(&conn, &blobs, &s2, "s2");
+
+    let hits = search(&conn, "token", 20).unwrap();
+    assert_eq!(hits.len(), 2);
+    // Title hit should rank first
+    assert_eq!(hits[0].session_id, sid2);
+    assert_eq!(hits[0].field, "title");
+    assert_eq!(hits[1].session_id, sid1);
+    assert_eq!(hits[1].field, "text");
+}

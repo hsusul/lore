@@ -119,6 +119,9 @@ struct ParsedQuery {
     agent: Option<String>,
     path: Option<String>,
     tool: Option<String>,
+    model: Option<String>,
+    before: Option<i64>,
+    after: Option<i64>,
     has_error: bool,
     /// Git-dimension filters, resolved against `search_git` (migration 0011).
     git: GitFilters,
@@ -209,7 +212,7 @@ pub fn search_page(
              SELECT sd.session_id AS session_id, sd.source_kind AS source_kind,
                     sd.source_id AS source_id, sd.field AS field,
                     snippet(search_fts, 0, ?, ?, '…', 12) AS snip,
-                    bm25(search_fts) AS rank,
+                    (bm25(search_fts) - CASE WHEN sd.field = 'title' THEN 2.0 ELSE 0.0 END) AS rank,
                     sd.agent_id AS agent_id, sd.started_at AS sa, sd.id AS did
              FROM search_fts
              JOIN search_document sd ON sd.id = search_fts.rowid
@@ -223,6 +226,28 @@ pub fn search_page(
     if let Some(agent) = query.agent {
         sql.push_str(" AND sd.agent_id = ?");
         params.push(Value::Text(agent));
+    }
+    if let Some(before_ts) = query.before {
+        sql.push_str(" AND sd.started_at < ?");
+        params.push(Value::Integer(before_ts));
+    }
+    if let Some(after_ts) = query.after {
+        sql.push_str(" AND sd.started_at >= ?");
+        params.push(Value::Integer(after_ts));
+    }
+    if let Some(model) = query.model {
+        sql.push_str(
+            " AND (EXISTS (SELECT 1 FROM session_segment ss
+                           WHERE ss.session_id = sd.session_id
+                             AND (ss.model LIKE ? ESCAPE '\\' OR ss.provider LIKE ? ESCAPE '\\'))
+                   OR EXISTS (SELECT 1 FROM agent_session asess
+                              WHERE asess.id = sd.session_id
+                                AND asess.primary_model LIKE ? ESCAPE '\\'))",
+        );
+        let pattern = format!("%{}%", like_escape(&model));
+        params.push(Value::Text(pattern.clone()));
+        params.push(Value::Text(pattern.clone()));
+        params.push(Value::Text(pattern));
     }
     if query.has_error {
         sql.push_str(
@@ -473,12 +498,33 @@ fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
     }
 }
 
+fn parse_date_bound(value: &str) -> Option<i64> {
+    let clean: String = value
+        .chars()
+        .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
+        .collect();
+    if clean.is_empty() {
+        return None;
+    }
+    if let Some(ms) = crate::adapters::common::epoch_ms(&clean) {
+        return Some(ms);
+    }
+    if clean.len() == 10 && clean.as_bytes()[4] == b'-' && clean.as_bytes()[7] == b'-' {
+        let rfc = format!("{clean}T00:00:00Z");
+        return crate::adapters::common::epoch_ms(&rfc);
+    }
+    None
+}
+
 fn parse_query(raw: &str) -> ParsedQuery {
     let bounded = truncate_to_char_boundary(raw, MAX_QUERY_LEN);
     let mut terms = Vec::new();
     let mut agent = None;
     let mut path = None;
     let mut tool = None;
+    let mut model = None;
+    let mut before = None;
+    let mut after = None;
     let mut has_error = false;
     let mut git = GitFilters::default();
     for token in bounded.split_whitespace() {
@@ -506,6 +552,12 @@ fn parse_query(raw: &str) -> ParsedQuery {
             if !clean.is_empty() {
                 tool = Some(clean);
             }
+        } else if let Some(value) = token.strip_prefix("model:") {
+            model = clean_filter(value);
+        } else if let Some(value) = token.strip_prefix("before:") {
+            before = parse_date_bound(value);
+        } else if let Some(value) = token.strip_prefix("after:") {
+            after = parse_date_bound(value);
         } else if let Some(value) = token.strip_prefix("repo:") {
             git.repo = clean_filter(value);
         } else if let Some(value) = token.strip_prefix("worktree:") {
@@ -532,6 +584,9 @@ fn parse_query(raw: &str) -> ParsedQuery {
         agent,
         path,
         tool,
+        model,
+        before,
+        after,
         has_error,
         git,
     }
@@ -749,5 +804,27 @@ mod tests {
         assert_eq!(q2.agent, None);
         assert_eq!(q2.path, None);
         assert!(q2.has_error);
+    }
+
+    #[test]
+    fn parse_query_handles_before_after_and_model_filters() {
+        let q = parse_query(
+            "model:claude-3-5 before:2026-08-28 after:2026-08-01T12:00:00Z prompt query",
+        );
+        assert_eq!(q.terms, vec!["prompt", "query"]);
+        assert_eq!(q.model.as_deref(), Some("claude-3-5"));
+        assert_eq!(
+            q.before,
+            crate::adapters::common::epoch_ms("2026-08-28T00:00:00Z")
+        );
+        assert_eq!(
+            q.after,
+            crate::adapters::common::epoch_ms("2026-08-01T12:00:00Z")
+        );
+
+        let q_invalid = parse_query("before:not-a-date after:invalid model:\0\u{200b}");
+        assert_eq!(q_invalid.before, None);
+        assert_eq!(q_invalid.after, None);
+        assert_eq!(q_invalid.model, None);
     }
 }
