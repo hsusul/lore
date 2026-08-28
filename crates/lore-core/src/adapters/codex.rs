@@ -638,7 +638,20 @@ fn attach_tool_output(
     };
     let is_error = str_field(p, "status")
         .as_deref()
-        .map(|s| !matches!(s, "completed" | "success" | "ok"));
+        .map(|s| !matches!(s, "completed" | "success" | "ok"))
+        .or_else(|| p.get("is_error").and_then(Value::as_bool))
+        .or_else(|| p.get("exit_code").and_then(Value::as_i64).map(|c| c != 0))
+        .or_else(|| {
+            p.get("error").and_then(|v| {
+                if v.is_null() {
+                    None
+                } else if let Some(b) = v.as_bool() {
+                    Some(b)
+                } else {
+                    Some(true)
+                }
+            })
+        });
     let tc = &mut session.tool_calls[idx];
     tc.result_ref = Some((seq, 0));
     tc.output_text = output_text;
@@ -876,6 +889,23 @@ mod tests {
         // tool_use and the output part is a tool_result.
         assert_eq!(s.tool_calls[0].call_ref.0, 1, "invoked at seq 1");
         assert_eq!(s.tool_calls[0].result_ref.map(|r| r.0), Some(2));
+    }
+
+    #[test]
+    fn tool_output_detects_error_from_is_error_exit_code_and_error_fields() {
+        let content = concat!(
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\",\"call_id\":\"c1\",\"name\":\"exec\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call_output\",\"call_id\":\"c1\",\"is_error\":true,\"output\":\"failed\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"c2\",\"name\":\"sh\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"c2\",\"exit_code\":127,\"output\":\"not found\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"c3\",\"name\":\"read\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"c3\",\"error\":\"permission denied\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "fallback");
+        assert_eq!(s.tool_calls.len(), 3);
+        assert_eq!(s.tool_calls[0].is_error, Some(true));
+        assert_eq!(s.tool_calls[1].is_error, Some(true));
+        assert_eq!(s.tool_calls[2].is_error, Some(true));
     }
 
     #[test]
