@@ -1217,6 +1217,7 @@ mod tests {
         assert_eq!((offset, lines), (13, 2));
     }
     use crate::adapters::codex::CodexAdapter;
+    use crate::model::{EventKind, ParsedMessage, Role, Tokens};
     use crate::storage::blob::BlobStore;
 
     #[test]
@@ -1313,5 +1314,47 @@ mod tests {
         std::fs::write(&bad_path, b"\xff\xfe\xfd\n").unwrap();
         let err = read_bounded_content(&bad_path, 1024).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn session_token_totals_sums_messages_with_saturating_overflow() {
+        let mut session = ParsedSession::new("test_session");
+        assert_eq!(session_token_totals(&session), Tokens::default());
+
+        let m1 = ParsedMessage {
+            seq: 0,
+            segment_ix: 0,
+            native_uuid: None,
+            parent_native_uuid: None,
+            role: Role::User,
+            event_kind: EventKind::Message,
+            is_sidechain: false,
+            ts: None,
+            model: None,
+            tokens: Tokens {
+                input: Some(i64::MAX - 10),
+                output: Some(100),
+                cache: None,
+            },
+            stop_reason: None,
+            source_offset: None,
+            metadata_json: None,
+            parts: vec![],
+        };
+        let mut m2 = m1.clone();
+        m2.seq = 1;
+        m2.tokens = Tokens {
+            input: Some(50),
+            output: Some(50),
+            cache: Some(30),
+        };
+
+        session.messages.push(m1);
+        session.messages.push(m2);
+
+        let totals = session_token_totals(&session);
+        assert_eq!(totals.input, Some(i64::MAX)); // saturating add
+        assert_eq!(totals.output, Some(150));
+        assert_eq!(totals.cache, Some(30));
     }
 }
