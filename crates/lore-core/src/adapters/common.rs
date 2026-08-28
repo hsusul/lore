@@ -583,6 +583,12 @@ mod tests {
         let micros_ts = "2026-08-11T10:00:00.123456Z";
         assert_eq!(epoch_ms(micros_ts), Some(base + 123));
 
+        let nanos_ts = "2026-08-11T10:00:00.123456789Z";
+        assert_eq!(epoch_ms(nanos_ts), Some(base + 123));
+
+        let lowercase_ts = "2026-08-11t10:00:00.123456789z";
+        assert_eq!(epoch_ms(lowercase_ts), Some(base + 123));
+
         // Leap year and invalid calendar date handling
         assert!(epoch_ms("2024-02-29T12:00:00Z").is_some());
         assert_eq!(epoch_ms("2025-02-29T12:00:00Z"), None);
