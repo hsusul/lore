@@ -1031,4 +1031,15 @@ mod tests {
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].parts.len(), 0);
     }
+
+    #[test]
+    fn claude_config_dir_environment_variable_overrides_default_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let custom_dir = temp.path().join("custom_claude");
+        std::env::set_var("CLAUDE_CONFIG_DIR", &custom_dir);
+        let root = ClaudeCodeAdapter::default_root();
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
+
+        assert_eq!(root, Some(custom_dir.join("projects")));
+    }
 }
