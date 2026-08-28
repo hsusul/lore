@@ -519,3 +519,42 @@ fn repository_with_one_live_and_one_dead_worktree_is_not_missing() {
         "all worktrees gone -> the repository surfaces as missing (F15)"
     );
 }
+
+#[test]
+fn reverify_flags_renamed_branch_while_preserving_recorded_history() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let head = git_out(repo.path(), &["rev-parse", "HEAD"]);
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let sid = persist_and_enrich(&conn, &store, repo.path(), &head);
+
+    // Rename branch main to renamed-main
+    git(repo.path(), &["branch", "-m", "main", "renamed-main"]);
+
+    reverify_session(&conn, &sid).unwrap();
+
+    let (exists, meta): (i64, String) = conn
+        .query_row(
+            "SELECT commit_exists, metadata_json FROM git_observation
+             WHERE session_id=?1 AND source='lore_reverified'",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(exists, 1, "the commit object still exists");
+    assert!(
+        meta.contains("\"branch_exists\":false"),
+        "renamed old branch name is detected as non-existent: {meta}"
+    );
+
+    let recorded_branch: String = conn
+        .query_row(
+            "SELECT branch FROM git_observation WHERE session_id=?1 AND source='agent_recorded'",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(recorded_branch, "main", "historical branch is unchanged");
+}
