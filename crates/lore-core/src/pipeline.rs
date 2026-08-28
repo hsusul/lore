@@ -47,6 +47,7 @@ pub enum ProgressEvent {
     /// A source was ingested with the given change classification.
     Ingested {
         agent_id: String,
+        session_id: String,
         change: ChangeClass,
     },
     /// A source was unchanged and skipped.
@@ -394,6 +395,7 @@ impl<'a> Pipeline<'a> {
                             summary.ingested += 1;
                             sink.emit(ProgressEvent::Ingested {
                                 agent_id: agent_id.clone(),
+                                session_id: session_id.clone(),
                                 change,
                             });
                             // Best-effort git enrichment: a failure never undoes

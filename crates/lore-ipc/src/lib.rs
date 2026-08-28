@@ -325,6 +325,43 @@ pub struct RescanResult {
     pub enriched: i64,
 }
 
+/// Reactive event emitted over IPC when a session is ingested or updated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SessionIngestedEvent {
+    pub session_id: String,
+    pub agent_id: String,
+    pub title: Option<String>,
+    pub parse_status: String,
+}
+
+/// Reactive event emitted over IPC when the search index is updated for a session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct IndexUpdatedEvent {
+    pub session_id: String,
+    #[ts(type = "number")]
+    pub documents_indexed: i64,
+}
+
+/// Reactive event emitted over IPC when a background job fails.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct JobFailedEvent {
+    pub job_id: String,
+    pub kind: String,
+    pub error: String,
+}
+
+/// Reactive event emitted over IPC when a secret finding is discovered during ingest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SecretFlaggedEvent {
+    pub session_id: String,
+    pub rule: String,
+    pub severity: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
