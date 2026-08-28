@@ -286,3 +286,29 @@ fn recover_archive_fails_cleanly_when_quarantine_dir_is_blocked() {
     let res = recover_archive(dir.path(), &backups);
     assert!(matches!(res, Err(lore_core::recovery::RecoveryError::Io)));
 }
+
+#[test]
+fn recover_archive_handles_sub_100_byte_truncated_garbage_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+
+    let db = dir.path().join("lore.db");
+    std::fs::write(
+        &db,
+        b"short 50-byte header garbage that is not valid sqlite",
+    )
+    .unwrap();
+
+    let outcome = recover_archive(dir.path(), &backups).unwrap();
+    let quarantine_path = match outcome {
+        RecoveryOutcome::QuarantinedOnly { quarantine_path } => quarantine_path,
+        other => panic!("expected QuarantinedOnly, got {other:?}"),
+    };
+
+    assert_eq!(
+        std::fs::read(&quarantine_path).unwrap(),
+        b"short 50-byte header garbage that is not valid sqlite"
+    );
+    assert!(!db.exists());
+}
