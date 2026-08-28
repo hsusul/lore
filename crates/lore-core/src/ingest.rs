@@ -1307,5 +1307,11 @@ mod tests {
         // Reading with cap smaller than line 1 yields empty string cleanly without error.
         let sub_line = read_bounded_content(&file_path, (line1.len() - 1) as u64).unwrap();
         assert_eq!(sub_line, "");
+
+        // Non-UTF-8 bytes return InvalidData error.
+        let bad_path = dir.path().join("bad_utf8.bin");
+        std::fs::write(&bad_path, b"\xff\xfe\xfd\n").unwrap();
+        let err = read_bounded_content(&bad_path, 1024).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }
