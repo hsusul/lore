@@ -1308,4 +1308,31 @@ mod tests {
         assert_eq!(totals.total_output_tokens, 30);
         assert_eq!(totals.total_cache_tokens, 45);
     }
+
+    #[test]
+    fn get_session_handles_empty_session_without_messages_or_segments() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        let empty_session = crate::model::ParsedSession::new("empty_session_key");
+        let session_id = persist_session(
+            &conn,
+            "custom-agent",
+            "Custom Agent",
+            &empty_session,
+            &blobs,
+        )
+        .unwrap();
+
+        let detail = get_session(&conn, &session_id).unwrap().unwrap();
+        assert_eq!(detail.summary.id, session_id);
+        assert_eq!(detail.summary.agent_id, "custom-agent");
+        assert_eq!(detail.summary.message_count, 0);
+        assert_eq!(detail.summary.tool_call_count, 0);
+        assert!(detail.messages.is_empty());
+        assert!(detail.segments.is_empty());
+        assert!(detail.file_events.is_empty());
+        assert!(detail.next_message_cursor.is_none());
+    }
 }
