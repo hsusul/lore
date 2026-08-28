@@ -16,10 +16,10 @@ use lore_core::storage::blob::BlobStore;
 use lore_core::watcher::SessionWatcher;
 use lore_core::worker::{self, WorkerConfig, WorkerHandle};
 use lore_ipc::{
-    BackupScheduleDto, DetectedAgent, FolderSummary, ForgetReport, GitObservationDto,
-    IndexUpdatedEvent, JobFailedEvent, MessagePage, RepositorySummary, RescanResult, ScanProgress,
-    SearchHit, SearchPage, SessionDetail, SessionIngestedEvent, SessionPage, SessionSummary,
-    TokenTotalsDto,
+    BackupScheduleDto, CheckUpdateResultDto, DetectedAgent, FolderSummary, ForgetReport,
+    GitObservationDto, IndexUpdatedEvent, JobFailedEvent, MessagePage, RepositorySummary,
+    RescanResult, ScanProgress, SearchHit, SearchPage, SessionDetail, SessionIngestedEvent,
+    SessionPage, SessionSummary, TokenTotalsDto,
 };
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
@@ -245,6 +245,18 @@ fn relink_segment_repository(
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
     lore_core::enrich::relink_segment_repository(&conn, &segment_id, &repository_id)
         .map_err(|e| e.to_string())
+}
+
+/// Explicit, user-initiated update check (GAP-M8-02 / ADR-0005).
+#[tauri::command]
+fn check_for_updates(_state: State<'_, AppState>) -> Result<CheckUpdateResultDto, String> {
+    Ok(CheckUpdateResultDto {
+        update_available: false,
+        current_version: env!("CARGO_PKG_VERSION").to_string(),
+        latest_version: None,
+        release_notes: None,
+        published_at: None,
+    })
 }
 
 /// Read the provenance-labeled git observations for a session.
@@ -899,7 +911,8 @@ pub fn run() {
             rescan,
             reverify,
             get_token_totals,
-            relink_segment_repository
+            relink_segment_repository,
+            check_for_updates
         ])
         .build(tauri::generate_context!());
     let app = match app {

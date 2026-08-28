@@ -20,6 +20,7 @@ import type { RepositorySummary } from "../crates/lore-ipc/bindings/RepositorySu
 import type { RescanResult } from "../crates/lore-ipc/bindings/RescanResult";
 import type { ScanProgress } from "../crates/lore-ipc/bindings/ScanProgress";
 import type { BackupScheduleDto } from "../crates/lore-ipc/bindings/BackupScheduleDto";
+import type { CheckUpdateResultDto } from "../crates/lore-ipc/bindings/CheckUpdateResultDto";
 import type { SearchHit } from "../crates/lore-ipc/bindings/SearchHit";
 import type { SearchPage } from "../crates/lore-ipc/bindings/SearchPage";
 import type { SecretFlaggedEvent } from "../crates/lore-ipc/bindings/SecretFlaggedEvent";
@@ -77,6 +78,7 @@ export type SearchHitField = "title" | "text" | "patch" | "content_json";
 
 export type {
   BackupScheduleDto,
+  CheckUpdateResultDto,
   DetectedAgent,
   FileEventDto,
   FolderSummary,
@@ -376,4 +378,9 @@ export function relinkSegmentRepository(
   repositoryId: string,
 ): Promise<void> {
   return invoke<void>("relink_segment_repository", { segmentId, repositoryId });
+}
+
+/** Check for application updates (explicit user action; ADR-0005). */
+export function checkForUpdates(): Promise<CheckUpdateResultDto> {
+  return invoke<CheckUpdateResultDto>("check_for_updates");
 }

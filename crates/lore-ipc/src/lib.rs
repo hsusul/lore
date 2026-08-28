@@ -384,6 +384,17 @@ pub struct SecretFlaggedEvent {
     pub severity: String,
 }
 
+/// Response from an explicit, user-initiated update check (GAP-M8-02 / ADR-0005).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CheckUpdateResultDto {
+    pub update_available: bool,
+    pub current_version: String,
+    pub latest_version: Option<String>,
+    pub release_notes: Option<String>,
+    pub published_at: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

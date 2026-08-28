@@ -221,4 +221,36 @@ describe("ipc contract", () => {
     const hitField: import("./ipc").SearchHitField = "title";
     expect(hitField).toBe("title");
   });
+
+  it("getTokenTotals, relinkSegmentRepository, and checkForUpdates invoke expected commands", async () => {
+    const { checkForUpdates, getTokenTotals, relinkSegmentRepository } = await import("./ipc");
+
+    invoke.mockResolvedValueOnce({
+      total_input_tokens: 100,
+      total_output_tokens: 20,
+      total_cache_tokens: 10,
+      est_cost_usd: 0.05,
+    });
+    const totals = await getTokenTotals();
+    expect(invoke).toHaveBeenCalledWith("get_token_totals");
+    expect(totals.total_input_tokens).toBe(100);
+
+    invoke.mockResolvedValueOnce(undefined);
+    await relinkSegmentRepository("seg-1", "repo-2");
+    expect(invoke).toHaveBeenCalledWith("relink_segment_repository", {
+      segmentId: "seg-1",
+      repositoryId: "repo-2",
+    });
+
+    invoke.mockResolvedValueOnce({
+      update_available: false,
+      current_version: "0.1.0",
+      latest_version: null,
+      release_notes: null,
+      published_at: null,
+    });
+    const updateResult = await checkForUpdates();
+    expect(invoke).toHaveBeenCalledWith("check_for_updates");
+    expect(updateResult.current_version).toBe("0.1.0");
+  });
 });
