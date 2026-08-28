@@ -844,6 +844,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_query_handles_git_filters_and_normalizes_commit_hex() {
+        let q = parse_query(
+            "repo:lore-main worktree:wt-feat branch:feature/login commit:ABCDEF1234 git-source:agent_recorded search term",
+        );
+        assert_eq!(q.terms, vec!["search", "term"]);
+        assert_eq!(q.git.repo.as_deref(), Some("lore-main"));
+        assert_eq!(q.git.worktree.as_deref(), Some("wt-feat"));
+        assert_eq!(q.git.branch.as_deref(), Some("feature/login"));
+        assert_eq!(q.git.commit.as_deref(), Some("abcdef1234")); // lowercased
+        assert_eq!(q.git.source_class.as_deref(), Some("agent_recorded"));
+
+        let q_invalid_source = parse_query("git-source:invalid_source_type");
+        assert_eq!(q_invalid_source.git.source_class, None);
+    }
+
+    #[test]
     fn truncate_to_char_boundary_handles_multibyte_utf8() {
         let s = "hello 🦀 world 漢字 café";
         for max_bytes in 0..=s.len() + 10 {
