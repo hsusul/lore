@@ -645,4 +645,22 @@ mod tests {
         let out = normalize_remote_url("https://user:p@ss@gitlab.example.com/g/p.git").unwrap();
         assert_eq!(out, "gitlab.example.com/g/p");
     }
+
+    #[test]
+    fn capture_on_unborn_repository_handles_zero_commits_cleanly() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path();
+        let _ = std::process::Command::new("git")
+            .arg("init")
+            .current_dir(repo_path)
+            .output();
+
+        let captured = capture(repo_path);
+        assert!(captured.is_some());
+        let c = captured.unwrap();
+        assert!(c.branch.is_some());
+        assert_eq!(c.head_commit, None);
+        assert!(!c.detached);
+        assert!(c.root_commits.is_empty());
+    }
 }
