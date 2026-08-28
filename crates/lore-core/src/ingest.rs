@@ -1357,4 +1357,50 @@ mod tests {
         assert_eq!(totals.output, Some(150));
         assert_eq!(totals.cache, Some(30));
     }
+
+    #[test]
+    fn scan_and_project_handles_multiline_text_with_secrets_and_trailing_newlines() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO agent (id, display_name) VALUES ('test_agent', 'Test Agent')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_session (id, agent_id, dedupe_key, started_at) VALUES ('s_multi', 'test_agent', 'k_multi', 1000)",
+            [],
+        )
+        .unwrap();
+
+        let token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+        let multiline = format!("Line 1: Normal text\nLine 2: Token {token}\n\n\n");
+
+        let outcome = scan_and_project(
+            &conn,
+            "s_multi",
+            None,
+            "message_part",
+            "p_1",
+            "text",
+            &multiline,
+            true,
+            Some(1000),
+            "test_agent",
+        )
+        .unwrap();
+
+        assert_eq!(outcome, ScanOutcome::Findings);
+
+        let redacted_doc: String = conn
+            .query_row(
+                "SELECT redacted_text FROM search_document WHERE source_id = 'p_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!redacted_doc.contains(token));
+        assert!(redacted_doc.contains("Line 1: Normal text"));
+        assert!(redacted_doc.contains("«redacted:github-token»"));
+        assert!(redacted_doc.ends_with("\n\n\n"));
+    }
 }
