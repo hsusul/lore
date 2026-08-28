@@ -354,4 +354,38 @@ mod tests {
         }
         assert_eq!(BackupInterval::parse("unknown"), BackupInterval::Off);
     }
+
+    #[test]
+    fn prune_keeps_exact_number_of_newest_backups_and_ignores_non_backup_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let backup_dir = dir.path().join("backups");
+        std::fs::create_dir_all(&backup_dir).unwrap();
+
+        // Create mock backup files with chronological names
+        let b1 = backup_dir.join("lore-00000000000000000001-0000.db");
+        let b2 = backup_dir.join("lore-00000000000000000002-0000.db");
+        let b3 = backup_dir.join("lore-00000000000000000003-0000.db");
+        let extra = backup_dir.join("other_file.txt");
+        let foreign_db = backup_dir.join("lore-not-backup.wal");
+
+        std::fs::write(&b1, b"b1").unwrap();
+        std::fs::write(&b2, b"b2").unwrap();
+        std::fs::write(&b3, b"b3").unwrap();
+        std::fs::write(&extra, b"txt").unwrap();
+        std::fs::write(&foreign_db, b"wal").unwrap();
+
+        let list = list_backups(&backup_dir).unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list, vec![b1.clone(), b2.clone(), b3.clone()]);
+
+        // Prune down to 2 newest
+        prune(&backup_dir, 2).unwrap();
+
+        let list_after = list_backups(&backup_dir).unwrap();
+        assert_eq!(list_after.len(), 2);
+        assert_eq!(list_after, vec![b2, b3]);
+        assert!(!b1.exists());
+        assert!(extra.exists());
+        assert!(foreign_db.exists());
+    }
 }
