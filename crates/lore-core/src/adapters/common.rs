@@ -499,6 +499,18 @@ mod tests {
             title_from_text("\r\n\r\nFix windows CRLF line endings\r\nSecond line"),
             Some("Fix windows CRLF line endings".to_string())
         );
+
+        // XML wrapper tag skipping
+        assert_eq!(
+            title_from_text("<task>\nFix database migrations\n</task>"),
+            Some("Fix database migrations".to_string())
+        );
+        assert_eq!(
+            title_from_text(
+                "<custom_instruction>\n  Implement export feature  \n</custom_instruction>"
+            ),
+            Some("Implement export feature".to_string())
+        );
     }
 
     #[test]
