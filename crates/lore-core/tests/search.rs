@@ -818,12 +818,7 @@ fn before_and_after_date_filters_scope_search_results() {
     assert_eq!(hits_after[0].session_id, sid_late);
 
     // Query with range (both after and before)
-    let hits_range = search(
-        &conn,
-        "database after:2026-08-01 before:2026-08-10",
-        20,
-    )
-    .unwrap();
+    let hits_range = search(&conn, "database after:2026-08-01 before:2026-08-10", 20).unwrap();
     assert_eq!(hits_range.len(), 1);
     assert_eq!(hits_range[0].session_id, sid_early);
 }

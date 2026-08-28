@@ -1294,7 +1294,8 @@ mod tests {
         assert_eq!(initial_totals.total_cache_tokens, 0);
         assert_eq!(initial_totals.est_cost_usd, 0.0);
 
-        let codex = CodexAdapter::new().parse_str(&fixture("codex", "token_count.jsonl"), "codex_totals");
+        let codex =
+            CodexAdapter::new().parse_str(&fixture("codex", "token_count.jsonl"), "codex_totals");
         let session_id = persist_session(&conn, "codex", "Codex", &codex, &blobs).unwrap();
 
         let detail = get_session(&conn, &session_id).unwrap().unwrap();

@@ -655,16 +655,22 @@ fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
                 i += 1;
             }
             let value_start = i;
-            // A template hole (`${VAR}`, `{{var}}`, `<placeholder>`) must be
+            // A template hole (`${VAR}`, `$(VAR)`, `{{var}}`, `%{var}`, `%VAR%`, `<placeholder>`) must be
             // captured whole, including its closer, so the allowlist can
-            // recognise it — otherwise the closing brace terminates the value
+            // recognise it — otherwise the closing brace/parenthesis terminates the value
             // and the truncated fragment looks like a credential.
             let is_double_brace = matches!(
                 (bytes.get(value_start), bytes.get(value_start + 1)),
                 (Some(b'{'), Some(b'{'))
             );
+            let is_percent_var = matches!(
+                (bytes.get(value_start), bytes.get(value_start + 1)),
+                (Some(b'%'), Some(b)) if *b != b'{' && is_token_byte(*b)
+            );
             let template_close = match (bytes.get(value_start), bytes.get(value_start + 1)) {
                 (Some(b'$'), Some(b'{')) => Some(b'}'),
+                (Some(b'$'), Some(b'(')) => Some(b')'),
+                (Some(b'%'), Some(b'{')) => Some(b'}'),
                 (Some(b'<'), _) => Some(b'>'),
                 _ => None,
             };
@@ -677,6 +683,18 @@ fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
                         None => {
                             b.is_ascii_whitespace()
                                 || matches!(b, b'"' | b'\'' | b',' | b';' | b')' | b']')
+                        }
+                    })
+                }
+            } else if is_percent_var {
+                if let Some(pos) = find(&bytes[value_start + 1..], b"%") {
+                    pos + 2
+                } else {
+                    run_until(bytes, value_start, |b| match quote {
+                        Some(q) => b == q || b.is_ascii_whitespace(),
+                        None => {
+                            b.is_ascii_whitespace()
+                                || matches!(b, b'"' | b'\'' | b',' | b';' | b'}' | b')' | b']')
                         }
                     })
                 }
@@ -807,10 +825,16 @@ fn is_allowlisted(value: &str) -> bool {
     if ALLOWLIST_VALUES.contains(&value) {
         return true;
     }
-    // Placeholder shapes: <...>, ${...}, {{...}}, all-x, common placeholders.
+    // Placeholder shapes: <...>, ${...}, $(...), {{...}}, %{...}, %...%, all-x, common placeholders.
     // A value that is *wholly* delimited is a template hole, not a credential.
     let wrapped = |open: &str, close: &str| value.starts_with(open) && value.ends_with(close);
-    if wrapped("${", "}") || wrapped("<", ">") || wrapped("{{", "}}") {
+    if wrapped("${", "}")
+        || wrapped("$(", ")")
+        || wrapped("%{", "}")
+        || wrapped("<", ">")
+        || wrapped("{{", "}}")
+        || (wrapped("%", "%") && value.len() >= 3 && !value[1..value.len() - 1].contains('%'))
+    {
         return true;
     }
     if contains_ignore_ascii_case(value, "example")
@@ -1152,8 +1176,12 @@ mod tests {
             "the password is required",
             "token: true",
             "api_key = ${MY_API_KEY}",
+            "api_key = $(MY_API_KEY)",
             "api_key = {{MY_API_KEY}}",
             "api_key = \"{{MY_API_KEY}}\"",
+            "api_key = \"%{MY_API_KEY}\"",
+            "api_key = %MY_API_KEY%",
+            "api_key = \"%MY_API_KEY%\"",
             "auth_token: <MY_AUTH_TOKEN>",
         ] {
             assert!(
