@@ -69,7 +69,7 @@ pub struct FolderSummary {
 }
 
 /// A one-line session for list views. Payload element of `list_sessions`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SessionSummary {
     pub id: String,
@@ -88,12 +88,20 @@ pub struct SessionSummary {
     pub primary_model: Option<String>,
     /// `ok` | `partial` | `failed`.
     pub parse_status: String,
+    #[ts(type = "number | null")]
+    pub total_input_tokens: Option<i64>,
+    #[ts(type = "number | null")]
+    pub total_output_tokens: Option<i64>,
+    #[ts(type = "number | null")]
+    pub total_cache_tokens: Option<i64>,
+    #[ts(type = "number | null")]
+    pub est_cost_usd: Option<f64>,
 }
 
 /// One stable newest-first page for the repository/session browser. The
 /// cursor is opaque to the UI and must be passed back unchanged. Payload of
 /// `list_sessions_page` / `list_repository_sessions_page` / `list_folder_sessions_page`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SessionPage {
     pub sessions: Vec<SessionSummary>,
@@ -212,7 +220,7 @@ pub struct MessagePage {
 }
 
 /// The full read of one session in context. Payload of `get_session`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SessionDetail {
     pub summary: SessionSummary,
@@ -353,6 +361,20 @@ pub struct JobFailedEvent {
     pub error: String,
 }
 
+/// Cumulative token usage and estimated cost across the entire archive.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TokenTotalsDto {
+    #[ts(type = "number")]
+    pub total_input_tokens: i64,
+    #[ts(type = "number")]
+    pub total_output_tokens: i64,
+    #[ts(type = "number")]
+    pub total_cache_tokens: i64,
+    #[ts(type = "number")]
+    pub est_cost_usd: f64,
+}
+
 /// Reactive event emitted over IPC when a secret finding is discovered during ingest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -394,10 +416,15 @@ mod tests {
             tool_call_count: 0,
             primary_model: None,
             parse_status: "ok".into(),
+            total_input_tokens: Some(1500),
+            total_output_tokens: Some(300),
+            total_cache_tokens: Some(500),
+            est_cost_usd: Some(0.015),
         };
         let value: serde_json::Value = serde_json::to_value(&summary).unwrap();
         assert!(value["started_at"].is_number());
         assert!(value["ended_at"].is_null());
+        assert_eq!(value["total_input_tokens"], 1500);
     }
 
     #[test]

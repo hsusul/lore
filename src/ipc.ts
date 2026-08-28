@@ -28,6 +28,7 @@ import type { SessionDetail } from "../crates/lore-ipc/bindings/SessionDetail";
 import type { SessionIngestedEvent } from "../crates/lore-ipc/bindings/SessionIngestedEvent";
 import type { SessionPage } from "../crates/lore-ipc/bindings/SessionPage";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
+import type { TokenTotalsDto } from "../crates/lore-ipc/bindings/TokenTotalsDto";
 
 export type BackupInterval = "off" | "daily" | "weekly";
 export type SearchSort = "relevance" | "newest" | "oldest";
@@ -97,6 +98,7 @@ export type {
   SessionIngestedEvent,
   SessionPage,
   SessionSummary,
+  TokenTotalsDto,
 };
 
 /** Snippet highlight markers (must match lore_core::search). */
@@ -361,4 +363,9 @@ export function onSecretFlagged(
   handler: (event: SecretFlaggedEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<SecretFlaggedEvent>("secret_flagged", (event) => handler(event.payload));
+}
+
+/** Calculate cumulative token usage and estimated cost across all sessions. */
+export function getTokenTotals(): Promise<TokenTotalsDto> {
+  return invoke<TokenTotalsDto>("get_token_totals");
 }

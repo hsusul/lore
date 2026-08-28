@@ -54,3 +54,11 @@ export function formatRelative(ms: number | null): string {
   if (weeks < 5) return `${weeks}w`;
   return formatShortDate(ms);
 }
+
+/** Compact token count formatting (e.g. 1.2k, 45k, 1.4M). */
+export function formatTokens(tokens: number | null): string {
+  if (tokens == null || !Number.isFinite(tokens) || tokens <= 0) return "";
+  if (tokens < 1_000) return `${tokens}`;
+  if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}

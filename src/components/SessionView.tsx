@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 
-import { agentLabel, formatRelative, formatTime } from "../format";
+import { agentLabel, formatRelative, formatTime, formatTokens } from "../format";
 import {
   listSessionMessagesPage,
   type FileEventDto,
@@ -210,10 +210,21 @@ function FileEventRow({
     setOpen((v) => !v);
   }
 
+  const editorUri = `vscode://file/${encodeURI(fileEvent.path.startsWith("/") ? fileEvent.path : `/${fileEvent.path}`)}`;
+
   return (
     <li className="file">
       <div className="file__row">
         <code className="file__path">{fileEvent.path}</code>
+        <a
+          href={editorUri}
+          className="file__editor-link"
+          title={`Open ${fileEvent.path} in local editor`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open
+        </a>
         <span className="file__kind">{fileEvent.change_kind}</span>
         {fileEvent.lines_added != null && (
           <span className="diffstat diffstat--add">+{fileEvent.lines_added}</span>
@@ -285,6 +296,7 @@ function SessionContent({
 
   const totalMessages = Math.max(summary.message_count, messages.length);
   const hasMore = visibleMessages < totalMessages || nextCursor !== null;
+  const totalTokens = (summary.total_input_tokens ?? 0) + (summary.total_output_tokens ?? 0);
 
   return (
     <section className="session" aria-label="Session detail">
@@ -295,6 +307,16 @@ function SessionContent({
           {summary.primary_model && <span className="mono">{summary.primary_model}</span>}
           <span>{totalMessages} messages</span>
           <span>{summary.tool_call_count} tools</span>
+          {totalTokens > 0 && (
+            <span
+              title={`Input: ${(summary.total_input_tokens ?? 0).toLocaleString()} · Output: ${(summary.total_output_tokens ?? 0).toLocaleString()}${summary.total_cache_tokens ? ` · Cache: ${summary.total_cache_tokens.toLocaleString()}` : ""}`}
+            >
+              {formatTokens(totalTokens)} tokens
+            </span>
+          )}
+          {summary.est_cost_usd != null && summary.est_cost_usd > 0 && (
+            <span>${summary.est_cost_usd.toFixed(3)}</span>
+          )}
           {segments.length > 1 && <span>{segments.length} segments</span>}
           {summary.started_at != null && <span>{formatRelative(summary.started_at)}</span>}
           {summary.parse_status !== "ok" && (

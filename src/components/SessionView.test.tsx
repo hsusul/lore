@@ -15,6 +15,10 @@ const detail: SessionDetail = {
     tool_call_count: 0,
     primary_model: "gpt-x",
     parse_status: "partial",
+    total_input_tokens: null,
+    total_output_tokens: null,
+    total_cache_tokens: null,
+    est_cost_usd: null,
   },
   parse_note: "1 parser note(s); first: unknown event_msg: brand_new_event",
   segments: [],
@@ -305,6 +309,10 @@ describe("SessionView", () => {
         tool_call_count: 0,
         primary_model: null,
         parse_status: "ok",
+        total_input_tokens: null,
+        total_output_tokens: null,
+        total_cache_tokens: null,
+        est_cost_usd: null,
       },
       parse_note: null,
       segments: [],
@@ -327,5 +335,24 @@ describe("SessionView", () => {
     render(<SessionView detail={minimalDetail} git={[]} />);
     expect(screen.getByText("Quick prompt")).toBeTruthy();
     expect(screen.getByText("hello world")).toBeTruthy();
+  });
+
+  it("renders token count, cost, and editor deep links", () => {
+    const tokenDetail: SessionDetail = {
+      ...detail,
+      summary: {
+        ...detail.summary,
+        total_input_tokens: 1200,
+        total_output_tokens: 300,
+        total_cache_tokens: 400,
+        est_cost_usd: 0.045,
+      },
+    };
+
+    render(<SessionView detail={tokenDetail} git={git} />);
+    expect(screen.getByText("1.5k tokens")).toBeTruthy();
+    expect(screen.getByText("$0.045")).toBeTruthy();
+    const editorLink = screen.getByTitle(/open billing\/webhook\.ts in local editor/i);
+    expect(editorLink.getAttribute("href")).toContain("vscode://file/");
   });
 });

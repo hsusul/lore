@@ -15,4 +15,4 @@ ended_at: number | null, message_count: number, tool_call_count: number, primary
 /**
  * `ok` | `partial` | `failed`.
  */
-parse_status: string, };
+parse_status: string, total_input_tokens: number | null, total_output_tokens: number | null, total_cache_tokens: number | null, est_cost_usd: number | null, };

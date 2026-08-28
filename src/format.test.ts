@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { agentLabel, clamp, formatRelative, formatTime } from "./format";
+import { agentLabel, clamp, formatRelative, formatTime, formatTokens } from "./format";
 
 describe("format helpers", () => {
   describe("agentLabel", () => {
@@ -59,6 +59,17 @@ describe("format helpers", () => {
       expect(formatRelative(now - 3 * 60 * 60 * 1000)).toBe("3h");
       expect(formatRelative(now - 2 * 24 * 60 * 60 * 1000)).toBe("2d");
       expect(formatRelative(now - 14 * 24 * 60 * 60 * 1000)).toBe("2w");
+    });
+  });
+
+  describe("formatTokens", () => {
+    it("formats small and large token counts compactly", () => {
+      expect(formatTokens(null)).toBe("");
+      expect(formatTokens(0)).toBe("");
+      expect(formatTokens(500)).toBe("500");
+      expect(formatTokens(1_500)).toBe("1.5k");
+      expect(formatTokens(24_000)).toBe("24k");
+      expect(formatTokens(1_200_000)).toBe("1.2M");
     });
   });
 

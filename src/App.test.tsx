@@ -84,6 +84,10 @@ function summary(id: string, title: string): SessionSummary {
     tool_call_count: 0,
     primary_model: null,
     parse_status: "ok",
+    total_input_tokens: null,
+    total_output_tokens: null,
+    total_cache_tokens: null,
+    est_cost_usd: null,
   };
 }
 

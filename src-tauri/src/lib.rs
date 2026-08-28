@@ -19,6 +19,7 @@ use lore_ipc::{
     BackupScheduleDto, DetectedAgent, FolderSummary, ForgetReport, GitObservationDto,
     IndexUpdatedEvent, JobFailedEvent, MessagePage, RepositorySummary, RescanResult, ScanProgress,
     SearchHit, SearchPage, SessionDetail, SessionIngestedEvent, SessionPage, SessionSummary,
+    TokenTotalsDto,
 };
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
@@ -200,6 +201,13 @@ fn list_repository_sessions_page(
         cursor.as_deref(),
     )
     .map_err(|e| e.to_string())
+}
+
+/// Calculate cumulative token usage and estimated cost across the entire archive.
+#[tauri::command]
+fn get_token_totals(state: State<'_, AppState>) -> Result<TokenTotalsDto, String> {
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::query::get_token_totals(&conn).map_err(|e| e.to_string())
 }
 
 /// Read one session in context (header, segments, ordered-part timeline, files).
@@ -874,7 +882,8 @@ pub fn run() {
             add_agent_root,
             remove_agent_root,
             rescan,
-            reverify
+            reverify,
+            get_token_totals
         ])
         .build(tauri::generate_context!());
     let app = match app {

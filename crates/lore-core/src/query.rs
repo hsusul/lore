@@ -10,13 +10,34 @@ use std::collections::HashMap;
 
 use lore_ipc::{
     FileEventDto, GitObservationDto, MessageDto, MessagePage, MessagePartDto, RepositorySummary,
-    SegmentDto, SessionDetail, SessionPage, SessionSummary,
+    SegmentDto, SessionDetail, SessionPage, SessionSummary, TokenTotalsDto,
 };
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::storage::blob::BlobStore;
 use crate::storage::Result;
+
+/// Calculate cumulative token usage and estimated cost across the entire archive.
+pub fn get_token_totals(conn: &Connection) -> Result<TokenTotalsDto> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(total_input_tokens), 0),
+                COALESCE(SUM(total_output_tokens), 0),
+                COALESCE(SUM(total_cache_tokens), 0),
+                COALESCE(SUM(est_cost_usd), 0.0)
+         FROM agent_session",
+        [],
+        |row| {
+            Ok(TokenTotalsDto {
+                total_input_tokens: row.get(0)?,
+                total_output_tokens: row.get(1)?,
+                total_cache_tokens: row.get(2)?,
+                est_cost_usd: row.get(3)?,
+            })
+        },
+    )
+    .map_err(Into::into)
+}
 
 /// Number of sessions already archived for one adapter.
 pub fn agent_session_count(conn: &Connection, agent_id: &str) -> Result<i64> {
@@ -32,7 +53,8 @@ pub fn agent_session_count(conn: &Connection, agent_id: &str) -> Result<i64> {
 pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary>> {
     let mut stmt = conn.prepare(
         "SELECT id, agent_id, title, started_at, ended_at, message_count,
-                tool_call_count, primary_model, parse_status
+                tool_call_count, primary_model, parse_status,
+                total_input_tokens, total_output_tokens, total_cache_tokens, est_cost_usd
          FROM agent_session
          ORDER BY started_at DESC, id DESC
          LIMIT ?1",
@@ -43,7 +65,7 @@ pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary
     Ok(rows)
 }
 
-/// Map the standard nine-column session-summary projection (columns 0..=8, in
+/// Map the standard session-summary projection (columns 0..=12, in
 /// the field order every `SELECT` in this module uses). Shared so the column
 /// order lives in exactly one place.
 fn session_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSummary> {
@@ -57,6 +79,10 @@ fn session_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSumma
         tool_call_count: row.get(6)?,
         primary_model: row.get(7)?,
         parse_status: row.get(8)?,
+        total_input_tokens: row.get(9)?,
+        total_output_tokens: row.get(10)?,
+        total_cache_tokens: row.get(11)?,
+        est_cost_usd: row.get(12)?,
     })
 }
 
@@ -102,7 +128,8 @@ pub fn list_sessions_page(
     let mut sql = String::with_capacity(384);
     sql.push_str(
         "SELECT id, agent_id, title, started_at, ended_at, message_count,
-                tool_call_count, primary_model, parse_status
+                tool_call_count, primary_model, parse_status,
+                total_input_tokens, total_output_tokens, total_cache_tokens, est_cost_usd
          FROM agent_session",
     );
     let mut params = Vec::with_capacity(8);
@@ -126,7 +153,8 @@ pub fn list_repository_sessions(
 ) -> Result<Vec<SessionSummary>> {
     let mut stmt = conn.prepare(
         "SELECT s.id, s.agent_id, s.title, s.started_at, s.ended_at, s.message_count,
-                s.tool_call_count, s.primary_model, s.parse_status
+                s.tool_call_count, s.primary_model, s.parse_status,
+                s.total_input_tokens, s.total_output_tokens, s.total_cache_tokens, s.est_cost_usd
          FROM agent_session s
          WHERE EXISTS (
              SELECT 1 FROM session_segment sg
@@ -154,7 +182,8 @@ pub fn list_repository_sessions_page(
     let mut sql = String::with_capacity(512);
     sql.push_str(
         "SELECT s.id, s.agent_id, s.title, s.started_at, s.ended_at, s.message_count,
-                s.tool_call_count, s.primary_model, s.parse_status
+                s.tool_call_count, s.primary_model, s.parse_status,
+                s.total_input_tokens, s.total_output_tokens, s.total_cache_tokens, s.est_cost_usd
          FROM agent_session s
          WHERE EXISTS (
              SELECT 1 FROM session_segment sg
@@ -189,7 +218,8 @@ pub fn list_folder_sessions_page(
     let mut sql = String::with_capacity(512);
     sql.push_str(
         "SELECT s.id, s.agent_id, s.title, s.started_at, s.ended_at, s.message_count,
-                s.tool_call_count, s.primary_model, s.parse_status
+                s.tool_call_count, s.primary_model, s.parse_status,
+                s.total_input_tokens, s.total_output_tokens, s.total_cache_tokens, s.est_cost_usd
          FROM agent_session s
          JOIN session_folder sf ON sf.session_id = s.id
          WHERE sf.folder_id = ?",
@@ -388,10 +418,12 @@ fn session_summary(
 ) -> Result<Option<(SessionSummary, Option<String>)>> {
     conn.query_row(
         "SELECT id, agent_id, title, started_at, ended_at, message_count,
-                tool_call_count, primary_model, parse_status, parse_note
+                tool_call_count, primary_model, parse_status,
+                total_input_tokens, total_output_tokens, total_cache_tokens, est_cost_usd,
+                parse_note
          FROM agent_session WHERE id = ?1",
         [session_id],
-        |row| Ok((session_summary_row(row)?, row.get(9)?)),
+        |row| Ok((session_summary_row(row)?, row.get(13)?)),
     )
     .optional()
     .map_err(Into::into)
@@ -1248,5 +1280,31 @@ mod tests {
         // Limit <= 0 clamps to 1.
         let clamped_zero = list_folder_sessions_page(&conn, &f1.id, 0, None).unwrap();
         assert_eq!(clamped_zero.sessions.len(), 1);
+    }
+
+    #[test]
+    fn get_token_totals_aggregates_usage_and_cost() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        let initial_totals = get_token_totals(&conn).unwrap();
+        assert_eq!(initial_totals.total_input_tokens, 0);
+        assert_eq!(initial_totals.total_output_tokens, 0);
+        assert_eq!(initial_totals.total_cache_tokens, 0);
+        assert_eq!(initial_totals.est_cost_usd, 0.0);
+
+        let codex = CodexAdapter::new().parse_str(&fixture("codex", "token_count.jsonl"), "codex_totals");
+        let session_id = persist_session(&conn, "codex", "Codex", &codex, &blobs).unwrap();
+
+        let detail = get_session(&conn, &session_id).unwrap().unwrap();
+        assert_eq!(detail.summary.total_input_tokens, Some(120));
+        assert_eq!(detail.summary.total_output_tokens, Some(30));
+        assert_eq!(detail.summary.total_cache_tokens, Some(45));
+
+        let totals = get_token_totals(&conn).unwrap();
+        assert_eq!(totals.total_input_tokens, 120);
+        assert_eq!(totals.total_output_tokens, 30);
+        assert_eq!(totals.total_cache_tokens, 45);
     }
 }
