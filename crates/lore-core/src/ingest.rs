@@ -1284,4 +1284,28 @@ mod tests {
             "a scanner failure must not fail the whole session"
         );
     }
+
+    #[test]
+    fn read_bounded_content_truncates_cleanly_at_newlines() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test_oversized.jsonl");
+
+        let line1 = "{\"line\":1}\n";
+        let line2 = "{\"line\":2}\n";
+        let line3 = "{\"line\":3}\n";
+        let full_text = format!("{}{}{}", line1, line2, line3);
+        std::fs::write(&file_path, &full_text).unwrap();
+
+        // Reading with cap larger than total yields all lines.
+        let full_read = read_bounded_content(&file_path, 1024).unwrap();
+        assert_eq!(full_read, full_text);
+
+        // Reading with cap between line 1 and line 2 cuts at line 1.
+        let bounded = read_bounded_content(&file_path, (line1.len() + 5) as u64).unwrap();
+        assert_eq!(bounded, line1);
+
+        // Reading with cap smaller than line 1 yields empty string cleanly without error.
+        let sub_line = read_bounded_content(&file_path, (line1.len() - 1) as u64).unwrap();
+        assert_eq!(sub_line, "");
+    }
 }
