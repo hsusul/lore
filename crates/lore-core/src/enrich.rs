@@ -22,11 +22,45 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::git::{self, CapturedRepo};
 use crate::ingest::det_id;
 use crate::storage::Result;
+
+/// User-driven repository assignment correction (GAP-M4-01 / I3).
+/// Moves a session segment to a target repository, updating resolution confidence to `high`
+/// and refreshing the session's git search projection.
+pub fn relink_segment_repository(
+    conn: &Connection,
+    segment_id: &str,
+    target_repo_id: &str,
+) -> Result<()> {
+    let _write = crate::storage::write_lock();
+    let tx = conn.unchecked_transaction()?;
+    let session_id: Option<String> = tx
+        .query_row(
+            "SELECT session_id FROM session_segment WHERE id = ?1",
+            params![segment_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+
+    tx.execute(
+        "UPDATE session_segment
+         SET repository_id = ?1, resolution_confidence = 'high'
+         WHERE id = ?2",
+        params![target_repo_id, segment_id],
+    )?;
+
+    crate::search::project_session_git(&tx, &session_id)?;
+    tx.commit()?;
+    Ok(())
+}
 
 /// Enrich every unresolved, cwd-bearing segment of `session_id`. Returns the
 /// number of segments linked to a repository. Segments whose cwd is not inside a

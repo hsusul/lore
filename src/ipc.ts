@@ -369,3 +369,11 @@ export function onSecretFlagged(
 export function getTokenTotals(): Promise<TokenTotalsDto> {
   return invoke<TokenTotalsDto>("get_token_totals");
 }
+
+/** Relink a session segment to a target repository (split/merge correction). */
+export function relinkSegmentRepository(
+  segmentId: string,
+  repositoryId: string,
+): Promise<void> {
+  return invoke<void>("relink_segment_repository", { segmentId, repositoryId });
+}

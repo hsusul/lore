@@ -232,6 +232,21 @@ fn get_file_patch(state: State<'_, AppState>, id: String) -> Result<Option<Strin
     lore_core::query::file_patch_text(&conn, &state.blobs, &id).map_err(|e| e.to_string())
 }
 
+/// Relink a segment to a target repository (user correction / split-merge).
+#[tauri::command]
+fn relink_segment_repository(
+    state: State<'_, AppState>,
+    segment_id: String,
+    repository_id: String,
+) -> Result<(), String> {
+    if is_invalid_text_token(&segment_id, 256) || is_invalid_text_token(&repository_id, 256) {
+        return Err("invalid id".to_string());
+    }
+    let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
+    lore_core::enrich::relink_segment_repository(&conn, &segment_id, &repository_id)
+        .map_err(|e| e.to_string())
+}
+
 /// Read the provenance-labeled git observations for a session.
 #[tauri::command]
 fn get_git_snapshot(
@@ -883,7 +898,8 @@ pub fn run() {
             remove_agent_root,
             rescan,
             reverify,
-            get_token_totals
+            get_token_totals,
+            relink_segment_repository
         ])
         .build(tauri::generate_context!());
     let app = match app {

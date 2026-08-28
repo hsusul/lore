@@ -458,3 +458,43 @@ fn multi_segment_session_in_same_repo_resolves_to_single_repository() {
         .unwrap();
     assert_eq!(total_repos, 1, "exactly one repository should exist");
 }
+
+#[test]
+fn user_can_relink_segment_to_different_repository() {
+    let repo_a = tempfile::tempdir().unwrap();
+    init_repo(repo_a.path());
+    let repo_b = tempfile::tempdir().unwrap();
+    init_repo(repo_b.path());
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+
+    let sid_a = persist_session_at(&conn, &store, "sess-a", repo_a.path());
+    let sid_b = persist_session_at(&conn, &store, "sess-b", repo_b.path());
+    enrich_session(&conn, &sid_a).unwrap();
+    enrich_session(&conn, &sid_b).unwrap();
+
+    let repo_a_id = repo_of(&conn, &sid_a);
+    let repo_b_id = repo_of(&conn, &sid_b);
+    assert_ne!(repo_a_id, repo_b_id);
+
+    let segment_a_id: String = conn
+        .query_row(
+            "SELECT id FROM session_segment WHERE session_id = ?1",
+            [&sid_a],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    // Relink segment from repo_a to repo_b
+    lore_core::enrich::relink_segment_repository(&conn, &segment_a_id, &repo_b_id).unwrap();
+
+    let new_repo_id: String = conn
+        .query_row(
+            "SELECT repository_id FROM session_segment WHERE id = ?1",
+            [&segment_a_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(new_repo_id, repo_b_id);
+}
