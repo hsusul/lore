@@ -1427,4 +1427,31 @@ mod tests {
             "rollout-2026-08-26-test.jsonl"
         );
     }
+
+    #[test]
+    fn turn_context_updates_segments_on_model_and_cwd_changes() {
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_turns\",\"cwd\":\"/dir1\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"turn_context\",\"payload\":{\"cwd\":\"/dir1\",\"model\":\"gpt-4o\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"hello\"}}\n",
+            "{\"type\":\"turn_context\",\"payload\":{\"cwd\":\"/dir2\",\"model\":\"gpt-4o-mini\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"hi from dir2\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_turns");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.segments.len(), 2);
+
+        assert_eq!(s.segments[0].cwd.as_deref(), Some("/dir1"));
+        assert_eq!(s.segments[0].model.as_deref(), Some("gpt-4o"));
+        assert_eq!(s.segments[0].seq_start, 0);
+        assert_eq!(s.segments[0].seq_end, 0);
+        assert_eq!(s.messages[0].segment_ix, 0);
+
+        assert_eq!(s.segments[1].cwd.as_deref(), Some("/dir2"));
+        assert_eq!(s.segments[1].model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(s.segments[1].seq_start, 1);
+        assert_eq!(s.segments[1].seq_end, 1);
+        assert_eq!(s.messages[1].segment_ix, 1);
+    }
 }
