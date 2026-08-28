@@ -1042,4 +1042,25 @@ mod tests {
 
         assert_eq!(root, Some(custom_dir.join("projects")));
     }
+
+    #[test]
+    fn parses_stop_reason_and_sparse_token_usage() {
+        let jsonl = concat!(
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-3-5-sonnet-20241022\",\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":150,\"output_tokens\":42},\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}\n",
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-3-5-sonnet-20241022\",\"stop_reason\":\"tool_use\",\"usage\":{\"cache_read_input_tokens\":80},\"content\":[{\"type\":\"text\",\"text\":\"calling tool\"}]}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "stop-reason-usage");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 2);
+
+        assert_eq!(session.messages[0].stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(session.messages[0].tokens.input, Some(150));
+        assert_eq!(session.messages[0].tokens.output, Some(42));
+        assert_eq!(session.messages[0].tokens.cache, None);
+
+        assert_eq!(session.messages[1].stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(session.messages[1].tokens.input, None);
+        assert_eq!(session.messages[1].tokens.output, None);
+        assert_eq!(session.messages[1].tokens.cache, Some(80));
+    }
 }
