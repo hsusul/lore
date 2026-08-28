@@ -776,8 +776,23 @@ mod tests {
             "\u{200b}hello\u{200c}".to_string(),
             "\0\u{0007}\u{001f}".to_string(),
             "world".to_string(),
+            "quo\"ted".to_string(),
         ];
-        assert_eq!(fts_match(&mixed), Some("\"hello\" \"world\"".to_string()));
+        assert_eq!(
+            fts_match(&mixed),
+            Some("\"hello\" \"world\" \"quo\"\"ted\"".to_string())
+        );
+    }
+
+    #[test]
+    fn like_escape_neutralizes_sql_wildcards_and_backslashes() {
+        assert_eq!(like_escape("normal"), "normal");
+        assert_eq!(like_escape("100%_match"), "100\\%\\_match");
+        assert_eq!(
+            like_escape("path\\with\\backslashes"),
+            "path\\\\with\\\\backslashes"
+        );
+        assert_eq!(like_escape("%_\\"), "\\%\\_\\\\");
     }
 
     #[test]
