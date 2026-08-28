@@ -156,3 +156,26 @@ fn empty_root_marks_nothing() {
         "an empty root must not mark its artifacts missing"
     );
 }
+
+#[test]
+fn selective_deletion_in_nonempty_root_marks_only_deleted_source_missing() {
+    let home = home();
+    let file2 = home.root.join("repo/session_2.jsonl");
+    fs::write(&file2, claude_fixture()).unwrap();
+
+    let registry = AdapterRegistry::v0();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let pipeline = Pipeline::new(&conn, &registry, &home.blobs, &home.config, 128);
+    pipeline.enqueue_scan(&NullSink).unwrap();
+    pipeline.drain(&NullSink, 10).unwrap();
+
+    assert_eq!(state_of(&conn, &home.file), "active");
+    assert_eq!(state_of(&conn, &file2), "active");
+
+    // Delete only file2; home.file remains present so root is still non-empty
+    fs::remove_file(&file2).unwrap();
+    pipeline.enqueue_scan(&NullSink).unwrap();
+
+    assert_eq!(state_of(&conn, &home.file), "active");
+    assert_eq!(state_of(&conn, &file2), "missing");
+}
