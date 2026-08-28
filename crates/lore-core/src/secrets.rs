@@ -1383,4 +1383,26 @@ mod tests {
         let changeme = "secret=changeme_987654321_abc_xyz_qwert";
         assert!(scan_ok(changeme).is_empty());
     }
+
+    #[test]
+    fn scan_and_redact_connection_strings_with_ipv6_and_various_schemes() {
+        let uri1 = "postgres://admin:pass123@[2001:db8::1]:5432/mydb";
+        let uri2 = "mongodb+srv://root:s3cret@[::1]/test";
+        let uri3 = "redis://default:mypassword@localhost:6379/0";
+
+        let text = format!("DB1: {uri1}\nDB2: {uri2}\nDB3: {uri3}");
+        let findings = scan_ok(&text);
+        assert_eq!(findings.len(), 3);
+        for f in &findings {
+            assert_eq!(f.rule, "connection-string");
+        }
+
+        let redacted = redact(&text, &findings);
+        assert!(!redacted.contains("admin:pass123"));
+        assert!(!redacted.contains("root:s3cret"));
+        assert!(!redacted.contains("default:mypassword"));
+        assert!(redacted.contains("«redacted:connection-string»@[2001:db8::1]:5432/mydb"));
+        assert!(redacted.contains("«redacted:connection-string»@[::1]/test"));
+        assert!(redacted.contains("«redacted:connection-string»@localhost:6379/0"));
+    }
 }
