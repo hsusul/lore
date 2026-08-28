@@ -827,4 +827,15 @@ mod tests {
         assert_eq!(q_invalid.after, None);
         assert_eq!(q_invalid.model, None);
     }
+
+    #[test]
+    fn truncate_to_char_boundary_handles_multibyte_utf8() {
+        let s = "hello 🦀 world 漢字 café";
+        for max_bytes in 0..=s.len() + 10 {
+            let truncated = truncate_to_char_boundary(s, max_bytes);
+            assert!(truncated.len() <= max_bytes);
+            assert!(s.starts_with(truncated));
+            assert!(s.is_char_boundary(truncated.len()));
+        }
+    }
 }
