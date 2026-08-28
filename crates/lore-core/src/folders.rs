@@ -307,4 +307,21 @@ mod tests {
         // Unfiling a nonexistent session ID also succeeds safely
         assert!(set_session_folder(&conn, "nonexistent-session", None).is_ok());
     }
+
+    #[test]
+    fn rename_folder_with_empty_or_whitespace_name_falls_back_to_default() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let f = create_folder(&conn, "Original Name").unwrap();
+        assert_eq!(f.name, "Original Name");
+
+        // Rename with whitespace falls back to "New folder"
+        rename_folder(&conn, &f.id, "   \t\n  ").unwrap();
+        let folders = list_folders(&conn).unwrap();
+        assert_eq!(folders[0].name, "New folder");
+
+        // Rename with control characters strips them
+        rename_folder(&conn, &f.id, "\0Renamed\x07Folder\0").unwrap();
+        let folders = list_folders(&conn).unwrap();
+        assert_eq!(folders[0].name, "Renamed Folder");
+    }
 }
