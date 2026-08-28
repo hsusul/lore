@@ -342,4 +342,26 @@ mod tests {
         assert!(store.read("").is_err());
         assert!(store.read("./escape").is_err());
     }
+
+    #[test]
+    fn remove_deletes_blob_and_rejects_traversal() {
+        let (_dir, store) = store();
+        let staged = store.stage(b"temporary blob to remove").unwrap();
+        assert_eq!(
+            store.read(staged.relpath()).unwrap(),
+            b"temporary blob to remove"
+        );
+
+        // Removal succeeds
+        assert!(store.remove(staged.relpath()).is_ok());
+        assert!(store.read(staged.relpath()).is_err());
+
+        // Removing non-existent file is idempotent (Ok)
+        assert!(store.remove(staged.relpath()).is_ok());
+
+        // Traversal path in remove is rejected
+        assert!(store.remove("../escape").is_err());
+        assert!(store.remove("shard/../../escape").is_err());
+        assert!(store.remove("").is_err());
+    }
 }
