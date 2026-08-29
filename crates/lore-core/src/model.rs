@@ -407,4 +407,65 @@ mod tests {
         };
         assert!(!with_cache.is_empty());
     }
+
+    #[test]
+    fn all_domain_enums_have_consistent_as_str_and_display_implementations() {
+        for status in [ParseStatus::Ok, ParseStatus::Partial, ParseStatus::Failed] {
+            assert_eq!(status.as_str(), status.to_string().as_str());
+        }
+
+        for role in [
+            Role::User,
+            Role::Assistant,
+            Role::System,
+            Role::Tool,
+            Role::Meta,
+        ] {
+            assert_eq!(role.as_str(), role.to_string().as_str());
+        }
+
+        for kind in [
+            EventKind::Message,
+            EventKind::Summary,
+            EventKind::Compaction,
+            EventKind::Attachment,
+            EventKind::Title,
+            EventKind::Mode,
+            EventKind::PrLink,
+            EventKind::Other,
+        ] {
+            assert_eq!(kind.as_str(), kind.to_string().as_str());
+        }
+
+        for part_kind in [
+            PartKind::Text,
+            PartKind::Thinking,
+            PartKind::ToolUse,
+            PartKind::ToolResult,
+            PartKind::Attachment,
+            PartKind::Opaque,
+        ] {
+            assert_eq!(part_kind.as_str(), part_kind.to_string().as_str());
+        }
+
+        for change_kind in [
+            FileChangeKind::Edit,
+            FileChangeKind::Write,
+            FileChangeKind::Create,
+            FileChangeKind::Delete,
+            FileChangeKind::Move,
+            FileChangeKind::Read,
+            FileChangeKind::Patch,
+        ] {
+            assert_eq!(change_kind.as_str(), change_kind.to_string().as_str());
+        }
+
+        for source in [
+            FileEventSource::AgentToolInput,
+            FileEventSource::AgentPatch,
+            FileEventSource::LoreCapture,
+        ] {
+            assert_eq!(source.as_str(), source.to_string().as_str());
+        }
+    }
 }
