@@ -663,4 +663,23 @@ mod tests {
         assert!(!c.detached);
         assert!(c.root_commits.is_empty());
     }
+
+    #[test]
+    fn normalize_remote_url_with_git_protocol_and_custom_users() {
+        assert_eq!(
+            normalize_remote_url("git://github.com/org/repo.git").as_deref(),
+            Some("github.com/org/repo")
+        );
+        assert_eq!(
+            normalize_remote_url(
+                "git+ssh://custom_user:secret_token@gitlab.example.com:9418/org/repo.git"
+            )
+            .as_deref(),
+            Some("gitlab.example.com/org/repo")
+        );
+        assert_eq!(
+            normalize_remote_url("git@ssh.dev.azure.com:v3/Company/Project/Repo").as_deref(),
+            Some("ssh.dev.azure.com/v3/Company/Project/Repo")
+        );
+    }
 }
