@@ -675,4 +675,18 @@ mod tests {
         assert_ne!(a, c);
         assert_eq!(a.len(), 16);
     }
+
+    #[test]
+    fn relink_segment_repository_with_nonexistent_segment_is_noop() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let res = relink_segment_repository(&conn, "nonexistent-segment", "target-repo");
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn enrich_session_with_nonexistent_session_returns_zero() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let count = enrich_session(&conn, "nonexistent-session").unwrap();
+        assert_eq!(count, 0);
+    }
 }
