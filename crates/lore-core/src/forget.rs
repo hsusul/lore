@@ -465,4 +465,15 @@ mod tests {
         assert!(report.removed.is_empty());
         assert!(report.preserved_exports.is_empty());
     }
+
+    #[test]
+    fn forget_session_with_nonexistent_id_returns_empty_report() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        let report = forget_session(&conn, &blobs, "nonexistent-session-id").unwrap();
+        assert_eq!(report.blobs_removed, 0);
+        assert!(report.source_paths.is_empty());
+    }
 }
