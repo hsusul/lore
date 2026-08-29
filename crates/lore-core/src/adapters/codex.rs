@@ -1481,4 +1481,18 @@ mod tests {
             crate::adapters::common::epoch_ms("2026-08-11T10:06:00.500Z")
         );
     }
+
+    #[test]
+    fn parses_message_item_with_whitespace_and_unknown_roles() {
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_roles\",\"cwd\":\"/dir\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"   \",\"content\":\"whitespace role\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"custom_agent\",\"content\":\"unknown role\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_roles");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.messages[0].role, Role::User);
+        assert_eq!(s.messages[1].role, Role::User);
+    }
 }
