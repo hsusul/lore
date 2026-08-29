@@ -1075,4 +1075,15 @@ mod tests {
         assert_eq!(session.messages[0].tokens.output, Some(200));
         assert_eq!(session.messages[0].tokens.cache, None);
     }
+
+    #[test]
+    fn parses_message_with_null_and_non_array_content() {
+        let jsonl =
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"content\":null}}\n{\"type\":\"user\",\"sessionId\":\"s1\",\"message\":{\"role\":\"user\",\"content\":42}}\n";
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "non-array-content");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 2);
+        assert!(session.messages[0].parts.is_empty());
+        assert!(session.messages[1].parts.is_empty());
+    }
 }
