@@ -364,4 +364,21 @@ mod tests {
         assert!(store.remove("shard/../../escape").is_err());
         assert!(store.remove("").is_err());
     }
+
+    #[test]
+    fn stage_and_read_empty_and_multibyte_blobs() {
+        let (_dir, store) = store();
+
+        // Empty blob
+        let empty_staged = store.stage(b"").unwrap();
+        assert_eq!(empty_staged.byte_len, 0);
+        assert!(empty_staged.content_hash().starts_with("0000000000000000"));
+        assert_eq!(store.read(empty_staged.relpath()).unwrap(), b"");
+
+        // Multibyte & binary blob
+        let multibyte: &[u8] = b"\xf0\x9f\xa6\x80 \xe6\xbc\xa2\xe5\xad\x97 \x00 \xff";
+        let mb_staged = store.stage(multibyte).unwrap();
+        assert_eq!(mb_staged.byte_len, multibyte.len() as i64);
+        assert_eq!(store.read(mb_staged.relpath()).unwrap(), multibyte);
+    }
 }
