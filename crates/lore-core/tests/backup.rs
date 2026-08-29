@@ -433,3 +433,19 @@ fn create_backup_with_keep_exceeding_count_retains_all_backups() {
     let list = list_backups(&backup_dir);
     assert_eq!(list.len(), 3);
 }
+
+#[test]
+fn create_backup_handles_trailing_slashes_in_directory_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let backup_dir = dir.path().join("backups_trailing");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+
+    let path_with_slash = std::path::PathBuf::from(format!("{}/", backup_dir.to_string_lossy()));
+    let backup = create_backup(&conn, &path_with_slash, 5).unwrap();
+    assert!(backup.path.exists());
+    assert_eq!(
+        backup.size_bytes,
+        std::fs::metadata(&backup.path).unwrap().len()
+    );
+}
