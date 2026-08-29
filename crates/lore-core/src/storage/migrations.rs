@@ -180,4 +180,23 @@ mod tests {
         let err = run(&conn).unwrap_err();
         assert!(matches!(err, StorageError::Migration(_)));
     }
+
+    #[test]
+    fn run_migrations_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+
+        let count_1: i64 = conn
+            .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_1, COUNT);
+
+        // Second run must be a successful no-op
+        run(&conn).unwrap();
+
+        let count_2: i64 = conn
+            .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_2, COUNT);
+    }
 }
