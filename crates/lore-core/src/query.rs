@@ -1393,4 +1393,21 @@ mod tests {
         assert!(p_folder.sessions.is_empty());
         assert_eq!(p_folder.next_cursor, None);
     }
+
+    #[test]
+    fn get_session_returns_clean_detail_when_session_has_no_segments() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let blobs = BlobStore::open(tempfile::tempdir().unwrap().path()).unwrap();
+
+        let session = crate::model::ParsedSession::new("dedupe_no_segments");
+        let session_id =
+            persist_session(&conn, "claude-code", "Claude Code", &session, &blobs).unwrap();
+
+        let detail = get_session(&conn, &session_id).unwrap().unwrap();
+        assert_eq!(detail.summary.id, session_id);
+        assert!(detail.segments.is_empty());
+        assert!(detail.messages.is_empty());
+        assert!(detail.file_events.is_empty());
+        assert_eq!(detail.next_message_cursor, None);
+    }
 }
