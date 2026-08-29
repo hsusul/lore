@@ -869,4 +869,36 @@ mod tests {
             assert!(s.is_char_boundary(truncated.len()));
         }
     }
+
+    #[test]
+    fn cursor_encode_decode_round_trips_various_ranks_and_timestamps() {
+        let c1 = Cursor {
+            rank: -12.345678912345678,
+            started_at: Some(1724800000123),
+            id: 42,
+        };
+        let encoded1 = c1.encode();
+        let decoded1 = Cursor::decode(&encoded1).unwrap();
+        assert_eq!(decoded1.rank.to_bits(), c1.rank.to_bits());
+        assert_eq!(decoded1.started_at, c1.started_at);
+        assert_eq!(decoded1.id, c1.id);
+
+        let c2 = Cursor {
+            rank: 0.0,
+            started_at: None,
+            id: 1,
+        };
+        let encoded2 = c2.encode();
+        let decoded2 = Cursor::decode(&encoded2).unwrap();
+        assert_eq!(decoded2.rank.to_bits(), c2.rank.to_bits());
+        assert_eq!(decoded2.started_at, None);
+        assert_eq!(decoded2.id, 1);
+
+        // Rejections for invalid cursor strings
+        assert!(Cursor::decode("").is_none());
+        assert!(Cursor::decode("0:1724800000:0").is_none()); // id <= 0
+        assert!(Cursor::decode("0:1724800000:-5").is_none());
+        assert!(Cursor::decode("0:1724800000:1:extra").is_none());
+        assert!(Cursor::decode("fff0000000000001:n:1").is_none()); // NaN / non-finite
+    }
 }
