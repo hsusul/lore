@@ -1108,4 +1108,16 @@ mod tests {
         names.sort();
         assert_eq!(names, vec!["agent-1", "agent-sub-2", "main_session"]);
     }
+
+    #[test]
+    fn parses_custom_and_ai_title_events_with_precedence_and_overrides() {
+        let jsonl = concat!(
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Initial AI Title\"}\n",
+            "{\"type\":\"custom-title\",\"customTitle\":\"User Custom Title\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_title\",\"message\":{\"role\":\"user\",\"content\":\"my prompt\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "s_title");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.title.as_deref(), Some("User Custom Title"));
+    }
 }
