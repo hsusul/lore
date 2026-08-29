@@ -415,3 +415,21 @@ fn create_backup_fails_cleanly_when_backup_dir_is_a_file() {
     let res = create_backup(&conn, &fake_dir, DEFAULT_BACKUP_RETENTION);
     assert!(res.is_err());
 }
+
+#[test]
+fn create_backup_with_keep_exceeding_count_retains_all_backups() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let backup_dir = dir.path().join("backups");
+
+    let b1 = create_backup(&conn, &backup_dir, 50).unwrap();
+    let b2 = create_backup(&conn, &backup_dir, 50).unwrap();
+    let b3 = create_backup(&conn, &backup_dir, 50).unwrap();
+
+    assert!(b1.path.exists());
+    assert!(b2.path.exists());
+    assert!(b3.path.exists());
+
+    let list = list_backups(&backup_dir);
+    assert_eq!(list.len(), 3);
+}
