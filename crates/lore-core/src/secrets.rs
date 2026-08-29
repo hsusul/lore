@@ -1456,4 +1456,22 @@ mod tests {
             "export ANTHROPIC_API_KEY=\"«redacted:anthropic-key»\"\nconst GCP_KEY = '«redacted:gcp-api-key»';"
         );
     }
+
+    #[test]
+    fn scan_and_redact_on_empty_whitespace_and_benign_text() {
+        assert!(scan_ok("").is_empty());
+        assert_eq!(redact("", &[]), "");
+
+        let whitespace = "\r\n\t   \n\n\t";
+        assert!(scan_ok(whitespace).is_empty());
+        assert_eq!(redact(whitespace, &[]), whitespace);
+
+        let benign = "fn add(a: i32, b: i32) -> i32 { a + b }";
+        assert!(scan_ok(benign).is_empty());
+        assert_eq!(redact(benign, &[]), benign);
+
+        let nulls = "\0\0\0";
+        assert!(scan_ok(nulls).is_empty());
+        assert_eq!(redact(nulls, &[]), nulls);
+    }
 }
