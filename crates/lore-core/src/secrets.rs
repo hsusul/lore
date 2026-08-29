@@ -1416,4 +1416,27 @@ mod tests {
         let redacted = redact(&text, &findings);
         assert_eq!(redacted, "\0\t  \n«redacted:github-token»\r\n \0");
     }
+
+    #[test]
+    fn scan_webhook_urls_with_query_params_and_quotes() {
+        let discord = format!(
+            "https://discord.com/api/webhooks/{}/{}?wait=true",
+            "123456789", "abcdefABCDEF123456"
+        );
+        let slack = format!(
+            "https://hooks.slack.com/services/{}/{}/{}",
+            "T01234567", "B01234567", "abcdefghijklmnopqrstuvwx"
+        );
+        let text = format!("Discord: \"{discord}\"\nSlack: <{slack}>");
+        let findings = scan_ok(&text);
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].rule, "discord-webhook");
+        assert_eq!(findings[1].rule, "slack-webhook");
+
+        let redacted = redact(&text, &findings);
+        assert!(!redacted.contains("abcdefABCDEF123456"));
+        assert!(!redacted.contains("abcdefghijklmnopqrstuvwx"));
+        assert!(redacted.contains("Discord: \"https://«redacted:discord-webhook»\""));
+        assert!(redacted.contains("Slack: <https://«redacted:slack-webhook»>"));
+    }
 }
