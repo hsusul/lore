@@ -665,6 +665,7 @@ fn fnv1a_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn identity_key_is_stable_for_a_common_dir() {
@@ -688,5 +689,30 @@ mod tests {
         let conn = crate::storage::open_in_memory().unwrap();
         let count = enrich_session(&conn, "nonexistent-session").unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn resolve_identity_handles_filesystem_root_workdir_and_empty_remotes() {
+        let facts = CapturedRepo {
+            common_dir: PathBuf::from("/.git"),
+            workdir: Some(PathBuf::from("/")),
+            branch: Some("main".to_string()),
+            head_commit: None,
+            detached: false,
+            is_dirty: None,
+            changed_files: None,
+            ahead: None,
+            behind: None,
+            commit_subject: None,
+            remotes: Vec::new(),
+            root_commits: Vec::new(),
+            history_truncated: false,
+        };
+
+        let common_key = fnv1a_hex(b"/.git");
+        let ident = resolve_identity(&facts, &common_key, Path::new("/"));
+        assert_eq!(ident.confidence, "high");
+        assert_eq!(ident.key, format!("gcd:{common_key}"));
+        assert_eq!(ident.display_name, format!("gcd:{common_key}"));
     }
 }
