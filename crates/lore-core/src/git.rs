@@ -698,4 +698,20 @@ mod tests {
             Some("custom-host.internal:8080/repos/myrepo")
         );
     }
+
+    #[test]
+    fn reverify_returns_none_for_nonexistent_or_relative_paths() {
+        assert_eq!(
+            reverify(Path::new("relative/path"), "0123456789abcdef", None),
+            None
+        );
+        assert_eq!(
+            reverify(
+                Path::new("/nonexistent/repo/path"),
+                "0123456789abcdef",
+                None
+            ),
+            None
+        );
+    }
 }
