@@ -409,6 +409,27 @@ mod tests {
     }
 
     #[test]
+    fn tokens_is_empty_handles_zero_values_and_partial_initialization() {
+        let zero_input = Tokens {
+            input: Some(0),
+            ..Default::default()
+        };
+        assert!(!zero_input.is_empty());
+
+        let zero_output = Tokens {
+            output: Some(0),
+            ..Default::default()
+        };
+        assert!(!zero_output.is_empty());
+
+        let zero_cache = Tokens {
+            cache: Some(0),
+            ..Default::default()
+        };
+        assert!(!zero_cache.is_empty());
+    }
+
+    #[test]
     fn all_domain_enums_have_consistent_as_str_and_display_implementations() {
         for status in [ParseStatus::Ok, ParseStatus::Partial, ParseStatus::Failed] {
             assert_eq!(status.as_str(), status.to_string().as_str());
