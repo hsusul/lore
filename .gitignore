@@ -53,4 +53,7 @@ dist-ssr/
 AUDIT_LOG.md
 AUDIT_LOG*.md
 audit-goal.txt
+proptest-regressions/
+**/proptest-regressions/
+
 
