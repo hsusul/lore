@@ -1086,4 +1086,26 @@ mod tests {
         assert!(session.messages[0].parts.is_empty());
         assert!(session.messages[1].parts.is_empty());
     }
+
+    #[test]
+    fn collect_jsonl_discovers_nested_workflow_and_deep_subagents() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        let sub_wf = root.join("subagents").join("workflows").join("wf_123");
+        std::fs::create_dir_all(&sub_wf).unwrap();
+
+        std::fs::write(root.join("main_session.jsonl"), b"{}\n").unwrap();
+        std::fs::write(root.join("subagents").join("agent-1.jsonl"), b"{}\n").unwrap();
+        std::fs::write(sub_wf.join("agent-sub-2.jsonl"), b"{}\n").unwrap();
+        std::fs::write(sub_wf.join("ignore.txt"), b"not a jsonl\n").unwrap();
+
+        let mut refs = Vec::new();
+        collect_jsonl(root, &mut refs);
+        assert_eq!(refs.len(), 3);
+
+        let mut names: Vec<_> = refs.iter().filter_map(|r| r.native_id.clone()).collect();
+        names.sort();
+        assert_eq!(names, vec!["agent-1", "agent-sub-2", "main_session"]);
+    }
 }
