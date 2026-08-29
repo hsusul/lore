@@ -403,3 +403,15 @@ fn backup_error_from_io() {
         "io error while creating or pruning backup"
     );
 }
+
+#[test]
+fn create_backup_fails_cleanly_when_backup_dir_is_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+
+    let fake_dir = dir.path().join("file_blocking_backup_dir");
+    std::fs::write(&fake_dir, b"blocking").unwrap();
+
+    let res = create_backup(&conn, &fake_dir, DEFAULT_BACKUP_RETENTION);
+    assert!(res.is_err());
+}
