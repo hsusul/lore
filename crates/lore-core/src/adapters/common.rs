@@ -50,9 +50,7 @@ fn title_from_text(text: &str) -> Option<String> {
         .lines()
         .map(str::trim)
         .map(|l| {
-            l.trim_start_matches('#')
-                .trim_start_matches(['-', '*'])
-                .trim()
+            l.trim_start_matches(|c: char| c == '#' || c == '-' || c == '*' || c.is_whitespace())
         })
         .find(|line| !line.is_empty() && !(line.starts_with('<') && line.ends_with('>')))?;
 
@@ -510,6 +508,16 @@ mod tests {
                 "<custom_instruction>\n  Implement export feature  \n</custom_instruction>"
             ),
             Some("Implement export feature".to_string())
+        );
+
+        // Mixed header and bullet markdown symbols
+        assert_eq!(
+            title_from_text("### - * Feature: Add dark mode theme\nDescription"),
+            Some("Feature: Add dark mode theme".to_string())
+        );
+        assert_eq!(
+            title_from_text("### --- ***\nNext actual prompt"),
+            Some("Next actual prompt".to_string())
         );
     }
 
