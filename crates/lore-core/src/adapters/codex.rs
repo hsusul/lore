@@ -1511,4 +1511,17 @@ mod tests {
         assert_eq!(s.tool_calls[1].input_json.as_deref(), Some("   "));
         assert_eq!(s.tool_calls[0].output_text.as_deref(), Some("ok"));
     }
+
+    #[test]
+    fn parses_token_count_telemetry_with_nested_and_flat_usages() {
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_tokens\",\"cwd\":\"/dir\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":500,\"output_tokens\":120,\"cached_input_tokens\":40,\"cache_write_input_tokens\":10}}}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_tokens");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.total_tokens.input, Some(500));
+        assert_eq!(s.total_tokens.output, Some(120));
+        assert_eq!(s.total_tokens.cache, Some(50));
+    }
 }
