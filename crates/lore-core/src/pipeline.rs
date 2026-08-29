@@ -561,4 +561,27 @@ mod tests {
         assert_eq!(commit, "commit_abc");
         assert!(decode_reverify_payload("not json").is_none());
     }
+
+    #[test]
+    fn root_readable_and_nonempty_behavior_and_empty_payload_decode() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        // Initially empty
+        assert!(!root_readable_and_nonempty(root));
+
+        // Create a file
+        std::fs::write(root.join("file.txt"), b"contents").unwrap();
+        assert!(root_readable_and_nonempty(root));
+
+        // Nonexistent path
+        assert!(!root_readable_and_nonempty(&root.join("nonexistent")));
+
+        // Empty and corrupted payload decode
+        assert!(decode_payload("").is_none());
+        assert!(decode_payload("{}").is_none());
+        assert!(decode_payload("{\"agent\":\"claude\"}").is_none());
+        assert!(decode_reverify_payload("").is_none());
+        assert!(decode_reverify_payload("{}").is_none());
+    }
 }
