@@ -376,4 +376,19 @@ mod tests {
         assert!(md.contains("Task 1 completed"));
         assert!(md.contains("Task 2 completed"));
     }
+
+    #[test]
+    fn export_session_markdown_with_empty_or_missing_cwd_and_empty_title() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl =
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e_empty\",\"message\":{\"role\":\"user\",\"content\":\"simple message\"}}\n";
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+
+        assert!(md.contains("# "));
+        assert!(md.contains("claude-code · 1 messages · 0 tool calls"));
+        assert!(md.contains("simple message"));
+    }
 }
