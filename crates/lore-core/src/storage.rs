@@ -212,4 +212,23 @@ mod tests {
         assert!(matches!(storage_err, StorageError::Io));
         assert_eq!(storage_err.to_string(), "io error");
     }
+
+    #[test]
+    fn file_backed_database_enforces_wal_journal_mode_and_foreign_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lore_wal.db");
+        let conn = open(&path).unwrap();
+
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(journal_mode.to_lowercase(), "wal");
+
+        let sync_mode: i64 = conn
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(sync_mode, 1); // 1 == NORMAL
+
+        assert!(foreign_keys_on(&conn));
+    }
 }
