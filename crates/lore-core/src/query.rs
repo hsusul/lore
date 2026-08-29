@@ -1426,4 +1426,11 @@ mod tests {
         assert!(page2.messages.is_empty());
         assert_eq!(page2.next_cursor, None);
     }
+
+    #[test]
+    fn list_repositories_on_empty_database_returns_empty_vector() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let repos = list_repositories(&conn).unwrap();
+        assert!(repos.is_empty());
+    }
 }
