@@ -423,4 +423,28 @@ mod tests {
         remove_custom_root(&conn, &registry, "claude-code", &with_trailing).unwrap();
         assert!(custom_roots(&conn, "claude-code").unwrap().is_empty());
     }
+
+    #[test]
+    fn add_custom_root_deduplicates_and_sorts_multiple_directories() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+        let dir = tempfile::tempdir().unwrap();
+
+        let sub_b = dir.path().join("b_dir");
+        let sub_a = dir.path().join("a_dir");
+        std::fs::create_dir_all(&sub_b).unwrap();
+        std::fs::create_dir_all(&sub_a).unwrap();
+
+        // Add in reverse order
+        add_custom_root(&conn, &registry, "claude-code", sub_b.to_str().unwrap()).unwrap();
+        add_custom_root(&conn, &registry, "claude-code", sub_a.to_str().unwrap()).unwrap();
+
+        // Add duplicate
+        add_custom_root(&conn, &registry, "claude-code", sub_b.to_str().unwrap()).unwrap();
+
+        let roots = custom_roots(&conn, "claude-code").unwrap();
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0], std::fs::canonicalize(&sub_a).unwrap());
+        assert_eq!(roots[1], std::fs::canonicalize(&sub_b).unwrap());
+    }
 }
