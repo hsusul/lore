@@ -747,4 +747,20 @@ mod tests {
         assert_eq!(job.error_kind.unwrap().chars().count(), 80);
         assert_eq!(job.error.unwrap().chars().count(), 500);
     }
+
+    #[test]
+    fn prune_terminal_jobs_with_zero_and_large_keep_count() {
+        let conn = db();
+        enqueue(&conn, &new_job("j_keep_0", 0), 10).unwrap();
+        let claimed = claim_next(&conn).unwrap().unwrap();
+        finish(&conn, &claimed.id).unwrap();
+
+        // Large keep count prunes 0 rows
+        assert_eq!(prune_terminal_jobs(&conn, 100).unwrap(), 0);
+        assert!(load(&conn, "j_keep_0").unwrap().is_some());
+
+        // Zero keep count prunes all terminal rows
+        assert_eq!(prune_terminal_jobs(&conn, 0).unwrap(), 1);
+        assert!(load(&conn, "j_keep_0").unwrap().is_none());
+    }
 }
