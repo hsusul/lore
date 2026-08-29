@@ -1524,4 +1524,23 @@ mod tests {
         assert_eq!(s.total_tokens.output, Some(120));
         assert_eq!(s.total_tokens.cache, Some(50));
     }
+
+    #[test]
+    fn parses_session_meta_and_turn_context_with_semver_and_unicode_paths() {
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_meta\",\"cli_version\":\"v2.5.0-rc.1+x86_64\",\"cwd\":\"/Users/dev/📁-プロジェクト\",\"model_provider\":\"openai-azure\"}}\n",
+            "{\"type\":\"turn_context\",\"payload\":{\"cwd\":\"/Users/dev/📁-プロジェクト/subfolder\",\"model\":\"gpt-4o-2026-08-06\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Hello!\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_meta");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.agent_version.as_deref(), Some("v2.5.0-rc.1+x86_64"));
+        assert_eq!(s.segments.len(), 1);
+        assert_eq!(
+            s.segments[0].cwd.as_deref(),
+            Some("/Users/dev/📁-プロジェクト/subfolder")
+        );
+        assert_eq!(s.segments[0].model.as_deref(), Some("gpt-4o-2026-08-06"));
+        assert_eq!(s.segments[0].provider.as_deref(), Some("openai-azure"));
+    }
 }
