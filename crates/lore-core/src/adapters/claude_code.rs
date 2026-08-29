@@ -1063,4 +1063,16 @@ mod tests {
         assert_eq!(session.messages[1].tokens.output, None);
         assert_eq!(session.messages[1].tokens.cache, Some(80));
     }
+
+    #[test]
+    fn parses_token_usage_with_null_and_mixed_fields() {
+        let jsonl =
+            "{\"type\":\"assistant\",\"sessionId\":\"s1\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-3-5-sonnet\",\"usage\":{\"input_tokens\":null,\"output_tokens\":200,\"cache_read_input_tokens\":\"invalid\"},\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n";
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "null-usage");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].tokens.input, None);
+        assert_eq!(session.messages[0].tokens.output, Some(200));
+        assert_eq!(session.messages[0].tokens.cache, None);
+    }
 }
