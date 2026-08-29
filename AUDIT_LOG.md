@@ -4668,7 +4668,467 @@ Durable audit memory for autonomous hardening and optimization passes.
 
 ---
 
+### Item 491: Template Placeholder Delimiter Support (`$(...)`, `%{...}`, `%...%`)
+- **Claim**: `scan_generic_assignment` truncated `$(VAR)` at the closing parenthesis and failed to recognize `%{var}` and Windows `%VAR%` template variable shapes, causing them to be falsely flagged as secrets or leaving trailing delimiter characters unredacted.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: `template_close` only handled `${...}` and `<...>`, while `is_allowlisted` only checked `${`, `<`, and `{{`. `$(VAR)` was sliced without its closer `)` and `%VAR%` was evaluated as potential secret content.
+- **Fix**:
+  - Added template matching for `$(...)`, `%{...}`, and `%...%` in `scan_generic_assignment`.
+  - Updated `is_allowlisted` to recognize `$(...)`, `%{...}`, and `%...%` whole-token template holes.
+  - Added test assertions in `generic_assignment_does_not_flag_placeholders_or_prose` in `secrets.rs`.
+- **Files Touched**: `crates/lore-core/src/secrets.rs`.
+- **Checks Run**: `cargo test -p lore-core -- secrets`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 492: Codex Custom Tool Output Error Detection
+- **Claim**: Codex function and custom tool outputs omitting `status` (such as MCP or shell results reporting `is_error: true`, `exit_code: 127`, or `error: "..."`) defaulted to `is_error: None` instead of marking the tool call as failed.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: `attach_tool_output` in `crates/lore-core/src/adapters/codex.rs` only examined `str_field(p, "status")`.
+- **Fix**:
+  - Enhanced `attach_tool_output` with fallback checks for `is_error` (boolean), `exit_code` (non-zero integer), and `error` (non-null/truthy value).
+  - Added unit test `tool_output_detects_error_from_is_error_exit_code_and_error_fields` in `codex.rs`.
+- **Files Touched**: `crates/lore-core/src/adapters/codex.rs`.
+- **Checks Run**: `cargo test -p lore-core -- adapters::codex`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 493: Claude Code Environment Discovery and Symlink Integrity
+- **Claim**: `ClaudeCodeAdapter::default_root` respects the documented `CLAUDE_CONFIG_DIR` environment variable, and discovery guards against infinite recursive symlink loops in project directories.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `default_root` correctly checks `CLAUDE_CONFIG_DIR` first before `HOME/.claude`, and `collect_jsonl` verifies non-symlink directories via `entry.file_type()?.is_dir()`.
+- **Fix**: Added unit test `claude_config_dir_environment_variable_overrides_default_root` in `crates/lore-core/src/adapters/claude_code.rs`.
+- **Files Touched**: `crates/lore-core/src/adapters/claude_code.rs`.
+- **Checks Run**: `cargo test -p lore-core -- adapters::claude_code`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 494: Search Query Multibyte UTF-8 Truncation Boundary Safety
+- **Claim**: `truncate_to_char_boundary` in `crates/lore-core/src/search.rs` safely handles multibyte UTF-8 codepoints (including emojis, CJK glyphs, and accented characters) across all byte offset boundaries without panicking or splitting unicode scalar sequences.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `truncate_to_char_boundary` retreats indices until `is_char_boundary(idx)` returns true, ensuring the truncated slice is always valid UTF-8.
+- **Fix**: Added comprehensive unit test `truncate_to_char_boundary_handles_multibyte_utf8` sweeping all byte boundary offsets across varied multibyte UTF-8 strings.
+- **Files Touched**: `crates/lore-core/src/search.rs`.
+- **Checks Run**: `cargo test -p lore-core -- search`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 495: Unborn Repository Git Capture Behavior
+- **Claim**: `capture` on an unborn branch in a newly initialized Git repository (0 commits) returns valid metadata with `head_commit: None`, `detached: false`, and an empty `root_commits` set without erroring or spawning failing processes.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `capture_gix` handles unborn references safely, correctly detecting the branch name while leaving commit sha as None.
+- **Fix**: Added unit test `capture_on_unborn_repository_handles_zero_commits_cleanly` in `crates/lore-core/src/git.rs`.
+- **Files Touched**: `crates/lore-core/src/git.rs`.
+- **Checks Run**: `cargo test -p lore-core -- git`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 496: Ingest Bounded File Reader UTF-8 Validation
+- **Claim**: `read_bounded_content` in `crates/lore-core/src/ingest.rs` enforces valid UTF-8, cleanly cuts at complete newline boundaries in oversized sessions, and rejects invalid UTF-8 with `ErrorKind::InvalidData` without panicking or creating corrupt session fragments.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `read_bounded_content` truncates at the last newline within `max_bytes` and converts to `String` using `String::from_utf8`.
+- **Fix**: Added unit test in `ingest.rs` verifying that invalid UTF-8 byte sequences are detected and returned as `ErrorKind::InvalidData`.
+- **Files Touched**: `crates/lore-core/src/ingest.rs`.
+- **Checks Run**: `cargo test -p lore-core -- ingest`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 497: Timestamp RFC3339 Parser Precision and Format Compatibility
+- **Claim**: `epoch_ms` in `crates/lore-core/src/adapters/common.rs` accurately converts full RFC3339 timestamps across timezone offsets, microsecond and nanosecond subsecond precision, and lowercase ISO/RFC delimiters into exact millisecond timestamps without truncation errors.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `time::OffsetDateTime::parse` with `well_known::Rfc3339` correctly supports 9-digit subsecond values and converts down to milliseconds via integer division.
+- **Fix**: Added unit tests covering nanosecond subsecond precision (`.123456789Z`) and lowercase separators (`2026-08-11t10:00:00.123456789z`) in `crates/lore-core/src/adapters/common.rs`.
+- **Files Touched**: `crates/lore-core/src/adapters/common.rs`.
+- **Checks Run**: `cargo test -p lore-core -- adapters::common`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 498: Session Detail Query Handling for Empty Sessions
+- **Claim**: `get_session` in `crates/lore-core/src/query.rs` handles sessions without messages, segments, or file events gracefully, returning an accurate `SessionDetail` summary and empty component collections without SQL errors or panics.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified queries on `agent_session`, `session_segment`, `message`, and `file_event` execute cleanly on 0-child sessions.
+- **Fix**: Added unit test `get_session_handles_empty_session_without_messages_or_segments` in `crates/lore-core/src/query.rs`.
+- **Files Touched**: `crates/lore-core/src/query.rs`.
+- **Checks Run**: `cargo test -p lore-core -- query`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 499: Codex Dynamic Segment Splitting on Turn Context
+- **Claim**: Codex sessions containing multiple `turn_context` events with updated `model` or working directory (`cwd`) dynamically split into sequential `ParsedSegment` regions with accurate `seq_start`, `seq_end`, and message segment indices.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `assign_segments` in `crates/lore-core/src/adapters/codex.rs` groups consecutive messages by `(cwd, model)` context and assigns `segment_ix` accordingly.
+- **Fix**: Added unit test `turn_context_updates_segments_on_model_and_cwd_changes` in `crates/lore-core/src/adapters/codex.rs`.
+- **Files Touched**: `crates/lore-core/src/adapters/codex.rs`.
+- **Checks Run**: `cargo test -p lore-core -- adapters::codex`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 500: Content-Addressed Blob Storage Deletion and Path Traversal Safety
+- **Claim**: `BlobStore::remove` safely removes content-addressed blobs by relative path, treats missing files as idempotent successes, and rejects path traversal attempts escaping the store root with `StorageError::Io`.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `safe_relpath` filters empty segments, `..`, `.`, and colon characters, ensuring filesystem operations stay rooted inside `BlobStore`.
+- **Fix**: Added unit test `remove_deletes_blob_and_rejects_traversal` in `crates/lore-core/src/storage/blob.rs`.
+- **Files Touched**: `crates/lore-core/src/storage/blob.rs`.
+- **Checks Run**: `cargo test -p lore-core -- storage::blob`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 501: Folder Rename Normalization and Sanitization
+- **Claim**: `rename_folder` in `crates/lore-core/src/folders.rs` sanitizes inputs through `clean_name`, correctly trimming whitespace, stripping control characters, and falling back to `"New folder"` for empty names without throwing database errors.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `rename_folder` runs input through `clean_name(name)` before updating the `name` and `updated_at` columns.
+- **Fix**: Added unit test `rename_folder_with_empty_or_whitespace_name_falls_back_to_default` in `crates/lore-core/src/folders.rs`.
+- **Files Touched**: `crates/lore-core/src/folders.rs`.
+- **Checks Run**: `cargo test -p lore-core -- folders`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 502: Session Markdown Export with Thinking Parts
+- **Claim**: `export_session_markdown` in `crates/lore-core/src/export.rs` renders thinking blocks as `> _(thinking)_ <text>` block quotes and formats structured JSON tools and content without breaking markdown rendering.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified thinking part iteration formats as markdown quotes with redaction applied.
+- **Fix**: Added unit test `export_renders_thinking_blocks_cleanly` in `crates/lore-core/src/export.rs`.
+- **Files Touched**: `crates/lore-core/src/export.rs`.
+- **Checks Run**: `cargo test -p lore-core -- export`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 503: Git Reverification Handling for Renamed Branches
+- **Claim**: `reverify_session` in `crates/lore-core/src/enrich.rs` accurately detects when a recorded branch has been renamed, noting `branch_exists: false` in the retrospective `lore_reverified` observation while preserving the historical `agent_recorded` metadata untouched.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified git branch lookup flags the old branch name as absent when renamed.
+- **Fix**: Added integration test `reverify_flags_renamed_branch_while_preserving_recorded_history` in `crates/lore-core/tests/reverify.rs`.
+- **Files Touched**: `crates/lore-core/tests/reverify.rs`.
+- **Checks Run**: `cargo test -p lore-core --test reverify`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 504: Token Summing with Saturating Overflow Protection
+- **Claim**: `session_token_totals` and `sum_message_tokens` in `crates/lore-core/src/ingest.rs` sum per-message token counts using `saturating_add`, preventing arithmetic overflow on massive session transcripts without crashing.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `sum_message_tokens` folds over messages with `sum.saturating_add(value.unwrap_or(0))` and tracks presence via `seen` flag.
+- **Fix**: Added unit test `session_token_totals_sums_messages_with_saturating_overflow` in `crates/lore-core/src/ingest.rs`.
+- **Files Touched**: `crates/lore-core/src/ingest.rs`.
+- **Checks Run**: `cargo test -p lore-core -- ingest`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 505: Fallback Title Normalization and Wrapper Tag Skipping
+- **Claim**: `fallback_title` in `crates/lore-core/src/adapters/common.rs` successfully skips bootstrap instructions and XML enclosure tags (`<task>`, `<custom_instruction>`), cleanly normalizing markdown prefixes (`#`, `-`, `*`) and collapsing multiline whitespace.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `title_from_text` checks for bootstrap prefixes and filters out lines matching `<...>` wrapper tags.
+- **Fix**: Added unit tests covering XML wrapper tag skipping and whitespace normalization in `crates/lore-core/src/adapters/common.rs`.
+- **Files Touched**: `crates/lore-core/src/adapters/common.rs`.
+- **Checks Run**: `cargo test -p lore-core -- adapters::common`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 506: Claude Code Stop Reason and Sparse Usage Parsing
+- **Claim**: `ClaudeCodeAdapter::parse_str` in `crates/lore-core/src/adapters/claude_code.rs` faithfully captures `stop_reason` and sparse `usage` fields (`input_tokens`, `output_tokens`, `cache_read_input_tokens`) on assistant turns without panicking when fields are omitted.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `build_message` extracts `stop_reason` and `usage` object properties with fallback `None` options.
+- **Fix**: Added unit test `parses_stop_reason_and_sparse_token_usage` in `crates/lore-core/src/adapters/claude_code.rs`.
+- **Files Touched**: `crates/lore-core/src/adapters/claude_code.rs`.
+- **Checks Run**: `cargo test -p lore-core -- adapters::claude_code`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 507: FTS Match Quoting and Like Wildcard Neutralization
+- **Claim**: `fts_match` and `like_escape` in `crates/lore-core/src/search.rs` neutralize raw SQLite LIKE wildcards (`%`, `_`, `\`) and properly double internal double-quotes in FTS match terms without corrupting search queries.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `fts_match` wraps terms in quotes, doubles internal quotes, and strips control/zero-width bytes. Verified `like_escape` escapes wildcards with backslashes.
+- **Fix**: Added unit tests `like_escape_neutralizes_sql_wildcards_and_backslashes` and internal quote escaping tests in `crates/lore-core/src/search.rs`.
+- **Files Touched**: `crates/lore-core/src/search.rs`.
+- **Checks Run**: `cargo test -p lore-core -- search`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 508: Archive Recovery for Sub-100-Byte Truncated Database Files
+- **Claim**: `recover_archive` and `integrity_ok` in `crates/lore-core/src/recovery.rs` cleanly recognize sub-100-byte truncated files as non-intact SQLite headers, safely moving them to quarantine without throwing unhandled panics or SQL errors.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `integrity_ok` checks `meta.len() < 100` before attempting read-only database connections.
+- **Fix**: Added integration test `recover_archive_handles_sub_100_byte_truncated_garbage_file` in `crates/lore-core/tests/recovery.rs`.
+- **Files Touched**: `crates/lore-core/tests/recovery.rs`.
+- **Checks Run**: `cargo test -p lore-core --test recovery`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 509: Search Query Git Filters Parsing and Normalization
+- **Claim**: `parse_query` in `crates/lore-core/src/search.rs` correctly parses `repo:`, `worktree:`, `branch:`, `commit:`, and `git-source:` filters, normalizing commit SHA hex prefixes to lowercase and validating source classes against allowlisted values.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `clean_filter` and `GIT_SOURCE_CLASSES` membership checks filter out unallowlisted sources while lowercasing `commit` hashes.
+- **Fix**: Added unit test `parse_query_handles_git_filters_and_normalizes_commit_hex` in `crates/lore-core/src/search.rs`.
+- **Files Touched**: `crates/lore-core/src/search.rs`.
+- **Checks Run**: `cargo test -p lore-core -- search`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 510: Ingest Secret Scan and Search Projection on Multiline Text
+- **Claim**: `scan_and_project` in `crates/lore-core/src/ingest.rs` redacts detected secrets and indexes accurate `search_document` projections preserving trailing newlines and whitespace structure.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `secret_finding` creation and `search_document` redaction with multi-line inputs.
+- **Fix**: Added unit test `scan_and_project_handles_multiline_text_with_secrets_and_trailing_newlines` in `crates/lore-core/src/ingest.rs`.
+- **Files Touched**: `crates/lore-core/src/ingest.rs`.
+- **Checks Run**: `cargo test -p lore-core -- ingest`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 511: Pipeline Reverify Job ID and Payload Serialization
+- **Claim**: `Pipeline` job helpers `reverify_job_id` and `decode_reverify_payload` in `crates/lore-core/src/pipeline.rs` maintain stable, deterministic job hashes across distinct `(worktree, commit)` targets and properly serialize/deserialize JSON payloads.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified FNV-1a hashing generates distinct hashes per worktree/commit pair and JSON payload round-trips worktree and commit strings.
+- **Fix**: Added unit test `reverify_job_id_and_payload_round_trip` in `crates/lore-core/src/pipeline.rs`.
+- **Files Touched**: `crates/lore-core/src/pipeline.rs`.
+- **Checks Run**: `cargo test -p lore-core -- pipeline`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 512: Backup Retention Pruning and Filename Validation
+- **Claim**: `prune` and `list_backups` in `crates/lore-core/src/backup.rs` accurately filter files matching `lore-*.db` naming scheme, sorting chronologically by filename and pruning down to the exact `keep` count without touching unrelated files.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `is_backup_file` checks prefix and extension and `prune` only removes excess oldest entries.
+- **Fix**: Added unit test `prune_keeps_exact_number_of_newest_backups_and_ignores_non_backup_files` in `crates/lore-core/src/backup.rs`.
+- **Files Touched**: `crates/lore-core/src/backup.rs`.
+- **Checks Run**: `cargo test -p lore-core -- backup`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 513: Source Presence Tracking with Selective File Deletions
+- **Claim**: `reconcile_source_presence` in `crates/lore-core/src/pipeline.rs` correctly marks only the vanished file as `missing` when other files keep the root readable and non-empty, preventing false mass-missing state flips.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `root_readable_and_nonempty` and `present.contains` selective logic.
+- **Fix**: Added integration test `selective_deletion_in_nonempty_root_marks_only_deleted_source_missing` in `crates/lore-core/tests/source_presence.rs`.
+- **Files Touched**: `crates/lore-core/tests/source_presence.rs`.
+- **Checks Run**: `cargo test -p lore-core --test source_presence`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 514: Connection String Secret Redaction on IPv6 and URI Schemes
+- **Claim**: `scan_connection_strings` and `redact` in `crates/lore-core/src/secrets.rs` properly detect credentials across multiple database URL schemes (`postgres://`, `mongodb+srv://`, `redis://`) with bracketed IPv6 hostnames, redacting only credentials and leaving hostnames intact.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified byte scanning boundaries stop before `@` separator and redaction preserves host syntax.
+- **Fix**: Added unit test `scan_and_redact_connection_strings_with_ipv6_and_various_schemes` in `crates/lore-core/src/secrets.rs`.
+- **Files Touched**: `crates/lore-core/src/secrets.rs`.
+- **Checks Run**: `cargo test -p lore-core -- secrets`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 515: Session Markdown Export for Nested Tool Calls and Results
+- **Claim**: `export_session_markdown` in `crates/lore-core/src/export.rs` renders nested JSON tool call parameters and tool output strings cleanly into markdown blocks with safe code fences.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified tool call JSON and tool result output formatting.
+- **Fix**: Added unit test `export_renders_complex_nested_tool_use_and_result` in `crates/lore-core/src/export.rs`.
+- **Files Touched**: `crates/lore-core/src/export.rs`.
+- **Checks Run**: `cargo test -p lore-core -- export`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 516: Unicode Segment Metadata Query Handling
+- **Claim**: `get_session` and `session_segments` in `crates/lore-core/src/query.rs` accurately query and return segment rows containing UTF-8 non-ASCII characters in `cwd`, `model`, and `provider` metadata fields.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified SQLite string retrieval and DTO construction with multibyte Unicode characters.
+- **Fix**: Added unit test `get_session_handles_unicode_segment_and_model_metadata` in `crates/lore-core/src/query.rs`.
+- **Files Touched**: `crates/lore-core/src/query.rs`.
+- **Checks Run**: `cargo test -p lore-core -- query`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 517: Folder Management with Unicode and Special Characters
+- **Claim**: `clean_name`, `create_folder`, and `rename_folder` in `crates/lore-core/src/folders.rs` preserve valid non-ASCII punctuation, Japanese characters, and emoji folder names while trimming control and zero-width characters.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified character boundary handling and SQLite UTF-8 storage.
+- **Fix**: Added unit test `create_and_rename_folder_with_unicode_and_punctuation` in `crates/lore-core/src/folders.rs`.
+- **Files Touched**: `crates/lore-core/src/folders.rs`.
+- **Checks Run**: `cargo test -p lore-core -- folders`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 518: Symlink Resolution in Custom Source Roots
+- **Claim**: `add_custom_root` and `remove_custom_root` in `crates/lore-core/src/source_roots.rs` properly canonicalize directory paths, resolving symlinks to true underlying targets and matching across canonical and user-supplied representations.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified `std::fs::canonicalize` behavior in path normalization and custom root removal matching.
+- **Fix**: Added unit test `add_and_remove_custom_root_with_symlink` in `crates/lore-core/src/source_roots.rs`.
+- **Files Touched**: `crates/lore-core/src/source_roots.rs`.
+- **Checks Run**: `cargo test -p lore-core -- source_roots`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 519: Idempotent Migration Application
+- **Claim**: `run` in `crates/lore-core/src/storage/migrations.rs` idempotently applies pending schema migrations, skipping already-applied migrations when checksums match and recording exact migration counts.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified checksum lookup and transaction handling on repeated invocations.
+- **Fix**: Added unit test `run_migrations_is_idempotent` in `crates/lore-core/src/storage/migrations.rs`.
+- **Files Touched**: `crates/lore-core/src/storage/migrations.rs`.
+- **Checks Run**: `cargo test -p lore-core -- storage::migrations`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 520: Codex Timestamp Parsing with Integer Seconds and Timezones
+- **Claim**: `parse_str` in `crates/lore-core/src/adapters/codex.rs` accurately extracts millisecond epoch timestamps from RFC3339 strings lacking subsecond fractions or using explicit timezone offsets (`+00:00`).
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified session started/ended boundaries and per-message timestamp assignment.
+- **Fix**: Added unit test `parses_timestamps_with_integer_seconds_and_timezone_offsets` in `crates/lore-core/src/adapters/codex.rs`.
+- **Files Touched**: `crates/lore-core/src/adapters/codex.rs`.
+- **Checks Run**: `cargo test -p lore-core -- adapters::codex`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 521: Fallback Title Derivation on Whitespace Prompts
+- **Claim**: `fallback_title` in `crates/lore-core/src/adapters/common.rs` accurately ignores whitespace-only prompt strings and synthetic environment context blocks, returning `None` instead of whitespace-padded titles.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified line trimming and prefix inspection in `title_from_text`.
+- **Fix**: Added unit test `fallback_title_returns_none_for_whitespace_and_empty_prompts` in `crates/lore-core/src/adapters/common.rs`.
+- **Files Touched**: `crates/lore-core/src/adapters/common.rs`.
+- **Checks Run**: `cargo test -p lore-core -- adapters::common`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 522: Sequential Recovery Quarantine Artifact Uniqueness
+- **Claim**: `quarantine` in `crates/lore-core/src/recovery.rs` uses millisecond timestamps and an atomic sequence counter (`QUARANTINE_SEQ`) to guarantee distinct quarantine filenames across multiple sequential corruption events.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified multiple sequential `recover_archive` invocations preserve each corrupted database in separate non-colliding files under `quarantine/`.
+- **Fix**: Added integration test `recover_archive_multiple_corruptions_create_distinct_quarantine_artifacts` in `crates/lore-core/tests/recovery.rs`.
+- **Files Touched**: `crates/lore-core/tests/recovery.rs`.
+- **Checks Run**: `cargo test -p lore-core --test recovery`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 523: Keyset Search Cursor Serialization and Deserialization
+- **Claim**: `Cursor::encode` and `Cursor::decode` in `crates/lore-core/src/search.rs` preserve exact IEEE-754 bit representations of rank values and reject non-finite or malformed identifiers without panics.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified round-trip consistency across positive, zero, negative, and None timestamp states, along with validation rejections.
+- **Fix**: Added unit test `cursor_encode_decode_round_trips_various_ranks_and_timestamps` in `crates/lore-core/src/search.rs`.
+- **Files Touched**: `crates/lore-core/src/search.rs`.
+- **Checks Run**: `cargo test -p lore-core -- search`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 524: Backup Creation Failure Handling
+- **Claim**: `create_backup` in `crates/lore-core/src/backup.rs` fails gracefully and returns `BackupError::Io` without unhandled panics or leaving temporary destination artifacts when directory creation or destination access is blocked.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified clean error propagation when `backup_dir` points to an uncreatable directory path.
+- **Fix**: Added integration test `create_backup_fails_cleanly_when_backup_dir_is_a_file` in `crates/lore-core/tests/backup.rs`.
+- **Files Touched**: `crates/lore-core/tests/backup.rs`.
+- **Checks Run**: `cargo test -p lore-core --test backup`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 525: Token Totals Calculation and Ingest Precedence
+- **Claim**: `session_token_totals` in `crates/lore-core/src/ingest.rs` prioritizes explicit session-level token counts from the agent adapter when present, only falling back to saturating summation over individual messages when absent.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified resolution order for `input`, `output`, and `cache` token fields across session-level vs message-level structures.
+- **Fix**: Added unit test `session_token_totals_prefers_explicit_session_totals_over_message_sum` in `crates/lore-core/src/ingest.rs`.
+- **Files Touched**: `crates/lore-core/src/ingest.rs`.
+- **Checks Run**: `cargo test -p lore-core -- ingest`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 526: Nonexistent Entity Safety in Enrichment
+- **Claim**: `enrich_session` and `relink_segment_repository` in `crates/lore-core/src/enrich.rs` handle nonexistent session or segment IDs gracefully as safe no-ops without erroring or rolling back transactions.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified queries on unlinked or missing IDs return `Ok(0)` or `Ok(())`.
+- **Fix**: Added unit tests `relink_segment_repository_with_nonexistent_segment_is_noop` and `enrich_session_with_nonexistent_session_returns_zero` in `crates/lore-core/src/enrich.rs`.
+- **Files Touched**: `crates/lore-core/src/enrich.rs`.
+- **Checks Run**: `cargo test -p lore-core -- enrich`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 527: Claude Code Token Usage Tolerant Parsing
+- **Claim**: `parse_str` in `crates/lore-core/src/adapters/claude_code.rs` tolerates missing, null, or non-integer `usage` fields without failing, extracting only valid numeric fields.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified extraction of partial token usage objects containing null and string values.
+- **Fix**: Added unit test `parses_token_usage_with_null_and_mixed_fields` in `crates/lore-core/src/adapters/claude_code.rs`.
+- **Files Touched**: `crates/lore-core/src/adapters/claude_code.rs`.
+- **Checks Run**: `cargo test -p lore-core -- adapters::claude_code`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 528: Destination Cleanup on Backup Restore Failure
+- **Claim**: `restore_backup` in `crates/lore-core/src/backup.rs` and `recover_archive` in `crates/lore-core/src/recovery.rs` cleanly remove partial/0-byte destination database artifacts if restoring an invalid backup fails, ensuring `recover_archive` leaves no orphan database files when all available backups are corrupt.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified failed restore calls remove `dst_db_path` on error, and `recover_archive` returns `QuarantinedOnly` cleanly.
+- **Fix**: Wrapped restore operations in `restore_backup` to remove `dst_db_path` on error; added integration test `recover_archive_when_all_backups_are_corrupt_quarantines_and_returns_quarantined_only` in `crates/lore-core/tests/recovery.rs`.
+- **Files Touched**: `crates/lore-core/src/backup.rs`, `crates/lore-core/tests/recovery.rs`.
+- **Checks Run**: `cargo test -p lore-core --test recovery`, `cargo test -p lore-core --test backup`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 529: Forget Session Safety on Nonexistent IDs
+- **Claim**: `forget_session` in `crates/lore-core/src/forget.rs` handles nonexistent session IDs cleanly, returning an empty `ForgetReport` (0 blobs removed, empty source paths) without raising database errors.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified SQLite deletion statement and orphan blob query execution with non-matching session IDs.
+- **Fix**: Added unit test `forget_session_with_nonexistent_id_returns_empty_report` in `crates/lore-core/src/forget.rs`.
+- **Files Touched**: `crates/lore-core/src/forget.rs`.
+- **Checks Run**: `cargo test -p lore-core -- forget`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 530: Blob Store Staging of Empty and Multibyte Payloads
+- **Claim**: `BlobStore::stage` and `BlobStore::read` in `crates/lore-core/src/storage/blob.rs` faithfully persist and recover empty byte payloads (0 length prefix) and multibyte/binary byte sequences without data loss or truncation.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified BLAKE3 content-hash prefixing, sharding, and exact byte round-trips.
+- **Fix**: Added unit test `stage_and_read_empty_and_multibyte_blobs` in `crates/lore-core/src/storage/blob.rs`.
+- **Files Touched**: `crates/lore-core/src/storage/blob.rs`.
+- **Checks Run**: `cargo test -p lore-core -- storage::blob`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
+### Item 531: Worker Channel Signal Processing and Shutdown
+- **Claim**: `spawn` in `crates/lore-core/src/worker.rs` processes `Rescan`, `Wake`, `Reverify`, and `Reconfigure` control channel signals and shuts down deterministically when `shutdown()` is called or the handle drops.
+- **Status**: CONFIRMED & FIXED
+- **Evidence**: Verified multi-signal channel message handling and clean thread join completion.
+- **Fix**: Added unit test `spawned_worker_handles_signals_and_shuts_down_cleanly` in `crates/lore-core/src/worker.rs`.
+- **Files Touched**: `crates/lore-core/src/worker.rs`.
+- **Checks Run**: `cargo test -p lore-core -- worker`, `cargo clippy -p lore-core --all-targets -- -D warnings`.
+
+---
+
 ## Active Backlog & Next Refill Targets
+
+- [ ] **Item 532**: `crates/lore-core/src/jobs.rs` — Audit job status query when invalid job payload JSON exists.
+- [ ] **Item 533**: `crates/lore-core/src/secrets.rs` — Audit secret scanner handling of strings with trailing whitespace and null characters.
+- [ ] **Item 534**: `crates/lore-core/src/adapters/codex.rs` — Audit Codex adapter response items with whitespace-only message roles.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

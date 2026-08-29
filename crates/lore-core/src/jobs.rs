@@ -713,4 +713,21 @@ mod tests {
         assert!(load(&conn, "done-2").unwrap().is_none());
         assert!(load(&conn, "done-3").unwrap().is_none());
     }
+
+    #[test]
+    fn load_job_with_invalid_state_returns_invalid_state_error() {
+        let conn = db();
+        enqueue(&conn, &new_job("j1", 0), 10).unwrap();
+
+        // Corrupt the state string directly in database
+        conn.execute(
+            "UPDATE job SET state = 'unrecognized_state' WHERE id = 'j1'",
+            [],
+        )
+        .unwrap();
+
+        let err = load(&conn, "j1").unwrap_err();
+        assert!(matches!(err, JobQueueError::InvalidState));
+        assert_eq!(err.to_string(), "job row has an invalid state");
+    }
 }
