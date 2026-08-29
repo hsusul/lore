@@ -966,4 +966,14 @@ mod tests {
         );
         assert_eq!(like_escape(""), "");
     }
+
+    #[test]
+    fn parse_query_with_surrounding_whitespace_and_mixed_filters() {
+        let q = parse_query("   search_term   agent:claude-code   path:src/main.rs   model:claude-3-5-sonnet   has:error   ");
+        assert_eq!(q.terms, vec!["search_term"]);
+        assert_eq!(q.agent.as_deref(), Some("claude-code"));
+        assert_eq!(q.path.as_deref(), Some("src/main.rs"));
+        assert_eq!(q.model.as_deref(), Some("claude-3-5-sonnet"));
+        assert!(q.has_error);
+    }
 }
