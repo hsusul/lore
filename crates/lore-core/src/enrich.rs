@@ -804,4 +804,21 @@ mod tests {
         assert_eq!(identity.confidence, "high");
         assert!(identity.key.starts_with("gcd:"));
     }
+
+    #[test]
+    fn det_id_prefix_and_uniqueness_for_repo_and_worktrees() {
+        let repo_id_1 = det_id("repo", &["key_a"]);
+        let repo_id_2 = det_id("repo", &["key_b"]);
+        let wt_id_1 = det_id("wt", &[&repo_id_1, "/path/1"]);
+        let wt_id_2 = det_id("wt", &[&repo_id_1, "/path/2"]);
+
+        assert!(repo_id_1.starts_with("repo_"));
+        assert!(repo_id_2.starts_with("repo_"));
+        assert!(wt_id_1.starts_with("wt_"));
+        assert!(wt_id_2.starts_with("wt_"));
+
+        assert_ne!(repo_id_1, repo_id_2);
+        assert_ne!(wt_id_1, wt_id_2);
+        assert_ne!(repo_id_1, wt_id_1);
+    }
 }
