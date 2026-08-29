@@ -368,4 +368,26 @@ mod tests {
         assert_eq!(summary, DrainSummary::default());
         assert_eq!(worker.queue_depth().unwrap(), QueueDepth::default());
     }
+
+    #[test]
+    fn spawned_worker_handles_signals_and_shuts_down_cleanly() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let worker = Worker::new(
+            conn,
+            AdapterRegistry::v0(),
+            BlobStore::open(tempfile::tempdir().unwrap().path()).unwrap(),
+            DiscoveryConfig::new(),
+            WorkerConfig {
+                idle_poll: Duration::from_millis(50),
+                ..WorkerConfig::default()
+            },
+        );
+
+        let handle = spawn(worker, None, NullSink);
+        handle.wake();
+        handle.trigger_rescan();
+        handle.trigger_reverify();
+        handle.reconfigure(DiscoveryConfig::new(), None);
+        handle.shutdown();
+    }
 }
