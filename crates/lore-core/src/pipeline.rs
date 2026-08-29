@@ -584,4 +584,28 @@ mod tests {
         assert!(decode_reverify_payload("").is_none());
         assert!(decode_reverify_payload("{}").is_none());
     }
+
+    #[test]
+    fn drain_summary_processed_counts_and_default() {
+        let summary = DrainSummary::default();
+        assert_eq!(summary.processed(), 0);
+        assert_eq!(summary.ingested, 0);
+        assert_eq!(summary.skipped, 0);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.requeued, 0);
+        assert_eq!(summary.enriched, 0);
+        assert_eq!(summary.enrich_failed, 0);
+        assert_eq!(summary.reverified, 0);
+
+        let active = DrainSummary {
+            ingested: 3,
+            skipped: 2,
+            failed: 1,
+            requeued: 4,
+            enriched: 3,
+            enrich_failed: 0,
+            reverified: 5,
+        };
+        assert_eq!(active.processed(), 3 + 2 + 1 + 5);
+    }
 }
