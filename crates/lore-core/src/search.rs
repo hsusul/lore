@@ -936,4 +936,23 @@ mod tests {
             "\"--help\" \"-v\" \"trailing-\" \"__init__\" \"_private\" \"*wildcard*\" \"^caret\""
         );
     }
+
+    #[test]
+    fn parse_date_bound_handles_calendar_dates_and_rfc3339_with_zero_width_chars() {
+        assert_eq!(
+            parse_date_bound("2026-08-11"),
+            crate::adapters::common::epoch_ms("2026-08-11T00:00:00Z")
+        );
+        assert_eq!(
+            parse_date_bound("2026-08-11\u{200b}"),
+            crate::adapters::common::epoch_ms("2026-08-11T00:00:00Z")
+        );
+        assert_eq!(
+            parse_date_bound("2026-08-11T15:30:00Z"),
+            crate::adapters::common::epoch_ms("2026-08-11T15:30:00Z")
+        );
+        assert_eq!(parse_date_bound("invalid-date"), None);
+        assert_eq!(parse_date_bound(""), None);
+        assert_eq!(parse_date_bound("\u{feff}"), None);
+    }
 }
