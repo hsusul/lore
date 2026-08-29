@@ -1379,4 +1379,18 @@ mod tests {
         assert!(p2.sessions.is_empty());
         assert_eq!(p2.next_cursor, None);
     }
+
+    #[test]
+    fn list_repository_and_folder_sessions_page_with_unicode_ids() {
+        let conn = crate::storage::open_in_memory().unwrap();
+
+        let p_repo =
+            list_repository_sessions_page(&conn, "repo_日本語_プロジェクト", 50, None).unwrap();
+        assert!(p_repo.sessions.is_empty());
+        assert_eq!(p_repo.next_cursor, None);
+
+        let p_folder = list_folder_sessions_page(&conn, "folder_📁_starred", 50, None).unwrap();
+        assert!(p_folder.sessions.is_empty());
+        assert_eq!(p_folder.next_cursor, None);
+    }
 }
