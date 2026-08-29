@@ -334,4 +334,37 @@ mod tests {
             "too many custom folders for this agent"
         );
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn add_and_remove_custom_root_with_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("real_folder");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let symlink_dir = dir.path().join("symlink_folder");
+        std::os::unix::fs::symlink(&target_dir, &symlink_dir).unwrap();
+
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+
+        // Adding via symlink canonicalizes to real_folder
+        let canonical = add_custom_root(
+            &conn,
+            &registry,
+            "claude-code",
+            symlink_dir.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(canonical, std::fs::canonicalize(&target_dir).unwrap());
+
+        // Removing by symlink path removes the canonical root
+        remove_custom_root(
+            &conn,
+            &registry,
+            "claude-code",
+            symlink_dir.to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(custom_roots(&conn, "claude-code").unwrap().is_empty());
+    }
 }
