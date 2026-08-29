@@ -324,4 +324,15 @@ mod tests {
         let folders = list_folders(&conn).unwrap();
         assert_eq!(folders[0].name, "Renamed Folder");
     }
+
+    #[test]
+    fn create_and_rename_folder_with_unicode_and_punctuation() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let f = create_folder(&conn, "📁 Projects · 2026 🚀").unwrap();
+        assert_eq!(f.name, "📁 Projects · 2026 🚀");
+
+        rename_folder(&conn, &f.id, "★ Starred (ACME / 開発) ★").unwrap();
+        let folders = list_folders(&conn).unwrap();
+        assert_eq!(folders[0].name, "★ Starred (ACME / 開発) ★");
+    }
 }
