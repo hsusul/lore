@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn prune_terminal_jobs_keeps_newest_and_ignores_active() {
         let conn = db();
-        enqueue(&conn, &new_job("pending-1", 0), 20).unwrap();
+        enqueue(&conn, &new_job("pending-1", -10), 20).unwrap();
 
         // Enqueue, claim, and complete 5 jobs
         for i in 1..=5 {
