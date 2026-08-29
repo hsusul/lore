@@ -420,4 +420,47 @@ mod tests {
             .unwrap();
         assert_eq!(count, 0);
     }
+
+    #[test]
+    fn set_session_folder_switching_across_multiple_folders_maintains_single_membership() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let sid = seed_session(&conn, "s_switch");
+        let f1 = create_folder(&conn, "F1").unwrap();
+        let f2 = create_folder(&conn, "F2").unwrap();
+        let f3 = create_folder(&conn, "F3").unwrap();
+
+        // Switch to F1
+        set_session_folder(&conn, &sid, Some(&f1.id)).unwrap();
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(f1.id.as_str())
+        );
+
+        // Switch to F2
+        set_session_folder(&conn, &sid, Some(&f2.id)).unwrap();
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(f2.id.as_str())
+        );
+
+        // Switch to F3
+        set_session_folder(&conn, &sid, Some(&f3.id)).unwrap();
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(f3.id.as_str())
+        );
+
+        // Unfile
+        set_session_folder(&conn, &sid, None).unwrap();
+        assert_eq!(folder_of_session(&conn, &sid).unwrap(), None);
+
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM session_folder WHERE session_id = ?1",
+                [&sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
 }
