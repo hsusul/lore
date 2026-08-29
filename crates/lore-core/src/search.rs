@@ -955,4 +955,15 @@ mod tests {
         assert_eq!(parse_date_bound(""), None);
         assert_eq!(parse_date_bound("\u{feff}"), None);
     }
+
+    #[test]
+    fn like_escape_escapes_consecutive_wildcards_and_backslashes() {
+        assert_eq!(like_escape("100%_guaranteed"), "100\\%\\_guaranteed");
+        assert_eq!(like_escape("%%%___\\\\"), "\\%\\%\\%\\_\\_\\_\\\\\\\\");
+        assert_eq!(
+            like_escape("C:\\Users\\User\\Path"),
+            "C:\\\\Users\\\\User\\\\Path"
+        );
+        assert_eq!(like_escape(""), "");
+    }
 }
