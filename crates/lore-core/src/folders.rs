@@ -373,4 +373,17 @@ mod tests {
             .unwrap();
         assert_eq!(rows, 1);
     }
+
+    #[test]
+    fn clean_name_bounds_long_unicode_strings_and_normalizes_whitespace() {
+        let long_name = "プロジェクト_".repeat(20);
+        let cleaned = clean_name(&long_name);
+        assert!(cleaned.chars().count() <= 100);
+
+        let spacey = "\n\t  Folder   \r\n   Subfolder  \t ";
+        assert_eq!(clean_name(spacey), "Folder Subfolder");
+
+        let zero_width_only = "\u{200b}\u{200c}\u{200d}\u{feff}";
+        assert_eq!(clean_name(zero_width_only), "New folder");
+    }
 }
