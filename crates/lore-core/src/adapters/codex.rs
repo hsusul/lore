@@ -1495,4 +1495,20 @@ mod tests {
         assert_eq!(s.messages[0].role, Role::User);
         assert_eq!(s.messages[1].role, Role::User);
     }
+
+    #[test]
+    fn parses_tool_call_with_empty_and_whitespace_arguments() {
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_empty_tc\",\"cwd\":\"/dir\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"noop\",\"arguments\":\"\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"call_2\",\"name\":\"ping\",\"arguments\":\"   \"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"ok\",\"status\":\"completed\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_empty_tc");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s.tool_calls.len(), 2);
+        assert_eq!(s.tool_calls[0].input_json.as_deref(), Some(""));
+        assert_eq!(s.tool_calls[1].input_json.as_deref(), Some("   "));
+        assert_eq!(s.tool_calls[0].output_text.as_deref(), Some("ok"));
+    }
 }
