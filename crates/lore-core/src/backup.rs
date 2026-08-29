@@ -396,4 +396,19 @@ mod tests {
         assert!(extra.exists());
         assert!(foreign_db.exists());
     }
+
+    #[test]
+    fn backup_schedule_default_and_interval_display_and_period() {
+        let default_sched = BackupSchedule::default();
+        assert_eq!(default_sched.interval, BackupInterval::Off);
+        assert_eq!(default_sched.keep, DEFAULT_BACKUP_RETENTION);
+
+        assert_eq!(format!("{}", BackupInterval::Off), "off");
+        assert_eq!(format!("{}", BackupInterval::Daily), "daily");
+        assert_eq!(format!("{}", BackupInterval::Weekly), "weekly");
+
+        assert_eq!(BackupInterval::Off.period_ms(), None);
+        assert_eq!(BackupInterval::Daily.period_ms(), Some(DAY_MS));
+        assert_eq!(BackupInterval::Weekly.period_ms(), Some(7 * DAY_MS));
+    }
 }
