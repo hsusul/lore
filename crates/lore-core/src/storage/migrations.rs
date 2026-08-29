@@ -199,4 +199,35 @@ mod tests {
             .unwrap();
         assert_eq!(count_2, COUNT);
     }
+
+    #[test]
+    fn apply_rejects_sql_with_added_whitespace_or_comments() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version    INTEGER PRIMARY KEY,
+                name       TEXT    NOT NULL,
+                checksum   TEXT    NOT NULL,
+                applied_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+
+        let m1 = Migration {
+            version: 1,
+            name: "initial",
+            sql: "CREATE TABLE t (id INT);",
+        };
+        apply(&conn, &m1).unwrap();
+
+        // Modifying SQL with trailing space changes checksum and fails
+        let m1_modified = Migration {
+            version: 1,
+            name: "initial",
+            sql: "CREATE TABLE t (id INT); ",
+        };
+        let err = apply(&conn, &m1_modified).unwrap_err();
+        assert!(matches!(err, StorageError::Migration(_)));
+        assert!(err.to_string().contains("checksum mismatch"));
+    }
 }
