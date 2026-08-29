@@ -50,3 +50,7 @@ dist-ssr/
 /.claude/
 /preview.html
 /src/preview.tsx
+AUDIT_LOG.md
+AUDIT_LOG*.md
+audit-goal.txt
+
