@@ -1410,4 +1410,20 @@ mod tests {
         assert!(detail.file_events.is_empty());
         assert_eq!(detail.next_message_cursor, None);
     }
+
+    #[test]
+    fn list_session_messages_page_clamps_negative_limit_and_handles_empty_session() {
+        let conn = crate::storage::open_in_memory().unwrap();
+
+        // Negative limit on nonexistent session
+        let page = list_session_messages_page(&conn, "nonexistent", -50, None).unwrap();
+        assert!(page.messages.is_empty());
+        assert_eq!(page.next_cursor, None);
+
+        // Huge limit on nonexistent session with invalid cursor
+        let page2 =
+            list_session_messages_page(&conn, "nonexistent", 999_999, Some("not_a_seq")).unwrap();
+        assert!(page2.messages.is_empty());
+        assert_eq!(page2.next_cursor, None);
+    }
 }
