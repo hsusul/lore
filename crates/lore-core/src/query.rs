@@ -1335,4 +1335,33 @@ mod tests {
         assert!(detail.file_events.is_empty());
         assert!(detail.next_message_cursor.is_none());
     }
+
+    #[test]
+    fn get_session_handles_unicode_segment_and_model_metadata() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        let mut session = crate::model::ParsedSession::new("unicode_segment_key");
+        session.segments.push(crate::model::ParsedSegment {
+            seq_start: 0,
+            seq_end: 1,
+            cwd: Some("/home/ユーザー/プロジェクト".to_string()),
+            model: Some("claude-3-7-sonnet-日本語".to_string()),
+            provider: Some("anthropic-東京".to_string()),
+            git_branch: Some("feature/🌟-stars".to_string()),
+            git_commit_sha: None,
+            git_remote_url: None,
+        });
+
+        let session_id =
+            persist_session(&conn, "claude-code", "Claude Code", &session, &blobs).unwrap();
+
+        let detail = get_session(&conn, &session_id).unwrap().unwrap();
+        assert_eq!(detail.segments.len(), 1);
+        let seg = &detail.segments[0];
+        assert_eq!(seg.cwd.as_deref(), Some("/home/ユーザー/プロジェクト"));
+        assert_eq!(seg.model.as_deref(), Some("claude-3-7-sonnet-日本語"));
+        assert_eq!(seg.provider.as_deref(), Some("anthropic-東京"));
+    }
 }
