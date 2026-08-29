@@ -1454,4 +1454,31 @@ mod tests {
         assert_eq!(s.segments[1].seq_end, 1);
         assert_eq!(s.messages[1].segment_ix, 1);
     }
+
+    #[test]
+    fn parses_timestamps_with_integer_seconds_and_timezone_offsets() {
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00Z\",\"payload\":{\"id\":\"s_tz\",\"cwd\":\"/dir\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:05:30+00:00\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"hello\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:06:00.500Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"response\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_tz");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        assert_eq!(
+            s.started_at,
+            crate::adapters::common::epoch_ms("2026-08-11T10:00:00Z")
+        );
+        assert_eq!(
+            s.ended_at,
+            crate::adapters::common::epoch_ms("2026-08-11T10:06:00.500Z")
+        );
+        assert_eq!(
+            s.messages[0].ts,
+            crate::adapters::common::epoch_ms("2026-08-11T10:05:30Z")
+        );
+        assert_eq!(
+            s.messages[1].ts,
+            crate::adapters::common::epoch_ms("2026-08-11T10:06:00.500Z")
+        );
+    }
 }
