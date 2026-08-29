@@ -386,4 +386,38 @@ mod tests {
         let zero_width_only = "\u{200b}\u{200c}\u{200d}\u{feff}";
         assert_eq!(clean_name(zero_width_only), "New folder");
     }
+
+    #[test]
+    fn delete_folder_with_active_memberships_clears_session_folder_links() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let sid1 = seed_session(&conn, "s1_delete");
+        let sid2 = seed_session(&conn, "s2_delete");
+        let f = create_folder(&conn, "Folder to delete").unwrap();
+
+        set_session_folder(&conn, &sid1, Some(&f.id)).unwrap();
+        set_session_folder(&conn, &sid2, Some(&f.id)).unwrap();
+        assert_eq!(
+            folder_of_session(&conn, &sid1).unwrap().as_deref(),
+            Some(f.id.as_str())
+        );
+        assert_eq!(
+            folder_of_session(&conn, &sid2).unwrap().as_deref(),
+            Some(f.id.as_str())
+        );
+
+        // Delete folder
+        delete_folder(&conn, &f.id).unwrap();
+
+        // Sessions are still present in DB but unfiled
+        assert_eq!(folder_of_session(&conn, &sid1).unwrap(), None);
+        assert_eq!(folder_of_session(&conn, &sid2).unwrap(), None);
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM session_folder WHERE folder_id = ?1",
+                [&f.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
 }
