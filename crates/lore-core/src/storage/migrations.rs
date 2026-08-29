@@ -230,4 +230,34 @@ mod tests {
         assert!(matches!(err, StorageError::Migration(_)));
         assert!(err.to_string().contains("checksum mismatch"));
     }
+
+    #[test]
+    fn schema_migrations_table_has_expected_columns_and_valid_timestamps() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version ASC")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(rows.len() as i64, COUNT);
+        for (i, (v, name, checksum, applied_at)) in rows.into_iter().enumerate() {
+            assert_eq!(v, (i + 1) as i64);
+            assert!(!name.trim().is_empty());
+            assert_eq!(checksum.len(), 16);
+            assert!(applied_at > 0);
+        }
+    }
 }
