@@ -1439,4 +1439,21 @@ mod tests {
         assert!(redacted.contains("Discord: \"https://«redacted:discord-webhook»\""));
         assert!(redacted.contains("Slack: <https://«redacted:slack-webhook»>"));
     }
+
+    #[test]
+    fn scan_handles_mixed_provider_tokens_in_code_snippets() {
+        let anthropic = t("sk-ant-", "api03-abcdefghijklmnopqrstuvwxyz0123456789");
+        let gcp = t("AIza", "SyD1234567890abcdefghijklmnopqrstuv");
+        let text = format!("export ANTHROPIC_API_KEY=\"{anthropic}\"\nconst GCP_KEY = '{gcp}';");
+        let findings = scan_ok(&text);
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].rule, "anthropic-key");
+        assert_eq!(findings[1].rule, "gcp-api-key");
+
+        let redacted = redact(&text, &findings);
+        assert_eq!(
+            redacted,
+            "export ANTHROPIC_API_KEY=\"«redacted:anthropic-key»\"\nconst GCP_KEY = '«redacted:gcp-api-key»';"
+        );
+    }
 }
