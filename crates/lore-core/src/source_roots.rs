@@ -402,4 +402,25 @@ mod tests {
             assert!(matches!(err4, SourceRootError::FilesystemRoot));
         }
     }
+
+    #[test]
+    fn remove_custom_root_with_trailing_slashes_and_canonical_matching() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+        let dir = tempfile::tempdir().unwrap();
+
+        let added = add_custom_root(
+            &conn,
+            &registry,
+            "claude-code",
+            dir.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(custom_roots(&conn, "claude-code").unwrap().len(), 1);
+
+        // Remove using path with trailing separator
+        let with_trailing = format!("{}/", added.to_string_lossy());
+        remove_custom_root(&conn, &registry, "claude-code", &with_trailing).unwrap();
+        assert!(custom_roots(&conn, "claude-code").unwrap().is_empty());
+    }
 }
