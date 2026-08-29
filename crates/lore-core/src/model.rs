@@ -489,4 +489,24 @@ mod tests {
             assert_eq!(source.as_str(), source.to_string().as_str());
         }
     }
+
+    #[test]
+    fn parsed_session_new_defaults_and_note_collection() {
+        let mut session = ParsedSession::new("test_dedupe_key");
+        assert_eq!(session.dedupe_key, "test_dedupe_key");
+        assert_eq!(session.status, ParseStatus::Ok);
+        assert!(!session.title_is_synthetic);
+        assert!(session.notes.is_empty());
+        assert!(session.messages.is_empty());
+        assert!(session.segments.is_empty());
+        assert!(session.tool_calls.is_empty());
+        assert!(session.file_events.is_empty());
+
+        session.note_partial("first note");
+        session.note_partial("second note");
+        assert_eq!(session.status, ParseStatus::Partial);
+        assert_eq!(session.notes.len(), 2);
+        assert_eq!(session.notes[0].message, "first note");
+        assert_eq!(session.notes[1].message, "second note");
+    }
 }
