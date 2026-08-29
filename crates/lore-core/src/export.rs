@@ -391,4 +391,20 @@ mod tests {
         assert!(md.contains("claude-code · 1 messages · 0 tool calls"));
         assert!(md.contains("simple message"));
     }
+
+    #[test]
+    fn export_session_markdown_with_empty_thinking_and_unusual_part_kinds() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl =
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e_parts\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\"},{\"type\":\"custom_block\",\"custom\":\"value\"}]}}\n";
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+
+        assert!(md.contains("### assistant"));
+        assert!(md.contains("```json"));
+        assert!(md.contains("\"custom\""));
+        assert!(md.contains("\"value\""));
+    }
 }
