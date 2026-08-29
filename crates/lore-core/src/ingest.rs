@@ -1403,4 +1403,41 @@ mod tests {
         assert!(redacted_doc.contains("«redacted:github-token»"));
         assert!(redacted_doc.ends_with("\n\n\n"));
     }
+
+    #[test]
+    fn session_token_totals_prefers_explicit_session_totals_over_message_sum() {
+        let mut session = ParsedSession::new("test_session_explicit");
+        session.total_tokens = Tokens {
+            input: Some(5000),
+            output: Some(2000),
+            cache: Some(1000),
+        };
+
+        let m1 = ParsedMessage {
+            seq: 0,
+            segment_ix: 0,
+            native_uuid: None,
+            parent_native_uuid: None,
+            role: Role::User,
+            event_kind: EventKind::Message,
+            is_sidechain: false,
+            ts: None,
+            model: None,
+            tokens: Tokens {
+                input: Some(10),
+                output: Some(20),
+                cache: Some(5),
+            },
+            stop_reason: None,
+            source_offset: None,
+            metadata_json: None,
+            parts: vec![],
+        };
+        session.messages.push(m1);
+
+        let totals = session_token_totals(&session);
+        assert_eq!(totals.input, Some(5000));
+        assert_eq!(totals.output, Some(2000));
+        assert_eq!(totals.cache, Some(1000));
+    }
 }
