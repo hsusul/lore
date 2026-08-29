@@ -312,3 +312,34 @@ fn recover_archive_handles_sub_100_byte_truncated_garbage_file() {
     );
     assert!(!db.exists());
 }
+
+#[test]
+fn recover_archive_multiple_corruptions_create_distinct_quarantine_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+
+    let db = dir.path().join("lore.db");
+
+    // First corruption
+    std::fs::write(&db, b"corrupt 1").unwrap();
+    let outcome1 = recover_archive(dir.path(), &backups).unwrap();
+    let path1 = match outcome1 {
+        RecoveryOutcome::QuarantinedOnly { quarantine_path } => quarantine_path,
+        other => panic!("expected QuarantinedOnly, got {other:?}"),
+    };
+
+    // Second corruption
+    std::fs::write(&db, b"corrupt 2").unwrap();
+    let outcome2 = recover_archive(dir.path(), &backups).unwrap();
+    let path2 = match outcome2 {
+        RecoveryOutcome::QuarantinedOnly { quarantine_path } => quarantine_path,
+        other => panic!("expected QuarantinedOnly, got {other:?}"),
+    };
+
+    assert_ne!(path1, path2);
+    assert!(path1.exists());
+    assert!(path2.exists());
+    assert_eq!(std::fs::read(&path1).unwrap(), b"corrupt 1");
+    assert_eq!(std::fs::read(&path2).unwrap(), b"corrupt 2");
+}
