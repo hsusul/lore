@@ -264,4 +264,201 @@ mod tests {
         assert!(!report.agents[1].detection.installed);
         assert!(report.sessions.is_empty());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_traversal_tolerates_broken_symlinks_and_hidden_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_root = dir.path().join("claude_projects");
+        let codex_root = dir.path().join("codex_sessions");
+        fs::create_dir_all(&claude_root).unwrap();
+        fs::create_dir_all(&codex_root).unwrap();
+
+        // Add valid sessions
+        fs::write(claude_root.join("valid-session.jsonl"), "{}\n").unwrap();
+        fs::write(codex_root.join("rollout-2026-08-29-valid.jsonl"), "{}\n").unwrap();
+
+        // Add broken symlinks
+        let broken_target = dir.path().join("non_existent_target");
+        std::os::unix::fs::symlink(&broken_target, claude_root.join("broken_link.jsonl")).unwrap();
+        std::os::unix::fs::symlink(&broken_target, codex_root.join("rollout-broken.jsonl"))
+            .unwrap();
+
+        // Add hidden subdirectories and ignored extensions
+        let hidden_dir = claude_root.join(".hidden");
+        fs::create_dir_all(&hidden_dir).unwrap();
+        fs::write(hidden_dir.join("ignore_me.txt"), "text\n").unwrap();
+
+        let mut config = DiscoveryConfig::new();
+        config.set_roots("claude-code", DiscoveryRoots::new(vec![claude_root]));
+        config.set_roots("codex", DiscoveryRoots::new(vec![codex_root]));
+
+        let report = discover(&AdapterRegistry::v0(), &config);
+        assert_eq!(report.agents.len(), 2);
+        assert!(report.agents[0].detection.installed);
+        assert!(report.agents[1].detection.installed);
+
+        // Discovery completes cleanly finding only real session files
+        let session_names: Vec<_> = report
+            .sessions
+            .iter()
+            .map(|s| s.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(session_names.contains(&"valid-session.jsonl".to_string()));
+        assert!(session_names.contains(&"rollout-2026-08-29-valid.jsonl".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_traversal_on_nested_hidden_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_root = dir.path().join("claude_projects");
+        let codex_root = dir.path().join("codex_sessions");
+
+        let claude_nested = claude_root.join(".hidden/sub/.another_hidden");
+        let codex_nested = codex_root.join(".hidden/2026/08/29");
+        fs::create_dir_all(&claude_nested).unwrap();
+        fs::create_dir_all(&codex_nested).unwrap();
+
+        fs::write(claude_nested.join("nested-session.jsonl"), "{}\n").unwrap();
+        fs::write(codex_nested.join("rollout-nested.jsonl"), "{}\n").unwrap();
+
+        let mut config = DiscoveryConfig::new();
+        config.set_roots("claude-code", DiscoveryRoots::new(vec![claude_root]));
+        config.set_roots("codex", DiscoveryRoots::new(vec![codex_root]));
+
+        let report = discover(&AdapterRegistry::v0(), &config);
+        assert_eq!(report.sessions.len(), 2);
+        let names: Vec<_> = report
+            .sessions
+            .iter()
+            .map(|s| s.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"nested-session.jsonl".to_string()));
+        assert!(names.contains(&"rollout-nested.jsonl".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_traversal_on_unreadable_files_and_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let claude_root = dir.path().join("claude_projects");
+        let codex_root = dir.path().join("codex_sessions");
+        fs::create_dir_all(&claude_root).unwrap();
+        fs::create_dir_all(&codex_root).unwrap();
+
+        // Valid accessible sessions
+        fs::write(claude_root.join("accessible.jsonl"), "{}\n").unwrap();
+        fs::write(codex_root.join("rollout-accessible.jsonl"), "{}\n").unwrap();
+
+        // Unreadable file (000 permissions)
+        let unreadable_file = claude_root.join("unreadable.jsonl");
+        fs::write(&unreadable_file, "{}\n").unwrap();
+        fs::set_permissions(&unreadable_file, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Unreadable directory
+        let unreadable_dir = claude_root.join("unreadable_dir");
+        fs::create_dir_all(&unreadable_dir).unwrap();
+        fs::write(unreadable_dir.join("inaccessible.jsonl"), "{}\n").unwrap();
+        fs::set_permissions(&unreadable_dir, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let mut config = DiscoveryConfig::new();
+        config.set_roots(
+            "claude-code",
+            DiscoveryRoots::new(vec![claude_root.clone()]),
+        );
+        config.set_roots("codex", DiscoveryRoots::new(vec![codex_root]));
+
+        let report = discover(&AdapterRegistry::v0(), &config);
+
+        // Restore permissions so tempdir can be cleaned up cleanly
+        let _ = fs::set_permissions(&unreadable_file, fs::Permissions::from_mode(0o644));
+        let _ = fs::set_permissions(&unreadable_dir, fs::Permissions::from_mode(0o755));
+
+        assert!(report.agents.iter().all(|a| a.detection.installed));
+        let names: Vec<_> = report
+            .sessions
+            .iter()
+            .map(|s| s.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"accessible.jsonl".to_string()));
+        assert!(names.contains(&"rollout-accessible.jsonl".to_string()));
+        // unreadable_dir was skipped without error
+        assert!(!names.contains(&"inaccessible.jsonl".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_broken_symlink_as_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken_root = dir.path().join("broken_root_link");
+        let non_existent_target = dir.path().join("target_does_not_exist");
+        std::os::unix::fs::symlink(&non_existent_target, &broken_root).unwrap();
+
+        let mut config = DiscoveryConfig::new();
+        config.set_roots(
+            "claude-code",
+            DiscoveryRoots::new(vec![broken_root.clone()]),
+        );
+        config.set_roots("codex", DiscoveryRoots::new(vec![broken_root.clone()]));
+
+        let report = discover(&AdapterRegistry::v0(), &config);
+        assert_eq!(report.agents.len(), 2);
+        assert!(!report.agents[0].detection.installed);
+        assert!(!report.agents[1].detection.installed);
+        assert!(report.sessions.is_empty());
+
+        let roots = watch_roots(&AdapterRegistry::v0(), &config);
+        assert_eq!(roots, vec![broken_root]);
+    }
+
+    #[test]
+    fn discovery_custom_root_configs_nested_and_overlapping() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent_root = dir.path().join("all_agents");
+        let nested_codex_root = parent_root.join("sub/codex");
+        fs::create_dir_all(&nested_codex_root).unwrap();
+
+        fs::write(parent_root.join("session.jsonl"), "{}\n").unwrap();
+        fs::write(nested_codex_root.join("rollout-sub.jsonl"), "{}\n").unwrap();
+
+        let mut config = DiscoveryConfig::new();
+        // Overlapping roots for claude-code
+        config.set_roots(
+            "claude-code",
+            DiscoveryRoots::new(vec![parent_root.clone(), parent_root.clone()]),
+        );
+        config.set_roots(
+            "codex",
+            DiscoveryRoots::new(vec![nested_codex_root.clone()]),
+        );
+
+        let registry = AdapterRegistry::v0();
+        let report = discover(&registry, &config);
+        assert_eq!(report.agents.len(), 2);
+        assert!(report.agents.iter().all(|a| a.detection.installed));
+
+        // Overlapping duplicate roots deduplicate sessions
+        let claude_sessions: Vec<_> = report
+            .sessions
+            .iter()
+            .filter(|s| s.agent.0 == "claude-code")
+            .collect();
+        assert_eq!(claude_sessions.len(), 2);
+
+        // owner_of selects the longest matching prefix for nested paths
+        let nested_file = nested_codex_root.join("rollout-sub.jsonl");
+        assert_eq!(
+            owner_of(&registry, &config, &nested_file).map(|a| a.0),
+            Some("codex")
+        );
+
+        let parent_file = parent_root.join("session.jsonl");
+        assert_eq!(
+            owner_of(&registry, &config, &parent_file).map(|a| a.0),
+            Some("claude-code")
+        );
+    }
 }
