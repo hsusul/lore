@@ -367,4 +367,39 @@ mod tests {
         .unwrap();
         assert!(custom_roots(&conn, "claude-code").unwrap().is_empty());
     }
+
+    #[test]
+    fn add_custom_root_rejects_nonexistent_and_file_and_root_paths() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+        let dir = tempfile::tempdir().unwrap();
+
+        // Nonexistent path -> NotDirectory
+        let err1 = add_custom_root(
+            &conn,
+            &registry,
+            "claude-code",
+            dir.path().join("does_not_exist").to_str().unwrap(),
+        )
+        .unwrap_err();
+        assert!(matches!(err1, SourceRootError::NotDirectory));
+
+        // File path (not directory) -> NotDirectory
+        let file_path = dir.path().join("a_file.txt");
+        std::fs::write(&file_path, b"hello").unwrap();
+        let err2 = add_custom_root(&conn, &registry, "claude-code", file_path.to_str().unwrap())
+            .unwrap_err();
+        assert!(matches!(err2, SourceRootError::NotDirectory));
+
+        // Relative path -> InvalidPath
+        let err3 = add_custom_root(&conn, &registry, "claude-code", "relative/path").unwrap_err();
+        assert!(matches!(err3, SourceRootError::InvalidPath));
+
+        // Filesystem root -> FilesystemRoot
+        #[cfg(unix)]
+        {
+            let err4 = add_custom_root(&conn, &registry, "claude-code", "/").unwrap_err();
+            assert!(matches!(err4, SourceRootError::FilesystemRoot));
+        }
+    }
 }
