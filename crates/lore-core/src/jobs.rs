@@ -730,4 +730,21 @@ mod tests {
         assert!(matches!(err, JobQueueError::InvalidState));
         assert_eq!(err.to_string(), "job row has an invalid state");
     }
+
+    #[test]
+    fn fail_with_kind_bounds_multibyte_kind_and_error_diagnostics() {
+        let conn = db();
+        enqueue(&conn, &new_job("j_fail", 0), 10).unwrap();
+        let claimed = claim_next(&conn).unwrap().unwrap();
+
+        let long_kind = "エラー_kind_".repeat(20);
+        let long_err = "失敗_detail_".repeat(100);
+
+        fail_with_kind(&conn, &claimed.id, &long_kind, &long_err).unwrap();
+
+        let job = load(&conn, &claimed.id).unwrap().unwrap();
+        assert_eq!(job.state, JobState::Failed);
+        assert_eq!(job.error_kind.unwrap().chars().count(), 80);
+        assert_eq!(job.error.unwrap().chars().count(), 500);
+    }
 }
