@@ -678,4 +678,21 @@ mod tests {
 
         assert_eq!(fallback_title(&[msg1, msg2]), None);
     }
+
+    #[test]
+    fn sanitize_path_mixed_separators_and_redundant_traversals() {
+        assert_eq!(
+            sanitize_path("foo/bar/../baz\\qux/./../final.rs"),
+            "foo/baz/final.rs"
+        );
+        assert_eq!(
+            sanitize_path("/absolute/path/../../outside/./target.txt"),
+            "outside/target.txt"
+        );
+        assert_eq!(
+            sanitize_path("C:\\windows\\system32\\..\\drivers\\etc"),
+            "windows/drivers/etc"
+        );
+        assert_eq!(sanitize_path("../../.."), "");
+    }
 }
