@@ -1364,4 +1364,19 @@ mod tests {
         assert_eq!(seg.model.as_deref(), Some("claude-3-7-sonnet-日本語"));
         assert_eq!(seg.provider.as_deref(), Some("anthropic-東京"));
     }
+
+    #[test]
+    fn list_sessions_page_clamps_negative_and_excessive_limits_and_tolerates_invalid_cursors() {
+        let conn = crate::storage::open_in_memory().unwrap();
+
+        // Negative limit is clamped to 1
+        let p1 = list_sessions_page(&conn, -100, None).unwrap();
+        assert!(p1.sessions.is_empty());
+        assert_eq!(p1.next_cursor, None);
+
+        // Huge limit is clamped to 10_000 without panic or integer overflow
+        let p2 = list_sessions_page(&conn, i64::MAX, Some("invalid:::base64::cursor")).unwrap();
+        assert!(p2.sessions.is_empty());
+        assert_eq!(p2.next_cursor, None);
+    }
 }
