@@ -778,4 +778,30 @@ mod tests {
             .unwrap();
         assert_eq!(branch_updated, "feature");
     }
+
+    #[test]
+    fn resolve_identity_with_unicode_workdir_and_no_remote() {
+        let workdir = PathBuf::from("/Users/dev/📁-プロジェクト-🚀");
+        let facts = CapturedRepo {
+            common_dir: workdir.join(".git"),
+            workdir: Some(workdir.clone()),
+            branch: Some("main".to_string()),
+            head_commit: Some("0123456789abcdef".to_string()),
+            detached: false,
+            is_dirty: Some(false),
+            changed_files: None,
+            ahead: None,
+            behind: None,
+            commit_subject: None,
+            remotes: Vec::new(),
+            root_commits: Vec::new(),
+            history_truncated: false,
+        };
+
+        let common_key = fnv1a_hex(facts.common_dir.to_string_lossy().as_bytes());
+        let identity = resolve_identity(&facts, &common_key, &workdir);
+        assert_eq!(identity.display_name, "📁-プロジェクト-🚀");
+        assert_eq!(identity.confidence, "high");
+        assert!(identity.key.starts_with("gcd:"));
+    }
 }
