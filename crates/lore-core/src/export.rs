@@ -356,4 +356,24 @@ mod tests {
         assert!(md.contains("> _(thinking)_ contemplating options..."));
         assert!(md.contains("here is the plan"));
     }
+
+    #[test]
+    fn export_renders_complex_nested_tool_use_and_result() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"batch run\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t_batch\",\"name\":\"BatchRunner\",\"input\":{\"tasks\":[{\"id\":1,\"cmd\":\"echo A\"},{\"id\":2,\"cmd\":\"echo B\"}],\"options\":{\"parallel\":true}}}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t_batch\",\"content\":\"Task 1 completed\\nTask 2 completed\"}]}}\n"
+        );
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+
+        assert!(md.contains("BatchRunner"));
+        assert!(md.contains("\"tasks\""));
+        assert!(md.contains("\"parallel\""));
+        assert!(md.contains("Task 1 completed"));
+        assert!(md.contains("Task 2 completed"));
+    }
 }
