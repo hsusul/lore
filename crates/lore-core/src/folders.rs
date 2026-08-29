@@ -335,4 +335,42 @@ mod tests {
         let folders = list_folders(&conn).unwrap();
         assert_eq!(folders[0].name, "★ Starred (ACME / 開発) ★");
     }
+
+    #[test]
+    fn set_session_folder_is_idempotent_and_updates_membership() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let sid = seed_session(&conn, "s1");
+        let f1 = create_folder(&conn, "Folder 1").unwrap();
+        let f2 = create_folder(&conn, "Folder 2").unwrap();
+
+        // Add to folder 1
+        set_session_folder(&conn, &sid, Some(&f1.id)).unwrap();
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(f1.id.as_str())
+        );
+
+        // Repeated addition to folder 1 is idempotent
+        set_session_folder(&conn, &sid, Some(&f1.id)).unwrap();
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(f1.id.as_str())
+        );
+
+        // Move to folder 2 updates membership without duplicate rows
+        set_session_folder(&conn, &sid, Some(&f2.id)).unwrap();
+        assert_eq!(
+            folder_of_session(&conn, &sid).unwrap().as_deref(),
+            Some(f2.id.as_str())
+        );
+
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM session_folder WHERE session_id = ?1",
+                [&sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
 }
