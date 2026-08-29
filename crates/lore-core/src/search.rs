@@ -901,4 +901,21 @@ mod tests {
         assert!(Cursor::decode("0:1724800000:1:extra").is_none());
         assert!(Cursor::decode("fff0000000000001:n:1").is_none()); // NaN / non-finite
     }
+
+    #[test]
+    fn fts_match_escapes_unbalanced_quotes_and_fts_operators() {
+        let terms = vec![
+            "\"unclosed".to_string(),
+            "middle\"quote".to_string(),
+            "AND".to_string(),
+            "OR".to_string(),
+            "NOT".to_string(),
+            "NEAR(a,b)".to_string(),
+        ];
+        let expr = fts_match(&terms).unwrap();
+        assert_eq!(
+            expr,
+            "\"\"\"unclosed\" \"middle\"\"quote\" \"AND\" \"OR\" \"NOT\" \"NEAR(a,b)\""
+        );
+    }
 }
