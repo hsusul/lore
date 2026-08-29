@@ -918,4 +918,22 @@ mod tests {
             "\"\"\"unclosed\" \"middle\"\"quote\" \"AND\" \"OR\" \"NOT\" \"NEAR(a,b)\""
         );
     }
+
+    #[test]
+    fn fts_match_escapes_hyphens_underscores_and_special_symbols() {
+        let terms = vec![
+            "--help".to_string(),
+            "-v".to_string(),
+            "trailing-".to_string(),
+            "__init__".to_string(),
+            "_private".to_string(),
+            "*wildcard*".to_string(),
+            "^caret".to_string(),
+        ];
+        let expr = fts_match(&terms).unwrap();
+        assert_eq!(
+            expr,
+            "\"--help\" \"-v\" \"trailing-\" \"__init__\" \"_private\" \"*wildcard*\" \"^caret\""
+        );
+    }
 }
