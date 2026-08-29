@@ -381,4 +381,17 @@ mod tests {
         assert_eq!(mb_staged.byte_len, multibyte.len() as i64);
         assert_eq!(store.read(mb_staged.relpath()).unwrap(), multibyte);
     }
+
+    #[test]
+    fn safe_relpath_and_path_resolution_boundaries() {
+        assert!(safe_relpath("ab/0123456789abcdef"));
+        assert!(safe_relpath("00/0000000000000000af12"));
+        assert!(!safe_relpath(""));
+        assert!(!safe_relpath("/root/abs"));
+        assert!(!safe_relpath("ab//cd"));
+        assert!(!safe_relpath("ab/./cd"));
+        assert!(!safe_relpath("ab/../cd"));
+        assert!(!safe_relpath("C:/windows"));
+        assert!(!safe_relpath("ab/cd:stream"));
+    }
 }
