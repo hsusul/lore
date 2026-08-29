@@ -411,4 +411,39 @@ mod tests {
         assert_eq!(BackupInterval::Daily.period_ms(), Some(DAY_MS));
         assert_eq!(BackupInterval::Weekly.period_ms(), Some(7 * DAY_MS));
     }
+
+    #[test]
+    fn prune_edge_cases_keep_zero_and_keep_greater_than_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let backup_dir = dir.path().join("backups");
+        std::fs::create_dir_all(&backup_dir).unwrap();
+
+        let b1 = backup_dir.join("lore-00000000000000000001-0000.db");
+        let b2 = backup_dir.join("lore-00000000000000000002-0000.db");
+        let extra = backup_dir.join("other_file.txt");
+        std::fs::write(&b1, b"b1").unwrap();
+        std::fs::write(&b2, b"b2").unwrap();
+        std::fs::write(&extra, b"extra").unwrap();
+
+        // keep > total count (keep = 10, total = 2) -> retains all backups, deletes nothing
+        prune(&backup_dir, 10).unwrap();
+        assert_eq!(list_backups(&backup_dir).unwrap().len(), 2);
+        assert!(b1.exists());
+        assert!(b2.exists());
+        assert!(extra.exists());
+
+        // keep = 0 -> drops all backups, ignores non-backup file
+        prune(&backup_dir, 0).unwrap();
+        assert_eq!(list_backups(&backup_dir).unwrap().len(), 0);
+        assert!(!b1.exists());
+        assert!(!b2.exists());
+        assert!(extra.exists());
+
+        // keep = 0 on empty backup dir -> Ok(())
+        prune(&backup_dir, 0).unwrap();
+
+        // prune on nonexistent directory -> Ok(())
+        let nonexistent = dir.path().join("nonexistent");
+        prune(&nonexistent, 5).unwrap();
+    }
 }
