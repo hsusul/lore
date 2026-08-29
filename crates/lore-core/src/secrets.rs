@@ -173,7 +173,14 @@ const PREFIX_RULES: &[PrefixRule] = &[
         id: "openai-key",
         severity: Severity::High,
         prefixes: &["sk-"],
-        tail: alnum,
+        tail: alnum_dash_us,
+        min_tail: 20,
+    },
+    PrefixRule {
+        id: "huggingface-token",
+        severity: Severity::High,
+        prefixes: &["hf_"],
+        tail: alnum_dash_us,
         min_tail: 20,
     },
     PrefixRule {
@@ -750,7 +757,12 @@ fn scan_entropy(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
         while i < bytes.len() && is_token_byte(bytes[i]) {
             i += 1;
         }
-        let end = i;
+        let mut end = i;
+        let mut pad = 0;
+        while end < bytes.len() && bytes[end] == b'=' && pad < 2 {
+            end += 1;
+            pad += 1;
+        }
         let token = &text[start..end];
         if token.len() < 20 {
             continue;
@@ -794,7 +806,7 @@ fn de_overlap(mut findings: Vec<Finding>) -> Vec<Finding> {
         match kept.last() {
             Some(last) if finding.start < last.end => {
                 // Overlaps the kept span; replace only if strictly better.
-                if finding.severity > last.severity && finding.end > last.end {
+                if finding.severity > last.severity {
                     kept.pop();
                     kept.push(finding);
                 }
@@ -857,9 +869,9 @@ fn is_b64url(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
-/// Token alphabet for the entropy pass (base64/base64url-ish, plus `+/=`).
+/// Token alphabet for the entropy pass (base64/base64url-ish, plus `+/-_`).
 fn is_token_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'-' | b'_')
+    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'-' | b'_')
 }
 
 fn is_hexish(token: &str) -> bool {
@@ -1037,7 +1049,10 @@ mod tests {
         assert!(found(&t("xoxb", "-123456789012-abcdefABCDEF")).contains(&"slack-token"));
         assert!(found(&t("sk", "_live_0123456789abcdefABCD")).contains(&"stripe-key"));
         assert!(found(&t("sk-ant", "-api03-abcdef0123456789ABCDEFG")).contains(&"anthropic-key"));
-        assert!(found(&t("sk", "-proj0123456789abcdefghij")).contains(&"openai-key"));
+        assert!(found(&t("sk-proj-", "0123456789abcdefghij_KLMNOPQ")).contains(&"openai-key"));
+        assert!(
+            found(&t("hf", "_0123456789abcdefghijklmnopqrstuvwxyz")).contains(&"huggingface-token")
+        );
         assert!(found(&t("GOCSPX", "-abcdefghij0123456789ABC")).contains(&"google-oauth-secret"));
         assert!(found(&t("npm", "_0123456789abcdefghijklmnopqrstuvwxyz12")).contains(&"npm-token"));
 
@@ -1473,5 +1488,100 @@ mod tests {
         let nulls = "\0\0\0";
         assert!(scan_ok(nulls).is_empty());
         assert_eq!(redact(nulls, &[]), nulls);
+    }
+
+    #[test]
+    fn scan_detects_openai_and_huggingface_tokens_in_shell_exports_env_files_and_strings() {
+        // Synthetic tokens are constructed with split strings so GitHub push protection (GH013)
+        // is never triggered on the test source code.
+        let openai_legacy = t("sk-", "1234567890abcdefghijklmnopqrstuvwxyzAB");
+        let openai_proj = t(
+            "sk-proj-",
+            "abc1234567890_ABCDEFGHIJKLMNOPQRSTUVWXYZ-abcdef",
+        );
+        let openai_svc = t("sk-svcacct-", "0123456789abcdefghijklmnopqrstuvwxyz");
+        let hf_token = t("hf_", "0123456789abcdefghijklmnopqrstuvwxyz01");
+        let hf_fine_grained = t("hf_", "AbCdEfGhIjKlMnOpQrStUvWxYz01234567_org");
+
+        // 1. Shell exports: double-quoted, single-quoted, and unquoted
+        let shell_export = format!(
+            "export OPENAI_API_KEY=\"{openai_proj}\"\n\
+             export HF_TOKEN='{hf_token}'\n\
+             export OPENAI_KEY=\"{openai_legacy}\"\n\
+             export HUGGINGFACE_HUB_TOKEN=\"{hf_fine_grained}\"\n\
+             export OPENAI_SVC=\"{openai_svc}\"\n\
+             export OPENAI_UNQUOTED={openai_proj}\n\
+             export HF_UNQUOTED={hf_token}"
+        );
+        let findings = scan_ok(&shell_export);
+        assert_eq!(findings.len(), 7);
+        assert_eq!(findings[0].rule, "openai-key");
+        assert_eq!(findings[1].rule, "huggingface-token");
+        assert_eq!(findings[2].rule, "openai-key");
+        assert_eq!(findings[3].rule, "huggingface-token");
+        assert_eq!(findings[4].rule, "openai-key");
+        assert_eq!(findings[5].rule, "openai-key");
+        assert_eq!(findings[6].rule, "huggingface-token");
+
+        let redacted_shell = redact(&shell_export, &findings);
+        assert!(!redacted_shell.contains(&openai_proj));
+        assert!(!redacted_shell.contains(&hf_token));
+        assert!(!redacted_shell.contains(&openai_legacy));
+        assert!(!redacted_shell.contains(&hf_fine_grained));
+        assert!(!redacted_shell.contains(&openai_svc));
+        assert_eq!(
+            redacted_shell,
+            "export OPENAI_API_KEY=\"«redacted:openai-key»\"\n\
+             export HF_TOKEN='«redacted:huggingface-token»'\n\
+             export OPENAI_KEY=\"«redacted:openai-key»\"\n\
+             export HUGGINGFACE_HUB_TOKEN=\"«redacted:huggingface-token»\"\n\
+             export OPENAI_SVC=\"«redacted:openai-key»\"\n\
+             export OPENAI_UNQUOTED=«redacted:openai-key»\n\
+             export HF_UNQUOTED=«redacted:huggingface-token»"
+        );
+
+        // 2. Environment files (.env lines)
+        let env_file = format!(
+            "OPENAI_API_KEY={openai_proj}\n\
+             HF_TOKEN={hf_token}\n\
+             OPENAI_KEY=\"{openai_legacy}\"\n\
+             HUGGINGFACE_TOKEN='{hf_fine_grained}'"
+        );
+        let findings = scan_ok(&env_file);
+        assert_eq!(findings.len(), 4);
+        assert_eq!(findings[0].rule, "openai-key");
+        assert_eq!(findings[1].rule, "huggingface-token");
+        assert_eq!(findings[2].rule, "openai-key");
+        assert_eq!(findings[3].rule, "huggingface-token");
+
+        let redacted_env = redact(&env_file, &findings);
+        assert_eq!(
+            redacted_env,
+            "OPENAI_API_KEY=«redacted:openai-key»\n\
+             HF_TOKEN=«redacted:huggingface-token»\n\
+             OPENAI_KEY=\"«redacted:openai-key»\"\n\
+             HUGGINGFACE_TOKEN='«redacted:huggingface-token»'"
+        );
+
+        // 3. Strings in source code, JSON configurations, and command arguments
+        let code_strings = format!(
+            "const client = new OpenAI({{ apiKey: \"{openai_proj}\" }});\n\
+             const hf = createClient(\"{hf_token}\");\n\
+             const config = {{ \"openai\": \"{openai_legacy}\", \"hf\": \"{hf_fine_grained}\" }};"
+        );
+        let findings = scan_ok(&code_strings);
+        assert_eq!(findings.len(), 4);
+        assert_eq!(findings[0].rule, "openai-key");
+        assert_eq!(findings[1].rule, "huggingface-token");
+        assert_eq!(findings[2].rule, "openai-key");
+        assert_eq!(findings[3].rule, "huggingface-token");
+
+        let redacted_code = redact(&code_strings, &findings);
+        assert_eq!(
+            redacted_code,
+            "const client = new OpenAI({ apiKey: \"«redacted:openai-key»\" });\n\
+             const hf = createClient(\"«redacted:huggingface-token»\");\n\
+             const config = { \"openai\": \"«redacted:openai-key»\", \"hf\": \"«redacted:huggingface-token»\" };"
+        );
     }
 }

@@ -135,6 +135,7 @@ fn intern_rule(rule: &str) -> &'static str {
         "stripe-key" => "stripe-key",
         "anthropic-key" => "anthropic-key",
         "openai-key" => "openai-key",
+        "huggingface-token" => "huggingface-token",
         "google-oauth-secret" => "google-oauth-secret",
         "npm-token" => "npm-token",
         "jwt" => "jwt",
