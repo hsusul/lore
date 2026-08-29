@@ -695,4 +695,24 @@ mod tests {
         );
         assert_eq!(sanitize_path("../../.."), "");
     }
+
+    #[test]
+    fn epoch_ms_parses_rfc3339_with_subseconds_and_offsets() {
+        assert_eq!(epoch_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(epoch_ms("1970-01-01T00:00:00.500Z"), Some(500));
+        assert_eq!(
+            epoch_ms("2026-08-11T10:00:00+02:00"),
+            epoch_ms("2026-08-11T08:00:00Z")
+        );
+        assert_eq!(
+            epoch_ms("2026-08-11T10:00:00-05:00"),
+            epoch_ms("2026-08-11T15:00:00Z")
+        );
+        assert_eq!(
+            epoch_ms("  2026-08-11T10:00:00Z  "),
+            epoch_ms("2026-08-11T10:00:00Z")
+        );
+        assert_eq!(epoch_ms("not-a-date"), None);
+        assert_eq!(epoch_ms(""), None);
+    }
 }
