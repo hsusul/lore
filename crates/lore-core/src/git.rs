@@ -682,4 +682,20 @@ mod tests {
             Some("ssh.dev.azure.com/v3/Company/Project/Repo")
         );
     }
+
+    #[test]
+    fn normalize_remote_url_with_ports_and_bitbucket_urls() {
+        assert_eq!(
+            normalize_remote_url("https://bitbucket.org/team/project.git/").as_deref(),
+            Some("bitbucket.org/team/project")
+        );
+        assert_eq!(
+            normalize_remote_url("ssh://git@bitbucket.org:7999/team/project.git").as_deref(),
+            Some("bitbucket.org:7999/team/project")
+        );
+        assert_eq!(
+            normalize_remote_url("http://custom-host.internal:8080/repos/myrepo.git").as_deref(),
+            Some("custom-host.internal:8080/repos/myrepo")
+        );
+    }
 }
