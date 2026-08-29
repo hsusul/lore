@@ -715,4 +715,67 @@ mod tests {
         assert_eq!(ident.key, format!("gcd:{common_key}"));
         assert_eq!(ident.display_name, format!("gcd:{common_key}"));
     }
+
+    #[test]
+    fn link_segment_is_idempotent_and_updates_observation_fields() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = crate::storage::blob::BlobStore::open(dir.path()).unwrap();
+
+        let jsonl =
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"s_enrich_idem\",\"cwd\":\"/project\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
+        let parsed = crate::adapters::claude_code::ClaudeCodeAdapter::new()
+            .parse_str(jsonl, "s_enrich_idem");
+        let sid =
+            crate::ingest::persist_session(&conn, "claude-code", "Claude Code", &parsed, &blobs)
+                .unwrap();
+
+        let seg_id: String = conn
+            .query_row(
+                "SELECT id FROM session_segment WHERE session_id = ?1",
+                [&sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let mut facts = CapturedRepo {
+            common_dir: PathBuf::from("/project/.git"),
+            workdir: Some(PathBuf::from("/project")),
+            branch: Some("main".to_string()),
+            head_commit: Some("abcdef1234567890".to_string()),
+            detached: false,
+            is_dirty: Some(false),
+            changed_files: Some(vec!["file1.rs".to_string()]),
+            ahead: Some(0),
+            behind: Some(0),
+            commit_subject: Some("initial commit".to_string()),
+            remotes: vec!["github.com/org/repo".to_string()],
+            root_commits: vec!["abcdef1234567890".to_string()],
+            history_truncated: false,
+        };
+
+        link_segment(&conn, &sid, &seg_id, &facts).unwrap();
+
+        let branch: String = conn
+            .query_row(
+                "SELECT branch FROM git_observation WHERE session_id = ?1 AND source = 'lore_captured'",
+                [&sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(branch, "main");
+
+        // Re-linking with changed branch updates existing row
+        facts.branch = Some("feature".to_string());
+        link_segment(&conn, &sid, &seg_id, &facts).unwrap();
+
+        let branch_updated: String = conn
+            .query_row(
+                "SELECT branch FROM git_observation WHERE session_id = ?1 AND source = 'lore_captured'",
+                [&sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(branch_updated, "feature");
+    }
 }
