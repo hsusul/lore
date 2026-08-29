@@ -1405,4 +1405,15 @@ mod tests {
         assert!(redacted.contains("«redacted:connection-string»@[::1]/test"));
         assert!(redacted.contains("«redacted:connection-string»@localhost:6379/0"));
     }
+
+    #[test]
+    fn scan_handles_null_bytes_and_whitespace_padding() {
+        let token = t("ghp", "_0123456789abcdefghijklmnopqrstuvwxyz");
+        let text = format!("\0\t  \n{token}\r\n \0");
+        let findings = scan_ok(&text);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule, "github-token");
+        let redacted = redact(&text, &findings);
+        assert_eq!(redacted, "\0\t  \n«redacted:github-token»\r\n \0");
+    }
 }
