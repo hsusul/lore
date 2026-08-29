@@ -629,4 +629,45 @@ mod tests {
         assert_eq!(bounded(short), "custom_event");
         assert_eq!(bounded(""), "");
     }
+
+    #[test]
+    fn fallback_title_returns_none_for_whitespace_and_empty_prompts() {
+        use crate::model::{EventKind, ParsedPart, Tokens};
+
+        let msg1 = ParsedMessage {
+            seq: 0,
+            segment_ix: 0,
+            native_uuid: None,
+            parent_native_uuid: None,
+            role: Role::User,
+            event_kind: EventKind::Message,
+            is_sidechain: false,
+            ts: None,
+            model: None,
+            tokens: Tokens::default(),
+            stop_reason: None,
+            source_offset: None,
+            metadata_json: None,
+            parts: vec![ParsedPart {
+                ordinal: 0,
+                kind: PartKind::Text,
+                text: Some("   \n\t  \r\n  ".to_string()),
+                content_json: None,
+                searchable: true,
+                metadata_json: None,
+            }],
+        };
+        let mut msg2 = msg1.clone();
+        msg2.seq = 1;
+        msg2.parts = vec![ParsedPart {
+            ordinal: 0,
+            kind: PartKind::Text,
+            text: Some("<environment_context>\nsystem info\n</environment_context>".to_string()),
+            content_json: None,
+            searchable: true,
+            metadata_json: None,
+        }];
+
+        assert_eq!(fallback_title(&[msg1, msg2]), None);
+    }
 }
