@@ -498,3 +498,224 @@ fn user_can_relink_segment_to_different_repository() {
         .unwrap();
     assert_eq!(new_repo_id, repo_b_id);
 }
+
+#[test]
+fn enrich_handles_detached_head_repository() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    // Create a second commit and detach HEAD
+    std::fs::write(repo.path().join("second.txt"), "second\n").unwrap();
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-m", "second commit"]);
+    git(repo.path(), &["checkout", "--detach", "HEAD"]);
+
+    let head_sha = {
+        let out = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+
+    let sid = persist_session_at(&conn, &store, "detached-sess", repo.path());
+    let enriched = enrich_session(&conn, &sid).unwrap();
+    assert_eq!(enriched, 1);
+
+    // Segment is linked to repository and worktree
+    let (repo_id, wt_id, confidence): (String, String, String) = conn
+        .query_row(
+            "SELECT repository_id, worktree_id, resolution_confidence FROM session_segment WHERE session_id = ?1",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(confidence, "high");
+
+    // Worktree branch_hint is NULL for detached HEAD
+    let branch_hint: Option<String> = conn
+        .query_row(
+            "SELECT branch_hint FROM worktree WHERE id = ?1",
+            [&wt_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        branch_hint, None,
+        "branch_hint is NULL when HEAD is detached"
+    );
+
+    struct ObsRow {
+        branch: Option<String>,
+        commit_sha: Option<String>,
+        commit_subject: Option<String>,
+        ahead: Option<i64>,
+        behind: Option<i64>,
+        is_dirty: Option<i64>,
+    }
+
+    let obs: ObsRow = conn
+        .query_row(
+            "SELECT branch, commit_sha, commit_subject, ahead, behind, is_dirty
+             FROM git_observation WHERE session_id = ?1 AND source = 'lore_captured'",
+            [&sid],
+            |r| {
+                Ok(ObsRow {
+                    branch: r.get(0)?,
+                    commit_sha: r.get(1)?,
+                    commit_subject: r.get(2)?,
+                    ahead: r.get(3)?,
+                    behind: r.get(4)?,
+                    is_dirty: r.get(5)?,
+                })
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        obs.branch, None,
+        "detached HEAD observation has branch NULL"
+    );
+    assert_eq!(obs.commit_sha.as_deref(), Some(head_sha.as_str()));
+    assert_eq!(obs.commit_subject.as_deref(), Some("second commit"));
+    assert_eq!(obs.ahead, None, "ahead is NULL for detached HEAD");
+    assert_eq!(obs.behind, None, "behind is NULL for detached HEAD");
+    assert_eq!(obs.is_dirty, Some(0));
+
+    // Search projection is updated with the observation
+    let projected_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM search_git WHERE session_id = ?1 AND repository_id = ?2",
+            [&sid, &repo_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(projected_count >= 1);
+}
+
+#[test]
+fn enrich_handles_empty_commits() {
+    let repo = tempfile::tempdir().unwrap();
+    git(repo.path(), &["init", "-b", "main"]);
+    // Create an empty commit
+    git(
+        repo.path(),
+        &["commit", "--allow-empty", "-m", "empty initial commit"],
+    );
+
+    let head_sha = {
+        let out = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+
+    let sid = persist_session_at(&conn, &store, "empty-commit-sess", repo.path());
+    let enriched = enrich_session(&conn, &sid).unwrap();
+    assert_eq!(enriched, 1);
+
+    let (branch, commit_sha, commit_subject, is_dirty): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+    ) = conn
+        .query_row(
+            "SELECT branch, commit_sha, commit_subject, is_dirty
+             FROM git_observation WHERE session_id = ?1 AND source = 'lore_captured'",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+
+    assert_eq!(branch.as_deref(), Some("main"));
+    assert_eq!(commit_sha.as_deref(), Some(head_sha.as_str()));
+    assert_eq!(commit_subject.as_deref(), Some("empty initial commit"));
+    assert_eq!(is_dirty, Some(0));
+
+    // Identity evidence contains root commit
+    let (repo_id,): (String,) = conn
+        .query_row(
+            "SELECT repository_id FROM session_segment WHERE session_id = ?1",
+            [&sid],
+            |r| Ok((r.get(0)?,)),
+        )
+        .unwrap();
+
+    let root_evidence_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM repository_identity_evidence WHERE repository_id = ?1 AND kind = 'root_set'",
+            [&repo_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(root_evidence_count, 1);
+}
+
+#[test]
+fn enrich_handles_unborn_repository_with_zero_commits() {
+    let repo = tempfile::tempdir().unwrap();
+    git(repo.path(), &["init", "-b", "main"]);
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+
+    let sid = persist_session_at(&conn, &store, "unborn-sess", repo.path());
+    let enriched = enrich_session(&conn, &sid).unwrap();
+    assert_eq!(enriched, 1);
+
+    // Segment linked
+    let (repo_id, wt_id, confidence): (String, String, String) = conn
+        .query_row(
+            "SELECT repository_id, worktree_id, resolution_confidence FROM session_segment WHERE session_id = ?1",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(confidence, "high");
+
+    // Worktree has branch_hint = main
+    let branch_hint: Option<String> = conn
+        .query_row(
+            "SELECT branch_hint FROM worktree WHERE id = ?1",
+            [&wt_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(branch_hint.as_deref(), Some("main"));
+
+    // Observation has branch = main, commit_sha = NULL, commit_subject = NULL
+    let (branch, commit_sha, commit_subject): (Option<String>, Option<String>, Option<String>) =
+        conn.query_row(
+            "SELECT branch, commit_sha, commit_subject
+             FROM git_observation WHERE session_id = ?1 AND source = 'lore_captured'",
+            [&sid],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(branch.as_deref(), Some("main"));
+    assert_eq!(commit_sha, None, "unborn repository has no head commit sha");
+    assert_eq!(
+        commit_subject, None,
+        "unborn repository has no commit subject"
+    );
+
+    // Root commit evidence is not written for unborn repo (roots are empty)
+    let root_evidence_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM repository_identity_evidence WHERE repository_id = ?1 AND kind = 'root_set'",
+            [&repo_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(root_evidence_count, 0);
+}

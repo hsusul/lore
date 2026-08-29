@@ -821,4 +821,58 @@ mod tests {
         assert_ne!(wt_id_1, wt_id_2);
         assert_ne!(repo_id_1, wt_id_1);
     }
+
+    #[test]
+    fn link_segment_handles_detached_head_with_null_branch_and_commit_only() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = crate::storage::blob::BlobStore::open(dir.path()).unwrap();
+
+        let jsonl =
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"s_enrich_detached\",\"cwd\":\"/project\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n";
+        let parsed = crate::adapters::claude_code::ClaudeCodeAdapter::new()
+            .parse_str(jsonl, "s_enrich_detached");
+        let sid =
+            crate::ingest::persist_session(&conn, "claude-code", "Claude Code", &parsed, &blobs)
+                .unwrap();
+
+        let seg_id: String = conn
+            .query_row(
+                "SELECT id FROM session_segment WHERE session_id = ?1",
+                [&sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let facts = CapturedRepo {
+            common_dir: PathBuf::from("/project/.git"),
+            workdir: Some(PathBuf::from("/project")),
+            branch: None, // Detached HEAD has no branch name
+            head_commit: Some("deadbeef0123456789".to_string()),
+            detached: true,
+            is_dirty: Some(false),
+            changed_files: None,
+            ahead: None,
+            behind: None,
+            commit_subject: Some("detached commit".to_string()),
+            remotes: Vec::new(),
+            root_commits: vec!["deadbeef0123456789".to_string()],
+            history_truncated: false,
+        };
+
+        link_segment(&conn, &sid, &seg_id, &facts).unwrap();
+
+        let (branch, commit, is_dirty): (Option<String>, Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT branch, commit_sha, is_dirty FROM git_observation
+                 WHERE session_id = ?1 AND source = 'lore_captured'",
+                [&sid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+
+        assert_eq!(branch, None, "detached HEAD leaves branch column NULL");
+        assert_eq!(commit.as_deref(), Some("deadbeef0123456789"));
+        assert_eq!(is_dirty, Some(0));
+    }
 }
