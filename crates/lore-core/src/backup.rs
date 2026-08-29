@@ -304,14 +304,22 @@ pub fn restore_backup(backup_path: &Path, dst_db_path: &Path) -> Result<()> {
     if !backup_path.is_file() {
         return Err(BackupError::Io);
     }
-    let mut dst = Connection::open(dst_db_path).map_err(|_| BackupError::Io)?;
-    dst.restore(
-        DatabaseName::Main,
-        backup_path,
-        None::<fn(rusqlite::backup::Progress)>,
-    )?;
-    drop(dst);
-    verify(dst_db_path)
+    let restore_res = (|| -> Result<()> {
+        let mut dst = Connection::open(dst_db_path).map_err(|_| BackupError::Io)?;
+        dst.restore(
+            DatabaseName::Main,
+            backup_path,
+            None::<fn(rusqlite::backup::Progress)>,
+        )?;
+        drop(dst);
+        verify(dst_db_path)
+    })();
+
+    if let Err(e) = restore_res {
+        let _ = std::fs::remove_file(dst_db_path);
+        return Err(e);
+    }
+    Ok(())
 }
 
 fn is_backup_file(path: &Path) -> bool {

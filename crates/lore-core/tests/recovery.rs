@@ -343,3 +343,36 @@ fn recover_archive_multiple_corruptions_create_distinct_quarantine_artifacts() {
     assert_eq!(std::fs::read(&path1).unwrap(), b"corrupt 1");
     assert_eq!(std::fs::read(&path2).unwrap(), b"corrupt 2");
 }
+
+#[test]
+fn recover_archive_when_all_backups_are_corrupt_quarantines_and_returns_quarantined_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+
+    // Create multiple corrupt backups
+    std::fs::write(
+        backups.join("lore-backup-20260801T100000Z-001.db"),
+        b"corrupt backup 1",
+    )
+    .unwrap();
+    std::fs::write(
+        backups.join("lore-backup-20260802T100000Z-002.db"),
+        b"corrupt backup 2",
+    )
+    .unwrap();
+
+    // Corrupt main archive
+    let db = dir.path().join("lore.db");
+    std::fs::write(&db, b"corrupt main").unwrap();
+
+    let outcome = recover_archive(dir.path(), &backups).unwrap();
+    let quarantine_path = match outcome {
+        RecoveryOutcome::QuarantinedOnly { quarantine_path } => quarantine_path,
+        other => panic!("expected QuarantinedOnly, got {other:?}"),
+    };
+
+    assert!(quarantine_path.exists());
+    assert_eq!(std::fs::read(&quarantine_path).unwrap(), b"corrupt main");
+    assert!(!db.exists());
+}
