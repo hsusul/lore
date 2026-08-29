@@ -1543,4 +1543,200 @@ mod tests {
         assert_eq!(s.segments[0].model.as_deref(), Some("gpt-4o-2026-08-06"));
         assert_eq!(s.segments[0].provider.as_deref(), Some("openai-azure"));
     }
+
+    #[test]
+    fn resilience_malformed_turn_markers_and_consecutive_context_updates() {
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_turn_resilience\",\"cwd\":\"/dir0\",\"model_provider\":\"openai\"}}\n",
+            // Malformed turn_context: non-object payload and null payload
+            "{\"type\":\"turn_context\",\"payload\":\"not an object\"}\n",
+            "{\"type\":\"turn_context\",\"payload\":null}\n",
+            "{\"type\":\"turn_context\",\"payload\":{\"cwd\":\"/dir1\",\"model\":\"gpt-4o\"}}\n",
+            // Consecutive turn_context before any message
+            "{\"type\":\"turn_context\",\"payload\":{\"cwd\":\"/dir2\",\"model\":\"gpt-4o-mini\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"first prompt\"}}\n",
+            // Malformed compacted: null and non-object payloads
+            "{\"type\":\"compacted\",\"payload\":null}\n",
+            "{\"type\":\"compacted\",\"payload\":12345}\n",
+            "{\"type\":\"compacted\",\"payload\":{\"message\":\"compacted summary\"}}\n",
+            // Malformed context_compacted: null payload degrades gracefully to partial note
+            "{\"type\":\"event_msg\",\"payload\":null}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"context_compacted\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"final answer\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_turn_resilience");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert_eq!(s.messages.len(), 6); // user message, 2 malformed compacted markers, 1 valid compacted, 1 context_compacted, 1 assistant msg
+        assert_eq!(s.messages[0].role, Role::User);
+        assert_eq!(s.messages[1].role, Role::Meta);
+        assert_eq!(s.messages[1].parts.len(), 0);
+        assert_eq!(s.messages[2].role, Role::Meta);
+        assert_eq!(s.messages[2].parts.len(), 0);
+        assert_eq!(s.messages[3].role, Role::Meta);
+        assert_eq!(
+            s.messages[3].parts[0].text.as_deref(),
+            Some("compacted summary")
+        );
+        assert_eq!(s.messages[4].role, Role::Meta);
+        assert_eq!(s.messages[4].parts.len(), 0);
+        assert_eq!(s.messages[5].role, Role::Assistant);
+
+        // Segment boundaries and consistency
+        assert!(!s.segments.is_empty());
+        for msg in &s.messages {
+            assert!(msg.segment_ix < s.segments.len());
+        }
+        for seg in &s.segments {
+            assert!(seg.seq_start <= seg.seq_end);
+        }
+        assert_eq!(s.segments[0].cwd.as_deref(), Some("/dir2"));
+        assert_eq!(s.segments[0].model.as_deref(), Some("gpt-4o-mini"));
+    }
+
+    #[test]
+    fn resilience_unexpected_event_types_and_missing_payloads() {
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_unexp\",\"cwd\":\"/dir\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"hello\"}}\n",
+            // Unexpected top-level record type
+            "{\"type\":\"quantum_state_event\",\"payload\":{\"state\":\"superposition\"}}\n",
+            // response_item with missing and null payloads
+            "{\"type\":\"response_item\"}\n",
+            "{\"type\":\"response_item\",\"payload\":null}\n",
+            // response_item with unknown payload type
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"future_experimental_stream\",\"data\":\"xyz\"}}\n",
+            // event_msg with missing and null payloads
+            "{\"type\":\"event_msg\"}\n",
+            "{\"type\":\"event_msg\",\"payload\":null}\n",
+            // event_msg with unknown payload type
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"custom_telemetry_event\",\"metric\":99}}\n",
+            // Known non-conversation types (should not add notes)
+            "{\"type\":\"world_state\",\"payload\":{\"open_tabs\":[]}}\n",
+            "{\"type\":\"inter_agent_communication_metadata\",\"payload\":{}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"world\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_unexp");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.messages[0].parts[0].text.as_deref(), Some("hello"));
+        assert_eq!(s.messages[1].parts[0].text.as_deref(), Some("world"));
+
+        // Verify notes record the unexpected events
+        assert!(s.notes.iter().any(|n| n
+            .message
+            .contains("unknown record type: quantum_state_event")));
+        assert!(s.notes.iter().any(|n| n
+            .message
+            .contains("unknown response_item: future_experimental_stream")));
+        assert!(s.notes.iter().any(|n| n
+            .message
+            .contains("unknown event_msg: custom_telemetry_event")));
+        // world_state and inter_agent_communication_metadata should NOT create notes
+        assert!(!s.notes.iter().any(|n| n.message.contains("world_state")
+            || n.message.contains("inter_agent_communication_metadata")));
+    }
+
+    #[test]
+    fn resilience_truncated_and_corrupt_json_lines_mid_session() {
+        let jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_trunc\",\"cwd\":\"/dir\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"first prompt\"}}\n",
+            "\n",
+            "   \t  \r\n",
+            // Corrupt / truncated line in the middle of the stream
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"assista\n",
+            // Another invalid json line
+            "{{{{bad json\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"second response\"}}\n",
+            // Truncated line at the end without trailing newline
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"patch_"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_trunc");
+        assert_eq!(s.status, crate::model::ParseStatus::Partial);
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.messages[0].parts[0].text.as_deref(), Some("first prompt"));
+        assert_eq!(
+            s.messages[1].parts[0].text.as_deref(),
+            Some("second response")
+        );
+
+        let unparseable_notes: Vec<_> = s
+            .notes
+            .iter()
+            .filter(|n| n.message.contains("unparseable line (possibly truncated)"))
+            .collect();
+        assert_eq!(
+            unparseable_notes.len(),
+            3,
+            "3 truncated/corrupted lines noted"
+        );
+    }
+
+    #[test]
+    fn resilience_empty_and_whitespace_only_input() {
+        let s_empty = CodexAdapter::new().parse_str("", "s_empty");
+        assert_eq!(s_empty.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s_empty.messages.len(), 0);
+        assert_eq!(s_empty.segments.len(), 0);
+        assert_eq!(s_empty.started_at, None);
+        assert_eq!(s_empty.ended_at, None);
+
+        let s_ws = CodexAdapter::new().parse_str("  \n\n\t\r\n   \n", "s_ws");
+        assert_eq!(s_ws.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s_ws.messages.len(), 0);
+        assert_eq!(s_ws.segments.len(), 0);
+    }
+
+    #[test]
+    fn resilience_missing_null_and_malformed_timestamps() {
+        // Session 1: No timestamps anywhere in the file
+        let no_ts = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_no_ts\",\"cwd\":\"/dir\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"hello\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"world\"}}\n"
+        );
+        let s1 = CodexAdapter::new().parse_str(no_ts, "s_no_ts");
+        assert_eq!(s1.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s1.started_at, None);
+        assert_eq!(s1.ended_at, None);
+        assert_eq!(s1.messages[0].ts, None);
+        assert_eq!(s1.messages[1].ts, None);
+
+        // Session 2: Mixed timestamps (valid RFC3339, null, integer, invalid string, boolean)
+        let mixed_ts = concat!(
+            "{\"type\":\"session_meta\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"id\":\"s_mixed_ts\",\"cwd\":\"/dir\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":null,\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"prompt 1\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":1723370400,\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"response 1\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"not-a-valid-timestamp\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"prompt 2\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":true,\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"response 2\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:15:30.500Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"response 3\"}}\n"
+        );
+        let s2 = CodexAdapter::new().parse_str(mixed_ts, "s_mixed_ts");
+        assert_eq!(s2.status, crate::model::ParseStatus::Ok);
+        assert_eq!(
+            s2.started_at,
+            crate::adapters::common::epoch_ms("2026-08-11T10:00:00.000Z")
+        );
+        assert_eq!(
+            s2.ended_at,
+            crate::adapters::common::epoch_ms("2026-08-11T10:15:30.500Z")
+        );
+        assert_eq!(s2.messages[0].ts, None, "null timestamp resolves to None");
+        assert_eq!(
+            s2.messages[1].ts, None,
+            "numeric timestamp resolves to None gracefully"
+        );
+        assert_eq!(
+            s2.messages[2].ts, None,
+            "invalid string timestamp resolves to None"
+        );
+        assert_eq!(
+            s2.messages[3].ts, None,
+            "boolean timestamp resolves to None"
+        );
+        assert_eq!(
+            s2.messages[4].ts,
+            crate::adapters::common::epoch_ms("2026-08-11T10:15:30.500Z")
+        );
+    }
 }
