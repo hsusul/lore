@@ -394,4 +394,77 @@ mod tests {
         assert!(!safe_relpath("C:/windows"));
         assert!(!safe_relpath("ab/cd:stream"));
     }
+
+    #[test]
+    fn blob_store_supports_non_ascii_root_paths() {
+        let parent = tempfile::tempdir().unwrap();
+        let unicode_root = parent.path().join("🦀_üñîçødé_目录_テスト");
+        let store = BlobStore::open(&unicode_root).unwrap();
+        let content = b"patch in unicode path root: \xf0\x9f\x94\xa7";
+        let staged = store.stage(content).unwrap();
+        assert_eq!(store.read(staged.relpath()).unwrap(), content);
+        assert!(store.remove(staged.relpath()).is_ok());
+        assert!(store.read(staged.relpath()).is_err());
+    }
+
+    #[test]
+    fn zero_byte_blob_db_reference_and_deduplication() {
+        let (_dir, store) = store();
+        let conn = crate::storage::open_in_memory().unwrap();
+        let empty_staged = store.stage(b"").unwrap();
+        assert_eq!(empty_staged.byte_len, 0);
+
+        let id1 = BlobStore::reference(&conn, &empty_staged, "text/plain").unwrap();
+        let id2 = BlobStore::reference(&conn, &empty_staged, "text/plain").unwrap();
+        assert_eq!(id1, id2);
+
+        let (stored_len, state): (i64, String) = conn
+            .query_row(
+                "SELECT byte_len, scan_state FROM blob WHERE id = ?1",
+                [&id1],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored_len, 0);
+        assert_eq!(state, "pending");
+    }
+
+    #[test]
+    fn read_missing_or_corrupted_relpath_returns_io_error() {
+        let (_dir, store) = store();
+        // Valid relpath format but file does not exist
+        assert!(store.read("00/0000000000000000nonexistent").is_err());
+        // Non-existent shard directory
+        assert!(store.read("ff/ffffffffffffffffnonexistent").is_err());
+    }
+
+    #[test]
+    fn blob_store_edge_cases_and_nonexistent_paths() {
+        let (_dir, store) = store();
+
+        // Reading nonexistent valid relpath returns Io error
+        assert!(store.read("00/0000000000000000dead").is_err());
+
+        // Reading invalid/traversal paths returns Io error
+        assert!(matches!(
+            store.read(""),
+            Err(crate::storage::StorageError::Io)
+        ));
+        assert!(matches!(
+            store.read("/absolute/path"),
+            Err(crate::storage::StorageError::Io)
+        ));
+        assert!(matches!(
+            store.read("../escape"),
+            Err(crate::storage::StorageError::Io)
+        ));
+
+        // Staging multiple distinct payloads produces distinct content hashes and shard directories
+        let a = store.stage(b"payload a").unwrap();
+        let b = store.stage(b"payload b").unwrap();
+        assert_ne!(a.content_hash(), b.content_hash());
+        assert_ne!(a.relpath(), b.relpath());
+        assert_eq!(store.read(a.relpath()).unwrap(), b"payload a");
+        assert_eq!(store.read(b.relpath()).unwrap(), b"payload b");
+    }
 }
