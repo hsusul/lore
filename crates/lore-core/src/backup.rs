@@ -446,4 +446,46 @@ mod tests {
         let nonexistent = dir.path().join("nonexistent");
         prune(&nonexistent, 5).unwrap();
     }
+
+    #[test]
+    fn run_scheduled_backup_respects_interval_timing_and_due_dates() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::storage::open(&dir.path().join("lore.db")).unwrap();
+        let backup_dir = dir.path().join("backups");
+
+        // When interval is Off -> returns None
+        write_schedule(
+            &conn,
+            BackupSchedule {
+                interval: BackupInterval::Off,
+                keep: 5,
+            },
+        )
+        .unwrap();
+        let res = run_scheduled_backup(&conn, &backup_dir, 1_000_000).unwrap();
+        assert_eq!(res, None);
+
+        // When interval is Daily and never run before -> runs backup
+        write_schedule(
+            &conn,
+            BackupSchedule {
+                interval: BackupInterval::Daily,
+                keep: 5,
+            },
+        )
+        .unwrap();
+        let now_ms = 100_000_000;
+        let res1 = run_scheduled_backup(&conn, &backup_dir, now_ms).unwrap();
+        assert!(res1.is_some());
+
+        // Calling again within 1 hour -> not due -> returns None
+        let not_due_ms = now_ms + (60 * 60 * 1000);
+        let res2 = run_scheduled_backup(&conn, &backup_dir, not_due_ms).unwrap();
+        assert_eq!(res2, None);
+
+        // Calling after 25 hours -> due -> runs backup
+        let due_ms = now_ms + (25 * 60 * 60 * 1000);
+        let res3 = run_scheduled_backup(&conn, &backup_dir, due_ms).unwrap();
+        assert!(res3.is_some());
+    }
 }

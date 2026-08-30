@@ -608,4 +608,25 @@ mod tests {
         };
         assert_eq!(active.processed(), 3 + 2 + 1 + 5);
     }
+
+    #[test]
+    fn progress_event_clones_and_equality() {
+        let ev1 = ProgressEvent::ScanEnqueued {
+            discovered: 10,
+            enqueued: 5,
+        };
+        let ev2 = ev1.clone();
+        assert_eq!(ev1, ev2);
+
+        let ev_ingested = ProgressEvent::Ingested {
+            agent_id: "codex".to_string(),
+            session_id: "s1".to_string(),
+            change: ChangeClass::New,
+        };
+        assert_eq!(ev_ingested.clone(), ev_ingested);
+
+        let sink = NullSink;
+        sink.emit(ev1);
+        sink.emit(ev_ingested);
+    }
 }

@@ -467,4 +467,29 @@ mod tests {
         assert_eq!(store.read(a.relpath()).unwrap(), b"payload a");
         assert_eq!(store.read(b.relpath()).unwrap(), b"payload b");
     }
+
+    #[test]
+    fn blob_store_remove_safety_and_idempotence() {
+        let (_dir, store) = store();
+
+        let staged = store.stage(b"temporary blob content").unwrap();
+        assert!(store.read(staged.relpath()).is_ok());
+
+        // Removing existing blob -> Ok(()) and file is deleted
+        store.remove(staged.relpath()).unwrap();
+        assert!(store.read(staged.relpath()).is_err());
+
+        // Removing already-deleted blob -> Ok(()) (idempotent)
+        store.remove(staged.relpath()).unwrap();
+
+        // Traversal / invalid relpath -> Err(StorageError::Io)
+        assert!(matches!(
+            store.remove("../escape"),
+            Err(crate::storage::StorageError::Io)
+        ));
+        assert!(matches!(
+            store.remove(""),
+            Err(crate::storage::StorageError::Io)
+        ));
+    }
 }
