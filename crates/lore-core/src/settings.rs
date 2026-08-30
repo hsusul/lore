@@ -126,4 +126,12 @@ mod tests {
         set(&conn, key, val).unwrap();
         assert_eq!(get(&conn, key).unwrap().as_deref(), Some(val));
     }
+
+    #[test]
+    fn get_bool_with_malformed_json_returns_default() {
+        let conn = db();
+        set(&conn, "bad_json_flag", "{invalid_json:").unwrap();
+        assert!(get_bool(&conn, "bad_json_flag", true).unwrap());
+        assert!(!get_bool(&conn, "bad_json_flag", false).unwrap());
+    }
 }

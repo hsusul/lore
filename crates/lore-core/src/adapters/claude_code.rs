@@ -1182,4 +1182,23 @@ mod tests {
         // Default roots derive from CLAUDE_CONFIG_DIR or HOME or empty
         assert!(default_roots.len() <= 1);
     }
+
+    #[test]
+    fn claude_code_adapter_detect_installation_with_custom_roots() {
+        let adapter = ClaudeCodeAdapter::new();
+        let temp = tempfile::tempdir().unwrap();
+        let projects_dir = temp.path().join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        let roots = DiscoveryRoots::new(vec![projects_dir.clone()]);
+        let detection = adapter.detect_installation(&roots);
+        assert!(detection.installed);
+        assert_eq!(detection.roots_found, vec![projects_dir]);
+
+        let missing = temp.path().join("missing_projects");
+        let missing_roots = DiscoveryRoots::new(vec![missing]);
+        let missing_det = adapter.detect_installation(&missing_roots);
+        assert!(!missing_det.installed);
+        assert!(missing_det.roots_found.is_empty());
+    }
 }

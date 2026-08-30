@@ -1806,4 +1806,23 @@ mod tests {
         // Default roots derive from CODEX_HOME or HOME or empty
         assert!(default_roots.len() <= 2);
     }
+
+    #[test]
+    fn codex_adapter_detect_installation_with_custom_roots() {
+        let adapter = CodexAdapter::new();
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("sessions");
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        let roots = DiscoveryRoots::new(vec![session_dir.clone()]);
+        let detection = adapter.detect_installation(&roots);
+        assert!(detection.installed);
+        assert_eq!(detection.roots_found, vec![session_dir]);
+
+        let missing = temp.path().join("missing_sessions");
+        let missing_roots = DiscoveryRoots::new(vec![missing]);
+        let missing_det = adapter.detect_installation(&missing_roots);
+        assert!(!missing_det.installed);
+        assert!(missing_det.roots_found.is_empty());
+    }
 }
