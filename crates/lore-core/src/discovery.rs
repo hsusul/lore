@@ -472,4 +472,24 @@ mod tests {
         let unowned = Path::new("/etc/unrelated/config.json");
         assert_eq!(owner_of(&registry, &config, unowned), None);
     }
+
+    #[test]
+    fn discovery_report_clones_and_empty_watch_roots() {
+        let report = DiscoveryReport {
+            agents: Vec::new(),
+            sessions: Vec::new(),
+        };
+        let report2 = report.clone();
+        assert_eq!(report.agents.len(), report2.agents.len());
+        assert_eq!(report.sessions.len(), report2.sessions.len());
+
+        let registry = AdapterRegistry::v0();
+        let mut config = DiscoveryConfig::new();
+        config.set_roots("claude-code", DiscoveryRoots::new(vec![]));
+        config.set_roots("codex", DiscoveryRoots::new(vec![]));
+
+        let roots = watch_roots(&registry, &config);
+        // Default roots are bounded
+        assert!(roots.len() <= 3);
+    }
 }

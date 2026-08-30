@@ -308,4 +308,16 @@ mod tests {
         let digest3 = fnv1a_hex("CREATE TABLE test2 (id INTEGER);");
         assert_ne!(digest1, digest3);
     }
+
+    #[test]
+    fn migrations_run_idempotent_on_populated_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(run(&conn).is_ok());
+        assert!(run(&conn).is_ok());
+
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, COUNT);
+    }
 }

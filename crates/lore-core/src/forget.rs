@@ -510,4 +510,19 @@ mod tests {
         let removed2 = purge_recoverable_copies(&empty).unwrap();
         assert!(removed2.is_empty());
     }
+
+    #[test]
+    fn forget_everything_on_nonexistent_and_empty_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let nonexistent = dir.path().join("does_not_exist");
+        let rep1 = forget_everything(&nonexistent).unwrap();
+        assert!(rep1.removed.is_empty());
+        assert!(rep1.preserved_exports.is_empty());
+
+        let empty = dir.path().join("empty_dir");
+        std::fs::create_dir_all(&empty).unwrap();
+        let rep2 = forget_everything(&empty).unwrap();
+        assert!(rep2.removed.is_empty());
+        assert!(rep2.preserved_exports.is_empty());
+    }
 }
