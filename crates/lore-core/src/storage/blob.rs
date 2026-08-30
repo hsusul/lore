@@ -505,5 +505,8 @@ mod tests {
 
         let bid = blob_id(staged.content_hash());
         assert!(bid.starts_with("blob_"));
+
+        let cloned = staged.clone();
+        assert_eq!(staged, cloned);
     }
 }

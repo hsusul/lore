@@ -1168,4 +1168,18 @@ mod tests {
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
         assert_eq!(session.messages.len(), 1);
     }
+
+    #[test]
+    fn claude_code_adapter_effective_roots_custom_vs_empty() {
+        let adapter = ClaudeCodeAdapter::new();
+        let custom_dir = PathBuf::from("/custom/claude/projects");
+        let custom_roots = DiscoveryRoots::new(vec![custom_dir.clone()]);
+        let roots = adapter.roots(&custom_roots);
+        assert_eq!(roots, vec![custom_dir]);
+
+        let empty_roots = DiscoveryRoots::new(vec![]);
+        let default_roots = adapter.roots(&empty_roots);
+        // Default roots derive from CLAUDE_CONFIG_DIR or HOME or empty
+        assert!(default_roots.len() <= 1);
+    }
 }

@@ -116,4 +116,14 @@ mod tests {
         assert_eq!(parsed["enabled"], true);
         assert_eq!(parsed["limit"], 100);
     }
+
+    #[test]
+    fn unicode_keys_and_values_round_trip() {
+        let conn = db();
+        let key = "設定_キー_🌟";
+        let val = "\"日本語設定値_🚀\"";
+
+        set(&conn, key, val).unwrap();
+        assert_eq!(get(&conn, key).unwrap().as_deref(), Some(val));
+    }
 }
