@@ -875,4 +875,38 @@ mod tests {
         assert_eq!(commit.as_deref(), Some("deadbeef0123456789"));
         assert_eq!(is_dirty, Some(0));
     }
+
+    #[test]
+    fn resolve_identity_handles_remote_and_truncated_history() {
+        let workdir = PathBuf::from("/workspace/repo");
+        let facts_truncated = CapturedRepo {
+            common_dir: PathBuf::from("/workspace/repo/.git"),
+            workdir: Some(workdir.clone()),
+            branch: Some("main".to_string()),
+            head_commit: Some("abc".to_string()),
+            detached: false,
+            is_dirty: Some(false),
+            changed_files: None,
+            ahead: None,
+            behind: None,
+            commit_subject: None,
+            remotes: vec!["github.com/org/repo".to_string()],
+            root_commits: vec!["root1".to_string()],
+            history_truncated: true, // Shallow clone
+        };
+        let common_key = fnv1a_hex(facts_truncated.common_dir.to_string_lossy().as_bytes());
+        let identity_med = resolve_identity(&facts_truncated, &common_key, &workdir);
+        assert_eq!(identity_med.confidence, "medium");
+        assert!(identity_med.key.starts_with("r:"));
+        assert_eq!(identity_med.display_name, "repo");
+
+        let facts_full = CapturedRepo {
+            history_truncated: false,
+            ..facts_truncated
+        };
+        let identity_high = resolve_identity(&facts_full, &common_key, &workdir);
+        assert_eq!(identity_high.confidence, "high");
+        assert!(identity_high.key.starts_with("rr:"));
+        assert_eq!(identity_high.display_name, "repo");
+    }
 }

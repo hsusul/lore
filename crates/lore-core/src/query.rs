@@ -1433,4 +1433,17 @@ mod tests {
         let repos = list_repositories(&conn).unwrap();
         assert!(repos.is_empty());
     }
+
+    #[test]
+    fn list_repository_and_folder_sessions_page_handles_nonexistent_and_empty_filters() {
+        let conn = crate::storage::open_in_memory().unwrap();
+
+        let repo_page = list_repository_sessions_page(&conn, "nonexistent_repo", 20, None).unwrap();
+        assert!(repo_page.sessions.is_empty());
+        assert_eq!(repo_page.next_cursor, None);
+
+        let folder_page = list_folder_sessions_page(&conn, "nonexistent_folder", 20, None).unwrap();
+        assert!(folder_page.sessions.is_empty());
+        assert_eq!(folder_page.next_cursor, None);
+    }
 }

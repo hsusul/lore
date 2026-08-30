@@ -1119,5 +1119,29 @@ mod tests {
         let session = ClaudeCodeAdapter::new().parse_str(jsonl, "s_title");
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
         assert_eq!(session.title.as_deref(), Some("User Custom Title"));
+        assert!(!session.title_is_synthetic);
+    }
+
+    #[test]
+    fn parses_title_events_ordering_and_fallback_synthetic_flag() {
+        // AI title after custom title does not overwrite custom title
+        let jsonl_custom_first = concat!(
+            "{\"type\":\"custom-title\",\"customTitle\":\"Pinned Custom Title\"}\n",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Late AI Title\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s1\",\"message\":{\"role\":\"user\",\"content\":\"some request\"}}\n"
+        );
+        let session1 = ClaudeCodeAdapter::new().parse_str(jsonl_custom_first, "s1");
+        assert_eq!(session1.title.as_deref(), Some("Pinned Custom Title"));
+        assert!(!session1.title_is_synthetic);
+
+        // Fallback synthetic title from user prompt
+        let jsonl_fallback =
+            "{\"type\":\"user\",\"sessionId\":\"s2\",\"message\":{\"role\":\"user\",\"content\":\"Analyze database indexing strategy\"}}\n";
+        let session2 = ClaudeCodeAdapter::new().parse_str(jsonl_fallback, "s2");
+        assert_eq!(
+            session2.title.as_deref(),
+            Some("Analyze database indexing strategy")
+        );
+        assert!(session2.title_is_synthetic);
     }
 }
