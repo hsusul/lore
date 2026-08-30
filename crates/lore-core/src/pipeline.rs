@@ -629,4 +629,35 @@ mod tests {
         sink.emit(ev1);
         sink.emit(ev_ingested);
     }
+
+    #[test]
+    fn progress_event_all_variants_and_null_sink() {
+        let sink = NullSink;
+        let sink2 = sink;
+        assert_eq!(format!("{sink:?}"), format!("{sink2:?}"));
+
+        let ev_skipped = ProgressEvent::Skipped {
+            agent_id: "claude-code".to_string(),
+        };
+        assert_eq!(ev_skipped.clone(), ev_skipped);
+
+        let ev_failed = ProgressEvent::Failed {
+            agent_id: "codex".to_string(),
+            kind: IngestFailureKind::SourceFailed,
+        };
+        assert_eq!(ev_failed.clone(), ev_failed);
+
+        let ev_requeued = ProgressEvent::Requeued {
+            agent_id: "claude-code".to_string(),
+        };
+        assert_eq!(ev_requeued.clone(), ev_requeued);
+
+        let ev_finished = ProgressEvent::ScanFinished;
+        assert_eq!(ev_finished.clone(), ev_finished);
+
+        sink.emit(ev_skipped);
+        sink.emit(ev_failed);
+        sink.emit(ev_requeued);
+        sink.emit(ev_finished);
+    }
 }

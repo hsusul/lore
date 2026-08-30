@@ -431,4 +431,24 @@ mod tests {
         assert_eq!(pass, pass2);
         assert_eq!(pass.enqueued, 0);
     }
+
+    #[test]
+    fn worker_queue_depth_and_enqueue_reverify_empty() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let worker = Worker::new(
+            conn,
+            AdapterRegistry::v0(),
+            BlobStore::open(tempfile::tempdir().unwrap().path()).unwrap(),
+            DiscoveryConfig::new(),
+            WorkerConfig::default(),
+        );
+
+        let depth = worker.queue_depth().unwrap();
+        assert_eq!(depth.pending, 0);
+        assert_eq!(depth.running, 0);
+        assert_eq!(depth.active(), 0);
+
+        let reverified = worker.enqueue_reverify().unwrap();
+        assert_eq!(reverified, 0);
+    }
 }

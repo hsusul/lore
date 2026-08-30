@@ -1446,4 +1446,18 @@ mod tests {
         assert!(folder_page.sessions.is_empty());
         assert_eq!(folder_page.next_cursor, None);
     }
+
+    #[test]
+    fn agent_session_count_and_token_totals_on_empty_db() {
+        let conn = crate::storage::open_in_memory().unwrap();
+
+        assert_eq!(agent_session_count(&conn, "claude-code").unwrap(), 0);
+        assert_eq!(agent_session_count(&conn, "codex").unwrap(), 0);
+
+        let totals = get_token_totals(&conn).unwrap();
+        assert_eq!(totals.total_input_tokens, 0);
+        assert_eq!(totals.total_output_tokens, 0);
+        assert_eq!(totals.total_cache_tokens, 0);
+        assert!((totals.est_cost_usd - 0.0).abs() < f64::EPSILON);
+    }
 }
