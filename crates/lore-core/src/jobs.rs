@@ -797,4 +797,27 @@ mod tests {
             Err(JobQueueError::InvalidState)
         ));
     }
+
+    #[test]
+    fn recover_running_on_empty_db_and_job_clones() {
+        let conn = db();
+        assert_eq!(recover_running(&conn).unwrap(), 0);
+
+        let qd = QueueDepth {
+            pending: 5,
+            running: 3,
+        };
+        let qd_clone = qd;
+        assert_eq!(qd, qd_clone);
+        assert_eq!(qd.active(), 8);
+
+        let new_j = NewJob {
+            id: "j_clone",
+            kind: "test",
+            priority: 1,
+            payload_json: Some("{}"),
+        };
+        let new_j_clone = new_j.clone();
+        assert_eq!(new_j, new_j_clone);
+    }
 }

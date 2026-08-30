@@ -506,4 +506,19 @@ mod tests {
             "io error while creating or pruning backup"
         );
     }
+
+    #[test]
+    fn backup_info_clones_and_list_nonexistent() {
+        let info = BackupInfo {
+            path: PathBuf::from("/path/to/backup.db"),
+            size_bytes: 1024,
+        };
+        let info_clone = info.clone();
+        assert_eq!(info, info_clone);
+
+        let dir = tempfile::tempdir().unwrap();
+        let nonexistent = dir.path().join("does_not_exist");
+        let list = list_backups(&nonexistent).unwrap();
+        assert!(list.is_empty());
+    }
 }

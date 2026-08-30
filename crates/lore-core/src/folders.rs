@@ -501,4 +501,22 @@ mod tests {
         assert_eq!(cleaned.chars().count(), 100);
         assert_eq!(cleaned, "a".repeat(100));
     }
+
+    #[test]
+    fn list_folders_on_empty_db_and_create_multiple() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        assert!(list_folders(&conn).unwrap().is_empty());
+
+        let f1 = create_folder(&conn, "Alpha").unwrap();
+        let f2 = create_folder(&conn, "Beta").unwrap();
+        assert_eq!(f1.name, "Alpha");
+        assert_eq!(f2.name, "Beta");
+        assert_eq!(f1.position, 0);
+        assert_eq!(f2.position, 1);
+
+        let list = list_folders(&conn).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, f1.id);
+        assert_eq!(list[1].id, f2.id);
+    }
 }
