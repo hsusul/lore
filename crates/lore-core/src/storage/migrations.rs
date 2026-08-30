@@ -260,4 +260,41 @@ mod tests {
             assert!(applied_at > 0);
         }
     }
+
+    #[test]
+    fn apply_atomic_rollback_on_syntax_error_in_migration() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version    INTEGER PRIMARY KEY,
+                name       TEXT    NOT NULL,
+                checksum   TEXT    NOT NULL,
+                applied_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+
+        let bad_migration = Migration {
+            version: 1,
+            name: "bad_syntax",
+            sql: "CREATE TABLE t (id INT); SYNTAX ERROR HERE;",
+        };
+        assert!(apply(&conn, &bad_migration).is_err());
+
+        // Table 't' and schema_migrations record must not exist
+        let t_exists: bool = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            > 0;
+        assert!(!t_exists);
+
+        let mig_count: i64 = conn
+            .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mig_count, 0);
+    }
 }

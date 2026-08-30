@@ -1739,4 +1739,31 @@ mod tests {
             crate::adapters::common::epoch_ms("2026-08-11T10:15:30.500Z")
         );
     }
+
+    #[test]
+    fn parses_token_totals_sparse_and_nested_formats() {
+        // Flat legacy info structure with partial token counts inside event_msg
+        let flat_jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_tokens_flat\",\"cwd\":\"/dir\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"input_tokens\":500,\"output_tokens\":120}}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"hello\"}}\n"
+        );
+        let s1 = CodexAdapter::new().parse_str(flat_jsonl, "s_tokens_flat");
+        assert_eq!(s1.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s1.total_tokens.input, Some(500));
+        assert_eq!(s1.total_tokens.output, Some(120));
+        assert_eq!(s1.total_tokens.cache, None);
+
+        // Nested total_token_usage structure with cache write and read inside event_msg
+        let nested_jsonl = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_tokens_nested\",\"cwd\":\"/dir\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input\":1000,\"output\":250,\"cached_input_tokens\":400,\"cache_write_input_tokens\":100}}}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"done\"}}\n"
+        );
+        let s2 = CodexAdapter::new().parse_str(nested_jsonl, "s_tokens_nested");
+        assert_eq!(s2.status, crate::model::ParseStatus::Ok);
+        assert_eq!(s2.total_tokens.input, Some(1000));
+        assert_eq!(s2.total_tokens.output, Some(250));
+        assert_eq!(s2.total_tokens.cache, Some(500));
+    }
 }

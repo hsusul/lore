@@ -463,4 +463,30 @@ mod tests {
             .unwrap();
         assert_eq!(rows, 0);
     }
+
+    #[test]
+    fn folders_nonexistent_ids_and_foreign_key_safety() {
+        let conn = crate::storage::open_in_memory().unwrap();
+
+        // Delete non-existent folder is a clean no-op
+        assert!(delete_folder(&conn, "nonexistent_folder_id").is_ok());
+
+        // Rename non-existent folder is a clean no-op
+        assert!(rename_folder(&conn, "nonexistent_folder_id", "New Name").is_ok());
+
+        // Query folder for unfiled/nonexistent session -> Ok(None)
+        assert_eq!(
+            folder_of_session(&conn, "nonexistent_session_id").unwrap(),
+            None
+        );
+
+        // Unfiling a non-existent session -> Ok(())
+        assert!(set_session_folder(&conn, "nonexistent_session_id", None).is_ok());
+
+        // Filing to a nonexistent folder or with a nonexistent session fails foreign key constraint
+        assert!(
+            set_session_folder(&conn, "nonexistent_session_id", Some("nonexistent_folder"))
+                .is_err()
+        );
+    }
 }
