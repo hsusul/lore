@@ -447,4 +447,28 @@ mod tests {
         assert_eq!(roots[0], std::fs::canonicalize(&sub_a).unwrap());
         assert_eq!(roots[1], std::fs::canonicalize(&sub_b).unwrap());
     }
+
+    #[test]
+    fn add_custom_root_enforces_max_custom_roots_limit() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+        let dir = tempfile::tempdir().unwrap();
+
+        for i in 0..MAX_CUSTOM_ROOTS {
+            let sub = dir.path().join(format!("root_{i}"));
+            std::fs::create_dir_all(&sub).unwrap();
+            add_custom_root(&conn, &registry, "claude-code", sub.to_str().unwrap()).unwrap();
+        }
+
+        assert_eq!(
+            custom_roots(&conn, "claude-code").unwrap().len(),
+            MAX_CUSTOM_ROOTS
+        );
+
+        let extra = dir.path().join("extra_root");
+        std::fs::create_dir_all(&extra).unwrap();
+        let err =
+            add_custom_root(&conn, &registry, "claude-code", extra.to_str().unwrap()).unwrap_err();
+        assert!(matches!(err, SourceRootError::TooManyRoots));
+    }
 }

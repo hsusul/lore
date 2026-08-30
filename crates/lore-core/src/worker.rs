@@ -390,4 +390,45 @@ mod tests {
         handle.reconfigure(DiscoveryConfig::new(), None);
         handle.shutdown();
     }
+
+    #[test]
+    fn worker_enqueue_paths_skips_unowned_and_nonexistent_paths() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let worker = Worker::new(
+            conn,
+            AdapterRegistry::v0(),
+            BlobStore::open(tempfile::tempdir().unwrap().path()).unwrap(),
+            DiscoveryConfig::new(),
+            WorkerConfig::default(),
+        );
+
+        let unowned = vec![
+            PathBuf::from("/nonexistent/random/file.txt"),
+            PathBuf::from("/tmp/unrelated.jsonl"),
+        ];
+        let enqueued = worker.enqueue_paths(&unowned).unwrap();
+        assert_eq!(enqueued, 0);
+
+        let pass = worker.run_pending(&unowned, &NullSink).unwrap();
+        assert_eq!(pass.enqueued, 0);
+        assert_eq!(pass.drained, DrainSummary::default());
+    }
+
+    #[test]
+    fn work_pass_and_worker_config_clones_and_equality() {
+        let cfg = WorkerConfig {
+            queue_capacity: 500,
+            drain_batch: 50,
+            idle_poll: Duration::from_millis(100),
+        };
+        let cfg2 = cfg;
+        assert_eq!(cfg.queue_capacity, cfg2.queue_capacity);
+        assert_eq!(cfg.drain_batch, cfg2.drain_batch);
+        assert_eq!(cfg.idle_poll, cfg2.idle_poll);
+
+        let pass = WorkPass::default();
+        let pass2 = pass.clone();
+        assert_eq!(pass, pass2);
+        assert_eq!(pass.enqueued, 0);
+    }
 }

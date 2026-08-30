@@ -156,3 +156,20 @@ fn quarantine(db_path: &Path, archive_dir: &Path) -> Result<PathBuf> {
     }
     main_dst.ok_or(RecoveryError::Io)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_error_and_outcome_formatting_and_clones() {
+        let err_io = RecoveryError::Io;
+        assert_eq!(err_io.to_string(), "io error during recovery");
+
+        let outcome = RecoveryOutcome::QuarantinedOnly {
+            quarantine_path: PathBuf::from("/tmp/quarantine/test"),
+        };
+        let outcome2 = outcome.clone();
+        assert_eq!(outcome, outcome2);
+    }
+}
