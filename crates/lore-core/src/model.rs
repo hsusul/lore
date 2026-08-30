@@ -509,4 +509,39 @@ mod tests {
         assert_eq!(session.notes[0].message, "first note");
         assert_eq!(session.notes[1].message, "second note");
     }
+
+    #[test]
+    fn token_counts_and_parsed_message_helpers() {
+        let tc_empty = Tokens::default();
+        assert!(tc_empty.is_empty());
+
+        let tc = Tokens {
+            input: Some(100),
+            output: Some(50),
+            cache: Some(10),
+        };
+        assert!(!tc.is_empty());
+        let tc_clone = tc;
+        assert_eq!(tc, tc_clone);
+
+        let msg = ParsedMessage {
+            seq: 1,
+            segment_ix: 0,
+            native_uuid: Some("msg_1".to_string()),
+            parent_native_uuid: None,
+            role: Role::User,
+            event_kind: EventKind::Message,
+            is_sidechain: false,
+            ts: Some(1000),
+            model: Some("claude-3-5-sonnet".to_string()),
+            tokens: tc,
+            stop_reason: None,
+            source_offset: None,
+            metadata_json: None,
+            parts: vec![],
+        };
+        let msg_clone = msg.clone();
+        assert_eq!(msg.native_uuid, msg_clone.native_uuid);
+        assert_eq!(msg.role, Role::User);
+    }
 }

@@ -713,4 +713,13 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn looks_like_repo_and_capture_relative_path_safety() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(!looks_like_repo(temp.path()));
+
+        assert_eq!(capture(Path::new("relative/repo")), None);
+        assert_eq!(capture(Path::new("")), None);
+    }
 }

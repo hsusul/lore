@@ -1440,4 +1440,58 @@ mod tests {
         assert_eq!(totals.output, Some(2000));
         assert_eq!(totals.cache, Some(1000));
     }
+
+    #[test]
+    fn session_token_totals_sums_messages_when_session_tokens_empty() {
+        let mut session = ParsedSession::new("test_session_sum");
+        session.total_tokens = Tokens::default();
+
+        let m1 = ParsedMessage {
+            seq: 0,
+            segment_ix: 0,
+            native_uuid: None,
+            parent_native_uuid: None,
+            role: Role::User,
+            event_kind: EventKind::Message,
+            is_sidechain: false,
+            ts: None,
+            model: None,
+            tokens: Tokens {
+                input: Some(10),
+                output: Some(20),
+                cache: Some(5),
+            },
+            stop_reason: None,
+            source_offset: None,
+            metadata_json: None,
+            parts: vec![],
+        };
+        let m2 = ParsedMessage {
+            seq: 1,
+            segment_ix: 0,
+            native_uuid: None,
+            parent_native_uuid: None,
+            role: Role::Assistant,
+            event_kind: EventKind::Message,
+            is_sidechain: false,
+            ts: None,
+            model: None,
+            tokens: Tokens {
+                input: Some(15),
+                output: Some(25),
+                cache: Some(10),
+            },
+            stop_reason: None,
+            source_offset: None,
+            metadata_json: None,
+            parts: vec![],
+        };
+        session.messages.push(m1);
+        session.messages.push(m2);
+
+        let totals = session_token_totals(&session);
+        assert_eq!(totals.input, Some(25));
+        assert_eq!(totals.output, Some(45));
+        assert_eq!(totals.cache, Some(15));
+    }
 }
