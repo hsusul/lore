@@ -492,4 +492,22 @@ mod tests {
         assert!(md.contains("# (untitled session)"));
         assert!(md.contains("claude-code · 0 messages · 0 tool calls"));
     }
+
+    #[test]
+    fn export_session_markdown_with_thinking_and_file_events() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e_thinking\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e_thinking\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"internal reasoning process\"},{\"type\":\"text\",\"text\":\"response text\"}]}}\n"
+        );
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+        assert!(
+            md.contains(">(thinking) internal reasoning process")
+                || md.contains("> _(thinking)_ internal reasoning process")
+        );
+        assert!(md.contains("response text"));
+    }
 }

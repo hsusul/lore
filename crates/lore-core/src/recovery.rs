@@ -240,4 +240,13 @@ mod tests {
         let out2 = recover_archive(&archive_dir, &backup_dir).unwrap();
         assert_eq!(out2, RecoveryOutcome::Healthy);
     }
+
+    #[test]
+    fn recovery_outcome_quarantined_only_clone_and_eq() {
+        let q = RecoveryOutcome::QuarantinedOnly {
+            quarantine_path: PathBuf::from("/quarantine/path.db"),
+        };
+        let q_clone = q.clone();
+        assert_eq!(q, q_clone);
+    }
 }

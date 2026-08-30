@@ -520,4 +520,12 @@ mod tests {
         // Removing a path when no custom roots exist for valid agent -> Ok(())
         assert!(remove_custom_root(&conn, &registry, "claude-code", "/nonexistent/path").is_ok());
     }
+
+    #[test]
+    fn custom_roots_empty_array_setting() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        crate::settings::set(&conn, "agent_roots.claude-code", "[]").unwrap();
+        let roots = custom_roots(&conn, "claude-code").unwrap();
+        assert!(roots.is_empty());
+    }
 }
