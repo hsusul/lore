@@ -509,4 +509,13 @@ mod tests {
         let cloned = staged.clone();
         assert_eq!(staged, cloned);
     }
+
+    #[test]
+    fn blob_store_open_creates_nested_tmp_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested").join("sub").join("blobs");
+        let store = BlobStore::open(&nested).unwrap();
+        assert!(nested.join("tmp").is_dir());
+        assert_eq!(store.root(), &nested);
+    }
 }

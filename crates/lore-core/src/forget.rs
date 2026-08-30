@@ -525,4 +525,11 @@ mod tests {
         assert!(rep2.removed.is_empty());
         assert!(rep2.preserved_exports.is_empty());
     }
+
+    #[test]
+    fn forget_report_default_values() {
+        let rep = ForgetReport::default();
+        assert_eq!(rep.blobs_removed, 0);
+        assert!(rep.source_paths.is_empty());
+    }
 }

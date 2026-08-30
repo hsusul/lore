@@ -320,4 +320,10 @@ mod tests {
             .unwrap();
         assert_eq!(count, COUNT);
     }
+
+    #[test]
+    fn fnv1a_hex_empty_string_matches_offset_basis() {
+        let digest = fnv1a_hex("");
+        assert_eq!(digest, "cbf29ce484222325");
+    }
 }
