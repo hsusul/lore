@@ -1584,4 +1584,28 @@ mod tests {
              const config = { \"openai\": \"«redacted:openai-key»\", \"hf\": \"«redacted:huggingface-token»\" };"
         );
     }
+
+    #[test]
+    fn severity_and_finding_fingerprint_behavior() {
+        assert_eq!(Severity::Low.as_str(), "low");
+        assert_eq!(Severity::Medium.as_str(), "medium");
+        assert_eq!(Severity::High.as_str(), "high");
+        assert_eq!(Severity::Critical.as_str(), "critical");
+
+        assert!(Severity::Critical > Severity::High);
+        assert!(Severity::High > Severity::Medium);
+        assert!(Severity::Medium > Severity::Low);
+
+        let text = "secret_prefix_1234567890_text";
+        let finding = Finding {
+            rule: "custom-rule",
+            start: 0,
+            end: 20,
+            severity: Severity::High,
+        };
+        let fp1 = finding.fingerprint(text);
+        let fp2 = finding.fingerprint(text);
+        assert_eq!(fp1, fp2);
+        assert_eq!(fp1.len(), 16);
+    }
 }

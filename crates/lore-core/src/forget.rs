@@ -476,4 +476,25 @@ mod tests {
         assert_eq!(report.blobs_removed, 0);
         assert!(report.source_paths.is_empty());
     }
+
+    #[test]
+    fn forget_all_on_empty_database_and_report_clones() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+
+        let report = forget_all(&conn, &blobs).unwrap();
+        assert_eq!(report.blobs_removed, 0);
+        assert!(report.source_paths.is_empty());
+
+        let report_clone = report.clone();
+        assert_eq!(report, report_clone);
+
+        let everything = ForgetEverythingReport {
+            removed: vec!["blobs".to_string()],
+            preserved_exports: vec!["summary.md".to_string()],
+            remaining_note: "note",
+        };
+        assert_eq!(everything.clone(), everything);
+    }
 }

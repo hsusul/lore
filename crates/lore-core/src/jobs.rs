@@ -763,4 +763,38 @@ mod tests {
         assert_eq!(prune_terminal_jobs(&conn, 0).unwrap(), 1);
         assert!(load(&conn, "j_keep_0").unwrap().is_none());
     }
+
+    #[test]
+    fn finish_and_fail_on_not_running_job_and_state_parse() {
+        let conn = db();
+        enqueue(&conn, &new_job("j_not_running", 0), 10).unwrap();
+
+        // Finishing a pending job -> Err(NotRunning)
+        assert!(matches!(
+            finish(&conn, "j_not_running"),
+            Err(JobQueueError::NotRunning)
+        ));
+
+        // Failing a pending job -> Err(NotRunning)
+        assert!(matches!(
+            fail_with_kind(&conn, "j_not_running", "kind", "err"),
+            Err(JobQueueError::NotRunning)
+        ));
+
+        // Finishing a nonexistent job -> Err(NotRunning)
+        assert!(matches!(
+            finish(&conn, "nonexistent"),
+            Err(JobQueueError::NotRunning)
+        ));
+
+        // JobState::parse variants
+        assert_eq!(JobState::parse("pending").unwrap(), JobState::Pending);
+        assert_eq!(JobState::parse("running").unwrap(), JobState::Running);
+        assert_eq!(JobState::parse("done").unwrap(), JobState::Done);
+        assert_eq!(JobState::parse("failed").unwrap(), JobState::Failed);
+        assert!(matches!(
+            JobState::parse("unknown"),
+            Err(JobQueueError::InvalidState)
+        ));
+    }
 }
