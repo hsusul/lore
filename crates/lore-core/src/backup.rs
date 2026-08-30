@@ -488,4 +488,22 @@ mod tests {
         let res3 = run_scheduled_backup(&conn, &backup_dir, due_ms).unwrap();
         assert!(res3.is_some());
     }
+
+    #[test]
+    fn backup_interval_variants_and_error_formatting() {
+        assert_eq!(BackupInterval::Off.as_str(), "off");
+        assert_eq!(BackupInterval::Daily.as_str(), "daily");
+        assert_eq!(BackupInterval::Weekly.as_str(), "weekly");
+
+        assert_eq!(BackupInterval::parse("off"), BackupInterval::Off);
+        assert_eq!(BackupInterval::parse("daily"), BackupInterval::Daily);
+        assert_eq!(BackupInterval::parse("weekly"), BackupInterval::Weekly);
+        assert_eq!(BackupInterval::parse("unknown"), BackupInterval::Off);
+
+        let err_io = BackupError::Io;
+        assert_eq!(
+            err_io.to_string(),
+            "io error while creating or pruning backup"
+        );
+    }
 }

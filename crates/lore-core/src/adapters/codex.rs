@@ -1766,4 +1766,30 @@ mod tests {
         assert_eq!(s2.total_tokens.output, Some(250));
         assert_eq!(s2.total_tokens.cache, Some(500));
     }
+
+    #[test]
+    fn codex_adapter_capabilities_and_empty_content_handling() {
+        let adapter = CodexAdapter::new();
+        assert_eq!(adapter.id(), AgentId("codex"));
+        let meta = adapter.metadata();
+        assert_eq!(meta.display_name, "Codex");
+        assert_eq!(meta.format_id, "codex/rollout-jsonl");
+
+        let caps = adapter.capabilities();
+        assert!(caps.git_context);
+        assert!(!caps.message_tree);
+        assert!(caps.encrypted_regions);
+
+        // Empty content produces empty parsed session with default dedupe id
+        let parsed = adapter.parse_str("", "default_id");
+        assert_eq!(parsed.dedupe_key, "default_id");
+        assert!(parsed.messages.is_empty());
+        assert_eq!(parsed.status, crate::model::ParseStatus::Ok);
+
+        // Whitespace-only lines are ignored cleanly
+        let ws_parsed = adapter.parse_str("   \n\n\t  \n", "ws_id");
+        assert_eq!(ws_parsed.dedupe_key, "ws_id");
+        assert!(ws_parsed.messages.is_empty());
+        assert_eq!(ws_parsed.status, crate::model::ParseStatus::Ok);
+    }
 }

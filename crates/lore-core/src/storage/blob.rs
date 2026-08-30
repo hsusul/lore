@@ -492,4 +492,18 @@ mod tests {
             Err(crate::storage::StorageError::Io)
         ));
     }
+
+    #[test]
+    fn staged_blob_getters_and_root_accessor() {
+        let (dir, store) = store();
+        assert_eq!(store.root(), dir.path());
+
+        let staged = store.stage(b"hello world").unwrap();
+        assert_eq!(staged.byte_len, 11);
+        assert!(!staged.content_hash().is_empty());
+        assert!(staged.relpath().ends_with(staged.content_hash()));
+
+        let bid = blob_id(staged.content_hash());
+        assert!(bid.starts_with("blob_"));
+    }
 }
