@@ -371,4 +371,26 @@ mod tests {
         assert_eq!(config.roots_for("claude-code").roots.len(), 1);
         assert_eq!(config.roots_for("codex").roots.len(), 1);
     }
+
+    #[test]
+    fn synthetic_generate_empty_sessions_and_profile_clones() {
+        let spec_empty = ProfileSpec {
+            claude_sessions: 0,
+            codex_sessions: 0,
+            max_extra_turns: 0,
+            seed: 0,
+        };
+        let spec_copy = spec_empty;
+        assert_eq!(spec_empty.claude_sessions, spec_copy.claude_sessions);
+
+        let dir = tempfile::tempdir().unwrap();
+        let profile = generate(dir.path(), &spec_empty).unwrap();
+        assert_eq!(profile.claude_files, 0);
+        assert_eq!(profile.codex_files, 0);
+        assert_eq!(profile.message_count, 0);
+
+        let profile_clone = profile.clone();
+        assert_eq!(profile.claude_root, profile_clone.claude_root);
+        assert_eq!(profile.codex_root, profile_clone.codex_root);
+    }
 }

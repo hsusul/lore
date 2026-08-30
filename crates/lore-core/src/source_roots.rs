@@ -496,4 +496,19 @@ mod tests {
             Err(SourceRootError::NotDirectory)
         ));
     }
+
+    #[test]
+    fn custom_roots_unknown_agent_error_handling() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+
+        let add_err = add_custom_root(&conn, &registry, "nonexistent_agent", path).unwrap_err();
+        assert!(matches!(add_err, SourceRootError::UnknownAgent));
+
+        let rem_err = remove_custom_root(&conn, &registry, "nonexistent_agent", path).unwrap_err();
+        assert!(matches!(rem_err, SourceRootError::UnknownAgent));
+    }
 }

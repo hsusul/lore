@@ -715,4 +715,26 @@ mod tests {
         assert_eq!(epoch_ms("not-a-date"), None);
         assert_eq!(epoch_ms(""), None);
     }
+
+    #[test]
+    fn bounded_strings_and_non_negative_int_field() {
+        assert_eq!(bounded("short"), "short");
+        let long_str = "a".repeat(100);
+        assert_eq!(bounded(&long_str), "a".repeat(40));
+
+        let obj = serde_json::json!({
+            "pos": 42,
+            "zero": 0,
+            "neg": -5,
+            "str_num": "10",
+            "not_num": "hello"
+        });
+
+        assert_eq!(non_negative_int_field(&obj, "pos"), Some(42));
+        assert_eq!(non_negative_int_field(&obj, "zero"), Some(0));
+        assert_eq!(non_negative_int_field(&obj, "neg"), None);
+        assert_eq!(non_negative_int_field(&obj, "str_num"), None);
+        assert_eq!(non_negative_int_field(&obj, "not_num"), None);
+        assert_eq!(non_negative_int_field(&obj, "missing"), None);
+    }
 }
