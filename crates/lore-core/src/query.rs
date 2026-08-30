@@ -1467,4 +1467,14 @@ mod tests {
         let sessions = list_repository_sessions(&conn, "nonexistent_repo", 10).unwrap();
         assert!(sessions.is_empty());
     }
+
+    #[test]
+    fn list_sessions_empty_and_get_session_none() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let sessions = list_sessions(&conn, 50).unwrap();
+        assert!(sessions.is_empty());
+
+        let session_detail = get_session(&conn, "nonexistent_session").unwrap();
+        assert_eq!(session_detail, None);
+    }
 }

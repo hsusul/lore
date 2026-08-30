@@ -1065,4 +1065,20 @@ mod tests {
         assert!(sql_old.is_empty());
         assert!(params_old.is_empty());
     }
+
+    #[test]
+    fn parse_query_empty_and_whitespace_only() {
+        let q_empty = parse_query("");
+        assert!(q_empty.terms.is_empty());
+        assert_eq!(q_empty.agent, None);
+        assert_eq!(q_empty.path, None);
+        assert_eq!(q_empty.model, None);
+        assert!(!q_empty.has_error);
+        assert!(!q_empty.has_patch);
+
+        let q_ws = parse_query("   \t\n  ");
+        assert!(q_ws.terms.is_empty());
+        assert_eq!(q_ws.agent, None);
+        assert_eq!(q_ws.path, None);
+    }
 }

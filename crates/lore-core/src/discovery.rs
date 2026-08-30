@@ -492,4 +492,21 @@ mod tests {
         // Default roots are bounded
         assert!(roots.len() <= 3);
     }
+
+    #[test]
+    fn discover_on_nonexistent_custom_roots() {
+        let registry = AdapterRegistry::v0();
+        let mut config = DiscoveryConfig::new();
+        let dir = tempfile::tempdir().unwrap();
+        let non_claude = dir.path().join("nonexistent_claude");
+        let non_codex = dir.path().join("nonexistent_codex");
+
+        config.set_roots("claude-code", DiscoveryRoots::new(vec![non_claude]));
+        config.set_roots("codex", DiscoveryRoots::new(vec![non_codex]));
+
+        let report = discover(&registry, &config);
+        assert_eq!(report.agents.len(), 2);
+        assert!(report.agents.iter().all(|a| !a.detection.installed));
+        assert!(report.sessions.is_empty());
+    }
 }
