@@ -461,4 +461,15 @@ mod tests {
             Some("claude-code")
         );
     }
+
+    #[test]
+    fn owner_of_unregistered_and_discovery_config_clones() {
+        let registry = AdapterRegistry::v0();
+        let config = DiscoveryConfig::new();
+        let config2 = config.clone();
+        assert!(config2.roots_for("claude-code").roots.is_empty());
+
+        let unowned = Path::new("/etc/unrelated/config.json");
+        assert_eq!(owner_of(&registry, &config, unowned), None);
+    }
 }

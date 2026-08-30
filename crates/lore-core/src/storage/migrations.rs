@@ -297,4 +297,15 @@ mod tests {
             .unwrap();
         assert_eq!(mig_count, 0);
     }
+
+    #[test]
+    fn fnv1a_hex_determinism_and_length() {
+        let digest1 = fnv1a_hex("CREATE TABLE test (id INTEGER);");
+        let digest2 = fnv1a_hex("CREATE TABLE test (id INTEGER);");
+        assert_eq!(digest1, digest2);
+        assert_eq!(digest1.len(), 16);
+
+        let digest3 = fnv1a_hex("CREATE TABLE test2 (id INTEGER);");
+        assert_ne!(digest1, digest3);
+    }
 }

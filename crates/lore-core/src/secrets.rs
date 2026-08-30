@@ -1608,4 +1608,23 @@ mod tests {
         assert_eq!(fp1, fp2);
         assert_eq!(fp1.len(), 16);
     }
+
+    #[test]
+    fn scan_failure_seam_and_empty_redaction() {
+        let text = "sample text with no secrets";
+        assert_eq!(redact(text, &[]), text);
+
+        // Disarmed seam -> scan succeeds
+        set_fail_scans_for_test(false);
+        assert!(scan(text).is_ok());
+
+        // Armed seam -> scan fails content-free
+        set_fail_scans_for_test(true);
+        let err = scan(text).unwrap_err();
+        assert_eq!(err.to_string(), "secret scan failed");
+
+        // Disarm again
+        set_fail_scans_for_test(false);
+        assert!(scan(text).is_ok());
+    }
 }
