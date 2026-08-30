@@ -660,4 +660,18 @@ mod tests {
         sink.emit(ev_requeued);
         sink.emit(ev_finished);
     }
+
+    #[test]
+    fn drain_summary_processed_calculation() {
+        let mut summary = DrainSummary::default();
+        assert_eq!(summary.processed(), 0);
+
+        summary.ingested = 3;
+        summary.skipped = 2;
+        summary.failed = 1;
+        summary.reverified = 4;
+        summary.requeued = 5; // Requeued is not counted in processed()
+
+        assert_eq!(summary.processed(), 10);
+    }
 }

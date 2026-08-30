@@ -940,4 +940,15 @@ mod tests {
         assert_eq!(identity_local.key, format!("gcd:{common_key}"));
         assert_eq!(identity_local.display_name, "standalone");
     }
+
+    #[test]
+    fn enrich_and_reverify_nonexistent_sessions_return_zero() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        assert_eq!(enrich_session(&conn, "nonexistent_session").unwrap(), 0);
+        assert_eq!(reverify_session(&conn, "nonexistent_session").unwrap(), 0);
+        assert_eq!(
+            reverify_commit(&conn, "nonexistent_worktree", "commit_sha").unwrap(),
+            0
+        );
+    }
 }
