@@ -951,4 +951,11 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn reverify_targets_on_empty_db_returns_empty() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let targets = reverify_targets(&conn, "nonexistent_session").unwrap();
+        assert!(targets.is_empty());
+    }
 }

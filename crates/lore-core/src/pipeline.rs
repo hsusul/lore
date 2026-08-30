@@ -674,4 +674,18 @@ mod tests {
 
         assert_eq!(summary.processed(), 10);
     }
+
+    #[test]
+    fn pipeline_enqueue_path_unowned_returns_none() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+        let blobs = BlobStore::open(tempfile::tempdir().unwrap().path()).unwrap();
+        let config = DiscoveryConfig::new();
+        let pipeline = Pipeline::new(&conn, &registry, &blobs, &config, 1000);
+
+        let res = pipeline
+            .enqueue_path(Path::new("/unowned/path/session.jsonl"))
+            .unwrap();
+        assert_eq!(res, None);
+    }
 }

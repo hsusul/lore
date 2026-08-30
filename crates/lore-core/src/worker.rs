@@ -467,4 +467,24 @@ mod tests {
         let summary = worker.drain_batch(&NullSink).unwrap();
         assert_eq!(summary, DrainSummary::default());
     }
+
+    #[test]
+    fn worker_enqueue_empty_and_unowned_paths() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let worker = Worker::new(
+            conn,
+            AdapterRegistry::v0(),
+            BlobStore::open(tempfile::tempdir().unwrap().path()).unwrap(),
+            DiscoveryConfig::new(),
+            WorkerConfig::default(),
+        );
+
+        assert_eq!(worker.enqueue_paths(&[]).unwrap(), 0);
+        assert_eq!(
+            worker
+                .enqueue_paths(&[PathBuf::from("/nonexistent/random/path.jsonl")])
+                .unwrap(),
+            0
+        );
+    }
 }
