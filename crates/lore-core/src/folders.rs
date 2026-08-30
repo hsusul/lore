@@ -519,4 +519,13 @@ mod tests {
         assert_eq!(list[0].id, f1.id);
         assert_eq!(list[1].id, f2.id);
     }
+
+    #[test]
+    fn clean_name_with_emojis_and_special_whitespace() {
+        let name = clean_name("  🚀  Project   🔥  ");
+        assert_eq!(name, "🚀 Project 🔥");
+
+        let mixed = clean_name("\t\t  Folder\u{00A0}Name  \n");
+        assert_eq!(mixed, "Folder Name");
+    }
 }

@@ -521,4 +521,20 @@ mod tests {
         let list = list_backups(&nonexistent).unwrap();
         assert!(list.is_empty());
     }
+
+    #[test]
+    fn backup_schedule_clones_and_read_defaults() {
+        let sched = BackupSchedule {
+            interval: BackupInterval::Weekly,
+            keep: 14,
+        };
+        let sched2 = sched;
+        assert_eq!(sched.interval, sched2.interval);
+        assert_eq!(sched.keep, sched2.keep);
+
+        let conn = crate::storage::open_in_memory().unwrap();
+        let read = read_schedule(&conn).unwrap();
+        assert_eq!(read.interval, BackupInterval::Off);
+        assert_eq!(read.keep, DEFAULT_BACKUP_RETENTION);
+    }
 }

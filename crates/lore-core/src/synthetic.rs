@@ -393,4 +393,30 @@ mod tests {
         assert_eq!(profile.claude_root, profile_clone.claude_root);
         assert_eq!(profile.codex_root, profile_clone.codex_root);
     }
+
+    #[test]
+    fn synthetic_generate_single_agent_variations() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec_claude_only = ProfileSpec {
+            claude_sessions: 3,
+            codex_sessions: 0,
+            max_extra_turns: 0,
+            seed: 42,
+        };
+        let profile_claude = generate(&dir.path().join("claude_only"), &spec_claude_only).unwrap();
+        assert_eq!(profile_claude.claude_files, 3);
+        assert_eq!(profile_claude.codex_files, 0);
+        assert_eq!(profile_claude.message_count, 6);
+
+        let spec_codex_only = ProfileSpec {
+            claude_sessions: 0,
+            codex_sessions: 3,
+            max_extra_turns: 0,
+            seed: 42,
+        };
+        let profile_codex = generate(&dir.path().join("codex_only"), &spec_codex_only).unwrap();
+        assert_eq!(profile_codex.claude_files, 0);
+        assert_eq!(profile_codex.codex_files, 3);
+        assert_eq!(profile_codex.message_count, 9);
+    }
 }
