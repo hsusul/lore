@@ -1494,4 +1494,27 @@ mod tests {
         assert_eq!(totals.output, Some(45));
         assert_eq!(totals.cache, Some(15));
     }
+
+    #[test]
+    fn session_id_for_deterministic_natural_keys() {
+        let mut s1 = ParsedSession::new("dedupe_key_1");
+        s1.native_session_id = Some("native_id_1".to_string());
+
+        let mut s2 = ParsedSession::new("dedupe_key_2");
+        s2.native_session_id = Some("native_id_1".to_string());
+
+        // When native_session_id is present, it takes precedence
+        assert_eq!(
+            session_id_for("claude-code", &s1),
+            session_id_for("claude-code", &s2)
+        );
+
+        // When absent, dedupe_key is used
+        let s3 = ParsedSession::new("dedupe_key_3");
+        let s4 = ParsedSession::new("dedupe_key_4");
+        assert_ne!(
+            session_id_for("claude-code", &s3),
+            session_id_for("claude-code", &s4)
+        );
+    }
 }

@@ -544,4 +544,39 @@ mod tests {
         assert_eq!(msg.native_uuid, msg_clone.native_uuid);
         assert_eq!(msg.role, Role::User);
     }
+
+    #[test]
+    fn parsed_tool_call_and_file_event_clones() {
+        let tc = ParsedToolCall {
+            native_call_id: "call_1".to_string(),
+            name: "read_file".to_string(),
+            call_ref: (1, 0),
+            result_ref: Some((2, 0)),
+            input_json: Some("{\"path\":\"test.rs\"}".to_string()),
+            output_text: Some("file content".to_string()),
+            is_error: Some(false),
+            duration_ms: Some(150),
+        };
+        let tc_clone = tc.clone();
+        assert_eq!(tc.native_call_id, tc_clone.native_call_id);
+        assert_eq!(tc.name, tc_clone.name);
+        assert_eq!(tc.duration_ms, Some(150));
+
+        let fe = ParsedFileEvent {
+            segment_ix: 0,
+            tool_native_call_id: Some("call_1".to_string()),
+            path: "test.rs".to_string(),
+            change_kind: FileChangeKind::Edit,
+            old_path: None,
+            lines_added: Some(10),
+            lines_removed: Some(2),
+            patch_text: Some("diff content".to_string()),
+            source: FileEventSource::AgentPatch,
+            event_ts: Some(123456789),
+        };
+        let fe_clone = fe.clone();
+        assert_eq!(fe.path, fe_clone.path);
+        assert_eq!(fe.change_kind, fe_clone.change_kind);
+        assert_eq!(fe.lines_added, Some(10));
+    }
 }

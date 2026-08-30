@@ -722,4 +722,25 @@ mod tests {
         assert_eq!(capture(Path::new("relative/repo")), None);
         assert_eq!(capture(Path::new("")), None);
     }
+
+    #[test]
+    fn normalize_remote_url_credentials_and_bare_host() {
+        assert_eq!(
+            normalize_remote_url("https://user:password@github.com/org/repo.git").as_deref(),
+            Some("github.com/org/repo")
+        );
+        assert_eq!(
+            normalize_remote_url("git+ssh://deploy-token:secret@gitlab.com/group/repo").as_deref(),
+            Some("gitlab.com/group/repo")
+        );
+        assert_eq!(
+            normalize_remote_url("github.com/just/path.git").as_deref(),
+            Some("github.com/just/path")
+        );
+        assert_eq!(
+            normalize_remote_url("github.com").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(normalize_remote_url("  \t\n "), None);
+    }
 }
