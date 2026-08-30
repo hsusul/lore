@@ -737,4 +737,29 @@ mod tests {
         assert_eq!(non_negative_int_field(&obj, "not_num"), None);
         assert_eq!(non_negative_int_field(&obj, "missing"), None);
     }
+
+    #[test]
+    fn str_field_and_json_field_nested_and_types() {
+        let obj = serde_json::json!({
+            "string_val": "hello world",
+            "int_val": 123,
+            "bool_val": true,
+            "nested_obj": { "key": "val" },
+            "array_val": [1, 2, 3]
+        });
+
+        assert_eq!(
+            str_field(&obj, "string_val"),
+            Some("hello world".to_string())
+        );
+        assert_eq!(str_field(&obj, "int_val"), None);
+        assert_eq!(str_field(&obj, "missing"), None);
+
+        assert_eq!(
+            json_field(&obj, "nested_obj"),
+            Some("{\"key\":\"val\"}".to_string())
+        );
+        assert_eq!(json_field(&obj, "array_val"), Some("[1,2,3]".to_string()));
+        assert_eq!(json_field(&obj, "missing"), None);
+    }
 }

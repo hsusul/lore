@@ -475,4 +475,21 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn export_session_markdown_untitled_session() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let blobs = BlobStore::open(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut session = crate::model::ParsedSession::new("empty_session");
+        session.title = None;
+        let session_id =
+            crate::ingest::persist_session(&conn, "claude-code", "Claude Code", &session, &blobs)
+                .unwrap();
+
+        let md = export_session_markdown(&conn, &session_id, false)
+            .unwrap()
+            .unwrap();
+        assert!(md.contains("# (untitled session)"));
+        assert!(md.contains("claude-code · 0 messages · 0 tool calls"));
+    }
 }

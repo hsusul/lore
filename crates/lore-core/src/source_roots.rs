@@ -511,4 +511,13 @@ mod tests {
         let rem_err = remove_custom_root(&conn, &registry, "nonexistent_agent", path).unwrap_err();
         assert!(matches!(rem_err, SourceRootError::UnknownAgent));
     }
+
+    #[test]
+    fn remove_custom_root_nonexistent_path_is_safe_noop() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+
+        // Removing a path when no custom roots exist for valid agent -> Ok(())
+        assert!(remove_custom_root(&conn, &registry, "claude-code", "/nonexistent/path").is_ok());
+    }
 }
