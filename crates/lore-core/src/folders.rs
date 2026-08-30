@@ -528,4 +528,11 @@ mod tests {
         let mixed = clean_name("\t\t  Folder\u{00A0}Name  \n");
         assert_eq!(mixed, "Folder Name");
     }
+
+    #[test]
+    fn rename_and_delete_folder_nonexistent_ids_safe_noop() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        assert!(rename_folder(&conn, "nonexistent_folder_id", "New Name").is_ok());
+        assert!(delete_folder(&conn, "nonexistent_folder_id").is_ok());
+    }
 }

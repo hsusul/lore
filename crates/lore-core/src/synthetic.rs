@@ -419,4 +419,18 @@ mod tests {
         assert_eq!(profile_codex.codex_files, 3);
         assert_eq!(profile_codex.message_count, 9);
     }
+
+    #[test]
+    fn synthetic_profile_discovery_config_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = ProfileSpec::default();
+        let profile = generate(dir.path(), &spec).unwrap();
+        let config = profile.discovery_config();
+
+        let claude_roots = config.roots_for("claude-code");
+        assert_eq!(claude_roots.roots, vec![profile.claude_root]);
+
+        let codex_roots = config.roots_for("codex");
+        assert_eq!(codex_roots.roots, vec![profile.codex_root]);
+    }
 }

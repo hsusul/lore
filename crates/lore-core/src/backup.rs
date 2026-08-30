@@ -537,4 +537,22 @@ mod tests {
         assert_eq!(read.interval, BackupInterval::Off);
         assert_eq!(read.keep, DEFAULT_BACKUP_RETENTION);
     }
+
+    #[test]
+    fn backup_prune_keep_larger_than_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let backup_dir = dir.path().join("backups");
+        std::fs::create_dir_all(&backup_dir).unwrap();
+
+        // 2 mock backup files
+        let b1 = backup_dir.join("lore-00000000000000000001-0001.db");
+        let b2 = backup_dir.join("lore-00000000000000000002-0002.db");
+        std::fs::write(&b1, b"mock backup 1").unwrap();
+        std::fs::write(&b2, b"mock backup 2").unwrap();
+
+        // Pruning with keep = 10 -> keep all
+        assert!(prune(&backup_dir, 10).is_ok());
+        assert!(b1.exists());
+        assert!(b2.exists());
+    }
 }
