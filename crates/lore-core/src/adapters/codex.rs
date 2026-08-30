@@ -1825,4 +1825,20 @@ mod tests {
         assert!(!missing_det.installed);
         assert!(missing_det.roots_found.is_empty());
     }
+
+    #[test]
+    fn codex_adapter_default_and_turn_context_parsing() {
+        let adapter = CodexAdapter;
+        let jsonl = r#"{"type":"session_meta","timestamp":"2026-08-10T10:00:00.000Z","payload":{"id":"session_123","cwd":"/repo/root"}}
+{"type":"turn_context","timestamp":"2026-08-10T10:00:01.000Z","payload":{"model":"o3-mini","cwd":"/repo/root"}}
+{"type":"response_item","timestamp":"2026-08-10T10:00:02.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}
+"#;
+        let session = adapter.parse_str(jsonl, "fallback_id");
+        assert_eq!(session.native_session_id.as_deref(), Some("session_123"));
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].model.as_deref(), Some("o3-mini"));
+        assert_eq!(session.segments.len(), 1);
+        assert_eq!(session.segments[0].model.as_deref(), Some("o3-mini"));
+        assert_eq!(session.segments[0].cwd.as_deref(), Some("/repo/root"));
+    }
 }

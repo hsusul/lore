@@ -1201,4 +1201,18 @@ mod tests {
         assert!(!missing_det.installed);
         assert!(missing_det.roots_found.is_empty());
     }
+
+    #[test]
+    fn claude_code_ai_title_precedence_and_empty_content() {
+        let adapter = ClaudeCodeAdapter;
+        let jsonl = concat!(
+            "{\"type\":\"ai-title\",\"aiTitle\":\"AI Generated Title\"}\n",
+            "{\"type\":\"custom-title\",\"customTitle\":\"User Custom Title\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_title\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n"
+        );
+        let session = adapter.parse_str(jsonl, "s_title");
+        assert_eq!(session.title.as_deref(), Some("User Custom Title"));
+        assert!(!session.title_is_synthetic);
+        assert_eq!(session.messages.len(), 1);
+    }
 }

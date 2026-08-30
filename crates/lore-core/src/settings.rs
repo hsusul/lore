@@ -134,4 +134,17 @@ mod tests {
         assert!(get_bool(&conn, "bad_json_flag", true).unwrap());
         assert!(!get_bool(&conn, "bad_json_flag", false).unwrap());
     }
+
+    #[test]
+    fn set_multiple_overwrites_updates_timestamp() {
+        let conn = db();
+        set(&conn, "counter", "1").unwrap();
+        assert_eq!(get(&conn, "counter").unwrap().as_deref(), Some("1"));
+
+        set(&conn, "counter", "2").unwrap();
+        assert_eq!(get(&conn, "counter").unwrap().as_deref(), Some("2"));
+
+        set(&conn, "counter", "3").unwrap();
+        assert_eq!(get(&conn, "counter").unwrap().as_deref(), Some("3"));
+    }
 }
