@@ -1022,4 +1022,26 @@ mod tests {
             "\"fn*()\" \"((nested))\" \"unmatched(\"\"\" \"wild*card\" \"\"\"exact\"\"\"\"quote\"\"\" \")OR(\""
         );
     }
+
+    #[test]
+    fn sort_order_variants_and_search_page_empty_limits() {
+        assert_eq!(SortOrder::parse(Some("newest")), SortOrder::Newest);
+        assert_eq!(SortOrder::parse(Some("oldest")), SortOrder::Oldest);
+        assert_eq!(SortOrder::parse(Some("relevance")), SortOrder::Relevance);
+        assert_eq!(SortOrder::parse(Some("unknown")), SortOrder::Relevance);
+        assert_eq!(SortOrder::parse(None), SortOrder::Relevance);
+
+        assert_eq!(SortOrder::Newest.as_str(), "newest");
+        assert_eq!(SortOrder::Oldest.as_str(), "oldest");
+        assert_eq!(SortOrder::Relevance.as_str(), "relevance");
+        assert_eq!(format!("{}", SortOrder::Newest), "newest");
+        assert_eq!(format!("{}", SortOrder::Oldest), "oldest");
+        assert_eq!(format!("{}", SortOrder::Relevance), "relevance");
+
+        // search_page on empty database with negative limit clamps cleanly
+        let conn = crate::storage::open_in_memory().unwrap();
+        let page = search_page(&conn, "query", -10, None, SortOrder::Newest).unwrap();
+        assert!(page.hits.is_empty());
+        assert_eq!(page.next_cursor, None);
+    }
 }

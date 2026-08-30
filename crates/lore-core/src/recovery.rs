@@ -172,4 +172,35 @@ mod tests {
         let outcome2 = outcome.clone();
         assert_eq!(outcome, outcome2);
     }
+
+    #[test]
+    fn integrity_ok_evaluates_header_length_and_corrupt_files() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Nonexistent path -> false
+        assert!(!integrity_ok(&dir.path().join("nonexistent.db")));
+
+        // Zero-byte file -> false (< 100 bytes)
+        let zero_byte = dir.path().join("zero.db");
+        std::fs::write(&zero_byte, b"").unwrap();
+        assert!(!integrity_ok(&zero_byte));
+
+        // 50-byte truncated file -> false (< 100 bytes)
+        let truncated = dir.path().join("trunc.db");
+        std::fs::write(&truncated, [0x42; 50]).unwrap();
+        assert!(!integrity_ok(&truncated));
+
+        // 120 bytes of non-sqlite garbage -> false (cannot open/integrity check fails)
+        let garbage = dir.path().join("garbage.db");
+        std::fs::write(&garbage, [0xFF; 120]).unwrap();
+        assert!(!integrity_ok(&garbage));
+
+        // Valid SQLite database -> true
+        let valid_db = dir.path().join("valid.db");
+        {
+            let conn = Connection::open(&valid_db).unwrap();
+            conn.execute("CREATE TABLE t (x INTEGER);", []).unwrap();
+        }
+        assert!(integrity_ok(&valid_db));
+    }
 }

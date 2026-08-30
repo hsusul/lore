@@ -471,4 +471,29 @@ mod tests {
             add_custom_root(&conn, &registry, "claude-code", extra.to_str().unwrap()).unwrap_err();
         assert!(matches!(err, SourceRootError::TooManyRoots));
     }
+
+    #[test]
+    fn normalize_selected_path_rejects_empty_relative_and_root_paths() {
+        assert!(matches!(
+            normalize_selected_path(""),
+            Err(SourceRootError::InvalidPath)
+        ));
+        assert!(matches!(
+            normalize_selected_path("relative/path"),
+            Err(SourceRootError::InvalidPath)
+        ));
+        assert!(matches!(
+            normalize_selected_path("/"),
+            Err(SourceRootError::FilesystemRoot)
+        ));
+
+        // Pointing to a file instead of a directory -> NotDirectory
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("file.txt");
+        std::fs::write(&file_path, b"content").unwrap();
+        assert!(matches!(
+            normalize_selected_path(file_path.to_str().unwrap()),
+            Err(SourceRootError::NotDirectory)
+        ));
+    }
 }
