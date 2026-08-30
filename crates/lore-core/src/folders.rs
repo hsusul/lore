@@ -489,4 +489,16 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn clean_name_multiline_and_truncation_limits() {
+        assert_eq!(clean_name(""), "New folder");
+        assert_eq!(clean_name("   \n\t  "), "New folder");
+        assert_eq!(clean_name("line1\nline2\r\nline3"), "line1 line2 line3");
+
+        let long_name = "a".repeat(150);
+        let cleaned = clean_name(&long_name);
+        assert_eq!(cleaned.chars().count(), 100);
+        assert_eq!(cleaned, "a".repeat(100));
+    }
 }

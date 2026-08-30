@@ -1144,4 +1144,28 @@ mod tests {
         );
         assert!(session2.title_is_synthetic);
     }
+
+    #[test]
+    fn claude_code_adapter_capabilities_and_ignored_events() {
+        let adapter = ClaudeCodeAdapter::new();
+        assert_eq!(adapter.id(), AgentId("claude-code"));
+        let meta = adapter.metadata();
+        assert_eq!(meta.display_name, "Claude Code");
+        assert_eq!(meta.format_id, "claude-code/jsonl");
+
+        let caps = adapter.capabilities();
+        assert!(caps.message_tree);
+        assert!(caps.tool_calls);
+        assert!(caps.file_events);
+
+        // queue-operation and last-prompt events are ignored without notes or error
+        let jsonl = concat!(
+            "{\"type\":\"queue-operation\",\"operation\":\"enqueue\"}\n",
+            "{\"type\":\"last-prompt\",\"prompt\":\"ignored\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_ignore\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n"
+        );
+        let session = adapter.parse_str(jsonl, "s_ignore");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 1);
+    }
 }

@@ -909,4 +909,35 @@ mod tests {
         assert!(identity_high.key.starts_with("rr:"));
         assert_eq!(identity_high.display_name, "repo");
     }
+
+    #[test]
+    fn relink_segment_nonexistent_and_local_identity_fallback() {
+        let conn = crate::storage::open_in_memory().unwrap();
+
+        // Relinking a nonexistent segment is a clean no-op
+        assert!(relink_segment_repository(&conn, "nonexistent_seg", "repo_1").is_ok());
+
+        // Local repo without remotes or root commits resolves to local fallback (l:)
+        let workdir = PathBuf::from("/local/standalone");
+        let facts_local = CapturedRepo {
+            common_dir: PathBuf::from("/local/standalone/.git"),
+            workdir: Some(workdir.clone()),
+            branch: Some("feature".to_string()),
+            head_commit: Some("commit1".to_string()),
+            detached: false,
+            is_dirty: Some(false),
+            changed_files: None,
+            ahead: None,
+            behind: None,
+            commit_subject: None,
+            remotes: Vec::new(),
+            root_commits: Vec::new(),
+            history_truncated: false,
+        };
+        let common_key = fnv1a_hex(facts_local.common_dir.to_string_lossy().as_bytes());
+        let identity_local = resolve_identity(&facts_local, &common_key, &workdir);
+        assert_eq!(identity_local.confidence, "high");
+        assert_eq!(identity_local.key, format!("gcd:{common_key}"));
+        assert_eq!(identity_local.display_name, "standalone");
+    }
 }
