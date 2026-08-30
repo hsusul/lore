@@ -1854,4 +1854,22 @@ mod tests {
         assert!(session.messages.is_empty());
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
     }
+
+    #[test]
+    fn codex_adapter_metadata_and_capabilities() {
+        let adapter = CodexAdapter;
+        assert_eq!(adapter.id(), AgentId("codex"));
+        let meta = adapter.metadata();
+        assert_eq!(meta.display_name, "Codex");
+        assert_eq!(meta.format_id, "codex/rollout-jsonl");
+        assert_eq!(meta.doc_link, "docs/agents/CODEX.md");
+
+        let caps = adapter.capabilities();
+        assert!(caps.messages);
+        assert!(caps.thinking);
+        assert!(caps.tool_calls);
+        assert!(caps.file_events);
+        assert!(caps.encrypted_regions);
+        assert!(!caps.message_tree);
+    }
 }

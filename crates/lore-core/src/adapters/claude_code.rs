@@ -1229,4 +1229,22 @@ mod tests {
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
         assert!(session.notes.is_empty());
     }
+
+    #[test]
+    fn claude_code_adapter_metadata_and_capabilities() {
+        let adapter = ClaudeCodeAdapter;
+        assert_eq!(adapter.id(), AgentId("claude-code"));
+        let meta = adapter.metadata();
+        assert_eq!(meta.display_name, "Claude Code");
+        assert_eq!(meta.format_id, "claude-code/jsonl");
+        assert_eq!(meta.doc_link, "docs/agents/CLAUDE_CODE.md");
+
+        let caps = adapter.capabilities();
+        assert!(caps.messages);
+        assert!(caps.thinking);
+        assert!(caps.tool_calls);
+        assert!(caps.file_events);
+        assert!(caps.git_context);
+        assert!(caps.message_tree);
+    }
 }

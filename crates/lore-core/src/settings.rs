@@ -147,4 +147,14 @@ mod tests {
         set(&conn, "counter", "3").unwrap();
         assert_eq!(get(&conn, "counter").unwrap().as_deref(), Some("3"));
     }
+
+    #[test]
+    fn set_bool_toggle_and_overwrite() {
+        let conn = db();
+        set_bool(&conn, "active", true).unwrap();
+        assert!(get_bool(&conn, "active", false).unwrap());
+
+        set_bool(&conn, "active", false).unwrap();
+        assert!(!get_bool(&conn, "active", true).unwrap());
+    }
 }
