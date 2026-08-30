@@ -218,4 +218,26 @@ mod tests {
         let io_err = RecoveryError::Io;
         assert_eq!(io_err.to_string(), "io error during recovery");
     }
+
+    #[test]
+    fn recover_archive_absent_and_healthy_outcomes() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive_dir = dir.path().join("archive");
+        let backup_dir = dir.path().join("backups");
+        std::fs::create_dir_all(&archive_dir).unwrap();
+        std::fs::create_dir_all(&backup_dir).unwrap();
+
+        // 1. lore.db does not exist -> Absent
+        let out1 = recover_archive(&archive_dir, &backup_dir).unwrap();
+        assert_eq!(out1, RecoveryOutcome::Absent);
+
+        // 2. lore.db exists and is intact -> Healthy
+        let db_path = archive_dir.join("lore.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute("CREATE TABLE t (id INT);", []).unwrap();
+        }
+        let out2 = recover_archive(&archive_dir, &backup_dir).unwrap();
+        assert_eq!(out2, RecoveryOutcome::Healthy);
+    }
 }

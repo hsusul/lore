@@ -232,4 +232,15 @@ mod tests {
             notify::event::ModifyKind::Data(notify::event::DataChange::Content)
         )));
     }
+
+    #[test]
+    fn session_watcher_empty_poll() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut watcher =
+            SessionWatcher::new(&[dir.path().to_path_buf()], Duration::from_millis(50)).unwrap();
+
+        let poll = watcher.poll();
+        assert!(poll.ready_paths.is_empty());
+        assert_eq!(poll.errors, 0);
+    }
 }

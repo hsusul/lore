@@ -820,4 +820,15 @@ mod tests {
         let new_j_clone = new_j.clone();
         assert_eq!(new_j, new_j_clone);
     }
+
+    #[test]
+    fn claim_and_queue_depth_on_empty_db() {
+        let conn = db();
+        assert_eq!(claim_next(&conn).unwrap(), None);
+
+        let depth = queue_depth(&conn).unwrap();
+        assert_eq!(depth.pending, 0);
+        assert_eq!(depth.running, 0);
+        assert_eq!(depth.active(), 0);
+    }
 }
