@@ -203,4 +203,19 @@ mod tests {
         }
         assert!(integrity_ok(&valid_db));
     }
+
+    #[test]
+    fn recovery_outcomes_and_error_formatting() {
+        assert_eq!(RecoveryOutcome::Absent.clone(), RecoveryOutcome::Absent);
+        assert_eq!(RecoveryOutcome::Healthy.clone(), RecoveryOutcome::Healthy);
+
+        let restored = RecoveryOutcome::Restored {
+            quarantine_path: PathBuf::from("/quar"),
+            backup_path: PathBuf::from("/bak"),
+        };
+        assert_eq!(restored.clone(), restored);
+
+        let io_err = RecoveryError::Io;
+        assert_eq!(io_err.to_string(), "io error during recovery");
+    }
 }

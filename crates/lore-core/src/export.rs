@@ -462,4 +462,17 @@ mod tests {
         assert_eq!(markdown_fence("contains ``` backticks"), "````");
         assert_eq!(markdown_fence("contains ```` four backticks"), "`````");
     }
+
+    #[test]
+    fn export_session_markdown_nonexistent_returns_none() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        assert_eq!(
+            export_session_markdown(&conn, "nonexistent_session", false).unwrap(),
+            None
+        );
+        assert_eq!(
+            export_session_markdown(&conn, "nonexistent_session", true).unwrap(),
+            None
+        );
+    }
 }

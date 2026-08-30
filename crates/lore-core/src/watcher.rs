@@ -212,4 +212,24 @@ mod tests {
         );
         assert_eq!(debouncer.pending_len(), 0);
     }
+
+    #[test]
+    fn is_jsonl_and_should_ingest_predicates() {
+        assert!(is_jsonl(Path::new("session.jsonl")));
+        assert!(is_jsonl(Path::new("/deep/path/to/session.jsonl")));
+        assert!(!is_jsonl(Path::new("session.json")));
+        assert!(!is_jsonl(Path::new("session.txt")));
+        assert!(!is_jsonl(Path::new("session")));
+        assert!(!is_jsonl(Path::new("")));
+
+        assert!(!should_ingest(&EventKind::Access(
+            notify::event::AccessKind::Read
+        )));
+        assert!(should_ingest(&EventKind::Create(
+            notify::event::CreateKind::File
+        )));
+        assert!(should_ingest(&EventKind::Modify(
+            notify::event::ModifyKind::Data(notify::event::DataChange::Content)
+        )));
+    }
 }
