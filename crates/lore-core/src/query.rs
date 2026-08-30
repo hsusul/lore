@@ -1460,4 +1460,11 @@ mod tests {
         assert_eq!(totals.total_cache_tokens, 0);
         assert!((totals.est_cost_usd - 0.0).abs() < f64::EPSILON);
     }
+
+    #[test]
+    fn list_repository_sessions_nonexistent_returns_empty() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let sessions = list_repository_sessions(&conn, "nonexistent_repo", 10).unwrap();
+        assert!(sessions.is_empty());
+    }
 }

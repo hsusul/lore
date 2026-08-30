@@ -1627,4 +1627,28 @@ mod tests {
         set_fail_scans_for_test(false);
         assert!(scan(text).is_ok());
     }
+
+    #[test]
+    fn redact_boundary_and_multiple_findings() {
+        let text = "SECRET_START normal text SECRET_END";
+        let findings = vec![
+            Finding {
+                rule: "test-rule-1",
+                start: 0,
+                end: 12,
+                severity: Severity::High,
+            },
+            Finding {
+                rule: "test-rule-2",
+                start: 25,
+                end: 35,
+                severity: Severity::Critical,
+            },
+        ];
+        let redacted = redact(text, &findings);
+        assert_eq!(
+            redacted,
+            "«redacted:test-rule-1» normal text «redacted:test-rule-2»"
+        );
+    }
 }

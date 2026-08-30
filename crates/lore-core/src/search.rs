@@ -1050,4 +1050,19 @@ mod tests {
         // fts_match with empty terms slice returns None
         assert_eq!(fts_match(&[]), None);
     }
+
+    #[test]
+    fn keyset_none_returns_empty() {
+        let (sql_rel, params_rel) = keyset(SortOrder::Relevance, &None);
+        assert!(sql_rel.is_empty());
+        assert!(params_rel.is_empty());
+
+        let (sql_new, params_new) = keyset(SortOrder::Newest, &None);
+        assert!(sql_new.is_empty());
+        assert!(params_new.is_empty());
+
+        let (sql_old, params_old) = keyset(SortOrder::Oldest, &None);
+        assert!(sql_old.is_empty());
+        assert!(params_old.is_empty());
+    }
 }
