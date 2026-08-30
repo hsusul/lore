@@ -1792,4 +1792,18 @@ mod tests {
         assert!(ws_parsed.messages.is_empty());
         assert_eq!(ws_parsed.status, crate::model::ParseStatus::Ok);
     }
+
+    #[test]
+    fn codex_adapter_effective_roots_custom_vs_empty() {
+        let adapter = CodexAdapter::new();
+        let custom_dir = PathBuf::from("/custom/codex/path");
+        let custom_roots = DiscoveryRoots::new(vec![custom_dir.clone()]);
+        let roots = adapter.roots(&custom_roots);
+        assert_eq!(roots, vec![custom_dir]);
+
+        let empty_roots = DiscoveryRoots::new(vec![]);
+        let default_roots = adapter.roots(&empty_roots);
+        // Default roots derive from CODEX_HOME or HOME or empty
+        assert!(default_roots.len() <= 2);
+    }
 }

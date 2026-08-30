@@ -1043,5 +1043,11 @@ mod tests {
         let page = search_page(&conn, "query", -10, None, SortOrder::Newest).unwrap();
         assert!(page.hits.is_empty());
         assert_eq!(page.next_cursor, None);
+
+        // reproject_for_test on nonexistent session is a clean no-op
+        assert!(reproject_for_test(&conn, "nonexistent_session").is_ok());
+
+        // fts_match with empty terms slice returns None
+        assert_eq!(fts_match(&[]), None);
     }
 }

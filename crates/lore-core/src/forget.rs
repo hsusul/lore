@@ -497,4 +497,17 @@ mod tests {
         };
         assert_eq!(everything.clone(), everything);
     }
+
+    #[test]
+    fn purge_recoverable_copies_on_nonexistent_and_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let nonexistent = dir.path().join("does_not_exist");
+        let removed1 = purge_recoverable_copies(&nonexistent).unwrap();
+        assert!(removed1.is_empty());
+
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let removed2 = purge_recoverable_copies(&empty).unwrap();
+        assert!(removed2.is_empty());
+    }
 }
