@@ -1841,4 +1841,17 @@ mod tests {
         assert_eq!(session.segments[0].model.as_deref(), Some("o3-mini"));
         assert_eq!(session.segments[0].cwd.as_deref(), Some("/repo/root"));
     }
+
+    #[test]
+    fn codex_empty_lines_and_whitespace_skips() {
+        let adapter = CodexAdapter;
+        let jsonl = "\n\n  \n\t\n{\"type\":\"session_meta\",\"timestamp\":\"2026-08-10T10:00:00.000Z\",\"payload\":{\"id\":\"sess_empty_lines\"}}\n\n\n";
+        let session = adapter.parse_str(jsonl, "fallback_id");
+        assert_eq!(
+            session.native_session_id.as_deref(),
+            Some("sess_empty_lines")
+        );
+        assert!(session.messages.is_empty());
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+    }
 }

@@ -1215,4 +1215,18 @@ mod tests {
         assert!(!session.title_is_synthetic);
         assert_eq!(session.messages.len(), 1);
     }
+
+    #[test]
+    fn claude_code_internal_bookkeeping_events_skipped() {
+        let adapter = ClaudeCodeAdapter;
+        let jsonl = concat!(
+            "{\"type\":\"queue-operation\",\"operation\":\"enqueue\"}\n",
+            "{\"type\":\"last-prompt\",\"prompt\":\"ignored\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_bookkeeping\",\"message\":{\"role\":\"user\",\"content\":\"real message\"}}\n"
+        );
+        let session = adapter.parse_str(jsonl, "s_bookkeeping");
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert!(session.notes.is_empty());
+    }
 }

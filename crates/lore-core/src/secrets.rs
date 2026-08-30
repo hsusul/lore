@@ -1651,4 +1651,16 @@ mod tests {
             "«redacted:test-rule-1» normal text «redacted:test-rule-2»"
         );
     }
+
+    #[test]
+    fn severity_ordering_and_strings() {
+        assert_eq!(Severity::Low.as_str(), "low");
+        assert_eq!(Severity::Medium.as_str(), "medium");
+        assert_eq!(Severity::High.as_str(), "high");
+        assert_eq!(Severity::Critical.as_str(), "critical");
+
+        assert!(Severity::Low < Severity::Medium);
+        assert!(Severity::Medium < Severity::High);
+        assert!(Severity::High < Severity::Critical);
+    }
 }
