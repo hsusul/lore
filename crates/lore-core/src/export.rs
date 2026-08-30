@@ -408,4 +408,21 @@ mod tests {
         assert!(md.contains("\"custom\""));
         assert!(md.contains("\"value\""));
     }
+
+    #[test]
+    fn export_session_markdown_with_file_events_and_custom_change_kinds() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e_files\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"update config\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e_files\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"Edit\",\"input\":{\"file_path\":\"config.json\"}}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"sessionId\":\"e_files\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call_1\",\"content\":\"updated\"}]}}\n"
+        );
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+
+        assert!(md.contains("### Files"));
+        assert!(md.contains("- `config.json` (edit)"));
+    }
 }

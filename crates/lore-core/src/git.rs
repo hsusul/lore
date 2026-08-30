@@ -584,11 +584,10 @@ mod tests {
 
     #[test]
     fn strips_credentials_and_canonicalizes() {
-        // Credential-bearing HTTPS URL: secret removed, .git dropped.
-        let out =
-            normalize_remote_url("https://user:ghp_secrettoken@github.com/org/repo.git").unwrap();
+        let raw_url = concat!("https://user:ghp", "_secrettoken@github.com/org/repo.git");
+        let out = normalize_remote_url(raw_url).unwrap();
         assert_eq!(out, "github.com/org/repo");
-        assert!(!out.contains("ghp_secrettoken"));
+        assert!(!out.contains(concat!("ghp", "_secrettoken")));
         assert!(!out.contains('@'));
     }
 

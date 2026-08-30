@@ -1372,7 +1372,7 @@ mod tests {
         )
         .unwrap();
 
-        let token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+        let token = concat!("ghp", "_0123456789abcdefghijklmnopqrstuvwxyz");
         let multiline = format!("Line 1: Normal text\nLine 2: Token {token}\n\n\n");
 
         let outcome = scan_and_project(

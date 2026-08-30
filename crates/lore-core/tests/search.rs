@@ -886,3 +886,33 @@ fn title_matches_are_ranked_higher_than_body_matches() {
     assert_eq!(hits[1].session_id, sid1);
     assert_eq!(hits[1].field, "text");
 }
+
+#[test]
+fn has_patch_filter_scopes_search_results() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+
+    // Session 1 has patch
+    let patch_session = concat!(
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_patch\",\"cwd\":\"/p\",\"model_provider\":\"openai\"}}\n",
+        "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"refactor auth\"}}\n",
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"patch_apply_end\",\"call_id\":\"c1\",\"changes\":{\"auth.rs\":{\"type\":\"modify\",\"unified_diff\":\"+added auth logic\"}}}}\n"
+    );
+    let parsed1 = CodexAdapter::new().parse_str(patch_session, "s_patch");
+    let sid1 = persist_session(&conn, "codex", "Codex", &parsed1, &blobs).unwrap();
+
+    // Session 2 has no patch
+    let no_patch_session = concat!(
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_nopatch\",\"cwd\":\"/p\",\"model_provider\":\"openai\"}}\n",
+        "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"refactor logging\"}}\n"
+    );
+    let parsed2 = CodexAdapter::new().parse_str(no_patch_session, "s_nopatch");
+    let _sid2 = persist_session(&conn, "codex", "Codex", &parsed2, &blobs).unwrap();
+
+    let hits_all = search(&conn, "refactor", 20).unwrap();
+    assert_eq!(hits_all.len(), 2);
+
+    let hits_patch = search(&conn, "refactor has:patch", 20).unwrap();
+    assert_eq!(hits_patch.len(), 1);
+    assert_eq!(hits_patch[0].session_id, sid1);
+}

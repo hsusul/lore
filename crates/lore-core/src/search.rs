@@ -123,6 +123,7 @@ struct ParsedQuery {
     before: Option<i64>,
     after: Option<i64>,
     has_error: bool,
+    has_patch: bool,
     /// Git-dimension filters, resolved against `search_git` (migration 0011).
     git: GitFilters,
 }
@@ -253,6 +254,12 @@ pub fn search_page(
         sql.push_str(
             " AND EXISTS (SELECT 1 FROM tool_call tc
                           WHERE tc.session_id = sd.session_id AND tc.is_error = 1)",
+        );
+    }
+    if query.has_patch {
+        sql.push_str(
+            " AND EXISTS (SELECT 1 FROM file_event fe
+                          WHERE fe.session_id = sd.session_id AND fe.patch_blob_id IS NOT NULL)",
         );
     }
     if let Some(path) = query.path {
@@ -526,32 +533,15 @@ fn parse_query(raw: &str) -> ParsedQuery {
     let mut before = None;
     let mut after = None;
     let mut has_error = false;
+    let mut has_patch = false;
     let mut git = GitFilters::default();
     for token in bounded.split_whitespace() {
         if let Some(value) = token.strip_prefix("agent:") {
-            let clean: String = value
-                .chars()
-                .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
-                .collect();
-            if !clean.is_empty() {
-                agent = Some(clean);
-            }
+            agent = clean_filter(value);
         } else if let Some(value) = token.strip_prefix("path:") {
-            let clean: String = value
-                .chars()
-                .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
-                .collect();
-            if !clean.is_empty() {
-                path = Some(clean);
-            }
+            path = clean_filter(value);
         } else if let Some(value) = token.strip_prefix("tool:") {
-            let clean: String = value
-                .chars()
-                .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
-                .collect();
-            if !clean.is_empty() {
-                tool = Some(clean);
-            }
+            tool = clean_filter(value);
         } else if let Some(value) = token.strip_prefix("model:") {
             model = clean_filter(value);
         } else if let Some(value) = token.strip_prefix("before:") {
@@ -575,6 +565,8 @@ fn parse_query(raw: &str) -> ParsedQuery {
                 clean_filter(value).filter(|v| GIT_SOURCE_CLASSES.contains(&v.as_str()));
         } else if token == "has:error" {
             has_error = true;
+        } else if token == "has:patch" {
+            has_patch = true;
         } else if terms.len() < MAX_TERMS {
             terms.push(token.to_string());
         }
@@ -588,6 +580,7 @@ fn parse_query(raw: &str) -> ParsedQuery {
         before,
         after,
         has_error,
+        has_patch,
         git,
     }
 }
@@ -969,11 +962,64 @@ mod tests {
 
     #[test]
     fn parse_query_with_surrounding_whitespace_and_mixed_filters() {
-        let q = parse_query("   search_term   agent:claude-code   path:src/main.rs   model:claude-3-5-sonnet   has:error   ");
+        let q = parse_query("   search_term   agent:claude-code   path:src/main.rs   model:claude-3-5-sonnet   has:error   has:patch   repo:lore   ");
         assert_eq!(q.terms, vec!["search_term"]);
         assert_eq!(q.agent.as_deref(), Some("claude-code"));
         assert_eq!(q.path.as_deref(), Some("src/main.rs"));
         assert_eq!(q.model.as_deref(), Some("claude-3-5-sonnet"));
         assert!(q.has_error);
+        assert!(q.has_patch);
+        assert_eq!(q.git.repo.as_deref(), Some("lore"));
+    }
+
+    #[test]
+    fn parse_query_handles_all_filter_prefixes_and_sanitizes_values() {
+        let q = parse_query(
+            "keyword agent:codex path:src/auth/ tool:Bash model:gpt-4o repo:lore-repo worktree:feat branch:main commit:1a2b3c git-source:agent_recorded has:error has:patch before:2026-08-01 after:2026-07-01",
+        );
+        assert_eq!(q.terms, vec!["keyword"]);
+        assert_eq!(q.agent.as_deref(), Some("codex"));
+        assert_eq!(q.path.as_deref(), Some("src/auth/"));
+        assert_eq!(q.tool.as_deref(), Some("Bash"));
+        assert_eq!(q.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(q.git.repo.as_deref(), Some("lore-repo"));
+        assert_eq!(q.git.worktree.as_deref(), Some("feat"));
+        assert_eq!(q.git.branch.as_deref(), Some("main"));
+        assert_eq!(q.git.commit.as_deref(), Some("1a2b3c"));
+        assert_eq!(q.git.source_class.as_deref(), Some("agent_recorded"));
+        assert!(q.has_error);
+        assert!(q.has_patch);
+        assert_eq!(
+            q.before,
+            crate::adapters::common::epoch_ms("2026-08-01T00:00:00Z")
+        );
+        assert_eq!(
+            q.after,
+            crate::adapters::common::epoch_ms("2026-07-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn fts_match_sanitizes_quotes_wildcards_and_parentheses() {
+        // Individual special characters
+        assert_eq!(fts_match(&["*".to_string()]), Some("\"*\"".to_string()));
+        assert_eq!(fts_match(&["\"".to_string()]), Some("\"\"\"\"".to_string()));
+        assert_eq!(fts_match(&["(".to_string()]), Some("\"(\"".to_string()));
+        assert_eq!(fts_match(&[")".to_string()]), Some("\")\"".to_string()));
+
+        // Complex expressions with unbalanced quotes, wildcards, and parentheses
+        let terms = vec![
+            "fn*()".to_string(),
+            "((nested))".to_string(),
+            "unmatched(\"".to_string(),
+            "wild*card".to_string(),
+            "\"exact\"\"quote\"".to_string(),
+            ")OR(".to_string(),
+        ];
+        let expr = fts_match(&terms).unwrap();
+        assert_eq!(
+            expr,
+            "\"fn*()\" \"((nested))\" \"unmatched(\"\"\" \"wild*card\" \"\"\"exact\"\"\"\"quote\"\"\" \")OR(\""
+        );
     }
 }
