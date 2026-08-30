@@ -346,4 +346,29 @@ mod tests {
         let bytes_b = std::fs::read(pb.claude_root.join("project-00").join(&name)).unwrap();
         assert_eq!(bytes_a, bytes_b, "same seed must produce identical bytes");
     }
+
+    #[test]
+    fn synthetic_profile_spec_defaults_and_zero_extra_turns() {
+        let spec_default = ProfileSpec::default();
+        assert_eq!(spec_default.claude_sessions, 8);
+        assert_eq!(spec_default.codex_sessions, 8);
+        assert_eq!(spec_default.max_extra_turns, 4);
+
+        let spec_zero = ProfileSpec {
+            claude_sessions: 2,
+            codex_sessions: 2,
+            max_extra_turns: 0,
+            seed: 123,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let profile = generate(dir.path(), &spec_zero).unwrap();
+        assert_eq!(profile.claude_files, 2);
+        assert_eq!(profile.codex_files, 2);
+        // Each Claude file has 2 messages, each Codex file has 3 messages -> 2*2 + 2*3 = 10
+        assert_eq!(profile.message_count, 10);
+
+        let config = profile.discovery_config();
+        assert_eq!(config.roots_for("claude-code").roots.len(), 1);
+        assert_eq!(config.roots_for("codex").roots.len(), 1);
+    }
 }

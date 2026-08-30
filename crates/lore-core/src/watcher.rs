@@ -185,4 +185,31 @@ mod tests {
         );
         assert!(watcher.is_ok());
     }
+
+    #[test]
+    fn watch_poll_defaults_and_debouncer_clock_skew() {
+        let poll = WatchPoll::default();
+        assert!(poll.ready_paths.is_empty());
+        assert_eq!(poll.errors, 0);
+        assert_eq!(poll.clone(), poll);
+
+        // Test clock jumping backward (now < observed_at)
+        let start = Instant::now();
+        let future = start + Duration::from_secs(10);
+        let path = PathBuf::from("future.jsonl");
+
+        let mut debouncer = PathDebouncer::new(Duration::from_millis(100));
+        debouncer.record(path.clone(), future);
+
+        // start < future -> saturating_duration_since returns 0 -> not ready
+        assert!(debouncer.drain_ready(start).is_empty());
+        assert_eq!(debouncer.pending_len(), 1);
+
+        // future + 150ms -> ready
+        assert_eq!(
+            debouncer.drain_ready(future + Duration::from_millis(150)),
+            vec![path]
+        );
+        assert_eq!(debouncer.pending_len(), 0);
+    }
 }

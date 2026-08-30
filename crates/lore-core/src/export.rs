@@ -425,4 +425,41 @@ mod tests {
         assert!(md.contains("### Files"));
         assert!(md.contains("- `config.json` (edit)"));
     }
+
+    #[test]
+    fn intern_rule_and_markdown_fence_behavior() {
+        assert_eq!(intern_rule("private-key-block"), "private-key-block");
+        assert_eq!(intern_rule("aws-access-key-id"), "aws-access-key-id");
+        assert_eq!(intern_rule("gcp-api-key"), "gcp-api-key");
+        assert_eq!(intern_rule("github-token"), "github-token");
+        assert_eq!(
+            intern_rule("github-fine-grained-pat"),
+            "github-fine-grained-pat"
+        );
+        assert_eq!(intern_rule("gitlab-pat"), "gitlab-pat");
+        assert_eq!(intern_rule("slack-token"), "slack-token");
+        assert_eq!(intern_rule("stripe-key"), "stripe-key");
+        assert_eq!(intern_rule("anthropic-key"), "anthropic-key");
+        assert_eq!(intern_rule("openai-key"), "openai-key");
+        assert_eq!(intern_rule("huggingface-token"), "huggingface-token");
+        assert_eq!(intern_rule("google-oauth-secret"), "google-oauth-secret");
+        assert_eq!(intern_rule("npm-token"), "npm-token");
+        assert_eq!(intern_rule("jwt"), "jwt");
+        assert_eq!(intern_rule("connection-string"), "connection-string");
+        assert_eq!(intern_rule("slack-webhook"), "slack-webhook");
+        assert_eq!(intern_rule("discord-webhook"), "discord-webhook");
+        assert_eq!(intern_rule("high-entropy"), "high-entropy");
+        assert_eq!(intern_rule("unknown-rule"), "secret");
+
+        assert_eq!(parse_severity("critical"), secrets::Severity::Critical);
+        assert_eq!(parse_severity("high"), secrets::Severity::High);
+        assert_eq!(parse_severity("medium"), secrets::Severity::Medium);
+        assert_eq!(parse_severity("low"), secrets::Severity::Low);
+        assert_eq!(parse_severity("other"), secrets::Severity::Low);
+
+        // Markdown fence calculation with nested backticks
+        assert_eq!(markdown_fence("simple text"), "```");
+        assert_eq!(markdown_fence("contains ``` backticks"), "````");
+        assert_eq!(markdown_fence("contains ```` four backticks"), "`````");
+    }
 }
