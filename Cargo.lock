@@ -2845,6 +2845,7 @@ name = "lore-core"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "dirs",
  "gix",
  "lore-ipc",
  "notify",

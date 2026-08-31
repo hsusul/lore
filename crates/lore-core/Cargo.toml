@@ -24,6 +24,11 @@ rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 # would let colliding content inherit another blob's "clean" scan. No network,
 # no default-off features needed.
 blake3 = "1"
+# Platform data-directory lookup. Tauri 2 defines `app_data_dir()` as
+# `dirs::data_dir().join(identifier)`, so `paths` calls the same function rather
+# than reimplementing the per-platform rules — reimplementation would drift.
+# Pure local filesystem/env lookup; no network, no default features to trim.
+dirs = "6"
 thiserror = "1"
 serde_json = "1"
 # RFC3339 timestamp parsing only (no networking/std feature creep).

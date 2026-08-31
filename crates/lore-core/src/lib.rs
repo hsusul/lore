@@ -27,6 +27,7 @@ pub mod git;
 pub mod ingest;
 pub mod jobs;
 pub mod model;
+pub mod paths;
 pub mod pipeline;
 pub mod query;
 pub mod recovery;

@@ -816,9 +816,14 @@ fn app_config(
 /// converting debounced source changes into durable coalesced jobs and draining
 /// them in bounded batches — all off the UI thread.
 fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
-    let data_dir = app.path().app_data_dir()?;
+    // Resolved by lore-core, not by `app.path().app_data_dir()`, so a CLI over
+    // the same core opens the same archive. The default is byte-identical to
+    // Tauri's (`dirs::data_dir()` joined with the bundle identifier — asserted
+    // by `tauri_conf_identifier_matches_core_constant` below); an explicit
+    // `LORE_ARCHIVE_DIR` now moves both surfaces together rather than only one.
+    let data_dir = lore_core::paths::archive_dir(None)?;
     std::fs::create_dir_all(&data_dir)?;
-    let db_path = data_dir.join("lore.db");
+    let db_path = data_dir.join(lore_core::paths::ARCHIVE_DB_FILENAME);
     let conn = lore_core::storage::open(&db_path)?;
     let blobs = BlobStore::open(data_dir.join("blobs"))?;
     let registry = AdapterRegistry::v0();
@@ -943,6 +948,22 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The archive location is `dirs::data_dir()/<identifier>`, and `lore-core`
+    /// holds that identifier as a constant so a CLI can resolve the same path
+    /// without Tauri. Editing `identifier` in `tauri.conf.json` alone would move
+    /// the app's archive and leave every other surface pointed at the old one —
+    /// a silently empty archive rather than an error. This pins them together.
+    #[test]
+    fn tauri_conf_identifier_matches_core_constant() {
+        let conf = include_str!("../tauri.conf.json");
+        let needle = format!("\"identifier\": \"{}\"", lore_core::paths::APP_IDENTIFIER);
+        assert!(
+            conf.contains(&needle),
+            "tauri.conf.json identifier must equal lore_core::paths::APP_IDENTIFIER ({})",
+            lore_core::paths::APP_IDENTIFIER
+        );
+    }
 
     #[test]
     fn test_is_invalid_folder_name() {
