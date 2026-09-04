@@ -28,11 +28,15 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy (deny warnings)
-        run: cargo clippy -p lore-core -p lore-ipc --all-targets --all-features -- -D warnings
+        run: cargo clippy -p lore-core -p lore-ipc -p lorectl --all-targets --all-features -- -D warnings
       - name: Test (locked)
-        run: cargo test --locked -p lore-core -p lore-ipc --all-targets
+        run: cargo test --locked -p lore-core -p lore-ipc -p lorectl --all-targets
       - name: Network-boundary guard (call-site)
-        run: cargo test -p lore-core --test no_network_in_archive
+        # One per network-incapable package: each crate owns its own scanner, so
+        # a change made for one cannot weaken the guarantee for the other.
+        run: |
+          cargo test -p lore-core --test no_network_in_archive
+          cargo test -p lorectl --test no_network_in_lorectl
       - name: Egress guard (dependency graph + runtime network-deny)
         # REQUIRE_RUNTIME makes an unavailable sandbox wrapper a failure rather
         # than a silent skip: a green job must mean the runtime check actually

@@ -1,0 +1,29 @@
+[package]
+name = "lorectl"
+description = "Command-line surface over the Lore archive: a local ledger of coding-agent work."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "lorectl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The archive itself. `lorectl` adds a second surface over the same core the
+# desktop shell uses; it must never grow its own copy of archive logic.
+lore-core = { path = "../lore-core" }
+# Argument parsing. `lexopt` is a zero-dependency pull parser, deliberately
+# chosen over `clap`: this binary is subject to the same no-network guarantee as
+# the archive, and the egress dependency audit (scripts/egress-check.sh) is only
+# trivially auditable while the tree stays this small. The cost is a hand-rolled
+# `--help`, which is paid in `help.rs`.
+lexopt = "0.3"
+thiserror = "1"
