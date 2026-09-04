@@ -660,9 +660,13 @@ fn backup_now(state: State<'_, AppState>) -> Result<(), String> {
     let keep = lore_core::backup::read_schedule(&conn)
         .map(|s| s.keep)
         .unwrap_or(lore_core::backup::DEFAULT_BACKUP_RETENTION);
-    lore_core::backup::create_backup(&conn, &state.archive_dir.join("backups"), keep)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    lore_core::backup::create_backup(
+        &conn,
+        &state.archive_dir.join(lore_core::paths::BACKUPS_DIRNAME),
+        keep,
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 fn replace_source_configuration(state: &AppState, config: DiscoveryConfig) -> Result<(), String> {
@@ -825,7 +829,7 @@ fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&data_dir)?;
     let db_path = data_dir.join(lore_core::paths::ARCHIVE_DB_FILENAME);
     let conn = lore_core::storage::open(&db_path)?;
-    let blobs = BlobStore::open(data_dir.join("blobs"))?;
+    let blobs = BlobStore::open(data_dir.join(lore_core::paths::BLOBS_DIRNAME))?;
     let registry = AdapterRegistry::v0();
     let config = app_config(&conn, &registry)?;
 
@@ -834,9 +838,11 @@ fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     // block the app from starting.
     if let Ok(elapsed) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         let now_ms = i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX);
-        if let Err(e) =
-            lore_core::backup::run_scheduled_backup(&conn, &data_dir.join("backups"), now_ms)
-        {
+        if let Err(e) = lore_core::backup::run_scheduled_backup(
+            &conn,
+            &data_dir.join(lore_core::paths::BACKUPS_DIRNAME),
+            now_ms,
+        ) {
             eprintln!("warning: scheduled backup skipped: {e}");
         }
     }

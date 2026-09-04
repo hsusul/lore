@@ -37,6 +37,14 @@ pub const APP_IDENTIFIER: &str = "dev.lore.app";
 /// Filename of the archive database inside the archive directory.
 pub const ARCHIVE_DB_FILENAME: &str = "lore.db";
 
+/// Directory holding content-addressed blobs, inside the archive directory.
+/// Named here rather than at each call site for the reason this module exists:
+/// a second surface computing it independently is how the two drift apart.
+pub const BLOBS_DIRNAME: &str = "blobs";
+
+/// Directory holding Lore-owned local backups, inside the archive directory.
+pub const BACKUPS_DIRNAME: &str = "backups";
+
 /// Environment variable that overrides the archive directory.
 pub const ARCHIVE_DIR_ENV: &str = "LORE_ARCHIVE_DIR";
 
@@ -74,6 +82,11 @@ pub fn archive_dir(explicit: Option<&Path>) -> Result<PathBuf> {
 /// [`ARCHIVE_DB_FILENAME`].
 pub fn archive_db_path(explicit: Option<&Path>) -> Result<PathBuf> {
     Ok(archive_dir(explicit)?.join(ARCHIVE_DB_FILENAME))
+}
+
+/// Directory holding content-addressed blobs.
+pub fn blobs_dir(explicit: Option<&Path>) -> Result<PathBuf> {
+    Ok(archive_dir(explicit)?.join(BLOBS_DIRNAME))
 }
 
 /// The pure resolution rule, with the environment and the platform lookup
@@ -202,12 +215,76 @@ mod tests {
         assert_eq!(db, dir.join(ARCHIVE_DB_FILENAME));
     }
 
+    proptest::proptest! {
+        /// Resolution is total: no input panics, and the absolute/relative rule
+        /// holds for arbitrary bytes — including paths that are not valid UTF-8,
+        /// which a user's `LORE_ARCHIVE_DIR` can legally be.
+        #[test]
+        fn resolve_never_panics_and_honours_absoluteness(raw in ".{0,120}") {
+            use std::os::unix::ffi::OsStrExt;
+            let bytes = raw.as_bytes();
+            let value = OsStr::from_bytes(bytes);
+
+            let explicit = resolve(Some(Path::new(value)), None, data());
+            if Path::new(value).is_absolute() {
+                proptest::prop_assert_eq!(explicit.unwrap(), PathBuf::from(value));
+            } else {
+                proptest::prop_assert_eq!(explicit.unwrap_err(), PathError::RelativeOverride);
+            }
+
+            let from_env = resolve(None, Some(value), data());
+            if value.is_empty() {
+                proptest::prop_assert_eq!(
+                    from_env.unwrap(),
+                    PathBuf::from("/data").join(APP_IDENTIFIER)
+                );
+            } else if Path::new(value).is_absolute() {
+                proptest::prop_assert_eq!(from_env.unwrap(), PathBuf::from(value));
+            } else {
+                proptest::prop_assert_eq!(from_env.unwrap_err(), PathError::RelativeEnvOverride);
+            }
+        }
+    }
+
     #[test]
     fn the_database_filename_and_identifier_are_unchanged() {
         // Guards against an accidental rename: existing archives live at these
         // exact names and are never migrated.
         assert_eq!(ARCHIVE_DB_FILENAME, "lore.db");
         assert_eq!(APP_IDENTIFIER, "dev.lore.app");
+    }
+
+    /// Guards the *semantics* of the platform default rather than the version of
+    /// `dirs` that provides them. The expected path is spelled out by hand from
+    /// the platform's own convention, so a future `dirs` release that changed
+    /// where user data lives would fail here instead of silently relocating
+    /// every user's archive.
+    #[test]
+    fn the_platform_default_matches_the_platform_convention() {
+        if std::env::var_os(ARCHIVE_DIR_ENV).is_some() {
+            return; // an override is in effect; covered by the pure tests above
+        }
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return; // no HOME: covered by `missing_data_dir_is_an_error_not_a_panic`
+        };
+
+        #[cfg(target_os = "macos")]
+        let expected = home
+            .join("Library/Application Support")
+            .join(APP_IDENTIFIER);
+
+        #[cfg(target_os = "linux")]
+        let expected = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join(".local/share"))
+            .join(APP_IDENTIFIER);
+
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        assert_eq!(archive_dir(None).unwrap(), expected);
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let _ = home;
     }
 
     #[test]

@@ -436,7 +436,20 @@ impl<'a> Pipeline<'a> {
 fn ingest_failure_kind(error: &StorageError) -> &'static str {
     match error {
         StorageError::Io => "source_io",
-        StorageError::Migration(_) => "storage_migration",
+        // The archive-compatibility variants are produced when an archive is
+        // opened or migrated (`open`, `open_read_only`, `migrations::run`), not
+        // during ingest, which always holds a writable, already-migrated
+        // connection. They are listed explicitly rather than swept into a
+        // wildcard so a genuinely new variant still fails this match at compile
+        // time. All describe migration-ledger state,
+        // so they share `storage_migration` rather than adding vocabulary the
+        // job table has never emitted.
+        StorageError::Migration(_)
+        | StorageError::ArchiveMissing
+        | StorageError::NotAnArchive
+        | StorageError::SchemaTooNew { .. }
+        | StorageError::SchemaNeedsUpgrade { .. }
+        | StorageError::SchemaInconsistent(_) => "storage_migration",
         StorageError::Sqlite(error) => match error.sqlite_error_code() {
             Some(ErrorCode::ConstraintViolation) => "sqlite_constraint",
             Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => "sqlite_busy",
