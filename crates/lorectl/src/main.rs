@@ -6,16 +6,17 @@
 //! capability (`tests/no_network_in_lorectl.rs`, `scripts/egress-check.sh`) and
 //! read-only on agent files.
 //!
-//! This build resolves the archive location, parses the full command surface,
-//! and maps failures onto the exit-code taxonomy in [`exit`]. It does not yet
-//! open the archive: opening it for writing needs an advisory scan lock, and
-//! opening it for reading needs the query wrappers, both of which are their own
-//! slices. Recognizing commands without implementing them is deliberate — the
-//! parser and the exit codes are the contract that later slices fill in.
+//! This build implements `scan` — the CLI's only writer, and the first surface
+//! other than the desktop app that writes to the archive at all. It runs
+//! synchronously under an advisory writer lock ([`lore_core::lock`]) and stamps
+//! when it finished. The remaining commands are recognized but not implemented;
+//! the parser and the exit codes are the contract that later slices fill in, and
+//! `--help` marks which is which so the listing cannot flatter the binary.
 
 mod cli;
 mod exit;
 mod help;
+mod scan;
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -51,6 +52,7 @@ fn run() -> Result<u8, CliError> {
             eprint!("{}", help::usage());
             Ok(exit::USAGE)
         }
+        Action::Run(cli::Command::Scan) => scan::run(&invocation),
         Action::Run(command) => {
             // Resolve the archive location before refusing the command, so a
             // bad `--archive` is reported as the bad `--archive` it is rather
@@ -83,6 +85,9 @@ mod tests {
         match invocation.action {
             Action::Help | Action::Version => Ok(exit::OK),
             Action::NoCommand => Ok(exit::USAGE),
+            // Mirrors `run`'s ordering for the commands that do no work. `scan`
+            // is exercised end to end as a real process in `tests/scan.rs`,
+            // because its whole contract is about processes and locks.
             Action::Run(command) => {
                 invocation.archive_dir()?;
                 Err(CliError::NotImplemented(command.name()))
@@ -105,10 +110,10 @@ mod tests {
     }
 
     #[test]
-    fn every_command_reports_not_implemented_rather_than_faking_output() {
-        for command in cli::COMMANDS {
+    fn unimplemented_commands_report_it_rather_than_faking_output() {
+        for command in cli::COMMANDS.iter().filter(|c| !c.is_implemented()) {
             let error = dispatch(&["--archive", "/tmp/lore-test", command.name()])
-                .expect_err("no command works yet");
+                .expect_err("this command does not work yet");
             assert!(matches!(error, CliError::NotImplemented(name) if name == command.name()));
             assert_eq!(exit::exit_code(&error), exit::USAGE);
         }
@@ -116,15 +121,16 @@ mod tests {
 
     #[test]
     fn json_does_not_conjure_an_implementation() {
-        let error = dispatch(&["--json", "scan"]).expect_err("still not implemented");
-        assert!(matches!(error, CliError::NotImplemented("scan")));
+        let error = dispatch(&["--json", "status"]).expect_err("still not implemented");
+        assert!(matches!(error, CliError::NotImplemented("status")));
         assert_eq!(exit::exit_code(&error), exit::USAGE);
     }
 
     #[test]
     fn a_bad_archive_flag_outranks_not_implemented() {
         // Otherwise the first thing a user fixes would be the wrong thing.
-        let error = dispatch(&["--archive", "relative", "scan"]).expect_err("relative is refused");
+        let error =
+            dispatch(&["--archive", "relative", "status"]).expect_err("relative is refused");
         assert!(matches!(
             error,
             CliError::Path(lore_core::paths::PathError::RelativeOverride)

@@ -30,6 +30,14 @@ blake3 = "1"
 # Pure local filesystem/env lookup; no network, no default features to trim.
 dirs = "6"
 thiserror = "1"
+# Advisory file locking (`flock`) for the archive writer lock. Already present in
+# the graph via gix; named explicitly here because we call it directly. Only the
+# `fs` API is requested — in particular NOT `net`, which is what would put socket
+# syscalls in the archive core. Default features are kept deliberately: rustix's
+# default is `std`, and turning it off here would build only because gix happens
+# to turn it back on through feature unification, which is not a thing to depend
+# on across a platform change.
+rustix = { version = "1", features = ["fs"] }
 serde_json = "1"
 # RFC3339 timestamp parsing only (no networking/std feature creep).
 time = { version = "0.3", features = ["parsing"] }

@@ -72,6 +72,20 @@ impl Command {
         }
     }
 
+    /// Whether this build actually does the thing. `--help` reads this, so the
+    /// listing cannot drift from what dispatch does.
+    #[must_use]
+    pub fn is_implemented(self) -> bool {
+        match self {
+            Command::Scan => true,
+            Command::Status
+            | Command::Inspect
+            | Command::Search
+            | Command::Hook
+            | Command::Report => false,
+        }
+    }
+
     fn from_name(name: &str) -> Option<Self> {
         COMMANDS.iter().copied().find(|c| c.name() == name)
     }
@@ -212,6 +226,17 @@ mod tests {
         assert_eq!(parsed(&["--help", "--version"]).action, Action::Help);
         assert_eq!(parsed(&["scan", "--help"]).action, Action::Help);
         assert_eq!(parsed(&["--version", "scan"]).action, Action::Version);
+    }
+
+    #[test]
+    fn scan_is_the_only_implemented_command_in_this_build() {
+        // Keeps the help listing and the dispatch table honest about each other.
+        let implemented: Vec<&str> = COMMANDS
+            .iter()
+            .filter(|c| c.is_implemented())
+            .map(|c| c.name())
+            .collect();
+        assert_eq!(implemented, ["scan"]);
     }
 
     #[test]

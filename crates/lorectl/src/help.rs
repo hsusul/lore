@@ -13,13 +13,30 @@ use crate::exit;
 /// The full usage text.
 #[must_use]
 pub fn usage() -> String {
+    // Pad the summaries to a common width so the "not implemented" notes line
+    // up in a column instead of straggling after sentences of different lengths.
+    let widest = COMMANDS
+        .iter()
+        .map(|c| c.summary().len())
+        .max()
+        .unwrap_or_default();
     let mut commands = String::new();
     for command in COMMANDS {
-        commands.push_str(&format!(
-            "    {:<9} {}\n",
-            command.name(),
-            command.summary()
-        ));
+        // Mark what does not work yet, rather than listing all six as if they
+        // were equals. A reader must be able to tell at a glance.
+        if command.is_implemented() {
+            commands.push_str(&format!(
+                "    {:<9} {}\n",
+                command.name(),
+                command.summary()
+            ));
+        } else {
+            commands.push_str(&format!(
+                "    {:<9} {:<widest$}   (not implemented in this build)\n",
+                command.name(),
+                command.summary(),
+            ));
+        }
     }
 
     format!(
@@ -31,7 +48,7 @@ Usage:
 
 Options may appear before or after the command.
 
-Commands (recognized; none are implemented in this build):
+Commands:
 {commands}
 Options:
     --archive <DIR>   Archive directory to use. Must be absolute; it names the
@@ -53,7 +70,10 @@ Exit codes:
     {unreadable}  archive present but unreadable: not a Lore archive, a schema
        from a newer or older build, an inconsistent migration ledger, or an
        I/O failure
-    5-9  reserved
+    {busy}  another Lore process is writing to this archive; the one failure
+       worth retrying unchanged
+    {scan_failed}  the scan did not complete (the archive itself is fine)
+    7-9  reserved
 ",
         version = lore_core::version(),
         commands = commands,
@@ -62,6 +82,8 @@ Exit codes:
         no_archive = exit::NO_ARCHIVE,
         not_a_repo = exit::NOT_A_REPO,
         unreadable = exit::ARCHIVE_UNREADABLE,
+        busy = exit::ARCHIVE_BUSY,
+        scan_failed = exit::SCAN_FAILED,
     )
 }
 
@@ -96,6 +118,8 @@ mod tests {
             exit::NO_ARCHIVE,
             exit::NOT_A_REPO,
             exit::ARCHIVE_UNREADABLE,
+            exit::ARCHIVE_BUSY,
+            exit::SCAN_FAILED,
         ] {
             assert!(
                 text.contains(&format!("\n    {code}  ")),
@@ -105,10 +129,22 @@ mod tests {
     }
 
     #[test]
-    fn help_is_honest_that_no_command_works_yet() {
+    fn help_marks_exactly_the_unimplemented_commands() {
         // The commands are listed so the destination is visible; the text must
-        // not let a reader believe any of them does something today.
-        assert!(usage().contains("none are implemented in this build"));
+        // not let a reader believe an unfinished one does something today.
+        let text = usage();
+        for line in text.lines() {
+            for command in COMMANDS {
+                if line.starts_with(&format!("    {} ", command.name())) {
+                    assert_eq!(
+                        line.contains("not implemented"),
+                        !command.is_implemented(),
+                        "`{}` is mislabelled in help: {line}",
+                        command.name()
+                    );
+                }
+            }
+        }
     }
 
     #[test]

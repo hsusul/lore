@@ -45,6 +45,12 @@ pub const BLOBS_DIRNAME: &str = "blobs";
 /// Directory holding Lore-owned local backups, inside the archive directory.
 pub const BACKUPS_DIRNAME: &str = "backups";
 
+/// Advisory lock file serializing archive *writers*, inside the archive
+/// directory. Named here for the same reason as the directories above: a second
+/// surface that computed this name independently could take a different lock and
+/// believe it had exclusive access.
+pub const SCAN_LOCK_FILENAME: &str = "scan.lock";
+
 /// Environment variable that overrides the archive directory.
 pub const ARCHIVE_DIR_ENV: &str = "LORE_ARCHIVE_DIR";
 
@@ -252,6 +258,22 @@ mod tests {
         // exact names and are never migrated.
         assert_eq!(ARCHIVE_DB_FILENAME, "lore.db");
         assert_eq!(APP_IDENTIFIER, "dev.lore.app");
+    }
+
+    #[test]
+    fn archive_member_names_are_distinct() {
+        // They share one directory, so a collision would have one member
+        // silently overwrite another.
+        let names = [
+            ARCHIVE_DB_FILENAME,
+            BLOBS_DIRNAME,
+            BACKUPS_DIRNAME,
+            SCAN_LOCK_FILENAME,
+        ];
+        let mut seen = names.to_vec();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), names.len(), "two archive members share a name");
     }
 
     /// Guards the *semantics* of the platform default rather than the version of
