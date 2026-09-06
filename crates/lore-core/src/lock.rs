@@ -197,12 +197,19 @@ mod tests {
     }
 
     #[test]
-    fn errors_name_a_condition_and_not_a_path() {
-        // Same content-free contract as StorageError.
-        for error in [LockError::Held, LockError::Io, LockError::Unsupported] {
-            let text = error.to_string();
-            assert!(!text.contains('/'), "error text leaked a path: {text}");
-            assert!(!text.is_empty());
-        }
+    fn every_error_names_a_distinct_condition() {
+        // The contract is that a caller can tell these apart and act on them —
+        // "another process is writing" and "this platform cannot lock" need
+        // different responses. Content-freeness follows from the variants
+        // carrying no data at all, which the type already guarantees.
+        let texts: Vec<String> = [LockError::Held, LockError::Io, LockError::Unsupported]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let mut unique = texts.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), texts.len(), "two lock errors read the same");
+        assert!(texts.iter().all(|t| !t.is_empty()));
     }
 }

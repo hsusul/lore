@@ -6,6 +6,8 @@
 //! is not a crash — it is a confident sentence that outruns the evidence.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -222,9 +224,10 @@ fn a_repository_with_no_recorded_sessions_says_so_as_a_fact_about_the_archive() 
 }
 
 #[test]
-fn status_json_marks_landing_as_unassessed_rather_than_omitting_it() {
-    // A machine reader must not be able to mistake a missing field for a
-    // negative finding.
+fn status_json_carries_no_landing_field_at_all() {
+    // Not even a null one. `if (!data.landing)` treats null as "nothing
+    // landed" — the exact claim this build cannot support — so the key is
+    // absent, and `assesses` states positively what the output does cover.
     let repo = repo();
     let homes = empty_homes();
     let archive = tempfile::tempdir().unwrap();
@@ -247,15 +250,68 @@ fn status_json_marks_landing_as_unassessed_rather_than_omitting_it() {
     assert_eq!(code(&out), 0);
     let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).expect("valid JSON");
     assert!(
-        value.get("landing").is_some(),
-        "landing key must be present"
+        value.get("landing").is_none(),
+        "a landing key — even null — invites a negative reading: {value}"
     );
+    let assesses: Vec<&str> = value["assesses"]
+        .as_array()
+        .expect("assesses lists what this output covers")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(!assesses.contains(&"landing"), "{value}");
+    assert!(assesses.contains(&"last_scan"), "{value}");
+}
+
+#[test]
+fn status_json_distinguishes_never_scanned_from_scanned_and_empty() {
+    // The text path says "never"; JSON has to make the same distinction, or a
+    // machine reader cannot tell "Lore has not looked" from "Lore looked and
+    // found nothing".
+    let repo = repo();
+    let homes = empty_homes();
+
+    let never = tempfile::tempdir().unwrap();
+    drop(lore_core::storage::open(&never.path().join("lore.db")).unwrap());
+    let out = lorectl_in(
+        repo.path(),
+        never.path(),
+        homes.path(),
+        &["--json", "status"],
+    );
+    assert_eq!(
+        code(&out),
+        0,
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).unwrap();
     assert!(
-        value["landing"].is_null(),
-        "landing must not assert a value"
+        value["last_scan_completed_at_ms"].is_null(),
+        "a never-scanned archive must report null, not a time: {value}"
     );
-    assert!(value["landing_note"].as_str().is_some());
-    assert!(value.get("last_scan_completed_at_ms").is_some());
+
+    let scanned = tempfile::tempdir().unwrap();
+    assert_eq!(
+        code(&lorectl_in(
+            repo.path(),
+            scanned.path(),
+            homes.path(),
+            &["scan"]
+        )),
+        0
+    );
+    let out = lorectl_in(
+        repo.path(),
+        scanned.path(),
+        homes.path(),
+        &["--json", "status"],
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).unwrap();
+    assert!(
+        value["last_scan_completed_at_ms"].as_i64().unwrap() > 1_700_000_000_000,
+        "a scanned archive must report when: {value}"
+    );
 }
 
 #[test]
@@ -353,29 +409,7 @@ fn status_does_not_modify_the_archive() {
         0
     );
 
-    let listing = |root: &Path| -> Vec<String> {
-        fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                out.push(
-                    path.strip_prefix(base)
-                        .unwrap()
-                        .to_string_lossy()
-                        .into_owned(),
-                );
-                if path.is_dir() {
-                    walk(&path, base, out);
-                }
-            }
-        }
-        let mut out = Vec::new();
-        walk(root, root, &mut out);
-        out.retain(|p| !p.ends_with("-wal") && !p.ends_with("-shm"));
-        out.sort();
-        out
-    };
-
-    let before = listing(archive.path());
+    let before = common::listing(archive.path());
     assert_eq!(
         code(&lorectl_in(
             repo.path(),
@@ -387,7 +421,7 @@ fn status_does_not_modify_the_archive() {
     );
     assert_eq!(
         before,
-        listing(archive.path()),
+        common::listing(archive.path()),
         "status changed the archive"
     );
 }

@@ -100,7 +100,8 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
 }
 
 /// Epoch millis, saturating rather than panicking on a clock before the epoch.
-fn now_ms() -> i64 {
+/// Shared with `status`, which reads the stamp this writes.
+pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))

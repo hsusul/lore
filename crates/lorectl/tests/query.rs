@@ -7,6 +7,8 @@
 //! history is read (`docs/development/TESTING.md`).
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -115,7 +117,14 @@ fn a_search_finds_archived_content() {
     );
 
     // Each line is one hit, so a caller can stream them.
-    for line in stdout(&out).lines() {
+    // Asserted before the loop: the loop is vacuous on zero hits, so without
+    // this the test passed whether or not search found anything.
+    let lines: Vec<String> = stdout(&out).lines().map(str::to_string).collect();
+    assert!(
+        !lines.is_empty(),
+        "search found nothing in a freshly scanned synthetic profile"
+    );
+    for line in &lines {
         let value: serde_json::Value = serde_json::from_str(line).expect("each line is JSON");
         assert!(value["session_id"].as_str().is_some());
         assert!(value["snippet"].as_str().is_some());
@@ -175,29 +184,7 @@ fn reading_an_archive_does_not_modify_it() {
     let (archive, homes) = scanned_archive();
     let sid = a_session_id(archive.path());
 
-    let listing = |root: &Path| -> Vec<String> {
-        fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                out.push(
-                    path.strip_prefix(base)
-                        .unwrap()
-                        .to_string_lossy()
-                        .into_owned(),
-                );
-                if path.is_dir() {
-                    walk(&path, base, out);
-                }
-            }
-        }
-        let mut out = Vec::new();
-        walk(root, root, &mut out);
-        out.retain(|p| !p.ends_with("-wal") && !p.ends_with("-shm"));
-        out.sort();
-        out
-    };
-
-    let before = listing(archive.path());
+    let before = common::listing(archive.path());
     assert_eq!(
         code(&lorectl(archive.path(), homes.path(), &["search", "the"])),
         0
@@ -212,7 +199,7 @@ fn reading_an_archive_does_not_modify_it() {
     );
     assert_eq!(
         before,
-        listing(archive.path()),
+        common::listing(archive.path()),
         "a read changed the archive"
     );
 }

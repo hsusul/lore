@@ -83,17 +83,25 @@ mod tests {
     use super::*;
     use crate::cli::Command;
 
-    /// The dispatch decision, without the process: what `run` would do for an
-    /// already-parsed invocation.
-    fn dispatch(args: &[&str]) -> Result<u8, CliError> {
+    /// The dispatch decision for commands this build does **not** implement.
+    ///
+    /// Deliberately narrow. An earlier version handled every `Action::Run` as
+    /// unimplemented, which made it a fiction the moment a command was
+    /// implemented: a test could assert `status` was unimplemented and pass,
+    /// while the real `run` implemented it. Implemented commands are exercised
+    /// as real processes in `tests/`, because their contracts are about
+    /// archives, locks, and exit codes.
+    fn dispatch_unimplemented(args: &[&str]) -> Result<u8, CliError> {
         let invocation = cli::parse(args.iter().copied())?;
         match invocation.action {
             Action::Help | Action::Version => Ok(exit::OK),
             Action::NoCommand => Ok(exit::USAGE),
-            // Mirrors `run`'s ordering for the commands that do no work. `scan`
-            // is exercised end to end as a real process in `tests/scan.rs`,
-            // because its whole contract is about processes and locks.
             Action::Run(command) => {
+                assert!(
+                    !command.is_implemented(),
+                    "`{}` is implemented; test it as a process, not through this helper",
+                    command.name()
+                );
                 invocation.archive_dir()?;
                 Err(CliError::NotImplemented(command.name()))
             }
@@ -102,22 +110,28 @@ mod tests {
 
     #[test]
     fn help_and_version_succeed() {
-        assert_eq!(dispatch(&["--help"]).expect("help succeeds"), exit::OK);
         assert_eq!(
-            dispatch(&["--version"]).expect("version succeeds"),
+            dispatch_unimplemented(&["--help"]).expect("help succeeds"),
+            exit::OK
+        );
+        assert_eq!(
+            dispatch_unimplemented(&["--version"]).expect("version succeeds"),
             exit::OK
         );
     }
 
     #[test]
     fn a_bare_invocation_is_a_usage_failure() {
-        assert_eq!(dispatch(&[]).expect("prints usage"), exit::USAGE);
+        assert_eq!(
+            dispatch_unimplemented(&[]).expect("prints usage"),
+            exit::USAGE
+        );
     }
 
     #[test]
     fn unimplemented_commands_report_it_rather_than_faking_output() {
         for command in cli::COMMANDS.iter().filter(|c| !c.is_implemented()) {
-            let error = dispatch(&["--archive", "/tmp/lore-test", command.name()])
+            let error = dispatch_unimplemented(&["--archive", "/tmp/lore-test", command.name()])
                 .expect_err("this command does not work yet");
             assert!(matches!(error, CliError::NotImplemented(name) if name == command.name()));
             assert_eq!(exit::exit_code(&error), exit::USAGE);
@@ -126,16 +140,21 @@ mod tests {
 
     #[test]
     fn json_does_not_conjure_an_implementation() {
-        let error = dispatch(&["--json", "status"]).expect_err("still not implemented");
-        assert!(matches!(error, CliError::NotImplemented("status")));
+        // Asserted `status` here until `status` was implemented, at which point
+        // it kept passing only because the helper it used was a fiction. Now it
+        // names a command that genuinely does nothing, and the assertion is
+        // guarded by `dispatch_unimplemented` if that ever stops being true.
+        let error =
+            dispatch_unimplemented(&["--json", "report"]).expect_err("`report` is not implemented");
+        assert!(matches!(error, CliError::NotImplemented("report")));
         assert_eq!(exit::exit_code(&error), exit::USAGE);
     }
 
     #[test]
     fn a_bad_archive_flag_outranks_not_implemented() {
         // Otherwise the first thing a user fixes would be the wrong thing.
-        let error =
-            dispatch(&["--archive", "relative", "status"]).expect_err("relative is refused");
+        let error = dispatch_unimplemented(&["--archive", "relative", "report"])
+            .expect_err("relative is refused");
         assert!(matches!(
             error,
             CliError::Path(lore_core::paths::PathError::RelativeOverride)
@@ -147,7 +166,7 @@ mod tests {
         // Documentation must be reachable when the invocation is otherwise
         // wrong; that is when people need it most.
         assert_eq!(
-            dispatch(&["--archive", "relative", "--help"]).expect("help succeeds"),
+            dispatch_unimplemented(&["--archive", "relative", "--help"]).expect("help succeeds"),
             exit::OK
         );
     }

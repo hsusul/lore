@@ -248,11 +248,27 @@ fn seeded_archive() -> (
     )
     .unwrap();
 
+    // A second session carrying ordinary prose. The codex patch fixture is all
+    // tool calls and patch payloads, so nothing of it reaches the search
+    // projection — a search test against it alone can only ever assert
+    // "returned no error", which is what made the previous version a tautology.
+    let claude = concat!(
+        r#"{"type":"user","uuid":"u1","sessionId":"ro-text","cwd":"/proj","#,
+        r#""message":{"role":"user","content":"the quokka refactor is finished"}}"#,
+        "\n"
+    );
+
     let sid = {
         let conn = storage::open(&db).unwrap();
         let blobs = lore_core::storage::blob::BlobStore::open(&blob_dir).unwrap();
         let parsed = lore_core::adapters::codex::CodexAdapter::new().parse_str(&fixture, "ro");
-        lore_core::ingest::persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap()
+        let sid =
+            lore_core::ingest::persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+        let text =
+            lore_core::adapters::claude_code::ClaudeCodeAdapter::new().parse_str(claude, "ro-text");
+        lore_core::ingest::persist_session(&conn, "claude-code", "Claude Code", &text, &blobs)
+            .unwrap();
+        sid
     };
     (dir, db, blob_dir, sid)
 }
@@ -283,17 +299,19 @@ fn search_pages_through_a_read_only_connection() {
     let (_dir, db, _blobs, _sid) = seeded_archive();
     let reader = storage::open_read_only(&db).unwrap();
 
+    // A term the seeded prose actually contains, so a zero-hit page fails.
     let page = lore_core::search::search_page(
         &reader,
-        "patch",
+        "quokka",
         10,
         None,
         lore_core::search::SortOrder::Relevance,
     )
     .unwrap();
-    // The assertion is that paging *works* read-only, not that this fixture
-    // matches: a zero-hit page is a valid answer, an error is not.
-    assert!(page.hits.len() <= 10);
+    assert!(
+        !page.hits.is_empty(),
+        "read-only search returned nothing for a term the archive contains"
+    );
 }
 
 #[test]

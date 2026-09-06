@@ -31,7 +31,7 @@ use lore_core::{query, settings, storage};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
-use crate::scan::KEY_LAST_SCAN_COMPLETED_AT;
+use crate::scan::{now_ms, KEY_LAST_SCAN_COMPLETED_AT};
 
 /// How many recent sessions to name. The count is always exact; this bounds
 /// only the listing.
@@ -89,10 +89,13 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
                 "title": s.title,
                 "started_at_ms": s.started_at,
             })).collect::<Vec<_>>(),
-            // Named explicitly so a machine reader cannot mistake the absence of
-            // a landing field for a claim that nothing landed.
-            "landing": serde_json::Value::Null,
-            "landing_note": "not yet assessed by this build",
+            // No `landing` key at all. An explicit `null` was worse than the
+            // omission it was meant to fix: `if (!data.landing)` reads null as
+            // "nothing landed", which is exactly the claim this build cannot
+            // make. An absent key forces a caller to notice it is absent.
+            // `assesses` says positively what this output covers, so the gap is
+            // discoverable without encoding a value for it.
+            "assesses": ["repository", "sessions", "last_scan"],
         });
         let _ = writeln!(stdout, "{line}");
         return Ok(exit::OK);
@@ -187,13 +190,6 @@ fn humanize_ms(delta: i64) -> String {
         d if d < DAY => plural(d / HOUR, "hour"),
         d => plural(d / DAY, "day"),
     }
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
