@@ -20,7 +20,7 @@
 //! commit atomically.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -500,20 +500,128 @@ fn resolve_identity(facts: &CapturedRepo, common_key: &str, workdir: &Path) -> I
     }
 }
 
+/// Everything derived from captured facts before any row is written: the
+/// identity, the id it hashes to, the common-dir key, and the effective
+/// workdir.
+///
+/// Extracted so the writer ([`link_segment`]) and the read-only resolver
+/// ([`resolve_repository`]) cannot compute different answers for the same
+/// repository. Two surfaces deriving repository identity independently is the
+/// same failure `crate::paths` exists to prevent, one level up: there, two
+/// surfaces would open different archives; here, they would disagree about
+/// which repository a directory *is*, and a lookup would silently miss rows the
+/// writer had already created.
+struct DerivedIdentity {
+    identity: Identity,
+    repo_id: String,
+    common_key: String,
+    workdir: PathBuf,
+}
+
+fn derive_identity(facts: &CapturedRepo) -> DerivedIdentity {
+    let common_key = fnv1a_hex(facts.common_dir.to_string_lossy().as_bytes());
+    let workdir = facts
+        .workdir
+        .clone()
+        .unwrap_or_else(|| facts.common_dir.clone());
+    let identity = resolve_identity(facts, &common_key, &workdir);
+    let repo_id = det_id("repo", &[&identity.key]);
+    DerivedIdentity {
+        identity,
+        repo_id,
+        common_key,
+        workdir,
+    }
+}
+
+/// What resolving a working directory against the archive found.
+///
+/// Deliberately three outcomes, not an `Option`: "this is not a repository" and
+/// "this is a repository the archive has no row for" are different facts, and
+/// collapsing them would let a caller report the wrong one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoResolution {
+    /// The path is not inside a Git repository (or is not readable as one).
+    NotARepository,
+    /// A repository, but the archive holds no `repository` row under its
+    /// identity.
+    ///
+    /// States a fact about the archive, not about the work: it does **not** mean
+    /// no agent work happened here. It means Lore has not recorded any — which
+    /// could equally be because nothing was scanned yet. Callers must not render
+    /// it as an absence of work.
+    ///
+    /// `display_name` is derived from the directory, since there is no stored
+    /// name to prefer.
+    NotInArchive {
+        identity_key: String,
+        display_name: String,
+    },
+    /// A repository the archive already has a row for.
+    ///
+    /// `display_name` is the **stored** name, not one re-derived from the
+    /// current directory. Those can differ: the derived name comes from the
+    /// workdir's own filename, so a linked worktree derives a different name
+    /// than the main one, while the row keeps whichever was seen first. Callers
+    /// naming a repository must use what the archive holds, or two surfaces
+    /// would call the same repository different things.
+    InArchive {
+        repository_id: String,
+        identity_key: String,
+        display_name: String,
+    },
+}
+
+/// Resolve a working directory to the archive's repository id, **reading only**.
+///
+/// Creates nothing. This is the lookup a query surface needs — "which archived
+/// repository am I standing in?" — and it must not have the side effect the
+/// ingest path has, because a `status` that silently created repository rows
+/// would populate the archive with repositories no agent ever worked in.
+///
+/// The repository id is a pure function of the identity key, so this derives the
+/// id the writer *would* use and asks whether that row exists. It never inserts,
+/// which is why it is safe on a read-only connection.
+pub fn resolve_repository(conn: &Connection, cwd: &Path) -> Result<RepoResolution> {
+    let Some(facts) = git::capture(cwd) else {
+        return Ok(RepoResolution::NotARepository);
+    };
+    let derived = derive_identity(&facts);
+
+    let found: Option<(String, String)> = conn
+        .query_row(
+            "SELECT id, display_name FROM repository WHERE id = ?1",
+            [&derived.repo_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+
+    Ok(match found {
+        Some((repository_id, display_name)) => RepoResolution::InArchive {
+            repository_id,
+            identity_key: derived.identity.key,
+            display_name,
+        },
+        None => RepoResolution::NotInArchive {
+            identity_key: derived.identity.key,
+            display_name: derived.identity.display_name,
+        },
+    })
+}
+
 fn link_segment(
     tx: &Connection,
     session_id: &str,
     segment_id: &str,
     facts: &CapturedRepo,
 ) -> Result<()> {
-    let common_key = fnv1a_hex(facts.common_dir.to_string_lossy().as_bytes());
-    let workdir = facts
-        .workdir
-        .clone()
-        .unwrap_or_else(|| facts.common_dir.clone());
+    let DerivedIdentity {
+        identity,
+        repo_id,
+        common_key,
+        workdir,
+    } = derive_identity(facts);
     let workdir_str = workdir.to_string_lossy().into_owned();
-    let identity = resolve_identity(facts, &common_key, &workdir);
-    let repo_id = det_id("repo", &[&identity.key]);
     // The main worktree's common dir is its own `.git`; a linked worktree's is
     // the main repo's, so it differs from `<workdir>/.git`.
     let is_primary = i64::from(workdir.join(".git") == facts.common_dir);

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
-use lore_core::enrich::enrich_session;
+use lore_core::enrich::{enrich_session, resolve_repository, RepoResolution};
 use lore_core::ingest::persist_session;
 use lore_core::storage::blob::BlobStore;
 use rusqlite::Connection;
@@ -718,4 +718,247 @@ fn enrich_handles_unborn_repository_with_zero_commits() {
         )
         .unwrap();
     assert_eq!(root_evidence_count, 0);
+}
+
+// ── Read-only cwd → repository resolution ───────────────────────────────────
+
+/// The property the whole resolver exists for: it must land on the *same*
+/// repository id the enrichment writer created. If these two ever computed
+/// identity differently, a lookup would silently miss rows that are right
+/// there, and a status surface would report "not in the archive" about a
+/// repository Lore had already recorded work for.
+#[test]
+fn resolution_agrees_with_the_id_enrichment_wrote() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+
+    let sid = persist_session_at(&conn, &store, "resolve-agrees", repo.path());
+    assert_eq!(enrich_session(&conn, &sid).unwrap(), 1);
+    let written: String = conn
+        .query_row(
+            "SELECT repository_id FROM session_segment WHERE session_id = ?1",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    match resolve_repository(&conn, repo.path()).unwrap() {
+        RepoResolution::InArchive { repository_id, .. } => assert_eq!(repository_id, written),
+        other => panic!("expected the enriched repository, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_repository_with_no_row_is_reported_as_not_in_the_archive() {
+    // Distinct from "not a repository": this *is* one, Lore just has no row for
+    // it. A caller must be able to tell those apart.
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let conn = lore_core::storage::open_in_memory().unwrap();
+
+    match resolve_repository(&conn, repo.path()).unwrap() {
+        RepoResolution::NotInArchive {
+            identity_key,
+            display_name,
+        } => {
+            assert!(!identity_key.is_empty());
+            assert!(!display_name.is_empty());
+        }
+        other => panic!("expected NotInArchive, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_non_git_directory_is_not_a_repository() {
+    let plain = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    assert_eq!(
+        resolve_repository(&conn, plain.path()).unwrap(),
+        RepoResolution::NotARepository
+    );
+}
+
+#[test]
+fn a_missing_or_relative_path_degrades_instead_of_panicking() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    assert_eq!(
+        resolve_repository(&conn, Path::new("/nonexistent/path/xyz")).unwrap(),
+        RepoResolution::NotARepository
+    );
+    // `git::capture` refuses relative paths: the answer would otherwise depend
+    // on the process working directory.
+    assert_eq!(
+        resolve_repository(&conn, Path::new("relative/dir")).unwrap(),
+        RepoResolution::NotARepository
+    );
+}
+
+#[test]
+fn resolution_creates_nothing() {
+    // The entire point of "no upsert": a query surface must not populate the
+    // archive with repositories merely by being run inside one.
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let conn = lore_core::storage::open_in_memory().unwrap();
+
+    let before: i64 = conn
+        .query_row("SELECT count(*) FROM repository", [], |r| r.get(0))
+        .unwrap();
+    for _ in 0..3 {
+        resolve_repository(&conn, repo.path()).unwrap();
+    }
+    let after: i64 = conn
+        .query_row("SELECT count(*) FROM repository", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(before, 0);
+    assert_eq!(after, 0, "resolution inserted a repository row");
+
+    let evidence: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM repository_identity_evidence",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let worktrees: i64 = conn
+        .query_row("SELECT count(*) FROM worktree", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(evidence, 0, "resolution inserted evidence");
+    assert_eq!(worktrees, 0, "resolution inserted a worktree");
+}
+
+#[test]
+fn resolution_works_on_a_read_only_connection() {
+    // Proves the "reads only" claim structurally rather than by inspection: a
+    // read-only handle makes any write fail at the SQLite layer.
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let archive = tempfile::tempdir().unwrap();
+    let db = archive.path().join("lore.db");
+
+    let written = {
+        let conn = lore_core::storage::open(&db).unwrap();
+        let (_bd, store) = blobs();
+        let sid = persist_session_at(&conn, &store, "read-only-resolve", repo.path());
+        assert_eq!(enrich_session(&conn, &sid).unwrap(), 1);
+        conn.query_row(
+            "SELECT repository_id FROM session_segment WHERE session_id = ?1",
+            [&sid],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap()
+    };
+
+    let reader = lore_core::storage::open_read_only(&db).unwrap();
+    match resolve_repository(&reader, repo.path()).unwrap() {
+        RepoResolution::InArchive { repository_id, .. } => assert_eq!(repository_id, written),
+        other => panic!("expected InArchive, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolution_is_stable_across_calls_and_from_a_subdirectory() {
+    // A repository's identity must not depend on where inside it you stand,
+    // or `status` would answer differently from a nested directory.
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let nested = repo.path().join("src/deep");
+    std::fs::create_dir_all(&nested).unwrap();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+
+    let top = resolve_repository(&conn, repo.path()).unwrap();
+    let deep = resolve_repository(&conn, &nested).unwrap();
+    assert_eq!(top, deep, "identity changed inside a subdirectory");
+    assert_eq!(top, resolve_repository(&conn, repo.path()).unwrap());
+}
+
+#[test]
+fn two_unrelated_repositories_resolve_to_different_identities() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    init_repo(a.path());
+    init_repo(b.path());
+    let conn = lore_core::storage::open_in_memory().unwrap();
+
+    let ra = resolve_repository(&conn, a.path()).unwrap();
+    let rb = resolve_repository(&conn, b.path()).unwrap();
+    assert_ne!(ra, rb, "unrelated repositories collided");
+}
+
+#[test]
+fn a_linked_worktree_resolves_to_the_same_repository() {
+    // Linked worktrees share one git common dir, so they are one repository —
+    // the same grouping enrichment applies (GIT_INTEGRATION.md §2).
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let holder = tempfile::tempdir().unwrap();
+    let linked = holder.path().join("wt");
+    git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "side",
+            linked.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let main = resolve_repository(&conn, repo.path()).unwrap();
+    let side = resolve_repository(&conn, &linked).unwrap();
+
+    // Identity is what makes them one repository. The derived display name is
+    // deliberately not compared: it comes from each worktree's own directory
+    // name, which is why `InArchive` reports the stored name instead.
+    let key = |r: &RepoResolution| match r {
+        RepoResolution::NotInArchive { identity_key, .. }
+        | RepoResolution::InArchive { identity_key, .. } => identity_key.clone(),
+        RepoResolution::NotARepository => panic!("expected a repository"),
+    };
+    assert_eq!(
+        key(&main),
+        key(&side),
+        "a linked worktree is the same repository"
+    );
+}
+
+#[test]
+fn an_archived_repository_reports_the_stored_name_from_every_worktree() {
+    // Follows from the above: once a row exists, both worktrees must name the
+    // repository identically, using what the archive holds rather than the
+    // directory each happens to sit in.
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path());
+    let holder = tempfile::tempdir().unwrap();
+    let linked = holder.path().join("wt");
+    git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "side2",
+            linked.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, store) = blobs();
+    let sid = persist_session_at(&conn, &store, "stored-name", repo.path());
+    assert_eq!(enrich_session(&conn, &sid).unwrap(), 1);
+
+    let stored: String = conn
+        .query_row("SELECT display_name FROM repository", [], |r| r.get(0))
+        .unwrap();
+    for dir in [repo.path(), linked.as_path()] {
+        match resolve_repository(&conn, dir).unwrap() {
+            RepoResolution::InArchive { display_name, .. } => assert_eq!(display_name, stored),
+            other => panic!("expected InArchive from {dir:?}, got {other:?}"),
+        }
+    }
 }
