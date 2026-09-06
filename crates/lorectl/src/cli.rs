@@ -77,12 +77,22 @@ impl Command {
     #[must_use]
     pub fn is_implemented(self) -> bool {
         match self {
-            Command::Scan => true,
-            Command::Status
-            | Command::Inspect
-            | Command::Search
-            | Command::Hook
-            | Command::Report => false,
+            Command::Scan | Command::Search | Command::Inspect => true,
+            Command::Status | Command::Hook | Command::Report => false,
+        }
+    }
+
+    /// The single operand this command requires, if any — the thing it acts on.
+    ///
+    /// Declared here rather than checked inside each command so a missing or
+    /// stray operand is one usage error from the parser, reported before any
+    /// archive is opened.
+    #[must_use]
+    pub fn operand(self) -> Option<&'static str> {
+        match self {
+            Command::Search => Some("QUERY"),
+            Command::Inspect => Some("SESSION_ID"),
+            Command::Scan | Command::Status | Command::Hook | Command::Report => None,
         }
     }
 
@@ -113,9 +123,12 @@ pub struct Invocation {
     /// database path is `lore_core::paths`' job, and duplicating that join here
     /// is precisely how two surfaces end up opening different files.
     pub archive: Option<PathBuf>,
-    /// `--json`. Accepted now so the commands that will honour it do not need a
-    /// parser change; nothing in this build varies on it.
+    /// `--json`. Machine-readable output where the command supports it.
     pub json: bool,
+    /// `--patch`. Only meaningful for `inspect`.
+    pub patch: bool,
+    /// The command's operand, when it takes one (a search query, a session id).
+    pub operand: Option<String>,
     /// What to do.
     pub action: Action,
 }
@@ -144,15 +157,18 @@ where
     let mut parser = lexopt::Parser::from_args(args);
     let mut archive = None;
     let mut json = false;
+    let mut patch = false;
     let mut help = false;
     let mut version = false;
     let mut command: Option<Command> = None;
+    let mut operand: Option<String> = None;
 
     while let Some(arg) = parser.next().map_err(usage)? {
         match arg {
             Short('h') | Long("help") => help = true,
             Short('V') | Long("version") => version = true,
             Long("json") => json = true,
+            Long("patch") => patch = true,
             Long("archive") => archive = Some(PathBuf::from(parser.value().map_err(usage)?)),
             Value(value) if command.is_none() => {
                 let name = value.to_string_lossy();
@@ -160,6 +176,12 @@ where
                     Command::from_name(&name)
                         .ok_or_else(|| CliError::Usage(format!("unknown command `{name}`")))?,
                 );
+            }
+            // One operand, after the command. A second is refused rather than
+            // ignored: silently dropping an argument someone typed is how a
+            // search for two words quietly searches for one.
+            Value(value) if operand.is_none() && command.is_some() => {
+                operand = Some(value.to_string_lossy().into_owned());
             }
             other => return Err(usage(other.unexpected())),
         }
@@ -173,7 +195,26 @@ where
         Action::Version
     } else {
         match command {
-            Some(command) => Action::Run(command),
+            Some(command) => {
+                // Checked here, before anything opens an archive, so "you forgot
+                // the query" is not reported as an archive problem.
+                match (command.operand(), operand.is_some()) {
+                    (Some(name), false) => {
+                        return Err(CliError::Usage(format!(
+                            "`lorectl {}` needs a {name}",
+                            command.name()
+                        )))
+                    }
+                    (None, true) => {
+                        return Err(CliError::Usage(format!(
+                            "`lorectl {}` takes no argument",
+                            command.name()
+                        )))
+                    }
+                    _ => {}
+                }
+                Action::Run(command)
+            }
             None => Action::NoCommand,
         }
     };
@@ -181,6 +222,8 @@ where
     Ok(Invocation {
         archive,
         json,
+        patch,
+        operand,
         action,
     })
 }
@@ -229,26 +272,70 @@ mod tests {
     }
 
     #[test]
-    fn scan_is_the_only_implemented_command_in_this_build() {
+    fn the_implemented_commands_are_exactly_what_dispatch_handles() {
         // Keeps the help listing and the dispatch table honest about each other.
         let implemented: Vec<&str> = COMMANDS
             .iter()
             .filter(|c| c.is_implemented())
             .map(|c| c.name())
             .collect();
-        assert_eq!(implemented, ["scan"]);
+        assert_eq!(implemented, ["scan", "inspect", "search"]);
     }
 
     #[test]
     fn every_reserved_command_name_parses() {
         for command in COMMANDS {
+            let args: Vec<&str> = match command.operand() {
+                Some(_) => vec![command.name(), "operand"],
+                None => vec![command.name()],
+            };
             assert_eq!(
-                parsed(&[command.name()]).action,
+                parsed(&args).action,
                 Action::Run(*command),
                 "the parser must already know `{}`",
                 command.name()
             );
         }
+    }
+
+    #[test]
+    fn a_command_that_needs_an_operand_refuses_to_run_without_one() {
+        // Caught in the parser, so "you forgot the query" is never reported as
+        // an archive problem later.
+        for command in COMMANDS.iter().filter(|c| c.operand().is_some()) {
+            let error = parse([command.name()]).unwrap_err();
+            assert_eq!(exit::exit_code(&error), USAGE);
+            assert!(error.to_string().contains(command.name()), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_command_that_takes_no_operand_refuses_a_stray_one() {
+        // Ignoring it would let `lorectl scan something` look like it worked.
+        for command in COMMANDS.iter().filter(|c| c.operand().is_none()) {
+            let error = parse([command.name(), "stray"]).unwrap_err();
+            assert_eq!(exit::exit_code(&error), USAGE);
+        }
+    }
+
+    #[test]
+    fn an_operand_is_captured_verbatim() {
+        let invocation = parsed(&["search", "needle in haystack"]);
+        assert_eq!(invocation.operand.as_deref(), Some("needle in haystack"));
+    }
+
+    #[test]
+    fn a_second_operand_is_refused_rather_than_dropped() {
+        // Silently ignoring it is how a two-word search quietly searches for one.
+        let error = parse(["search", "one", "two"]).unwrap_err();
+        assert_eq!(exit::exit_code(&error), USAGE);
+    }
+
+    #[test]
+    fn patch_is_parsed_and_defaults_off() {
+        assert!(!parsed(&["inspect", "sid"]).patch);
+        assert!(parsed(&["inspect", "--patch", "sid"]).patch);
+        assert!(parsed(&["--patch", "inspect", "sid"]).patch);
     }
 
     #[test]
@@ -312,10 +399,10 @@ mod tests {
     }
 
     #[test]
-    fn a_second_positional_argument_is_a_usage_error_in_this_build() {
-        // `inspect <session-id>` takes one later. Until it does, silently
-        // ignoring the argument would be worse than refusing it.
-        let error = parse(["inspect", "some-session-id"]).unwrap_err();
+    fn a_third_positional_argument_is_a_usage_error() {
+        // `inspect` takes exactly one operand; anything further is a typo, and
+        // ignoring it would be worse than refusing it.
+        let error = parse(["inspect", "some-session-id", "extra"]).unwrap_err();
         assert_eq!(exit::exit_code(&error), USAGE);
     }
 

@@ -20,20 +20,28 @@ pub fn usage() -> String {
         .map(|c| c.summary().len())
         .max()
         .unwrap_or_default();
+    // Commands that take an operand advertise it, so `--help` shows the shape
+    // of the invocation rather than just the verb.
+    let spelled = |c: &crate::cli::Command| match c.operand() {
+        Some(operand) => format!("{} <{operand}>", c.name()),
+        None => c.name().to_string(),
+    };
+    let name_width = COMMANDS.iter().map(|c| spelled(c).len()).max().unwrap_or(0);
+
     let mut commands = String::new();
     for command in COMMANDS {
         // Mark what does not work yet, rather than listing all six as if they
         // were equals. A reader must be able to tell at a glance.
         if command.is_implemented() {
             commands.push_str(&format!(
-                "    {:<9} {}\n",
-                command.name(),
+                "    {:<name_width$}  {}\n",
+                spelled(command),
                 command.summary()
             ));
         } else {
             commands.push_str(&format!(
-                "    {:<9} {:<widest$}   (not implemented in this build)\n",
-                command.name(),
+                "    {:<name_width$}  {:<widest$}   (not implemented in this build)\n",
+                spelled(command),
                 command.summary(),
             ));
         }
@@ -54,6 +62,7 @@ Options:
     --archive <DIR>   Archive directory to use. Must be absolute; it names the
                       directory, not the database file.
     --json            Machine-readable output where a command supports it.
+    --patch           With `inspect`: also print each recorded patch.
     -h, --help        Print this help.
     -V, --version     Print the version.
 
@@ -135,7 +144,7 @@ mod tests {
         let text = usage();
         for line in text.lines() {
             for command in COMMANDS {
-                if line.starts_with(&format!("    {} ", command.name())) {
+                if line.trim_start().starts_with(command.name()) {
                     assert_eq!(
                         line.contains("not implemented"),
                         !command.is_implemented(),

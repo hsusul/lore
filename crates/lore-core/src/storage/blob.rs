@@ -72,9 +72,33 @@ pub struct BlobStore {
 impl BlobStore {
     /// Open (creating if absent) a blob store rooted at `root`, ensuring the
     /// staging directory exists.
+    ///
+    /// For **writers**. A reader must use [`BlobStore::open_existing`], which
+    /// creates nothing.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(root.join("tmp")).map_err(|_| StorageError::Io)?;
+        Ok(Self { root })
+    }
+
+    /// Open an existing blob store for **reading**, creating nothing.
+    ///
+    /// [`BlobStore::open`] makes the staging directory as a side effect, which
+    /// is right for a writer and wrong for a reader: a query surface that
+    /// printed a patch would leave `blobs/tmp/` behind in an archive it was only
+    /// supposed to read, and — worse — would silently succeed against a
+    /// directory that is not an archive at all, conjuring an empty blob store
+    /// and then reporting every patch as missing. Refusing up front turns that
+    /// into one honest error instead of a series of plausible wrong answers.
+    ///
+    /// `root` must already be a directory. Its contents are not otherwise
+    /// inspected: an archive with no blobs yet is a legitimate empty store, and
+    /// individual missing blobs are a per-read outcome, not an open failure.
+    pub fn open_existing(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        if !root.is_dir() {
+            return Err(StorageError::Io);
+        }
         Ok(Self { root })
     }
 
@@ -223,6 +247,78 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = BlobStore::open(dir.path()).unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn open_existing_creates_nothing() {
+        // The whole reason it exists: a reader must not leave `tmp/` behind in
+        // an archive it was only supposed to read.
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::open_existing(dir.path()).unwrap();
+        assert_eq!(store.root(), dir.path());
+        assert!(
+            !dir.path().join("tmp").exists(),
+            "open_existing created the staging directory"
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "open_existing wrote something into the store"
+        );
+    }
+
+    #[test]
+    fn open_existing_refuses_a_directory_that_is_not_there() {
+        // Otherwise a reader pointed at a non-archive would conjure an empty
+        // store and report every patch as missing — a wrong answer that looks
+        // like a right one.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no-such-blobs");
+        assert!(BlobStore::open_existing(&missing).is_err());
+        assert!(!missing.exists(), "the failed open created the directory");
+    }
+
+    #[test]
+    fn open_existing_refuses_a_file_where_the_store_should_be() {
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_dir = dir.path().join("blobs");
+        std::fs::write(&not_a_dir, b"not a directory").unwrap();
+        assert!(BlobStore::open_existing(&not_a_dir).is_err());
+    }
+
+    #[test]
+    fn open_existing_accepts_an_archive_with_no_blobs_yet() {
+        // An empty store is legitimate: a scanned archive may simply have no
+        // patches. Only a missing directory is an error.
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = dir.path().join("blobs");
+        std::fs::create_dir(&blobs).unwrap();
+        assert!(BlobStore::open_existing(&blobs).is_ok());
+    }
+
+    #[test]
+    fn open_existing_reads_what_a_writer_staged() {
+        // The two constructors must address the same bytes the same way.
+        let dir = tempfile::tempdir().unwrap();
+        let staged = {
+            let writer = BlobStore::open(dir.path()).unwrap();
+            writer.stage(b"@@ -1 +1 @@\n-old\n+new\n").unwrap()
+        };
+        let reader = BlobStore::open_existing(dir.path()).unwrap();
+        assert_eq!(
+            reader.read(staged.relpath()).unwrap(),
+            b"@@ -1 +1 @@\n-old\n+new\n"
+        );
+    }
+
+    #[test]
+    fn a_reader_still_refuses_an_escaping_relpath() {
+        // The traversal guard is on `read`, so it must hold for a store opened
+        // either way.
+        let dir = tempfile::tempdir().unwrap();
+        let reader = BlobStore::open_existing(dir.path()).unwrap();
+        assert!(reader.read("../escape").is_err());
+        assert!(reader.read("/etc/passwd").is_err());
     }
 
     #[test]

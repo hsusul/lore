@@ -224,3 +224,173 @@ fn an_archive_created_by_the_writer_reopens_read_only() {
         "a domain write through a read-only connection must fail as read-only, got {error:?}"
     );
 }
+
+// ── The query surface over a read-only archive ──────────────────────────────
+
+/// Build a real archive on disk — a Codex session whose recorded changes carry
+/// patch payloads — and return its paths plus the session id.
+///
+/// Written with the ordinary writer path, then closed. Everything after this is
+/// a reader's view of a finished archive, which is the situation a query surface
+/// is actually in.
+fn seeded_archive() -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    String,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lore.db");
+    let blob_dir = dir.path().join("blobs");
+
+    let fixture = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/codex/patch_apply.jsonl"),
+    )
+    .unwrap();
+
+    let sid = {
+        let conn = storage::open(&db).unwrap();
+        let blobs = lore_core::storage::blob::BlobStore::open(&blob_dir).unwrap();
+        let parsed = lore_core::adapters::codex::CodexAdapter::new().parse_str(&fixture, "ro");
+        lore_core::ingest::persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap()
+    };
+    (dir, db, blob_dir, sid)
+}
+
+#[test]
+fn a_session_reads_back_through_a_read_only_connection() {
+    let (_dir, db, _blobs, sid) = seeded_archive();
+    let reader = storage::open_read_only(&db).unwrap();
+
+    let detail = lore_core::query::get_session(&reader, &sid)
+        .unwrap()
+        .expect("the persisted session is readable");
+    assert_eq!(detail.summary.id, sid);
+    assert!(
+        !detail.messages.is_empty(),
+        "a read-only connection returned no messages"
+    );
+    assert!(
+        !detail.file_events.is_empty(),
+        "the fixture's recorded file changes are readable"
+    );
+}
+
+#[test]
+fn search_pages_through_a_read_only_connection() {
+    // Search touches the FTS tables, which is the read most likely to want a
+    // write (temp indexes, spill). It must not.
+    let (_dir, db, _blobs, _sid) = seeded_archive();
+    let reader = storage::open_read_only(&db).unwrap();
+
+    let page = lore_core::search::search_page(
+        &reader,
+        "patch",
+        10,
+        None,
+        lore_core::search::SortOrder::Relevance,
+    )
+    .unwrap();
+    // The assertion is that paging *works* read-only, not that this fixture
+    // matches: a zero-hit page is a valid answer, an error is not.
+    assert!(page.hits.len() <= 10);
+}
+
+#[test]
+fn a_patch_reads_back_without_creating_a_blob_store() {
+    // `inspect --patch` in one line: read a recorded patch out of an archive
+    // while leaving the archive exactly as it was found.
+    let (_dir, db, blob_dir, sid) = seeded_archive();
+    let reader = storage::open_read_only(&db).unwrap();
+    let blobs = lore_core::storage::blob::BlobStore::open_existing(&blob_dir).unwrap();
+
+    let event_id: String = reader
+        .query_row(
+            "SELECT id FROM file_event WHERE session_id = ?1 AND patch_blob_id IS NOT NULL
+             ORDER BY id LIMIT 1",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    let patch = lore_core::query::file_patch_text(&reader, &blobs, &event_id)
+        .unwrap()
+        .expect("the recorded patch is readable");
+    assert!(!patch.is_empty());
+}
+
+#[test]
+fn reading_an_archive_leaves_its_directory_untouched() {
+    // The property a query surface owes an archive it does not own. Compares the
+    // full directory listing before and after a read, so a stray `tmp/` — or
+    // anything else — fails here.
+    let (dir, db, blob_dir, sid) = seeded_archive();
+
+    let listing = |root: &std::path::Path| -> Vec<String> {
+        fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                out.push(
+                    path.strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                if path.is_dir() {
+                    walk(&path, base, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, root, &mut out);
+        // WAL sidecars come and go with connections and say nothing about
+        // whether the archive's *contents* were modified.
+        out.retain(|p| !p.ends_with("-wal") && !p.ends_with("-shm"));
+        out.sort();
+        out
+    };
+
+    let before = listing(dir.path());
+    {
+        let reader = storage::open_read_only(&db).unwrap();
+        let blobs = lore_core::storage::blob::BlobStore::open_existing(&blob_dir).unwrap();
+        lore_core::query::get_session(&reader, &sid).unwrap();
+        lore_core::search::search_page(
+            &reader,
+            "patch",
+            10,
+            None,
+            lore_core::search::SortOrder::Relevance,
+        )
+        .unwrap();
+        if let Ok(event_id) = reader.query_row(
+            "SELECT id FROM file_event WHERE session_id = ?1 AND patch_blob_id IS NOT NULL
+             ORDER BY id LIMIT 1",
+            [&sid],
+            |r| r.get::<_, String>(0),
+        ) {
+            lore_core::query::file_patch_text(&reader, &blobs, &event_id).unwrap();
+        }
+    }
+    assert_eq!(before, listing(dir.path()), "reading changed the archive");
+}
+
+#[test]
+fn a_writer_opened_blob_store_would_have_left_a_trace() {
+    // Guards the previous test against passing for the wrong reason: it must be
+    // `open_existing` doing the work, not the read path happening to be inert.
+    let dir = tempfile::tempdir().unwrap();
+    let blob_dir = dir.path().join("blobs");
+    std::fs::create_dir(&blob_dir).unwrap();
+
+    lore_core::storage::blob::BlobStore::open_existing(&blob_dir).unwrap();
+    assert!(!blob_dir.join("tmp").exists());
+
+    lore_core::storage::blob::BlobStore::open(&blob_dir).unwrap();
+    assert!(
+        blob_dir.join("tmp").exists(),
+        "the writer constructor is expected to create tmp/ — if it no longer \
+         does, `reading_an_archive_leaves_its_directory_untouched` proves less \
+         than it appears to"
+    );
+}

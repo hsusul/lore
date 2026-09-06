@@ -2879,6 +2879,8 @@ version = "0.0.0"
 dependencies = [
  "lexopt",
  "lore-core",
+ "lore-ipc",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
