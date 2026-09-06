@@ -75,7 +75,7 @@ Exit codes:
     {usage}  usage: unknown flag or command, a relative --archive, or a command
        this build does not implement
     {no_archive}  no archive at that location (run `lorectl scan` to build one)
-    {not_a_repo}  not a Git repository (reserved; unused in this build)
+    {not_a_repo}  not inside a Git repository
     {unreadable}  archive present but unreadable: not a Lore archive, a schema
        from a newer or older build, an inconsistent migration ledger, or an
        I/O failure

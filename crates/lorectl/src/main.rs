@@ -18,6 +18,7 @@ mod exit;
 mod help;
 mod query;
 mod scan;
+mod status;
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -54,6 +55,7 @@ fn run() -> Result<u8, CliError> {
             Ok(exit::USAGE)
         }
         Action::Run(cli::Command::Scan) => scan::run(&invocation),
+        Action::Run(cli::Command::Status) => status::run(&invocation),
         Action::Run(cli::Command::Search) => query::search(&invocation),
         Action::Run(cli::Command::Inspect) => query::inspect(&invocation),
         Action::Run(command) => {

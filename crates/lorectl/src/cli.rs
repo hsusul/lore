@@ -77,8 +77,8 @@ impl Command {
     #[must_use]
     pub fn is_implemented(self) -> bool {
         match self {
-            Command::Scan | Command::Search | Command::Inspect => true,
-            Command::Status | Command::Hook | Command::Report => false,
+            Command::Scan | Command::Search | Command::Inspect | Command::Status => true,
+            Command::Hook | Command::Report => false,
         }
     }
 
@@ -279,7 +279,7 @@ mod tests {
             .filter(|c| c.is_implemented())
             .map(|c| c.name())
             .collect();
-        assert_eq!(implemented, ["scan", "inspect", "search"]);
+        assert_eq!(implemented, ["scan", "status", "inspect", "search"]);
     }
 
     #[test]

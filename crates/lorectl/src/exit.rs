@@ -30,8 +30,9 @@ pub const USAGE: u8 = 1;
 pub const NO_ARCHIVE: u8 = 2;
 /// The working directory is not inside a Git repository.
 ///
-/// Reserved: nothing in this build resolves a repository. It is defined now so
-/// the repository-aware commands cannot renumber the codes below it later.
+/// Distinct from every archive code: the archive may be perfectly healthy and
+/// simply not the problem. A caller that retried against a different archive
+/// would be fixing the wrong thing.
 pub const NOT_A_REPO: u8 = 3;
 /// An archive exists but this build cannot read it: not a Lore archive, a
 /// schema from a newer or older build, an inconsistent migration ledger, or an
@@ -78,6 +79,10 @@ pub enum CliError {
     /// The archive's persisted source roots could not be read.
     #[error(transparent)]
     SourceRoots(#[from] SourceRootError),
+    /// The command needs a Git repository and the working directory is not in
+    /// one.
+    #[error("not inside a Git repository")]
+    NotARepository,
 }
 
 impl CliError {
@@ -95,6 +100,7 @@ impl CliError {
             CliError::Lock(LockError::Held) => {
                 Some("wait for the other process to finish, then run it again")
             }
+            CliError::NotARepository => Some("run it from inside a Git repository"),
             _ => None,
         }
     }
@@ -110,6 +116,7 @@ pub fn exit_code(error: &CliError) -> u8 {
         CliError::Storage(error) => storage_exit_code(error),
         CliError::Lock(error) => lock_exit_code(error),
         CliError::Scan(_) => SCAN_FAILED,
+        CliError::NotARepository => NOT_A_REPO,
         // Reading the persisted roots is an archive read. Delegate the wrapped
         // storage failure so a too-new schema still reports as one, rather than
         // being flattened into a generic "unreadable".
@@ -257,6 +264,21 @@ mod tests {
         seen.dedup();
         assert_eq!(seen.len(), assigned.len(), "codes must not collide");
         assert_eq!(seen, [0, 1, 2, 3, 4, 5, 6], "7-9 stay free for later work");
+    }
+
+    #[test]
+    fn not_a_repository_is_its_own_code_and_not_an_archive_failure() {
+        // Reserved by the first CLI slice, claimed here. It must never collapse
+        // into an archive code: the archive may be fine and simply not the
+        // problem, and a caller retrying against another archive would be
+        // fixing the wrong thing.
+        assert_eq!(exit_code(&CliError::NotARepository), NOT_A_REPO);
+        assert_ne!(NOT_A_REPO, NO_ARCHIVE);
+        assert_ne!(NOT_A_REPO, ARCHIVE_UNREADABLE);
+        let advice = CliError::NotARepository
+            .advice()
+            .expect("a non-repository has a next action");
+        assert!(advice.contains("Git repository"), "{advice}");
     }
 
     #[test]
