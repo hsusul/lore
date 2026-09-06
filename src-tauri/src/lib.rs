@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use lore_core::adapters::AdapterRegistry;
 use lore_core::discovery::{watch_roots, DiscoveryConfig};
+use lore_core::lock::{LockError, ScanLock};
 use lore_core::pipeline::{ProgressEvent, ProgressSink};
 use lore_core::storage::blob::BlobStore;
 use lore_core::watcher::SessionWatcher;
@@ -44,6 +45,18 @@ struct AppState {
     /// The Lore-owned archive root (`app_data_dir`); used to purge on-disk
     /// backups/cache/quarantine on "forget everything".
     archive_dir: std::path::PathBuf,
+    /// Exclusive writer hold on this archive, kept for the app's lifetime.
+    ///
+    /// Held because `jobs::recover_running` returns **every** `running` job to
+    /// `pending` and the `job` table has no owner column: a second writer that
+    /// recovers while this app is mid-ingest reclaims its in-flight work, and
+    /// both then run the same source. The lock is what makes "one writer at a
+    /// time" true across processes (`lore_core::lock`, `ARCHITECTURE.md` §3.2).
+    ///
+    /// `None` means the lock was unavailable at startup, in which case no worker
+    /// was spawned and this instance never writes. Dropping the guard with the
+    /// app releases the lock.
+    _scan_lock: Option<ScanLock>,
 }
 
 /// An owned, thread-safe progress sink for the background worker. Accumulates
@@ -819,6 +832,40 @@ fn app_config(
 /// recovers interrupted jobs, runs the initial incremental scan, then keeps
 /// converting debounced source changes into durable coalesced jobs and draining
 /// them in bounded batches — all off the UI thread.
+/// Take the archive writer lock, or explain why the app is starting read-only.
+///
+/// Extracted from [`init_state`] so the decision is testable without a Tauri
+/// `AppHandle`. The decision is the safety-relevant part: `worker::spawn`
+/// immediately recovers and scans, and `jobs::recover_running` returns *every*
+/// `running` job to `pending` with no owner column, so spawning a worker without
+/// this lock reclaims another live writer's in-flight work
+/// (`ARCHITECTURE.md` §3.2).
+///
+/// `None` means no lock, which must mean no worker. It is deliberately not an
+/// error: the archive is still readable, so the app starts and every
+/// worker-backed command reports "background ingestion worker unavailable"
+/// rather than the app refusing to launch because a CLI scan happens to be
+/// running.
+fn acquire_writer_lock(archive_dir: &std::path::Path) -> Option<ScanLock> {
+    match ScanLock::acquire(archive_dir) {
+        Ok(lock) => Some(lock),
+        Err(LockError::Held) => {
+            eprintln!(
+                "warning: another Lore process is writing to this archive; \
+                 starting read-only (no background ingestion)"
+            );
+            None
+        }
+        Err(error) => {
+            eprintln!(
+                "warning: could not take the archive writer lock ({error}); \
+                 starting read-only (no background ingestion)"
+            );
+            None
+        }
+    }
+}
+
 fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     // Resolved by lore-core, not by `app.path().app_data_dir()`, so a CLI over
     // the same core opens the same archive. The default is byte-identical to
@@ -827,6 +874,19 @@ fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     // `LORE_ARCHIVE_DIR` now moves both surfaces together rather than only one.
     let data_dir = lore_core::paths::archive_dir(None)?;
     std::fs::create_dir_all(&data_dir)?;
+
+    // Taken before the database is opened, and held for the whole run. Anything
+    // between opening and locking is a window in which two writers both believe
+    // they are alone — the same ordering `lorectl scan` uses.
+    //
+    // Unavailable is not fatal: the archive is still perfectly readable, so the
+    // app starts *without* a background worker rather than refusing to launch
+    // because a CLI scan happens to be running. Every worker-backed command
+    // already reports "background ingestion worker unavailable" for that state.
+    // What must never happen is starting a worker without the lock — that is the
+    // hijack this exists to prevent.
+    let scan_lock = acquire_writer_lock(&data_dir);
+
     let db_path = data_dir.join(lore_core::paths::ARCHIVE_DB_FILENAME);
     let conn = lore_core::storage::open(&db_path)?;
     let blobs = BlobStore::open(data_dir.join(lore_core::paths::BLOBS_DIRNAME))?;
@@ -866,15 +926,20 @@ fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
                 None
             }
         };
-    let handle = worker::spawn(worker, watcher, WorkerSink::new(app.clone()));
+    // Only with the lock in hand. `spawn` immediately recovers and scans, which
+    // is exactly the sequence that would steal another writer's jobs.
+    let handle = scan_lock
+        .as_ref()
+        .map(|_| worker::spawn(worker, watcher, WorkerSink::new(app.clone())));
 
     Ok(AppState {
         db: Mutex::new(conn),
         blobs,
         registry,
         config: Mutex::new(config),
-        worker: Mutex::new(Some(handle)),
+        worker: Mutex::new(handle),
         archive_dir: data_dir,
+        _scan_lock: scan_lock,
     })
 }
 
@@ -954,6 +1019,64 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The safety property the desktop app owes every other writer: it may run a
+    /// background worker only while it holds the archive's writer lock.
+    ///
+    /// `worker::spawn` recovers and scans immediately, and `jobs::recover_running`
+    /// returns every `running` job to `pending` with no way to tell whose it was,
+    /// so a worker started without the lock reclaims a live CLI scan's jobs and
+    /// both then ingest the same source.
+    #[test]
+    fn no_writer_lock_means_no_background_worker() {
+        let archive = tempfile::tempdir().unwrap();
+
+        // Nothing else holds it: the app gets the lock, so a worker is allowed.
+        let held = acquire_writer_lock(archive.path());
+        assert!(held.is_some(), "the lock was free and was not taken");
+
+        // Something else holds it: the app must start read-only. `is_some()` on
+        // the returned lock is exactly the condition `init_state` uses to decide
+        // whether to spawn, so this is the real gate, not a proxy for it.
+        let contended = acquire_writer_lock(archive.path());
+        assert!(
+            contended.is_none(),
+            "the app would have started a worker while another writer held the lock"
+        );
+
+        drop(held);
+        assert!(
+            acquire_writer_lock(archive.path()).is_some(),
+            "the lock was not released when the holder went away"
+        );
+    }
+
+    #[test]
+    fn an_unusable_archive_directory_also_means_no_worker() {
+        // A lock that cannot be taken for any reason — not just contention —
+        // must still withhold the worker rather than proceeding unlocked.
+        let parent = tempfile::tempdir().unwrap();
+        let missing = parent.path().join("no-such-archive");
+        assert!(acquire_writer_lock(&missing).is_none());
+    }
+
+    #[test]
+    fn the_app_and_the_cli_contend_for_the_same_lock() {
+        // Both surfaces must name the same file, or each would hold its own and
+        // believe it was alone. `lorectl` builds the path the same way, from
+        // `paths::SCAN_LOCK_FILENAME`.
+        let archive = tempfile::tempdir().unwrap();
+        let app_hold = acquire_writer_lock(archive.path()).expect("app takes it");
+        assert_eq!(
+            app_hold.path(),
+            archive.path().join(lore_core::paths::SCAN_LOCK_FILENAME)
+        );
+        assert_eq!(
+            lore_core::lock::ScanLock::acquire(archive.path()).unwrap_err(),
+            lore_core::lock::LockError::Held,
+            "a CLI writer was not blocked by the app's lock"
+        );
+    }
 
     /// The archive location is `dirs::data_dir()/<identifier>`, and `lore-core`
     /// holds that identifier as a constant so a CLI can resolve the same path

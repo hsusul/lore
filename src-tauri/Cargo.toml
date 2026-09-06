@@ -50,3 +50,7 @@ serde_json = "1"
 # The updater is the sole network-capable component and is OFF by default
 # (M0 requirement). Compiling it in requires explicitly enabling this feature.
 updater = []
+
+[dev-dependencies]
+# Temporary archive directories for the writer-lock tests.
+tempfile = "3"
