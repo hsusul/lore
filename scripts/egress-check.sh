@@ -22,6 +22,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Point the adapters at empty directories for the duration of this script.
+# Belt-and-braces: no test should depend on the developer's real agent history
+# (TESTING.md), and the tests that used to were fixed — but this script runs
+# every test binary unfiltered, so a future regression would walk a real
+# ~/.claude here first and take minutes doing it.
+LORE_EGRESS_HOMES="$(mktemp -d)"
+trap 'rm -rf "$LORE_EGRESS_HOMES"' EXIT
+mkdir -p "$LORE_EGRESS_HOMES/claude" "$LORE_EGRESS_HOMES/codex"
+export CLAUDE_CONFIG_DIR="$LORE_EGRESS_HOMES/claude"
+export CODEX_HOME="$LORE_EGRESS_HOMES/codex"
+
 # Every package that must be network-incapable. Both checks run for each.
 PACKAGES=(lore-core lorectl)
 

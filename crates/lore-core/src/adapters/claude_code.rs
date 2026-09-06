@@ -1036,9 +1036,16 @@ mod tests {
     fn claude_config_dir_environment_variable_overrides_default_root() {
         let temp = tempfile::tempdir().unwrap();
         let custom_dir = temp.path().join("custom_claude");
+        // Restored rather than removed. The environment is process-wide, and
+        // clearing it left every other test in this binary — including ones on
+        // other threads — falling back to the real `~/.claude`.
+        let previous = std::env::var_os("CLAUDE_CONFIG_DIR");
         std::env::set_var("CLAUDE_CONFIG_DIR", &custom_dir);
         let root = ClaudeCodeAdapter::default_root();
-        std::env::remove_var("CLAUDE_CONFIG_DIR");
+        match previous {
+            Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
 
         assert_eq!(root, Some(custom_dir.join("projects")));
     }

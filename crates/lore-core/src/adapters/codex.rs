@@ -1400,9 +1400,14 @@ mod tests {
     fn codex_home_environment_variable_overrides_default_roots() {
         let temp = tempfile::tempdir().unwrap();
         let codex_home = temp.path().join("custom_codex");
+        // Restored, not removed — see the sibling test in `claude_code`.
+        let previous = std::env::var_os("CODEX_HOME");
         std::env::set_var("CODEX_HOME", &codex_home);
         let roots = CodexAdapter::default_roots();
-        std::env::remove_var("CODEX_HOME");
+        match previous {
+            Some(value) => std::env::set_var("CODEX_HOME", value),
+            None => std::env::remove_var("CODEX_HOME"),
+        }
 
         assert_eq!(roots.len(), 2);
         assert_eq!(roots[0], codex_home.join("sessions"));

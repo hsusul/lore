@@ -372,11 +372,30 @@ mod tests {
     #[test]
     fn spawned_worker_handles_signals_and_shuts_down_cleanly() {
         let conn = crate::storage::open_in_memory().unwrap();
+        // Explicit empty roots, not `DiscoveryConfig::new()`. An empty
+        // `DiscoveryRoots` means "use the adapter's documented defaults", which
+        // is the developer's real `~/.claude` — so this test used to scan the
+        // machine it ran on, taking minutes and violating TESTING.md's
+        // fixtures-only rule. It also made the test depend on environment
+        // variables that other tests in this binary mutate.
+        let roots = tempfile::tempdir().unwrap();
+        let confined = || {
+            let mut config = DiscoveryConfig::new();
+            for agent in ["claude-code", "codex"] {
+                config.set_roots(
+                    agent,
+                    crate::adapters::DiscoveryRoots::new(vec![roots.path().to_path_buf()]),
+                );
+            }
+            config
+        };
+        let config = confined();
+        let blobs = tempfile::tempdir().unwrap();
         let worker = Worker::new(
             conn,
             AdapterRegistry::v0(),
-            BlobStore::open(tempfile::tempdir().unwrap().path()).unwrap(),
-            DiscoveryConfig::new(),
+            BlobStore::open(blobs.path()).unwrap(),
+            config,
             WorkerConfig {
                 idle_poll: Duration::from_millis(50),
                 ..WorkerConfig::default()
@@ -387,7 +406,11 @@ mod tests {
         handle.wake();
         handle.trigger_rescan();
         handle.trigger_reverify();
-        handle.reconfigure(DiscoveryConfig::new(), None);
+        // Confined again, not `DiscoveryConfig::new()`. Reconfiguring to empty
+        // roots would hand the running worker the adapter defaults — the real
+        // `~/.claude` — and the rescan below would then walk the developer's
+        // machine. That was the actual cause of this test hanging.
+        handle.reconfigure(confined(), None);
         handle.shutdown();
     }
 
