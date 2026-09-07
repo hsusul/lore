@@ -72,39 +72,6 @@
   }
 }
 
-/* Manual theme override wins in both directions. */
-:root[data-theme="light"] {
-  color-scheme: light;
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #17130f;
-  --surface: #201b16;
-  --surface-2: #2a241d;
-  --surface-hover: rgba(244, 241, 234, 0.055);
-  --border: rgba(244, 241, 234, 0.09);
-  --border-strong: rgba(244, 241, 234, 0.16);
-  --text: #f0ece2;
-  --text-2: #b1a996;
-  --text-3: #7d7666;
-  --accent: #7c82f0;
-  --accent-fg: #ffffff;
-  --accent-weak: rgba(124, 130, 240, 0.18);
-  --success: #51cf66;
-  --warn: #f4a94b;
-  --danger: #ff7b7b;
-  --info: #4dabf7;
-  --diff-add-bg: rgba(81, 207, 102, 0.13);
-  --diff-add-fg: #69db7c;
-  --diff-del-bg: rgba(255, 123, 123, 0.12);
-  --diff-del-fg: #ff9b9b;
-  --prov-recorded: #b197fc;
-  --prov-captured: #3bc9db;
-  --prov-patch: #f4a94b;
-  --prov-reverified: #69db7c;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
-}
-
 * {
   box-sizing: border-box;
 }

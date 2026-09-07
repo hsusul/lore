@@ -33,16 +33,11 @@ use std::io::Write;
 use lore_core::enrich::{resolve_repository, RepoResolution};
 use lore_core::landing::{self, Landing, LandingIndex};
 use lore_core::paths::ARCHIVE_DB_FILENAME;
-use lore_core::{query, settings, storage};
+use lore_core::{settings, storage};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
 use crate::scan::{now_ms, KEY_LAST_SCAN_COMPLETED_AT};
-
-/// How many recent sessions to name. The count is always exact; this bounds
-/// only the listing.
-const RECENT_LIMIT: i64 = 5;
-const _: () = assert!(RECENT_LIMIT > 0);
 
 /// `lorectl status` — archived agent work for the current repository.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
@@ -72,18 +67,14 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         RepoResolution::NotARepository => unreachable!("handled above"),
     };
 
-    let sessions = match &repository_id {
-        Some(id) => query::list_repository_sessions(&conn, id, RECENT_LIMIT)?,
-        None => Vec::new(),
-    };
     let total = match &repository_id {
         Some(id) => repository_session_count(&conn, id)?,
         None => 0,
     };
 
-    let tally = match &repository_id {
-        Some(id) => landing_tally(&conn, id)?,
-        None => LandingTally::default(),
+    let report = match &repository_id {
+        Some(id) => risk_report(&conn, id)?,
+        None => RiskReport::default(),
     };
 
     let mut stdout = std::io::stdout().lock();
@@ -94,38 +85,61 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             "in_archive": repository_id.is_some(),
             "sessions": total,
             "last_scan_completed_at_ms": last_scan,
-            "recent": sessions.iter().map(|s| serde_json::json!({
-                "session_id": s.id,
-                "agent_id": s.agent_id,
-                "title": s.title,
-                "started_at_ms": s.started_at,
+            // The finding, first: content that exists in this repository but is
+            // on no branch, and would be discarded by an ordinary reset.
+            "at_risk": report.at_risk.iter().map(|c| serde_json::json!({
+                "session_id": c.session_id,
+                "agent_id": c.agent_id,
+                "title": c.title,
+                "path": c.path,
             })).collect::<Vec<_>>(),
-            // Counts per rung, never a score. `not_assessed` is reported
-            // alongside the rest precisely so a reader can see how much of the
-            // work Lore had no evidence for.
-            "landing": {
-                "committed": tally.committed,
-                "in_repository_not_on_a_branch": tally.staged,
-                "no_observed_landing": tally.no_observed,
-                "not_assessed": tally.not_assessed,
-            },
+            "at_risk_count": report.at_risk.len(),
+            // Reported, but never as risk — see `RiskReport::unseen`.
+            "not_found_in_this_repository": report.unseen,
+            "in_a_commit": report.committed,
+            "not_assessed": report.not_assessed,
             "assesses": ["repository", "sessions", "last_scan", "landing"],
         });
         let _ = writeln!(stdout, "{line}");
         return Ok(exit::OK);
     }
 
+    // The finding first, before any inventory. If there is something to act on,
+    // it should be the first thing on screen.
+    if !report.at_risk.is_empty() {
+        let _ = writeln!(
+            stdout,
+            "AT RISK  {} file(s) created by agents are in this repository but on no branch",
+            report.at_risk.len()
+        );
+        let _ = writeln!(stdout, "         a reset or clean would discard them\n");
+        let mut current = String::new();
+        for change in &report.at_risk {
+            if change.session_id != current {
+                current.clone_from(&change.session_id);
+                let title = change.title.as_deref().unwrap_or("(untitled)");
+                let _ = writeln!(
+                    stdout,
+                    "  {}  {}  {title}",
+                    change.session_id, change.agent_id
+                );
+            }
+            let _ = writeln!(stdout, "      {}", short_path(&change.path));
+        }
+        let _ = writeln!(stdout);
+    } else if report.committed > 0 {
+        // Said positively, and only when something was actually checked.
+        let _ = writeln!(
+            stdout,
+            "nothing at risk — {} agent change(s) are in commits\n",
+            report.committed
+        );
+    }
+
     let _ = writeln!(stdout, "repository  {display_name}");
     match repository_id {
         Some(_) => {
             let _ = writeln!(stdout, "sessions    {total} archived for this repository");
-            for session in &sessions {
-                let title = session.title.as_deref().unwrap_or("(untitled)");
-                let _ = writeln!(stdout, "  {}  {}  {title}", session.id, session.agent_id);
-            }
-            if total > i64::try_from(sessions.len()).unwrap_or(i64::MAX) {
-                let _ = writeln!(stdout, "  … and {} more", total - sessions.len() as i64);
-            }
         }
         None => {
             // Phrased as a fact about the archive, not about the work.
@@ -136,17 +150,25 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         }
     }
     let _ = writeln!(stdout, "last scan   {}", describe_last_scan(last_scan));
-    if tally.total() > 0 {
-        let _ = writeln!(stdout, "changes     {}", tally.describe());
-        // Explain the not-assessed rung once, without restating its count: it is
-        // the difference between "your work did not land" and "Lore could not
-        // tell", and a reader must not confuse the two.
-        if tally.not_assessed > 0 {
-            let _ = writeln!(
-                stdout,
-                "            (not assessed: an edit records a change, not the resulting file)"
-            );
-        }
+
+    if report.unseen > 0 {
+        // Deliberately not called risk: a file the agent created and someone
+        // then edited before committing is indistinguishable from one that was
+        // never committed, and Lore cannot tell them apart.
+        let _ = writeln!(
+            stdout,
+            "unseen      {} recorded change(s) not found in this repository \
+             (may have been edited before committing)",
+            report.unseen
+        );
+    }
+    if report.assessed() == 0 && report.not_assessed > 0 {
+        // The honest headline when nothing could be checked at all.
+        let _ = writeln!(
+            stdout,
+            "note        no change could be checked — an edit records a change, \
+             not the resulting file"
+        );
     }
     Ok(exit::OK)
 }
@@ -258,89 +280,108 @@ mod tests {
     }
 }
 
-/// Counts of recorded file changes per landing rung, for one repository.
+/// Agent-created content that is **in the repository's object database but on
+/// no branch** — an index entry, or a commit that was rewritten away.
 ///
-/// Counts, never a score. The rungs answer different questions and averaging
-/// them would destroy exactly the distinction the ladder exists to preserve.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct LandingTally {
+/// This is the one landing outcome that is both provable and actionable: the
+/// bytes exist, nothing references them, and an ordinary `git reset` or `git
+/// clean` discards them for good. It is the finding `status` leads with.
+#[derive(Debug, Clone)]
+struct AtRiskChange {
+    session_id: String,
+    agent_id: String,
+    title: Option<String>,
+    path: String,
+}
+
+/// What `status` found for one repository.
+#[derive(Debug, Default, Clone)]
+struct RiskReport {
+    /// Provably at risk: present, unreferenced.
+    at_risk: Vec<AtRiskChange>,
+    /// Content Lore recorded and cannot find in this repository at all.
+    ///
+    /// Reported **separately and softly**, never as risk: a file the agent
+    /// created and someone then edited before committing looks exactly like a
+    /// file that was never committed. Lore cannot tell those apart, so it does
+    /// not pretend to.
+    unseen: usize,
+    /// Confirmed in a commit.
     committed: usize,
-    staged: usize,
-    no_observed: usize,
+    /// No recorded content to check — an `edit` records a change, not the
+    /// resulting file.
     not_assessed: usize,
 }
 
-impl LandingTally {
-    fn total(self) -> usize {
-        self.committed + self.staged + self.no_observed + self.not_assessed
-    }
-
-    /// One line, listing only the rungs that actually occurred, so a clean
-    /// result reads as one short phrase instead of three zeroes.
-    fn describe(self) -> String {
-        let mut parts = Vec::new();
-        if self.committed > 0 {
-            parts.push(format!("{} in a commit", self.committed));
-        }
-        if self.staged > 0 {
-            parts.push(format!(
-                "{} in the repository but not on a branch",
-                self.staged
-            ));
-        }
-        if self.no_observed > 0 {
-            parts.push(format!("{} no observed landing", self.no_observed));
-        }
-        if self.not_assessed > 0 {
-            parts.push(format!("{} not assessed", self.not_assessed));
-        }
-        parts.join("  ·  ")
+impl RiskReport {
+    fn assessed(&self) -> usize {
+        self.at_risk.len() + self.unseen + self.committed
     }
 }
 
-/// Classify every recorded file change for a repository.
+/// Classify every recorded change for a repository, keeping the identity of the
+/// ones that are at risk so the report can name them.
 ///
-/// The repository's object history is walked **once** into a
-/// [`LandingIndex`], then every oid is a set membership test. Resolving each
-/// change independently would re-walk history per change.
-fn landing_tally(
-    conn: &rusqlite::Connection,
-    repository_id: &str,
-) -> Result<LandingTally, CliError> {
+/// The repository's object history is walked **once** into a [`LandingIndex`];
+/// resolving each change independently would re-walk history per change.
+fn risk_report(conn: &rusqlite::Connection, repository_id: &str) -> Result<RiskReport, CliError> {
     let mut stmt = conn
         .prepare(
-            "SELECT f.content_oid FROM file_event f
+            "SELECT f.content_oid, f.path, s.id, s.agent_id, s.title
+             FROM file_event f
              JOIN session_segment sg ON sg.id = f.segment_id
-             WHERE sg.repository_id = ?1",
+             JOIN agent_session s ON s.id = f.session_id
+             WHERE sg.repository_id = ?1
+             ORDER BY s.started_at DESC",
         )
         .map_err(lore_core::storage::StorageError::from)?;
-    let oids: Vec<Option<String>> = stmt
-        .query_map([repository_id], |row| row.get(0))
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(Option<String>, String, String, String, Option<String>)> = stmt
+        .query_map([repository_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
         .map_err(lore_core::storage::StorageError::from)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(lore_core::storage::StorageError::from)?;
 
-    let mut tally = LandingTally::default();
+    let mut report = RiskReport::default();
     let worktrees = landing::live_worktrees(conn, repository_id)?;
     let index = worktrees
         .iter()
         .find_map(|w| LandingIndex::build(w).map(|i| (w.clone(), i)));
 
-    for oid in oids {
+    for (oid, path, session_id, agent_id, title) in rows {
         let Some(oid) = oid else {
-            tally.not_assessed += 1;
+            report.not_assessed += 1;
             continue;
         };
-        match &index {
-            Some((worktree, index)) => match landing::classify(worktree, index, &oid) {
-                Landing::Committed => tally.committed += 1,
-                Landing::Staged => tally.staged += 1,
-                Landing::NoObservedLanding | Landing::NotAssessed => tally.no_observed += 1,
-            },
-            // No readable worktree: Lore has an oid but nowhere to look. That is
-            // an absence of observation, not an absence of landing.
-            None => tally.no_observed += 1,
+        let Some((worktree, index)) = &index else {
+            // An oid but nowhere to look. Not a finding either way.
+            report.unseen += 1;
+            continue;
+        };
+        match landing::classify(worktree, index, &oid) {
+            Landing::Committed => report.committed += 1,
+            Landing::Staged => report.at_risk.push(AtRiskChange {
+                session_id,
+                agent_id,
+                title,
+                path,
+            }),
+            Landing::NoObservedLanding | Landing::NotAssessed => report.unseen += 1,
         }
     }
-    Ok(tally)
+    Ok(report)
+}
+
+/// The last path segments of `path`, so a long absolute path stays readable
+/// without hiding which file it is.
+fn short_path(path: &str) -> String {
+    let parts: Vec<&str> = path.rsplit('/').take(3).collect();
+    let tail = parts.into_iter().rev().collect::<Vec<_>>().join("/");
+    if tail.len() < path.len() {
+        format!("…/{tail}")
+    } else {
+        tail
+    }
 }

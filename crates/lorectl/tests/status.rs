@@ -224,10 +224,10 @@ fn a_repository_with_no_recorded_sessions_says_so_as_a_fact_about_the_archive() 
 }
 
 #[test]
-fn status_json_reports_landing_as_counts_per_rung() {
-    // Counts, never a score, and never a bare boolean: "committed" and "not
-    // assessed" answer different questions, and a reader must be able to see
-    // how much of the work Lore had no evidence for.
+fn status_json_leads_with_what_is_at_risk() {
+    // The finding, not an inventory: `at_risk` names the changes a reset would
+    // discard, and the softer buckets are reported separately so they can never
+    // be mistaken for risk.
     let repo = repo();
     let homes = empty_homes();
     let archive = tempfile::tempdir().unwrap();
@@ -249,26 +249,70 @@ fn status_json_reports_landing_as_counts_per_rung() {
     );
     assert_eq!(code(&out), 0);
     let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).expect("valid JSON");
-    let landing = &value["landing"];
-    for rung in [
-        "committed",
-        "in_repository_not_on_a_branch",
-        "no_observed_landing",
-        "not_assessed",
-    ] {
-        assert!(
-            landing[rung].as_u64().is_some(),
-            "rung `{rung}` missing from {landing}"
-        );
+    assert!(value["at_risk"].is_array(), "{value}");
+    assert!(value["at_risk_count"].as_u64().is_some());
+    // The soft buckets exist and are named so they cannot read as risk.
+    assert!(value["not_found_in_this_repository"].as_u64().is_some());
+    assert!(value["in_a_commit"].as_u64().is_some());
+    assert!(value["not_assessed"].as_u64().is_some());
+    assert!(
+        value.get("at_risk").is_some() && value.get("landing").is_none(),
+        "the four-rung tally should have been replaced by the finding: {value}"
+    );
+}
+
+#[test]
+fn status_reports_nothing_at_risk_without_inventing_a_worry() {
+    // A clean repository must not produce an alarming-looking report. Silence
+    // about risk is the correct output when there is none.
+    let repo = repo();
+    let homes = empty_homes();
+    let archive = tempfile::tempdir().unwrap();
+    assert_eq!(
+        code(&lorectl_in(
+            repo.path(),
+            archive.path(),
+            homes.path(),
+            &["scan"]
+        )),
+        0
+    );
+
+    let out = lorectl_in(repo.path(), archive.path(), homes.path(), &["status"]);
+    let text = stdout(&out);
+    assert!(!text.contains("AT RISK"), "invented a risk: {text}");
+    for alarming in ["lost", "abandoned", "unfinished", "never landed"] {
+        assert!(!text.to_lowercase().contains(alarming), "{text}");
     }
-    let assesses: Vec<&str> = value["assesses"]
-        .as_array()
-        .expect("assesses lists what this output covers")
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
-    assert!(assesses.contains(&"landing"));
-    assert!(assesses.contains(&"last_scan"));
+}
+
+#[test]
+fn unseen_changes_are_never_described_as_at_risk() {
+    // A file the agent created and someone then edited before committing is
+    // indistinguishable from one that was never committed. Lore reports the
+    // former softly and must not fold it into the actionable bucket.
+    let repo = repo();
+    let homes = empty_homes();
+    let archive = tempfile::tempdir().unwrap();
+    assert_eq!(
+        code(&lorectl_in(
+            repo.path(),
+            archive.path(),
+            homes.path(),
+            &["scan"]
+        )),
+        0
+    );
+
+    let out = lorectl_in(repo.path(), archive.path(), homes.path(), &["status"]);
+    let text = stdout(&out);
+    if let Some(line) = text.lines().find(|l| l.starts_with("unseen")) {
+        assert!(
+            line.contains("may have been edited"),
+            "an unseen change must carry its caveat: {line}"
+        );
+        assert!(!line.to_uppercase().contains("AT RISK"), "{line}");
+    }
 }
 
 #[test]
@@ -367,7 +411,9 @@ fn status_reports_sessions_recorded_for_this_repository() {
     let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).unwrap();
     assert!(value["in_archive"].as_bool().unwrap(), "{value}");
     assert_eq!(value["sessions"], 1, "{value}");
-    assert_eq!(value["recent"].as_array().unwrap().len(), 1);
+    // No `recent` list: naming the last five sessions is inventory, not a
+    // finding, and `status` no longer prints it.
+    assert!(value.get("recent").is_none(), "{value}");
 }
 
 #[test]
@@ -458,4 +504,118 @@ fn status_works_while_the_writer_lock_is_held() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// Seed a Codex session recorded as having run in `repo`, so its file changes
+/// attach to that repository. The fixture's own cwd is rewritten to the repo.
+fn seed_codex_session_in(repo: &Path, homes: &Path) {
+    let fixture = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../lore-core/fixtures/codex/patch_apply.jsonl"),
+    )
+    .unwrap();
+    let retargeted = fixture.replace("\"/proj\"", &format!("{:?}", repo.display().to_string()));
+    let sessions = homes.join("codex/sessions/2026/08/11");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(sessions.join("rollout-000000000001.jsonl"), retargeted).unwrap();
+}
+
+#[test]
+fn status_finds_agent_work_that_is_staged_but_never_committed() {
+    // The finding the whole command exists for, reproduced end to end: an agent
+    // created a file, it reached the index, and nothing ever committed it. A
+    // `git reset` would discard it and nobody would know.
+    let repo = repo();
+    let homes = empty_homes();
+    let archive = tempfile::tempdir().unwrap();
+    seed_codex_session_in(repo.path(), homes.path());
+
+    assert_eq!(
+        code(&lorectl_in(
+            repo.path(),
+            archive.path(),
+            homes.path(),
+            &["scan"]
+        )),
+        0
+    );
+
+    // The agent's exact bytes reach the object database but no commit.
+    std::fs::create_dir_all(repo.path().join("src")).unwrap();
+    std::fs::write(repo.path().join("src/new.ts"), "export const x = 1\n").unwrap();
+    git(repo.path(), &["add", "src/new.ts"]);
+
+    let out = lorectl_in(
+        repo.path(),
+        archive.path(),
+        homes.path(),
+        &["--json", "status"],
+    );
+    assert_eq!(
+        code(&out),
+        0,
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).unwrap();
+    assert_eq!(
+        value["at_risk_count"], 1,
+        "staged agent work was not reported as at risk: {value}"
+    );
+    let entry = &value["at_risk"][0];
+    assert!(
+        entry["path"].as_str().unwrap().ends_with("src/new.ts"),
+        "the finding must name the file: {entry}"
+    );
+    assert_eq!(entry["agent_id"], "codex");
+
+    // And the human-readable form leads with it.
+    let text = lorectl_in(repo.path(), archive.path(), homes.path(), &["status"]);
+    let rendered = stdout(&text);
+    assert!(rendered.starts_with("AT RISK"), "{rendered}");
+    assert!(rendered.contains("new.ts"), "{rendered}");
+}
+
+#[test]
+fn committing_that_work_clears_the_finding() {
+    // The other half: once it is committed, `status` must stop warning. A report
+    // that never goes quiet is one people learn to ignore.
+    let repo = repo();
+    let homes = empty_homes();
+    let archive = tempfile::tempdir().unwrap();
+    seed_codex_session_in(repo.path(), homes.path());
+    assert_eq!(
+        code(&lorectl_in(
+            repo.path(),
+            archive.path(),
+            homes.path(),
+            &["scan"]
+        )),
+        0
+    );
+
+    std::fs::create_dir_all(repo.path().join("src")).unwrap();
+    std::fs::write(repo.path().join("src/new.ts"), "export const x = 1\n").unwrap();
+    git(repo.path(), &["add", "src/new.ts"]);
+    git(repo.path(), &["commit", "-m", "land the agent's file"]);
+
+    let out = lorectl_in(
+        repo.path(),
+        archive.path(),
+        homes.path(),
+        &["--json", "status"],
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).unwrap();
+    assert_eq!(
+        value["at_risk_count"], 0,
+        "the finding survived the work being committed: {value}"
+    );
+    assert_eq!(value["in_a_commit"], 1, "{value}");
+
+    let rendered = stdout(&lorectl_in(
+        repo.path(),
+        archive.path(),
+        homes.path(),
+        &["status"],
+    ));
+    assert!(rendered.starts_with("nothing at risk"), "{rendered}");
 }

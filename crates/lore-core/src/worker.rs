@@ -123,6 +123,11 @@ impl Worker {
         let pipeline = self.pipeline();
         pipeline.enqueue_scan(sink)?;
         let summary = self.drain_to_empty(&pipeline, sink)?;
+        // The queue is empty and no transaction is open — the one moment a
+        // checkpoint can do its job. Ingesting a large source commits more in a
+        // single transaction than `wal_autocheckpoint` can act on, so without
+        // this the WAL keeps that high-water mark for the life of the process.
+        crate::storage::checkpoint(&self.conn);
         sink.emit(crate::pipeline::ProgressEvent::ScanFinished);
         Ok(summary)
     }

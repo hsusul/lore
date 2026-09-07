@@ -232,6 +232,34 @@ fn configure_reader(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Fold the write-ahead log back into the database and try to reset the file.
+///
+/// Called when a writer has finished a batch of work and no transaction is open.
+/// Without it the WAL grows without bound in a long-running app: a single large
+/// ingest commits far more than `wal_autocheckpoint`'s threshold in one
+/// transaction, and the automatic checkpoint only runs at commit boundaries, so
+/// the file keeps whatever high-water mark that transaction set. An archive
+/// observed in the wild had a 360 MB WAL beside a 1.25 GB database, and every
+/// read had to traverse it.
+///
+/// `TRUNCATE` is attempted first because it is the only mode that shrinks the
+/// file, but it cannot complete while any other connection holds a read
+/// snapshot — and a desktop app keeps one open for its whole run. `PASSIVE` is
+/// the fallback: it cannot reset the file, but it does copy committed frames
+/// back into the database so the space is reused instead of appended to.
+///
+/// Best-effort by design. A checkpoint that cannot run is a missed
+/// optimization, never a correctness problem, so failure is swallowed rather
+/// than propagated into a caller that has already durably committed its work.
+pub fn checkpoint(conn: &Connection) {
+    if conn
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .is_err()
+    {
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    }
+}
+
 /// Process-wide write serialization for the archive database.
 ///
 /// The UI and the background ingest worker each hold their own SQLite connection

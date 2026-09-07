@@ -21,7 +21,6 @@ import {
   getFilePatch,
   getGitSnapshot,
   getSession,
-  getSetting,
   listDetectedAgents,
   listFolderSessionsPage,
   listFolders,
@@ -36,7 +35,6 @@ import {
   searchPage,
   sessionSecretCount,
   setSessionFolder,
-  setSetting,
   type DetectedAgent,
   type FolderSummary,
   type GitObservationDto,
@@ -81,22 +79,6 @@ function Mark() {
       <circle cx="28" cy="48" r="7" fill="currentColor" />
     </svg>
   );
-}
-
-function toggleTheme() {
-  const root = document.documentElement;
-  const next =
-    root.dataset.theme === "dark"
-      ? "light"
-      : root.dataset.theme === "light"
-        ? "dark"
-        : matchMedia("(prefers-color-scheme: dark)").matches
-          ? "light"
-          : "dark";
-  root.dataset.theme = next;
-  // Persist so the choice survives restarts and archive clearing. Fire-and-forget:
-  // a failed write must not break the toggle.
-  void setSetting("theme", JSON.stringify(next)).catch(() => {});
 }
 
 /**
@@ -235,20 +217,6 @@ export default function App() {
       void unlisten.then((off) => off());
     };
   }, [refresh]);
-
-  // Restore a persisted theme choice on launch; absent one, the CSS default
-  // (system preference) applies. Ignores an unset or malformed value.
-  useEffect(() => {
-    void getSetting("theme")
-      .then((raw) => {
-        if (!raw) return;
-        const theme = JSON.parse(raw) as unknown;
-        if (theme === "light" || theme === "dark") {
-          document.documentElement.dataset.theme = theme;
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -730,15 +698,6 @@ export default function App() {
           </span>
         </button>
         <span className="shell__dev">preview build</span>
-        <button
-          type="button"
-          className="icon-btn"
-          onClick={toggleTheme}
-          aria-label="Toggle theme"
-          title="Toggle light/dark"
-        >
-          ◐
-        </button>
         <button
           type="button"
           className="icon-btn"

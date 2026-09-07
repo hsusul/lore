@@ -412,3 +412,53 @@ fn a_writer_opened_blob_store_would_have_left_a_trace() {
          than it appears to"
     );
 }
+
+#[test]
+fn a_completed_scan_folds_the_write_ahead_log_back() {
+    // Regression for an archive found in the wild with a 360 MB WAL beside a
+    // 1.25 GB database: nothing ever checkpointed outside `forget`, so a single
+    // large ingest set a high-water mark the file kept for the life of the
+    // process, and every read had to traverse it.
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lore.db");
+    let wal = dir.path().join("lore.db-wal");
+
+    let conn = storage::open(&db).unwrap();
+    // Commit enough to push the WAL past its automatic threshold.
+    for i in 0..2_000 {
+        folders::create_folder(&conn, &format!("folder-{i}")).unwrap();
+    }
+    let before = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+
+    storage::checkpoint(&conn);
+    let after = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+
+    assert!(
+        after <= before,
+        "the checkpoint grew the WAL: {before} -> {after}"
+    );
+    // With no competing reader, TRUNCATE should actually reset the file.
+    assert_eq!(after, 0, "TRUNCATE left {after} bytes of WAL behind");
+    // And the data is still there — a checkpoint moves pages, it does not drop
+    // them.
+    assert_eq!(folder_count(&conn), 2_000);
+}
+
+#[test]
+fn a_checkpoint_blocked_by_a_reader_is_not_an_error() {
+    // A desktop app holds a reader open for its whole run, which makes TRUNCATE
+    // impossible. That must degrade to PASSIVE rather than failing the scan that
+    // just succeeded.
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lore.db");
+    let writer = storage::open(&db).unwrap();
+    folders::create_folder(&writer, "one").unwrap();
+
+    let reader = storage::open_read_only(&db).unwrap();
+    assert_eq!(folder_count(&reader), 1);
+
+    // Must not panic or poison the connection.
+    storage::checkpoint(&writer);
+    folders::create_folder(&writer, "two").unwrap();
+    assert_eq!(folder_count(&writer), 2);
+}
