@@ -11,12 +11,17 @@
 //! - which archived sessions have segments linked to that repository;
 //! - when a scan of this archive last *completed* (`scan.last_completed_at`).
 //!
-//! Lore cannot yet prove anything about **landing** — whether the work in those
-//! sessions reached a commit. That needs per-change content identity and a
-//! commit path, which do not exist yet. So this command says nothing about it,
-//! rather than implying it with a silence a reader would fill in. Words like
-//! *lost*, *abandoned*, *uncommitted*, *unfinished*, and *never landed* are
-//! forbidden here until they are earned.
+//! - whether recorded file content reached a commit, where the content is
+//!   genuinely known (`lore_core::landing`).
+//!
+//! The landing ladder is discrete and every rung is an observation, never a
+//! verdict: *in a commit*, *in the repository but not on any branch*, *no
+//! observed landing*, *not assessed*. The last two are different in kind — one
+//! means Lore looked and did not find it, the other that Lore had nothing to
+//! look for, because an `edit` records a diff rather than the resulting file.
+//! Words like *lost*, *abandoned*, *uncommitted*, *unfinished*, and *never
+//! landed* remain forbidden: they assert something about the developer's work,
+//! and Lore only ever knows what it looked for and found.
 //!
 //! Every count is therefore reported next to **when Lore last looked**. A
 //! session count without that is uninterpretable: "no archived sessions" and
@@ -26,6 +31,7 @@
 use std::io::Write;
 
 use lore_core::enrich::{resolve_repository, RepoResolution};
+use lore_core::landing::{self, Landing, LandingIndex};
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::{query, settings, storage};
 
@@ -75,6 +81,11 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         None => 0,
     };
 
+    let tally = match &repository_id {
+        Some(id) => landing_tally(&conn, id)?,
+        None => LandingTally::default(),
+    };
+
     let mut stdout = std::io::stdout().lock();
     if invocation.json {
         let line = serde_json::json!({
@@ -89,13 +100,16 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
                 "title": s.title,
                 "started_at_ms": s.started_at,
             })).collect::<Vec<_>>(),
-            // No `landing` key at all. An explicit `null` was worse than the
-            // omission it was meant to fix: `if (!data.landing)` reads null as
-            // "nothing landed", which is exactly the claim this build cannot
-            // make. An absent key forces a caller to notice it is absent.
-            // `assesses` says positively what this output covers, so the gap is
-            // discoverable without encoding a value for it.
-            "assesses": ["repository", "sessions", "last_scan"],
+            // Counts per rung, never a score. `not_assessed` is reported
+            // alongside the rest precisely so a reader can see how much of the
+            // work Lore had no evidence for.
+            "landing": {
+                "committed": tally.committed,
+                "in_repository_not_on_a_branch": tally.staged,
+                "no_observed_landing": tally.no_observed,
+                "not_assessed": tally.not_assessed,
+            },
+            "assesses": ["repository", "sessions", "last_scan", "landing"],
         });
         let _ = writeln!(stdout, "{line}");
         return Ok(exit::OK);
@@ -122,11 +136,18 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         }
     }
     let _ = writeln!(stdout, "last scan   {}", describe_last_scan(last_scan));
-    // The limit of what this build knows, stated rather than left to inference.
-    let _ = writeln!(
-        stdout,
-        "note        whether this work landed in Git is not assessed by this build"
-    );
+    if tally.total() > 0 {
+        let _ = writeln!(stdout, "changes     {}", tally.describe());
+        // Explain the not-assessed rung once, without restating its count: it is
+        // the difference between "your work did not land" and "Lore could not
+        // tell", and a reader must not confuse the two.
+        if tally.not_assessed > 0 {
+            let _ = writeln!(
+                stdout,
+                "            (not assessed: an edit records a change, not the resulting file)"
+            );
+        }
+    }
     Ok(exit::OK)
 }
 
@@ -235,4 +256,91 @@ mod tests {
         assert_eq!(humanize_ms(90 * 60_000), "1 hour");
         assert_eq!(humanize_ms(0), "less than a minute");
     }
+}
+
+/// Counts of recorded file changes per landing rung, for one repository.
+///
+/// Counts, never a score. The rungs answer different questions and averaging
+/// them would destroy exactly the distinction the ladder exists to preserve.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct LandingTally {
+    committed: usize,
+    staged: usize,
+    no_observed: usize,
+    not_assessed: usize,
+}
+
+impl LandingTally {
+    fn total(self) -> usize {
+        self.committed + self.staged + self.no_observed + self.not_assessed
+    }
+
+    /// One line, listing only the rungs that actually occurred, so a clean
+    /// result reads as one short phrase instead of three zeroes.
+    fn describe(self) -> String {
+        let mut parts = Vec::new();
+        if self.committed > 0 {
+            parts.push(format!("{} in a commit", self.committed));
+        }
+        if self.staged > 0 {
+            parts.push(format!(
+                "{} in the repository but not on a branch",
+                self.staged
+            ));
+        }
+        if self.no_observed > 0 {
+            parts.push(format!("{} no observed landing", self.no_observed));
+        }
+        if self.not_assessed > 0 {
+            parts.push(format!("{} not assessed", self.not_assessed));
+        }
+        parts.join("  ·  ")
+    }
+}
+
+/// Classify every recorded file change for a repository.
+///
+/// The repository's object history is walked **once** into a
+/// [`LandingIndex`], then every oid is a set membership test. Resolving each
+/// change independently would re-walk history per change.
+fn landing_tally(
+    conn: &rusqlite::Connection,
+    repository_id: &str,
+) -> Result<LandingTally, CliError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT f.content_oid FROM file_event f
+             JOIN session_segment sg ON sg.id = f.segment_id
+             WHERE sg.repository_id = ?1",
+        )
+        .map_err(lore_core::storage::StorageError::from)?;
+    let oids: Vec<Option<String>> = stmt
+        .query_map([repository_id], |row| row.get(0))
+        .map_err(lore_core::storage::StorageError::from)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(lore_core::storage::StorageError::from)?;
+
+    let mut tally = LandingTally::default();
+    let worktrees = landing::live_worktrees(conn, repository_id)?;
+    let index = worktrees
+        .iter()
+        .find_map(|w| LandingIndex::build(w).map(|i| (w.clone(), i)));
+
+    for oid in oids {
+        let Some(oid) = oid else {
+            tally.not_assessed += 1;
+            continue;
+        };
+        match &index {
+            Some((worktree, index)) => match landing::classify(worktree, index, &oid) {
+                Landing::Committed => tally.committed += 1,
+                Landing::Staged => tally.staged += 1,
+                Landing::NoObservedLanding | Landing::NotAssessed => tally.no_observed += 1,
+            },
+            // No readable worktree: Lore has an oid but nowhere to look. That is
+            // an absence of observation, not an absence of landing.
+            None => tally.no_observed += 1,
+        }
+    }
+    Ok(tally)
 }

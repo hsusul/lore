@@ -224,10 +224,10 @@ fn a_repository_with_no_recorded_sessions_says_so_as_a_fact_about_the_archive() 
 }
 
 #[test]
-fn status_json_carries_no_landing_field_at_all() {
-    // Not even a null one. `if (!data.landing)` treats null as "nothing
-    // landed" — the exact claim this build cannot support — so the key is
-    // absent, and `assesses` states positively what the output does cover.
+fn status_json_reports_landing_as_counts_per_rung() {
+    // Counts, never a score, and never a bare boolean: "committed" and "not
+    // assessed" answer different questions, and a reader must be able to see
+    // how much of the work Lore had no evidence for.
     let repo = repo();
     let homes = empty_homes();
     let archive = tempfile::tempdir().unwrap();
@@ -249,18 +249,26 @@ fn status_json_carries_no_landing_field_at_all() {
     );
     assert_eq!(code(&out), 0);
     let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).expect("valid JSON");
-    assert!(
-        value.get("landing").is_none(),
-        "a landing key — even null — invites a negative reading: {value}"
-    );
+    let landing = &value["landing"];
+    for rung in [
+        "committed",
+        "in_repository_not_on_a_branch",
+        "no_observed_landing",
+        "not_assessed",
+    ] {
+        assert!(
+            landing[rung].as_u64().is_some(),
+            "rung `{rung}` missing from {landing}"
+        );
+    }
     let assesses: Vec<&str> = value["assesses"]
         .as_array()
         .expect("assesses lists what this output covers")
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
-    assert!(!assesses.contains(&"landing"), "{value}");
-    assert!(assesses.contains(&"last_scan"), "{value}");
+    assert!(assesses.contains(&"landing"));
+    assert!(assesses.contains(&"last_scan"));
 }
 
 #[test]

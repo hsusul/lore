@@ -336,11 +336,27 @@ fn persist_rows(
             Some(staged) => Some(BlobStore::reference(tx, staged, PATCH_MEDIA_TYPE)?),
             None => None,
         };
+        // Content identity, for later landing lookups (`crate::landing`).
+        //
+        // Only for `create`, whose recorded payload *is* the resulting file, so
+        // the oid genuinely addresses what the agent produced. An `edit` records
+        // a diff or an old/new fragment; reconstructing its post-image needs the
+        // pre-image, and hashing the file from disk here would address whatever
+        // it contains now — attributing later human edits to the agent. Those
+        // stay NULL, which the query side reads as "not assessed", never as
+        // "did not land".
+        let content_oid = match (fe.change_kind, fe.patch_text.as_deref()) {
+            (crate::model::FileChangeKind::Create, Some(content)) => {
+                Some(crate::landing::blob_oid(content.as_bytes()))
+            }
+            _ => None,
+        };
         tx.execute(
             "INSERT INTO file_event
                 (id, session_id, segment_id, tool_call_id, path, change_kind, old_path,
-                 lines_added, lines_removed, patch_blob_id, source, event_ts)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                 lines_added, lines_removed, patch_blob_id, source, event_ts,
+                 content_oid, content_oid_algo)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 fid,
                 session_id,
@@ -354,6 +370,10 @@ fn persist_rows(
                 patch_blob_id,
                 fe.source.as_str(),
                 fe.event_ts,
+                content_oid,
+                content_oid
+                    .as_ref()
+                    .map(|_| crate::landing::CONTENT_OID_ALGO),
             ],
         )?;
 

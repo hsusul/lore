@@ -78,6 +78,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "search_git_filter_indexes",
         sql: include_str!("../../migrations/0012_search_git_filter_indexes.sql"),
     },
+    Migration {
+        version: 13,
+        name: "file_content_identity",
+        sql: include_str!("../../migrations/0013_file_content_identity.sql"),
+    },
 ];
 
 /// How many migrations exist. Tests assert against this rather than a literal
