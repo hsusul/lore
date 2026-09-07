@@ -211,7 +211,10 @@ fn stale_parser_version_forces_reparse_without_generation_bump() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(parser_version, "2");
+    // Asserted against the constant, not a literal: the property is "a reparse
+    // records the *current* parser version", and pinning the number here meant
+    // a necessary bump looked like a regression.
+    assert_eq!(parser_version, lore_core::ingest::PARSER_VERSION);
 }
 
 #[test]

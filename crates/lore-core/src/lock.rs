@@ -37,10 +37,11 @@
 //!
 //! ## Scope, stated plainly
 //!
-//! This module provides the lock. A writer only benefits from it if it takes it.
-//! `lorectl scan` does. **The desktop app does not yet**, so this does not, on
-//! its own, make the app and the CLI safe to run concurrently — it makes
-//! concurrent `lorectl` writers safe and gives the app something to adopt.
+//! This module provides the lock; a writer only benefits from it if it takes
+//! it. Both do: `lorectl scan` holds it for a scan, and the desktop app takes
+//! it at startup and holds it for its whole run (`src-tauri/src/lib.rs`), since
+//! its worker may ingest at any moment. The visible consequence is deliberate —
+//! `lorectl scan` exits 5 while the app is open.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};

@@ -73,7 +73,7 @@ fn session_start(invocation: &Invocation) -> Result<(), CliError> {
     let mut stdout = std::io::stdout().lock();
     let _ = writeln!(
         stdout,
-        "lore: {at_risk} file(s) created by agents in this repository are on no branch \
+        "lore: {at_risk} file(s) written by agents are staged and not committed \
          (a reset would discard them) — see `lorectl status`"
     );
     Ok(())
@@ -107,6 +107,8 @@ fn count_at_risk(conn: &rusqlite::Connection, repository_id: &str) -> Result<usi
     };
     Ok(oids
         .iter()
+        // Staged only. `Unreferenced` content is not discarded by a reset, so
+        // announcing it under the same warning would be false.
         .filter(|oid| matches!(landing::classify(&worktree, &index, oid), Landing::Staged))
         .count())
 }

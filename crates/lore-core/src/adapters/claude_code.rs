@@ -211,7 +211,20 @@ fn file_event_from_tool(name: &str, block: &Value, call_id: String) -> Option<Pa
         old_path: None,
         lines_added: None,
         lines_removed: None,
-        patch_text: None,
+        // A `Write` tool call carries the whole file it wrote, so the resulting
+        // content is genuinely known and can be addressed (`landing`). `Edit`
+        // carries only an old/new fragment and stays `None`: reconstructing its
+        // post-image needs the pre-image, and hashing the file from disk would
+        // address whatever it holds now.
+        patch_text: if matches!(change_kind, FileChangeKind::Write) {
+            block
+                .get("input")
+                .and_then(|inp| inp.get("content"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        },
         source: FileEventSource::AgentToolInput,
         event_ts: None,
     })

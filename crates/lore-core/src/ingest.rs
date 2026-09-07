@@ -24,7 +24,13 @@ use crate::storage::blob::{BlobStore, StagedBlob};
 use crate::storage::{Result, StorageError};
 
 /// Bumped when parser output for a source could change; drives re-ingest.
-const PARSER_VERSION: &str = "2";
+///
+/// v3: file events carry `content_oid` (migration 0013), and Claude `Write`
+/// events carry the content they wrote. Both change what a re-parse produces,
+/// so sources ingested at v2 must be parsed again — without this bump the
+/// landing feature can never turn on for an existing archive, because
+/// unchanged v2 sources are skipped.
+pub const PARSER_VERSION: &str = "3";
 /// Bytes of a source file hashed to distinguish append from rewrite.
 const PREFIX_BYTES: usize = 4096;
 /// Media type recorded for agent-recorded patch/diff blobs.
@@ -346,9 +352,14 @@ fn persist_rows(
         // stay NULL, which the query side reads as "not assessed", never as
         // "did not land".
         let content_oid = match (fe.change_kind, fe.patch_text.as_deref()) {
-            (crate::model::FileChangeKind::Create, Some(content)) => {
-                Some(crate::landing::blob_oid(content.as_bytes()))
-            }
+            // `Create` (Codex) and `Write` (Claude Code) both record the whole
+            // resulting file, so the oid genuinely addresses what the agent
+            // produced. Claude never emits `Create`, so without `Write` here
+            // every Claude file change would be invisible to landing forever.
+            (
+                crate::model::FileChangeKind::Create | crate::model::FileChangeKind::Write,
+                Some(content),
+            ) => Some(crate::landing::blob_oid(content.as_bytes())),
             _ => None,
         };
         tx.execute(

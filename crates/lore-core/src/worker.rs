@@ -170,6 +170,14 @@ impl Worker {
     ) -> jobs::Result<WorkPass> {
         let enqueued = self.enqueue_paths(paths)?;
         let drained = self.pipeline().drain(sink, self.cfg.drain_batch)?;
+        // The desktop app ingests through *this* loop, not `scan`, so stamping
+        // only in `scan` meant the app never recorded that it had looked — and
+        // `status` told the owner "never scanned" about an archive the app had
+        // been filling for weeks. Recorded whenever a pass actually did work, so
+        // an idle tick does not keep rewriting the row.
+        if enqueued > 0 || drained != DrainSummary::default() {
+            let _ = crate::settings::record_scan_completed(&self.conn, now_ms());
+        }
         Ok(WorkPass { enqueued, drained })
     }
 

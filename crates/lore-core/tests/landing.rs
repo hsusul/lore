@@ -348,3 +348,90 @@ fn the_index_is_built_once_and_answers_many() {
     assert!(index.contains(&landing::blob_oid(b)));
     assert!(!index.contains(&landing::blob_oid(b"never committed\n")));
 }
+
+#[test]
+fn staged_and_unreferenced_are_different_rungs() {
+    // They need different advice. A reset discards staged content; it does not
+    // discard a blob left behind by rewritten history, and telling someone it
+    // would is the forbidden inference in friendlier words.
+    let dir = repo();
+
+    let staged = b"pub fn staged_now() {}\n";
+    std::fs::write(dir.path().join("staged.rs"), staged).unwrap();
+    git(dir.path(), &["add", "staged.rs"]);
+    assert_eq!(
+        landing::lookup_in_worktree(dir.path(), &landing::blob_oid(staged)),
+        Some(Landing::Staged),
+        "content in the index must read as staged"
+    );
+
+    // Commit on a branch, then delete the branch: the blob survives in the
+    // object database but nothing references it and it is not in the index.
+    let orphaned = b"pub fn rewritten_away() {}\n";
+    git(dir.path(), &["checkout", "-b", "doomed"]);
+    std::fs::write(dir.path().join("doomed.rs"), orphaned).unwrap();
+    git(dir.path(), &["add", "doomed.rs"]);
+    git(dir.path(), &["commit", "-m", "doomed work"]);
+    git(dir.path(), &["checkout", "main"]);
+    git(dir.path(), &["branch", "-D", "doomed"]);
+
+    assert_eq!(
+        landing::lookup_in_worktree(dir.path(), &landing::blob_oid(orphaned)),
+        Some(Landing::Unreferenced),
+        "an unreferenced blob must not be reported as staged"
+    );
+}
+
+#[test]
+fn only_the_staged_rung_may_mention_a_reset() {
+    // Pins the copy contract at the source, so a later edit cannot quietly
+    // attach reset advice to a rung where it is false.
+    assert!(Landing::Staged.describe().contains("staged"));
+    for rung in [
+        Landing::Unreferenced,
+        Landing::NoObservedLanding,
+        Landing::NotAssessed,
+        Landing::Committed,
+    ] {
+        let text = rung.describe();
+        assert!(!text.contains("reset"), "`{text}` promises reset behaviour");
+        assert!(!text.contains("discard"), "`{text}` promises discarding");
+    }
+}
+
+#[test]
+fn a_claude_write_is_addressed_like_a_codex_create() {
+    // Claude Code never emits `Create`; it emits `Write` with the whole file.
+    // Without hashing that, every Claude file change is invisible to landing.
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = lore_core::storage::blob::BlobStore::open(blob_dir.path()).unwrap();
+
+    let content = "export const written = 1\n";
+    let line = format!(
+        concat!(
+            r#"{{"type":"assistant","uuid":"a1","sessionId":"w","cwd":"/proj","#,
+            r#""message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t1","#,
+            r#""name":"Write","input":{{"file_path":"/proj/w.ts","content":{}}}}}]}}}}"#,
+            "\n"
+        ),
+        serde_json::to_string(content).unwrap()
+    );
+    let parsed = lore_core::adapters::claude_code::ClaudeCodeAdapter::new().parse_str(&line, "w");
+    let sid =
+        lore_core::ingest::persist_session(&conn, "claude-code", "Claude Code", &parsed, &blobs)
+            .unwrap();
+
+    let oid: Option<String> = conn
+        .query_row(
+            "SELECT content_oid FROM file_event WHERE session_id = ?1 AND change_kind = 'write'",
+            [&sid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        oid.as_deref(),
+        Some(landing::blob_oid(content.as_bytes()).as_str()),
+        "a Claude write did not record the content it wrote"
+    );
+}

@@ -64,25 +64,18 @@ fn empty_homes() -> tempfile::TempDir {
 }
 
 /// Words that assert something about whether work reached a commit. None of
-/// them is provable by this build, so none may appear in its output.
-const FORBIDDEN: &[&str] = &[
-    "lost",
-    "abandoned",
-    "uncommitted",
-    "unfinished",
-    "never landed",
-    "not landed",
-    "landed",
-];
 
 #[test]
-fn status_never_claims_anything_about_landing() {
-    // The epistemic constraint, enforced rather than trusted. If a later change
-    // teaches Lore to prove landing, this test should be updated deliberately —
-    // which is the point of failing here.
+fn status_only_promises_a_reset_for_content_a_reset_would_discard() {
+    // Replaces a word-ban that had gone stale: it forbade "landed" and so kept
+    // passing after landing shipped, while catching none of the claims that
+    // actually matter. This pins the sentence instead. Staged content is
+    // discarded by a reset; unreferenced content is not, and saying otherwise is
+    // the forbidden inference with friendlier words.
     let repo = repo();
     let homes = empty_homes();
     let archive = tempfile::tempdir().unwrap();
+    seed_codex_session_in(repo.path(), homes.path());
     assert_eq!(
         code(&lorectl_in(
             repo.path(),
@@ -93,27 +86,29 @@ fn status_never_claims_anything_about_landing() {
         0
     );
 
-    let out = lorectl_in(repo.path(), archive.path(), homes.path(), &["status"]);
-    assert_eq!(
-        code(&out),
-        0,
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
+    // Commit on a branch and delete it: present, unreferenced, not staged.
+    std::fs::create_dir_all(repo.path().join("src")).unwrap();
+    git(repo.path(), &["checkout", "-b", "doomed"]);
+    std::fs::write(repo.path().join("src/new.ts"), "export const x = 1\n").unwrap();
+    git(repo.path(), &["add", "src/new.ts"]);
+    git(repo.path(), &["commit", "-m", "doomed"]);
+    git(repo.path(), &["checkout", "main"]);
+    git(repo.path(), &["branch", "-D", "doomed"]);
+
+    let text = stdout(&lorectl_in(
+        repo.path(),
+        archive.path(),
+        homes.path(),
+        &["status"],
+    ));
+    assert!(
+        !text.contains("AT RISK"),
+        "unreferenced content was announced as at risk: {text}"
     );
-    let text = stdout(&out).to_lowercase();
-    for word in FORBIDDEN {
-        // "not assessed by this build" is the one sanctioned mention, and it
-        // denies a claim rather than making one.
-        let stripped = text.replace(
-            "whether this work landed in git is not assessed by this build",
-            "",
-        );
-        assert!(
-            !stripped.contains(word),
-            "status claimed `{word}`, which this build cannot prove:\n{}",
-            stdout(&out)
-        );
-    }
+    assert!(
+        !text.contains("reset"),
+        "promised reset behaviour for content a reset does not discard: {text}"
+    );
 }
 
 #[test]

@@ -156,7 +156,9 @@ fn at_risk_work_is_announced_once_and_names_the_next_step() {
     assert_eq!(code(&out), 0);
     let text = stdout(&out);
     assert!(text.contains("lore:"), "{text}");
-    assert!(text.contains("on no branch"), "{text}");
+    // The claim is only made for staged content, where a reset really would
+    // discard it.
+    assert!(text.contains("staged and not committed"), "{text}");
     assert!(
         text.contains("lorectl status"),
         "must name the next step: {text}"

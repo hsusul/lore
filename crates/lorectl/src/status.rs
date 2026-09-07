@@ -94,6 +94,8 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             })).collect::<Vec<_>>(),
             "at_risk_count": report.at_risk.len(),
             // Reported, but never as risk — see `RiskReport::unseen`.
+            "unreferenced": report.unreferenced,
+            "could_not_check": report.could_not_look,
             "not_found_in_this_repository": report.unseen,
             "in_a_commit": report.committed,
             "not_assessed": report.not_assessed,
@@ -108,10 +110,11 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     if !report.at_risk.is_empty() {
         let _ = writeln!(
             stdout,
-            "AT RISK  {} file(s) created by agents are in this repository but on no branch",
+            "AT RISK  {} file(s) written by agents are staged and not committed",
             report.at_risk.len()
         );
-        let _ = writeln!(stdout, "         a reset or clean would discard them\n");
+        // Said only for staged content, where it is actually true.
+        let _ = writeln!(stdout, "         a reset would discard them\n");
         let mut current = String::new();
         for change in &report.at_risk {
             if change.session_id != current {
@@ -150,6 +153,23 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     }
     let _ = writeln!(stdout, "last scan   {}", describe_last_scan(last_scan));
 
+    if report.unreferenced > 0 {
+        // Deliberately carries no reset advice: this content is already
+        // unreferenced, so a reset does not discard it and saying so would be
+        // the overclaim the ladder split exists to prevent.
+        let _ = writeln!(
+            stdout,
+            "unreferenced {} recorded change(s) are in the repository but on no branch",
+            report.unreferenced
+        );
+    }
+    if report.could_not_look > 0 {
+        let _ = writeln!(
+            stdout,
+            "unchecked   {} recorded change(s) — no readable worktree for this repository",
+            report.could_not_look
+        );
+    }
     if report.unseen > 0 {
         // Deliberately not called risk: a file the agent created and someone
         // then edited before committing is indistinguishable from one that was
@@ -296,8 +316,15 @@ struct AtRiskChange {
 /// What `status` found for one repository.
 #[derive(Debug, Default, Clone)]
 struct RiskReport {
-    /// Provably at risk: present, unreferenced.
+    /// Staged and not committed: a reset discards these. The only bucket that
+    /// may carry that warning.
     at_risk: Vec<AtRiskChange>,
+    /// Present but neither staged nor on a branch — usually rewritten-away
+    /// history. Reported without a reset claim, which would be false.
+    unreferenced: usize,
+    /// Lore had an oid but no readable worktree to check it against. Kept apart
+    /// from `unseen` because "could not look" is not "looked and did not find".
+    could_not_look: usize,
     /// Content Lore recorded and cannot find in this repository at all.
     ///
     /// Reported **separately and softly**, never as risk: a file the agent
@@ -314,7 +341,7 @@ struct RiskReport {
 
 impl RiskReport {
     fn assessed(&self) -> usize {
-        self.at_risk.len() + self.unseen + self.committed
+        self.at_risk.len() + self.unreferenced + self.unseen + self.committed
     }
 }
 
@@ -344,6 +371,13 @@ fn risk_report(conn: &rusqlite::Connection, repository_id: &str) -> Result<RiskR
         .map_err(lore_core::storage::StorageError::from)?;
 
     let mut report = RiskReport::default();
+    // Building the index walks the repository's whole history. Skip it entirely
+    // when no row carries an oid — the common case on an archive ingested
+    // before content identity existed, where it cost seconds to learn nothing.
+    if rows.iter().all(|(oid, ..)| oid.is_none()) {
+        report.not_assessed = rows.len();
+        return Ok(report);
+    }
     let worktrees = landing::live_worktrees(conn, repository_id)?;
     let index = worktrees
         .iter()
@@ -355,8 +389,9 @@ fn risk_report(conn: &rusqlite::Connection, repository_id: &str) -> Result<RiskR
             continue;
         };
         let Some((worktree, index)) = &index else {
-            // An oid but nowhere to look. Not a finding either way.
-            report.unseen += 1;
+            // An oid but nowhere to look. Its own bucket: merging it into
+            // `unseen` would report an absence of observation as an absence.
+            report.could_not_look += 1;
             continue;
         };
         match landing::classify(worktree, index, &oid) {
@@ -367,6 +402,7 @@ fn risk_report(conn: &rusqlite::Connection, repository_id: &str) -> Result<RiskR
                 title,
                 path,
             }),
+            Landing::Unreferenced => report.unreferenced += 1,
             Landing::NoObservedLanding | Landing::NotAssessed => report.unseen += 1,
         }
     }

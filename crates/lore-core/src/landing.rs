@@ -75,9 +75,18 @@ pub const CONTENT_OID_ALGO: &str = "git-sha1";
 pub enum Landing {
     /// The exact content is reachable from a ref.
     Committed,
-    /// The object exists but no ref reaches it — staged, or on rewritten
-    /// history.
+    /// The content is in the **index**: staged and not yet committed. A
+    /// `git reset --hard` or `git checkout` discards it, so this is the one
+    /// rung that may say so.
     Staged,
+    /// The object exists but is neither in the index nor reachable from a ref —
+    /// typically a commit that was rewritten away.
+    ///
+    /// Split from [`Landing::Staged`] because the obvious advice is wrong here:
+    /// a reset does **not** discard it (it is already unreferenced, and the
+    /// reflog may still hold the commit), so telling a user it would is the
+    /// forbidden inference wearing friendlier words.
+    Unreferenced,
     /// Not present in the object database. An absence of observation.
     NoObservedLanding,
     /// Lore never knew the resulting content, so it asked nothing.
@@ -91,7 +100,8 @@ impl Landing {
     pub fn describe(self) -> &'static str {
         match self {
             Landing::Committed => "in a commit",
-            Landing::Staged => "in the repository but not on any branch",
+            Landing::Staged => "staged, not yet committed",
+            Landing::Unreferenced => "in the repository but on no branch",
             Landing::NoObservedLanding => "no observed landing",
             Landing::NotAssessed => "not assessed",
         }
@@ -242,19 +252,34 @@ pub fn classify(worktree: &Path, index: &LandingIndex, oid: &str) -> Landing {
     if index.contains(oid) {
         return Landing::Committed;
     }
-    // Not in history. Distinguish "exists as an object" (staged, or on
-    // rewritten history) from "absent entirely", because those need different
-    // responses from a reader.
-    let exists = gix::discover(worktree).ok().is_some_and(|repo| {
-        gix::ObjectId::from_hex(oid.as_bytes())
-            .map(|id| repo.find_object(id).is_ok())
-            .unwrap_or(false)
-    });
-    if exists {
+    // Not in history. Three outcomes, not two: in the index (a reset discards
+    // it), merely present (a reset does not), or absent. Collapsing the first
+    // two produces advice that is wrong half the time.
+    let Ok(repo) = gix::discover(worktree) else {
+        return Landing::NoObservedLanding;
+    };
+    let Ok(id) = gix::ObjectId::from_hex(oid.as_bytes()) else {
+        return Landing::NoObservedLanding;
+    };
+    if repo.find_object(id).is_err() {
+        return Landing::NoObservedLanding;
+    }
+    if index_contains(&repo, id) {
         Landing::Staged
     } else {
-        Landing::NoObservedLanding
+        Landing::Unreferenced
     }
+}
+
+/// Whether the repository's index holds `blob`.
+///
+/// A missing or unreadable index is treated as "not staged": the object is
+/// known to exist, and claiming it is staged on a guess is exactly the
+/// overclaim this split exists to prevent.
+fn index_contains(repo: &gix::Repository, blob: gix::ObjectId) -> bool {
+    repo.index()
+        .map(|index| index.entries().iter().any(|e| e.id == blob))
+        .unwrap_or(false)
 }
 
 /// Resolve landing for one recorded content oid, trying every live worktree of
@@ -273,7 +298,10 @@ pub fn resolve(conn: &Connection, repository_id: &str, oid: Option<&str>) -> Res
             // repository's history, whichever worktree answered.
             Landing::Committed => return Ok(Landing::Committed),
             Landing::Staged => answer = Landing::Staged,
-            Landing::NoObservedLanding | Landing::NotAssessed => {}
+            Landing::Unreferenced if answer != Landing::Staged => {
+                answer = Landing::Unreferenced;
+            }
+            Landing::Unreferenced | Landing::NoObservedLanding | Landing::NotAssessed => {}
         }
     }
     Ok(answer)
@@ -330,6 +358,7 @@ mod tests {
         for landing in [
             Landing::Committed,
             Landing::Staged,
+            Landing::Unreferenced,
             Landing::NoObservedLanding,
             Landing::NotAssessed,
         ] {
@@ -350,6 +379,7 @@ mod tests {
         let all = [
             Landing::Committed,
             Landing::Staged,
+            Landing::Unreferenced,
             Landing::NoObservedLanding,
             Landing::NotAssessed,
         ];
