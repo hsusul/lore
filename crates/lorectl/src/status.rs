@@ -37,7 +37,7 @@ use lore_core::{settings, storage};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
-use crate::scan::{now_ms, KEY_LAST_SCAN_COMPLETED_AT};
+use crate::scan::now_ms;
 
 /// `lorectl status` — archived agent work for the current repository.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
@@ -54,8 +54,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         return Err(CliError::NotARepository);
     }
 
-    let last_scan: Option<i64> =
-        settings::get(&conn, KEY_LAST_SCAN_COMPLETED_AT)?.and_then(|raw| raw.parse::<i64>().ok());
+    let last_scan: Option<i64> = settings::last_scan_completed_at(&conn)?;
 
     let (repository_id, display_name) = match &resolution {
         RepoResolution::InArchive {

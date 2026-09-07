@@ -67,7 +67,7 @@ impl Command {
             Command::Status => "Summarize archived work against the current repository",
             Command::Inspect => "Show one archived session in detail",
             Command::Search => "Full-text search across archived sessions",
-            Command::Hook => "Agent hook entry points (session-start)",
+            Command::Hook => "Agent hook entry point; run by an agent, not a person",
             Command::Report => "Longer-form summary of archived work",
         }
     }
@@ -77,8 +77,12 @@ impl Command {
     #[must_use]
     pub fn is_implemented(self) -> bool {
         match self {
-            Command::Scan | Command::Search | Command::Inspect | Command::Status => true,
-            Command::Hook | Command::Report => false,
+            Command::Scan
+            | Command::Search
+            | Command::Inspect
+            | Command::Status
+            | Command::Hook => true,
+            Command::Report => false,
         }
     }
 
@@ -92,7 +96,8 @@ impl Command {
         match self {
             Command::Search => Some("QUERY"),
             Command::Inspect => Some("SESSION_ID"),
-            Command::Scan | Command::Status | Command::Hook | Command::Report => None,
+            Command::Hook => Some("EVENT"),
+            Command::Scan | Command::Status | Command::Report => None,
         }
     }
 
@@ -279,7 +284,7 @@ mod tests {
             .filter(|c| c.is_implemented())
             .map(|c| c.name())
             .collect();
-        assert_eq!(implemented, ["scan", "status", "inspect", "search"]);
+        assert_eq!(implemented, ["scan", "status", "inspect", "search", "hook"]);
     }
 
     #[test]

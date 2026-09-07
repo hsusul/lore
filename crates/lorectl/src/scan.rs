@@ -41,14 +41,8 @@ use lore_core::{settings, source_roots, storage};
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
 
-/// Setting key holding the epoch-millis time the last **successful** scan
-/// finished.
-///
-/// Persisted so a later `status` can say when Lore last looked. That matters
-/// more than it sounds: "no observed landing" is an absence of observation, and
-/// an absence is only meaningful alongside when the looking happened. Follows
-/// the `backup.last_at` convention — a JSON number under a dotted key.
-pub const KEY_LAST_SCAN_COMPLETED_AT: &str = "scan.last_completed_at";
+// The completion stamp lives in `lore_core::settings` so the desktop worker
+// and this command record the same key; `Worker::scan` writes it.
 
 /// Run a full scan of every configured source root into the archive.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
@@ -85,8 +79,10 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     // process rather than a claim about the worker's internal state.
     drop(worker);
 
-    let completed_at = now_ms();
-    settings::set(&conn, KEY_LAST_SCAN_COMPLETED_AT, &completed_at.to_string())?;
+    // `Worker::scan` already stamped completion; read it back so the report
+    // shows exactly what a later `status` will read, rather than a second clock
+    // reading that could differ.
+    let completed_at = settings::last_scan_completed_at(&conn)?.unwrap_or_else(now_ms);
 
     let mut stdout = std::io::stdout().lock();
     let report = if invocation.json {
@@ -177,13 +173,6 @@ mod tests {
             enrich_failed: 0,
             reverified: 0,
         }
-    }
-
-    #[test]
-    fn the_completion_key_follows_the_settings_convention() {
-        // `backup.last_at` set the pattern: a dotted namespace and a JSON number.
-        assert_eq!(KEY_LAST_SCAN_COMPLETED_AT, "scan.last_completed_at");
-        assert!(KEY_LAST_SCAN_COMPLETED_AT.contains('.'));
     }
 
     #[test]

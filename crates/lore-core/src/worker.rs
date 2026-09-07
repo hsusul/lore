@@ -123,6 +123,12 @@ impl Worker {
         let pipeline = self.pipeline();
         pipeline.enqueue_scan(sink)?;
         let summary = self.drain_to_empty(&pipeline, sink)?;
+        // The scan finished, so record when Lore last looked. Done here rather
+        // than in a caller so every scanning surface stamps it: the desktop
+        // worker and `lorectl scan` reach this same line, and an archive filled
+        // by one must not look unscanned to the other.
+        let _ = crate::settings::record_scan_completed(&self.conn, now_ms());
+
         // The queue is empty and no transaction is open — the one moment a
         // checkpoint can do its job. Ingesting a large source commits more in a
         // single transaction than `wal_autocheckpoint` can act on, so without
@@ -327,6 +333,14 @@ where
         tx,
         join: Some(join),
     }
+}
+
+/// Epoch millis, saturating rather than panicking on a clock before the epoch.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 fn poll_ready(watcher: Option<&mut SessionWatcher>) -> Vec<PathBuf> {

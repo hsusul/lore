@@ -34,6 +34,33 @@ pub fn set(conn: &Connection, key: &str, value_json: &str) -> Result<()> {
     Ok(())
 }
 
+/// Epoch-millis time a scan of this archive last **completed**.
+///
+/// Written by every surface that scans — the desktop worker and `lorectl scan`
+/// alike — because it answers "when did Lore last look?", and an archive filled
+/// by one surface must not look unscanned to the other. It lived in the CLI
+/// first, which made `status` report "never" about an archive the app had been
+/// ingesting into for weeks.
+///
+/// Only ever stamped after a scan that finished. A refused or failed scan leaves
+/// it untouched: its whole value is that a count of findings can be read
+/// alongside when the looking happened, and a stamp from a scan that did not
+/// complete would make that reading false.
+pub const KEY_LAST_SCAN_COMPLETED_AT: &str = "scan.last_completed_at";
+
+/// Record that a scan completed at `now_ms`.
+pub fn record_scan_completed(conn: &Connection, now_ms: i64) -> Result<()> {
+    set(conn, KEY_LAST_SCAN_COMPLETED_AT, &now_ms.to_string())
+}
+
+/// When a scan last completed, or `None` if one never has.
+///
+/// `None` is load-bearing and must not be rendered as "no work found": it means
+/// Lore has never looked, which says nothing at all about the work.
+pub fn last_scan_completed_at(conn: &Connection) -> Result<Option<i64>> {
+    Ok(get(conn, KEY_LAST_SCAN_COMPLETED_AT)?.and_then(|raw| raw.parse::<i64>().ok()))
+}
+
 /// Read a boolean setting, falling back to `default` when it is unset or its
 /// stored value does not parse as a JSON boolean.
 pub fn get_bool(conn: &Connection, key: &str, default: bool) -> Result<bool> {

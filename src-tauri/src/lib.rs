@@ -1011,6 +1011,16 @@ pub fn run() {
                         handle.shutdown();
                     }
                 }
+                // Fold the write-ahead log back now that the worker thread is
+                // joined. This is the only moment a `TRUNCATE` checkpoint can
+                // actually shrink the file: for the whole run this connection is
+                // an open reader, and a reader holds up truncation, so the
+                // in-scan checkpoint can only ever fall back to `PASSIVE`. An
+                // archive left running for weeks accumulated a 360 MB WAL beside
+                // a 1.25 GB database, and every read had to traverse it.
+                if let Ok(conn) = state.db.lock() {
+                    lore_core::storage::checkpoint(&conn);
+                }
             }
         }
     });
