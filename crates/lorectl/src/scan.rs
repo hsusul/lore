@@ -27,7 +27,6 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use lore_core::adapters::AdapterRegistry;
 use lore_core::lock::ScanLock;
@@ -98,10 +97,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
 /// Epoch millis, saturating rather than panicking on a clock before the epoch.
 /// Shared with `status`, which reads the stamp this writes.
 pub fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+    lore_core::now_ms()
 }
 
 /// Human-readable summary.

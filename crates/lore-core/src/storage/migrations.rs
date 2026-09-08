@@ -310,14 +310,7 @@ fn apply(conn: &Connection, m: &Migration) -> Result<()> {
 /// FNV-1a 64-bit hex digest — a small, dependency-free content fingerprint used
 /// only to detect edited-after-apply migrations (not a security primitive).
 fn fnv1a_hex(s: &str) -> String {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for byte in s.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    format!("{hash:016x}")
+    crate::hash::fnv1a64_hex(s.as_bytes())
 }
 
 #[cfg(test)]

@@ -594,20 +594,7 @@ fn scan_and_project(
 
 /// Deterministic opaque id from a prefix and stable natural-key parts.
 pub(crate) fn det_id(prefix: &str, parts: &[&str]) -> String {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for (i, part) in parts.iter().enumerate() {
-        if i > 0 {
-            hash ^= 0x1f;
-            hash = hash.wrapping_mul(PRIME);
-        }
-        for byte in part.as_bytes() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(PRIME);
-        }
-    }
-    format!("{prefix}_{hash:016x}")
+    crate::hash::det_id(prefix, parts)
 }
 
 // ── Recoverable source-file ingest ──────────────────────────────────────────
@@ -1166,19 +1153,15 @@ fn source_snapshot(path: &Path, meta: &std::fs::Metadata, content: &str) -> Sour
 /// traversal. Changed multi-megabyte sessions are commonly append-only; avoid
 /// walking their full history separately for hashing and newline accounting.
 fn fingerprint_and_checkpoint(bytes: &[u8]) -> (String, String, i64, i64) {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut full = OFFSET;
-    let mut prefix = OFFSET;
+    let mut full = crate::hash::Fnv1a64::new();
+    let mut prefix = crate::hash::Fnv1a64::new();
     let mut last_offset = 0usize;
     let mut complete_lines = 0usize;
 
     for (index, byte) in bytes.iter().copied().enumerate() {
-        full ^= u64::from(byte);
-        full = full.wrapping_mul(PRIME);
+        full.update_byte(byte);
         if index < PREFIX_BYTES {
-            prefix ^= u64::from(byte);
-            prefix = prefix.wrapping_mul(PRIME);
+            prefix.update_byte(byte);
         }
         if byte == b'\n' {
             last_offset = index.saturating_add(1);
@@ -1187,8 +1170,8 @@ fn fingerprint_and_checkpoint(bytes: &[u8]) -> (String, String, i64, i64) {
     }
 
     (
-        format!("{full:016x}"),
-        format!("{prefix:016x}"),
+        full.finish_hex(),
+        prefix.finish_hex(),
         i64::try_from(last_offset).unwrap_or(i64::MAX),
         i64::try_from(complete_lines).unwrap_or(i64::MAX),
     )
@@ -1225,14 +1208,7 @@ fn file_id(_meta: &std::fs::Metadata) -> Option<String> {
 
 /// FNV-1a 64-bit hex digest (content fingerprint; not a security hash).
 fn fnv1a_hex(bytes: &[u8]) -> String {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    format!("{hash:016x}")
+    crate::hash::fnv1a64_hex(bytes)
 }
 
 #[cfg(test)]

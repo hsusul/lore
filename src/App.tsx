@@ -10,47 +10,25 @@ import SessionList from "./components/SessionList";
 import SessionView from "./components/SessionView";
 import SettingsPanel from "./components/SettingsPanel";
 import { agentLabel } from "./format";
+import { useFolderManager } from "./hooks/useFolderManager";
+import { SEARCH_PAGE, useSearchState } from "./hooks/useSearchState";
+import { useSessionBrowser } from "./hooks/useSessionBrowser";
 import {
   addAgentRoot,
   chooseAgentRootDirectory,
-  createFolder,
-  deleteFolder,
-  exportSessionMarkdown,
   forgetEverything,
-  forgetSession,
   getFilePatch,
-  getGitSnapshot,
-  getSession,
   listDetectedAgents,
-  listFolderSessionsPage,
   listFolders,
   listRepositories,
-  listRepositorySessionsPage,
-  listSessionsPage,
   onScanProgress,
   removeAgentRoot,
-  renameFolder,
   rescan,
-  saveSessionExport,
   searchPage,
-  sessionSecretCount,
-  setSessionFolder,
   type DetectedAgent,
-  type FolderSummary,
-  type GitObservationDto,
   type RepositorySummary,
   type ScanProgress,
-  type SearchHit,
-  type SessionDetail,
-  type SessionSummary,
 } from "./ipc";
-
-/** Sessions fetched per browse page. Initial navigation stays bounded. */
-const SESSION_PAGE = 100;
-/** Search results fetched per page; "Load more" appends another page. */
-const SEARCH_PAGE = 50;
-/** Coalesce rapid typing before crossing the Tauri/SQLite boundary. */
-const SEARCH_DEBOUNCE_MS = 180;
 
 /** The Lore mark: a node linked to two overlapping rings. */
 function Mark() {
@@ -91,80 +69,115 @@ export default function App() {
   );
   const [agents, setAgents] = useState<DetectedAgent[]>([]);
   const [repositories, setRepositories] = useState<RepositorySummary[]>([]);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [sessionCursor, setSessionCursor] = useState<string | null>(null);
-  const [loadingMoreSessionsRequest, setLoadingMoreSessionsRequest] = useState<number | null>(null);
-  const loadingMoreSessions = loadingMoreSessionsRequest !== null;
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
-  const [folders, setFolders] = useState<FolderSummary[]>([]);
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
-  const [selectedSession, setSelectedSession] = useState<string | null>(null);
-  const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [git, setGit] = useState<GitObservationDto[]>([]);
+  const selectedRepoRef = useRef<string | null>(null);
+
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  // `null` is the pending state; an array (including empty) is settled. Keeping
-  // those mutually exclusive avoids a separate flag drifting from the results.
-  const [hits, setHits] = useState<SearchHit[] | null>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
-  // Always holds the latest query so an in-flight page can tell it has been
-  // superseded by newer typing and drop its (stale) results.
-  const queryRef = useRef("");
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const searchResultsRef = useRef<HTMLUListElement>(null);
-  const selectedRepoRef = useRef<string | null>(null);
-  const selectedFolderRef = useRef<string | null>(null);
-  const refreshRequestRef = useRef(0);
-  const sessionsRequestRef = useRef(0);
-  const sessionsPendingRequestRef = useRef<number | null>(null);
-  const loadedSessionCountRef = useRef(0);
-  const sessionRequestRef = useRef(0);
-  const sessionPendingRequestRef = useRef<number | null>(null);
-  const [secretCount, setSecretCount] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [rootBusy, setRootBusy] = useState<string | null>(null);
 
-  const loadSessions = useCallback(
-    async (repo: string | null, folder: string | null, showPending = false) => {
-    const request = ++sessionsRequestRef.current;
-    setLoadingMoreSessionsRequest(null);
-    const limit = showPending
-      ? SESSION_PAGE
-      : Math.max(SESSION_PAGE, loadedSessionCountRef.current);
-    if (showPending) {
-      sessionsPendingRequestRef.current = request;
-      loadedSessionCountRef.current = 0;
-      setSessions([]);
-      setSessionCursor(null);
-    }
-    try {
-      const page = folder
-        ? await listFolderSessionsPage(folder, limit, null)
-        : repo
-          ? await listRepositorySessionsPage(repo, limit, null)
-          : await listSessionsPage(limit, null);
-      if (request === sessionsRequestRef.current) {
-        // The newest request owns the pane and also settles any pending marker
-        // inherited from a manual load that it superseded.
-        sessionsPendingRequestRef.current = null;
-        loadedSessionCountRef.current = page.sessions.length;
-        setSessions(page.sessions);
-        setSessionCursor(page.next_cursor);
+  const refreshRequestRef = useRef(0);
+
+  const clearError = useCallback(() => setError(null), []);
+  const clearNotice = useCallback(() => setNotice(null), []);
+
+  const {
+    sessions,
+    sessionCursor,
+    loadingMoreSessions,
+    selectedSession,
+    detail,
+    git,
+    secretCount,
+    sessionsPendingRequestRef,
+    sessionPendingRequestRef,
+    loadSessions,
+    loadOlderSessions,
+    openSession,
+    handleExport,
+    handleSaveFile,
+    handleForget,
+    resetForgetAll,
+  } = useSessionBrowser({
+    onError: setError,
+    onNotice: setNotice,
+    onClearError: clearError,
+    onClearNotice: clearNotice,
+  });
+
+  const selectRepo = useCallback(
+    async (repo: string | null) => {
+      selectedRepoRef.current = repo;
+      folderManager.clearFolderSelection();
+      setSelectedRepo(repo);
+      setError(null);
+      try {
+        await loadSessions(repo, null, true);
+      } catch (e) {
+        setError(String(e));
       }
-    } catch (e) {
-      if (request !== sessionsRequestRef.current) return;
-      sessionsPendingRequestRef.current = null;
-      loadedSessionCountRef.current = 0;
-      setSessions([]);
-      setSessionCursor(null);
-      throw e;
-    }
-  }, []);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loadSessions],
+  );
+
+  const folderManager = useFolderManager({
+    onError: setError,
+    onNotice: setNotice,
+    onClearError: clearError,
+    onReloadSessions: async (repo, folder) => {
+      await loadSessions(repo, folder);
+    },
+    onFallBackToAllSessions: async () => {
+      await selectRepo(null);
+    },
+  });
+
+  const {
+    folders,
+    setFolders,
+    selectedFolder,
+    selectedFolderRef,
+    handleCreateFolder,
+    handleRenameFolder,
+    handleDeleteFolder,
+    fileSession: fileSessionInFolder,
+  } = folderManager;
+
+  const selectFolder = useCallback(
+    async (folderId: string) => {
+      selectedRepoRef.current = null;
+      setSelectedRepo(null);
+      await folderManager.selectFolder(folderId);
+    },
+    [folderManager],
+  );
+
+  const fileSession = useCallback(
+    async (sessionId: string, folderId: string | null) => {
+      await fileSessionInFolder(sessionId, folderId, selectedRepoRef.current);
+    },
+    [fileSessionInFolder],
+  );
+
+  const {
+    query,
+    hits,
+    cursor,
+    loadingMore,
+    searchInputRef,
+    searchResultsRef,
+    updateSearch,
+    loadMore,
+    clearSearch,
+  } = useSearchState({
+    onError: setError,
+    onClearError: clearError,
+  });
 
   const refresh = useCallback(async () => {
     const request = ++refreshRequestRef.current;
@@ -193,7 +206,7 @@ export default function App() {
         setArchiveStatus((current) => (current === "ready" ? current : "failed"));
       }
     }
-  }, [loadSessions]);
+  }, [loadSessions, selectedFolderRef, setFolders]);
 
   useEffect(() => {
     void refresh();
@@ -242,274 +255,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  useEffect(() => {
-    if (query.trim() === "") {
-      return;
-    }
-
-    const forQuery = query;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void searchPage(forQuery, SEARCH_PAGE)
-        .then((page) => {
-          if (cancelled || queryRef.current !== forQuery) return;
-          setHits(page.hits);
-          setCursor(page.next_cursor);
-        })
-        .catch((e: unknown) => {
-          if (!cancelled && queryRef.current === forQuery) {
-            setHits([]);
-            setError(String(e));
-          }
-        });
-    }, SEARCH_DEBOUNCE_MS);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [query]);
-
-  const selectRepo = useCallback(async (repo: string | null) => {
-    selectedRepoRef.current = repo;
-    selectedFolderRef.current = null;
-    setSelectedRepo(repo);
-    setSelectedFolder(null);
-    setError(null);
-    try {
-      await loadSessions(repo, null, true);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [loadSessions]);
-
-  const selectFolder = useCallback(async (folderId: string) => {
-    selectedFolderRef.current = folderId;
-    selectedRepoRef.current = null;
-    setSelectedFolder(folderId);
-    setSelectedRepo(null);
-    setError(null);
-    try {
-      await loadSessions(null, folderId, true);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [loadSessions]);
-
-  const refreshFolders = useCallback(async () => {
-    try {
-      setFolders(await listFolders());
-    } catch (e) {
-      setError(String(e));
-    }
-  }, []);
-
-  const handleCreateFolder = useCallback(
-    async (name: string) => {
-      setError(null);
-      try {
-        await createFolder(name);
-        await refreshFolders();
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [refreshFolders],
-  );
-
-  const handleRenameFolder = useCallback(
-    async (id: string, name: string) => {
-      try {
-        await renameFolder(id, name);
-        await refreshFolders();
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [refreshFolders],
-  );
-
-  const handleDeleteFolder = useCallback(
-    async (id: string) => {
-      if (!window.confirm("Delete this folder? Its threads stay in Lore, just unfiled.")) {
-        return;
-      }
-      try {
-        await deleteFolder(id);
-        // Leaving a now-deleted folder view falls back to All sessions.
-        if (selectedFolderRef.current === id) {
-          await selectRepo(null);
-        }
-        await refreshFolders();
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [refreshFolders, selectRepo],
-  );
-
-  // File a thread into a folder (or unfile it when `folderId` is null), then
-  // refresh folder counts and the current pane so membership changes show at once.
-  const fileSession = useCallback(
-    async (sessionId: string, folderId: string | null) => {
-      setError(null);
-      try {
-        await setSessionFolder(sessionId, folderId);
-        await refreshFolders();
-        await loadSessions(selectedRepoRef.current, selectedFolderRef.current);
-        const target = folders.find((f) => f.id === folderId);
-        setNotice(
-          folderId
-            ? `Filed thread in “${target?.name ?? "folder"}”.`
-            : "Removed thread from its folder.",
-        );
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [folders, loadSessions, refreshFolders],
-  );
-
-  function updateSearch(next: string) {
-    // Batch the query and its visible state so snippets from the previous query
-    // cannot paint under the new text while the debounce effect is pending.
-    setQuery(next);
-    queryRef.current = next;
-    setHits(next.trim() === "" ? [] : null);
-    setCursor(null);
-    setError(null);
-  }
-
-  async function loadMore() {
-    if (cursor === null || loadingMore) return;
-    const forQuery = queryRef.current;
-    setLoadingMore(true);
-    try {
-      const page = await searchPage(forQuery, SEARCH_PAGE, cursor);
-      if (queryRef.current !== forQuery) return; // query changed mid-flight
-      setHits((prev) => [...(prev ?? []), ...page.hits]);
-      setCursor(page.next_cursor);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoadingMore(false);
-    }
-  }
-
-  async function loadOlderSessions() {
-    if (sessionCursor === null || loadingMoreSessions) return;
-    const request = ++sessionsRequestRef.current;
-    const repo = selectedRepoRef.current;
-    const folder = selectedFolderRef.current;
-    const forCursor = sessionCursor;
-    setLoadingMoreSessionsRequest(request);
-    setError(null);
-    try {
-      const page = folder
-        ? await listFolderSessionsPage(folder, SESSION_PAGE, forCursor)
-        : repo
-          ? await listRepositorySessionsPage(repo, SESSION_PAGE, forCursor)
-          : await listSessionsPage(SESSION_PAGE, forCursor);
-      if (
-        request !== sessionsRequestRef.current ||
-        repo !== selectedRepoRef.current ||
-        folder !== selectedFolderRef.current
-      )
-        return;
-      // A cursor page should be disjoint, but deduping at the UI boundary keeps
-      // a concurrent archive refresh from ever painting a duplicate.
-      const seen = new Set(sessions.map((session) => session.id));
-      const merged = [
-        ...sessions,
-        ...page.sessions.filter((session) => !seen.has(session.id)),
-      ];
-      loadedSessionCountRef.current = merged.length;
-      setSessions(merged);
-      setSessionCursor(page.next_cursor);
-    } catch (e) {
-      if (request === sessionsRequestRef.current) setError(String(e));
-    } finally {
-      setLoadingMoreSessionsRequest((current) => (current === request ? null : current));
-    }
-  }
-
-  const openSession = useCallback(async (id: string) => {
-    const request = ++sessionRequestRef.current;
-    sessionPendingRequestRef.current = request;
-    setSelectedSession(id);
-    setError(null);
-    setNotice(null);
-    try {
-      const [loaded, snapshot, secrets] = await Promise.all([
-        getSession(id),
-        getGitSnapshot(id),
-        sessionSecretCount(id),
-      ]);
-      if (request !== sessionRequestRef.current) return;
-      sessionPendingRequestRef.current = null;
-      setDetail(loaded);
-      setGit(snapshot);
-      setSecretCount(secrets);
-    } catch (e) {
-      if (request !== sessionRequestRef.current) return;
-      sessionPendingRequestRef.current = null;
-      setSelectedSession(null);
-      setDetail(null);
-      setError(String(e));
-    }
-  }, []);
-
-  async function handleExport() {
-    if (!selectedSession) return;
-    try {
-      const markdown = await exportSessionMarkdown(selectedSession, false);
-      if (markdown == null) return;
-      if (!navigator.clipboard?.writeText) {
-        setError("Clipboard is unavailable here. Use “Save file” instead.");
-        return;
-      }
-      await navigator.clipboard.writeText(markdown);
-      setNotice("Copied Markdown to the clipboard (flagged secrets redacted).");
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function handleSaveFile() {
-    if (!selectedSession) return;
-    try {
-      const saved = await saveSessionExport(selectedSession, null, false);
-      if (saved) {
-        setNotice("Saved session export.");
-      }
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function handleForget() {
-    if (!selectedSession) return;
-    if (!window.confirm("Forget this session? This permanently removes it from Lore.")) {
-      return;
-    }
-    try {
-      sessionRequestRef.current += 1;
-      sessionPendingRequestRef.current = null;
-      const report = await forgetSession(selectedSession);
-      setDetail(null);
-      setSelectedSession(null);
-      await refresh();
-      const remaining =
-        report.source_paths.length > 0
-          ? ` The original agent log(s) remain: ${report.source_paths.join(", ")}.`
-          : "";
-      setNotice(`Session forgotten (${report.blobs_removed} blob(s) removed).${remaining}`);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
+  }, [searchInputRef]);
 
   async function handleForgetEverything() {
     if (
@@ -520,20 +266,12 @@ export default function App() {
       return;
     }
     try {
-      sessionRequestRef.current += 1;
-      sessionPendingRequestRef.current = null;
+      resetForgetAll();
       const report = await forgetEverything();
-      setDetail(null);
-      setSelectedSession(null);
       setSelectedRepo(null);
       selectedRepoRef.current = null;
-      setSelectedFolder(null);
-      selectedFolderRef.current = null;
-      setGit([]);
-      setQuery("");
-      queryRef.current = "";
-      setHits([]);
-      setCursor(null);
+      folderManager.clearFolderSelection();
+      clearSearch();
       setSettingsOpen(false);
       await refresh();
       setNotice(`Archive cleared (${report.blobs_removed} blob(s) removed).`);
@@ -677,7 +415,8 @@ export default function App() {
   // count; processed is how many of those candidates have been resolved.
   const scanProcessed = progress ? progress.ingested + progress.skipped + progress.failed : 0;
   const scanTotal = progress ? Math.max(progress.discovered, scanProcessed, 0) : 0;
-  const scanPercent = scanTotal > 0 ? Math.min(100, Math.round((scanProcessed / scanTotal) * 100)) : 0;
+  const scanPercent =
+    scanTotal > 0 ? Math.min(100, Math.round((scanProcessed / scanTotal) * 100)) : 0;
 
   return (
     <div className="shell">
@@ -834,7 +573,9 @@ export default function App() {
                 onOpen={openSession}
                 hasMore={sessionCursor !== null}
                 loadingMore={loadingMoreSessions}
-                onLoadMore={() => void loadOlderSessions()}
+                onLoadMore={() =>
+                  void loadOlderSessions(selectedRepoRef.current, selectedFolderRef.current)
+                }
               />
             )
           )}
@@ -876,7 +617,7 @@ export default function App() {
                 secretCount={secretCount}
                 onExport={handleExport}
                 onSaveFile={handleSaveFile}
-                onForget={handleForget}
+                onForget={() => void handleForget(refresh)}
               />
             </ErrorBoundary>
           )}

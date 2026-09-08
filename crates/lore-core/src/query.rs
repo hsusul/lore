@@ -462,6 +462,18 @@ struct RawMessageRow {
     model: Option<String>,
 }
 
+fn raw_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawMessageRow> {
+    Ok(RawMessageRow {
+        id: row.get(0)?,
+        seq: row.get(1)?,
+        role: row.get(2)?,
+        event_kind: row.get(3)?,
+        is_sidechain: row.get::<_, i64>(4)? != 0,
+        ts: row.get(5)?,
+        model: row.get(6)?,
+    })
+}
+
 fn query_session_messages_window(
     conn: &Connection,
     session_id: &str,
@@ -470,49 +482,34 @@ fn query_session_messages_window(
 ) -> Result<(Vec<MessageDto>, bool)> {
     let fetch_limit = limit.saturating_add(1);
 
-    let mut raw_messages: Vec<RawMessageRow> = Vec::new();
-    match after_seq {
-        Some(seq) => {
-            let mut stmt = conn.prepare(
-                "SELECT id, seq, role, event_kind, is_sidechain, ts, model
-                 FROM message
-                 WHERE session_id = ?1 AND seq > ?2
-                 ORDER BY seq LIMIT ?3",
-            )?;
-            let mut rows = stmt.query(rusqlite::params![session_id, seq, fetch_limit])?;
-            while let Some(row) = rows.next()? {
-                raw_messages.push(RawMessageRow {
-                    id: row.get(0)?,
-                    seq: row.get(1)?,
-                    role: row.get(2)?,
-                    event_kind: row.get(3)?,
-                    is_sidechain: row.get::<_, i64>(4)? != 0,
-                    ts: row.get(5)?,
-                    model: row.get(6)?,
-                });
-            }
-        }
-        None => {
-            let mut stmt = conn.prepare(
-                "SELECT id, seq, role, event_kind, is_sidechain, ts, model
-                 FROM message
-                 WHERE session_id = ?1
-                 ORDER BY seq LIMIT ?2",
-            )?;
-            let mut rows = stmt.query(rusqlite::params![session_id, fetch_limit])?;
-            while let Some(row) = rows.next()? {
-                raw_messages.push(RawMessageRow {
-                    id: row.get(0)?,
-                    seq: row.get(1)?,
-                    role: row.get(2)?,
-                    event_kind: row.get(3)?,
-                    is_sidechain: row.get::<_, i64>(4)? != 0,
-                    ts: row.get(5)?,
-                    model: row.get(6)?,
-                });
-            }
-        }
+    let (sql, params): (&str, Vec<Value>) = match after_seq {
+        Some(seq) => (
+            "SELECT id, seq, role, event_kind, is_sidechain, ts, model
+             FROM message
+             WHERE session_id = ?1 AND seq > ?2
+             ORDER BY seq LIMIT ?3",
+            vec![
+                Value::Text(session_id.to_string()),
+                Value::Integer(seq),
+                Value::Integer(fetch_limit),
+            ],
+        ),
+        None => (
+            "SELECT id, seq, role, event_kind, is_sidechain, ts, model
+             FROM message
+             WHERE session_id = ?1
+             ORDER BY seq LIMIT ?2",
+            vec![
+                Value::Text(session_id.to_string()),
+                Value::Integer(fetch_limit),
+            ],
+        ),
     };
+
+    let mut stmt = conn.prepare(sql)?;
+    let mut raw_messages = stmt
+        .query_map(rusqlite::params_from_iter(params), raw_message_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
     let has_more = raw_messages.len() as i64 > limit;
     if has_more {

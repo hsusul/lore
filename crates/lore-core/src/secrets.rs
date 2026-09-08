@@ -966,18 +966,11 @@ fn shannon_per_char(bytes: &[u8]) -> f64 {
 /// FNV-1a hex fingerprint of `rule` + value. Not cryptographic; used only to
 /// match/dedup findings and allowlist entries, never to reconstruct a value.
 fn fingerprint(rule: &str, value: &str) -> String {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for byte in rule
-        .bytes()
-        .chain(b"\0".iter().copied())
-        .chain(value.bytes())
-    {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    format!("{hash:016x}")
+    let mut hasher = crate::hash::Fnv1a64::new();
+    hasher.update(rule.as_bytes());
+    hasher.update_byte(0);
+    hasher.update(value.as_bytes());
+    hasher.finish_hex()
 }
 
 #[cfg(test)]

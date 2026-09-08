@@ -93,6 +93,19 @@ pub fn watch_roots(registry: &AdapterRegistry, config: &DiscoveryConfig) -> Vec<
     roots
 }
 
+/// The union of every registered adapter's protected paths and effective roots.
+/// Used to prevent external export writes into agent log or home directories.
+#[must_use]
+pub fn protected_roots(registry: &AdapterRegistry, config: &DiscoveryConfig) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = registry
+        .iter()
+        .flat_map(|adapter| adapter.protected_paths(&config.roots_for(adapter.id().0)))
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
 /// Resolve which adapter owns an observed path by matching it against each
 /// adapter's effective roots (longest matching root wins, so nested roots
 /// resolve deterministically). Returns `None` for a path under no known root.

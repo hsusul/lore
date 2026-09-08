@@ -24,6 +24,7 @@ pub mod export;
 pub mod folders;
 pub mod forget;
 pub mod git;
+pub mod hash;
 pub mod ingest;
 pub mod jobs;
 pub mod landing;
@@ -42,10 +43,21 @@ pub mod synthetic;
 pub mod watcher;
 pub mod worker;
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 /// The `lore-core` crate version (from `CARGO_PKG_VERSION`).
 #[must_use]
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// Milliseconds since Unix epoch, saturating on clock skew.
+#[must_use]
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 /// Check if a character is an invisible zero-width Unicode codepoint.
@@ -55,6 +67,13 @@ pub fn is_zero_width(c: char) -> bool {
         c,
         '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}'
     )
+}
+
+/// Check whether a text token is invalid: empty, longer than `max_len`, or contains
+/// control characters or zero-width codepoints.
+#[must_use]
+pub fn is_invalid_text_token(s: &str, max_len: usize) -> bool {
+    s.is_empty() || s.len() > max_len || s.chars().any(|c| c.is_control() || is_zero_width(c))
 }
 
 #[cfg(test)]
@@ -77,5 +96,20 @@ mod tests {
         assert!(!is_zero_width('a'));
         assert!(!is_zero_width(' '));
         assert!(!is_zero_width('\n'));
+    }
+
+    #[test]
+    fn now_ms_reports_plausible_epoch_time() {
+        let t = now_ms();
+        assert!(t > 1_700_000_000_000, "clock before 2023: {t}");
+    }
+
+    #[test]
+    fn test_is_invalid_text_token() {
+        assert!(!is_invalid_text_token("valid_token_123", 64));
+        assert!(is_invalid_text_token("", 64));
+        assert!(is_invalid_text_token("invalid\x07", 64));
+        assert!(is_invalid_text_token("invalid\u{200C}", 64));
+        assert!(is_invalid_text_token(&"x".repeat(65), 64));
     }
 }

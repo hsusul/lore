@@ -345,10 +345,7 @@ where
 
 /// Epoch millis, saturating rather than panicking on a clock before the epoch.
 fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+    crate::now_ms()
 }
 
 fn poll_ready(watcher: Option<&mut SessionWatcher>) -> Vec<PathBuf> {

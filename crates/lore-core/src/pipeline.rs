@@ -31,9 +31,6 @@ const JOB_KIND_REVERIFY: &str = "reverify";
 /// transcript ingest; it must never block transcript reads or search
 /// (`GIT_INTEGRATION.md` §8).
 const REVERIFY_PRIORITY: i64 = 0;
-/// Must advance whenever parser output changes so terminal jobs are reconsidered.
-/// Keep aligned with the ingest checkpoint parser version.
-const JOB_PARSER_VERSION: &str = "2";
 
 /// A content-free progress event. Carries an adapter id (a static schema
 /// identifier), an outcome, and counts — never a path or session content.
@@ -260,11 +257,6 @@ impl<'a> Pipeline<'a> {
     /// permission, removed custom root) never mass-marks its artifacts missing
     /// (N7a). Returns the number of rows whose state changed.
     fn reconcile_source_presence(&self, discovered: &[SessionRef]) -> rusqlite::Result<usize> {
-        let now_ms = || -> i64 {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        };
         let mut changed = 0usize;
 
         for adapter in self.registry.iter() {
@@ -304,7 +296,7 @@ impl<'a> Pipeline<'a> {
                         self.conn.execute(
                             "UPDATE source_artifact
                              SET state = ?2, last_seen_at = ?3 WHERE id = ?1",
-                            params![id, next, now_ms()],
+                            params![id, next, crate::now_ms()],
                         )?;
                         changed += 1;
                     }
@@ -461,19 +453,8 @@ fn ingest_failure_kind(error: &StorageError) -> &'static str {
 /// Stable, compact job id so repeated events for one source coalesce onto one
 /// job. Derived from the adapter id and the path; the raw path is not the id.
 fn job_id(agent_id: &str, path: &Path) -> String {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    let mut mix = |bytes: &[u8]| {
-        for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(PRIME);
-        }
-    };
-    mix(agent_id.as_bytes());
-    mix(&[0x1f]);
-    mix(path.to_string_lossy().as_bytes());
-    format!("ingest_{hash:016x}")
+    let path_str = path.to_string_lossy();
+    crate::hash::det_id("ingest", &[agent_id, &path_str])
 }
 
 fn encode_payload(agent_id: &str, path: &Path, size: u64, mtime_ns: &str) -> String {
@@ -482,7 +463,7 @@ fn encode_payload(agent_id: &str, path: &Path, size: u64, mtime_ns: &str) -> Str
         "path": path.to_string_lossy(),
         "size": size,
         "mtime_ns": mtime_ns,
-        "parser_version": JOB_PARSER_VERSION,
+        "parser_version": crate::ingest::PARSER_VERSION,
     })
     .to_string()
 }
@@ -497,19 +478,7 @@ fn decode_payload(payload: &str) -> Option<(String, PathBuf)> {
 /// Stable, compact job id for a `(worktree, commit)` re-verification unit, so
 /// re-triggering coalesces onto the same job (I2).
 fn reverify_job_id(worktree_id: &str, commit_sha: &str) -> String {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    let mut mix = |bytes: &[u8]| {
-        for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(PRIME);
-        }
-    };
-    mix(worktree_id.as_bytes());
-    mix(&[0x1f]);
-    mix(commit_sha.as_bytes());
-    format!("reverify_{hash:016x}")
+    crate::hash::det_id("reverify", &[worktree_id, commit_sha])
 }
 
 fn decode_reverify_payload(payload: &str) -> Option<(String, String)> {

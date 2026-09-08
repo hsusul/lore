@@ -323,9 +323,7 @@ fn flag(value: Option<bool>) -> char {
 
 /// Wall-clock milliseconds since the Unix epoch, saturating at 0 before it.
 fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+    crate::now_ms()
 }
 
 impl ReverifyOutcome {
@@ -758,14 +756,7 @@ fn upsert_evidence(
 
 /// FNV-1a 64-bit hex digest (a content fingerprint, not a security primitive).
 fn fnv1a_hex(bytes: &[u8]) -> String {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    format!("{hash:016x}")
+    crate::hash::fnv1a64_hex(bytes)
 }
 
 // Full enrichment is covered end-to-end by `tests/enrich.rs`, which builds

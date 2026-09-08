@@ -102,6 +102,13 @@ pub trait AgentAdapter: Send + Sync {
     /// filesystem watches and to resolve which adapter owns an observed path.
     fn roots(&self, overrides: &DiscoveryRoots) -> Vec<PathBuf>;
 
+    /// Directories that this adapter considers its private or home directories
+    /// (including parent config/home dirs and effective session roots), which external
+    /// export operations must never write into.
+    fn protected_paths(&self, overrides: &DiscoveryRoots) -> Vec<PathBuf> {
+        self.roots(overrides)
+    }
+
     /// Enumerate candidate session files. Idempotent and cheap; no parsing.
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef>;
 

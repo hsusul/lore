@@ -500,6 +500,17 @@ impl AgentAdapter for ClaudeCodeAdapter {
         Self::effective_roots(overrides)
     }
 
+    fn protected_paths(&self, overrides: &DiscoveryRoots) -> Vec<PathBuf> {
+        let mut paths = Self::effective_roots(overrides);
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            paths.push(home.join(".claude"));
+        }
+        if let Some(claude_dir) = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+            paths.push(claude_dir);
+        }
+        paths
+    }
+
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef> {
         let mut out = Vec::new();
         for root in Self::effective_roots(roots) {

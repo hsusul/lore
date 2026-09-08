@@ -718,6 +718,17 @@ impl AgentAdapter for CodexAdapter {
         Self::effective_roots(overrides)
     }
 
+    fn protected_paths(&self, overrides: &DiscoveryRoots) -> Vec<PathBuf> {
+        let mut paths = Self::effective_roots(overrides);
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            paths.push(home.join(".codex"));
+        }
+        if let Some(codex_dir) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
+            paths.push(codex_dir);
+        }
+        paths
+    }
+
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef> {
         let mut out = Vec::new();
         for root in Self::effective_roots(roots) {
