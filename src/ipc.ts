@@ -3,12 +3,14 @@
 // module only names the commands and wires argument/return types to them.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type { ActivityDto } from "../crates/lore-ipc/bindings/ActivityDto";
 import type { ActivityKind } from "../crates/lore-ipc/bindings/ActivityKind";
 import type { ContinueTaskRequest } from "../crates/lore-ipc/bindings/ContinueTaskRequest";
 import type { CreateTaskRequest } from "../crates/lore-ipc/bindings/CreateTaskRequest";
+import type { DecisionDto } from "../crates/lore-ipc/bindings/DecisionDto";
 import type { DirEntryDto } from "../crates/lore-ipc/bindings/DirEntryDto";
 import type { FileContentDto } from "../crates/lore-ipc/bindings/FileContentDto";
 import type { MergeResultDto } from "../crates/lore-ipc/bindings/MergeResultDto";
@@ -18,12 +20,14 @@ import type { TaskDto } from "../crates/lore-ipc/bindings/TaskDto";
 import type { TaskOverlapDto } from "../crates/lore-ipc/bindings/TaskOverlapDto";
 import type { TaskPermission } from "../crates/lore-ipc/bindings/TaskPermission";
 import type { TaskState } from "../crates/lore-ipc/bindings/TaskState";
+import type { TasksChangedEvent } from "../crates/lore-ipc/bindings/TasksChangedEvent";
 
 export type {
   ActivityDto,
   ActivityKind,
   ContinueTaskRequest,
   CreateTaskRequest,
+  DecisionDto,
   DirEntryDto,
   FileContentDto,
   MergeResultDto,
@@ -33,6 +37,8 @@ export type {
   TaskOverlapDto,
   TaskPermission,
   TaskState,
+  TasksChangedEvent,
+  UnlistenFn,
 };
 
 // Dev-only browser preview: outside Tauri (`npm run dev` in a plain browser)
@@ -60,6 +66,31 @@ export function listTasks(): Promise<TaskDto[]> {
   return invoke<TaskDto[]>("list_tasks");
 }
 
+/** One task by id, with its state refreshed. Used to apply `tasks_changed`. */
+export function getTask(id: string): Promise<TaskDto> {
+  if (mock) return mock.then((m) => m.getTask(id));
+  return invoke<TaskDto>("get_task", { id });
+}
+
+/**
+ * The shared decision log, newest first: what the orchestrator did across the
+ * repository's tasks. Without `repoPath` it spans every repository.
+ */
+export function listDecisions(repoPath?: string | null, limit?: number): Promise<DecisionDto[]> {
+  if (mock) return mock.then((m) => m.listDecisions(repoPath, limit));
+  return invoke<DecisionDto[]>("list_decisions", { repoPath: repoPath ?? null, limit: limit ?? null });
+}
+
+/**
+ * Subscribe to the backend's `tasks_changed` event. The callback gets the ids
+ * whose state or output changed; an empty-string id means the list itself did
+ * (a task was added or removed), so the whole list has to be re-read.
+ */
+export function onTasksChanged(cb: (ids: string[]) => void): Promise<UnlistenFn> {
+  if (mock) return mock.then((m) => m.onTasksChanged(cb));
+  return listen<TasksChangedEvent>("tasks_changed", (event) => cb(event.payload.ids));
+}
+
 /** Create a Lore-owned worktree for the request and launch its agent. */
 export function createTask(request: CreateTaskRequest): Promise<TaskDto> {
   if (mock) return mock.then((m) => m.createTask(request));
@@ -81,10 +112,14 @@ export function continueTask(request: ContinueTaskRequest): Promise<TaskDto> {
   return invoke<TaskDto>("continue_task", { request });
 }
 
-/** Commit every uncommitted change in the task worktree (empty message = task title). */
-export function commitTask(id: string, message: string): Promise<TaskDto> {
-  if (mock) return mock.then((m) => m.commitTask(id, message));
-  return invoke<TaskDto>("commit_task", { id, message });
+/**
+ * Commit every uncommitted change in the task worktree (empty message = task
+ * title). The backend refuses a commit that touches files another unmerged task
+ * claims; `force` overrides that after the user confirms.
+ */
+export function commitTask(id: string, message: string, force?: boolean): Promise<TaskDto> {
+  if (mock) return mock.then((m) => m.commitTask(id, message, force));
+  return invoke<TaskDto>("commit_task", force ? { id, message, force: true } : { id, message });
 }
 
 /**

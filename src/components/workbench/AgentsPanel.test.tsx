@@ -22,6 +22,9 @@ function renderPanel(overrides: Partial<Parameters<typeof AgentsPanel>[0]> = {})
     onCreated: vi.fn(),
     onOpenFolder: vi.fn(),
     focusToken: 0,
+    allRepos: false,
+    onAllReposChange: vi.fn(),
+    hiddenCount: 0,
     ...overrides,
   };
   render(<AgentsPanel {...props} />);
@@ -71,6 +74,7 @@ describe("AgentsPanel", () => {
         prompt: "fix it",
         agent: "codex",
         permission: "edits",
+        auto_handoff: true,
       }),
     );
     await waitFor(() => expect(props.onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: "new" })));
@@ -158,6 +162,63 @@ describe("AgentsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm discard" }));
     await waitFor(() => expect(props.onDiscard).toHaveBeenCalledWith("t1"));
+  });
+
+  it("parses claims into chips and sends them with auto-handoff", async () => {
+    vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
+    renderPanel({ tasks: [] });
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
+    fireEvent.change(screen.getByLabelText("Owns (files or folders)"), {
+      target: { value: " src/parser/ , docs/SCHEMA.md\n./src/parser/ \n" },
+    });
+
+    // Comma- and newline-separated, trimmed, deduplicated, shown as chips.
+    const chips = within(screen.getByRole("list", { name: "Owned paths" })).getAllByRole("listitem");
+    expect(chips.map((li) => li.textContent)).toEqual(["src/parser/", "docs/SCHEMA.md"]);
+    expect(screen.getByText(/Other agents are told not to touch these/)).toBeTruthy();
+
+    const autoHandoff = screen.getByLabelText("Auto-handoff on usage limit") as HTMLInputElement;
+    expect(autoHandoff.checked).toBe(true);
+    fireEvent.click(autoHandoff);
+
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+    await waitFor(() =>
+      expect(createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ claims: ["src/parser/", "docs/SCHEMA.md"], auto_handoff: false }),
+      ),
+    );
+  });
+
+  it("omits claims entirely when the field is empty", async () => {
+    vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
+    renderPanel({ tasks: [] });
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
+    fireEvent.change(screen.getByLabelText("Owns (files or folders)"), { target: { value: " , \n " } });
+    expect(screen.queryByRole("list", { name: "Owned paths" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalled());
+    expect(vi.mocked(createTask).mock.calls[0][0]).not.toHaveProperty("claims");
+  });
+
+  it("toggles the repository scope and counts what it hides", () => {
+    const props = renderPanel({ tasks: [], hiddenCount: 3 });
+    const toggle = screen.getByRole("button", { name: /All repositories/ });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(toggle.textContent).toContain("3");
+    expect(screen.getByText("No agents in this repository (3 in others).")).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(props.onAllReposChange).toHaveBeenCalledWith(true);
+  });
+
+  it("marks a task whose auto-handoff is off", () => {
+    renderPanel({
+      tasks: [task({ auto_handoff: false }), task({ id: "t2", title: "Auto one", auto_handoff: true })],
+    });
+    const manual = screen.getByRole("listitem", { name: "Fix parser" });
+    expect(within(manual).getByText("manual handoff")).toBeTruthy();
+    expect(within(screen.getByRole("listitem", { name: "Auto one" })).queryByText("manual handoff")).toBeNull();
   });
 
   it("shows the task load warning", () => {

@@ -1,10 +1,16 @@
 import { memo, useEffect, useRef, useState, type FormEvent } from "react";
 
 import { formatRelative, formatTime } from "../../format";
-import { createTask, type TaskAgent, type TaskDto, type TaskPermission } from "../../ipc";
+import {
+  createTask,
+  type CreateTaskRequest,
+  type TaskAgent,
+  type TaskDto,
+  type TaskPermission,
+} from "../../ipc";
 import { CommitIcon, DiffIcon, MergeIcon, OverlapIcon, RevealIcon, StopIcon, TrashIcon, WarningIcon } from "./icons";
 import { SidebarHeader } from "./Sidebar";
-import { AGENT_LABELS, baseName, errorText, stateLabel } from "./state";
+import { AGENT_LABELS, baseName, errorText, parseClaims, stateLabel } from "./state";
 
 export type TaskActions = {
   onSelect: (id: string) => void;
@@ -24,14 +30,34 @@ type Props = TaskActions & {
   onOpenFolder: () => void;
   /** Changes whenever something asks to focus the new-agent form. */
   focusToken: number;
+  /** Show tasks from every repository, not only the open workspace. */
+  allRepos: boolean;
+  onAllReposChange: (all: boolean) => void;
+  /** Tasks hidden by the repository scope, for the toggle's label. */
+  hiddenCount: number;
 };
 
 /** The Agents sidebar view: launch an agent in the workspace and watch every task. */
 export default function AgentsPanel(props: Props) {
-  const { tasks, listError, loadWarning, selectedTaskId } = props;
+  const { tasks, listError, loadWarning, selectedTaskId, allRepos, hiddenCount } = props;
   return (
     <section className="wb-view wb-view--agents" aria-label="Agents">
-      <SidebarHeader title="Agents" />
+      <SidebarHeader title="Agents">
+        <button
+          type="button"
+          className={`scope-toggle${allRepos ? " scope-toggle--on" : ""}`}
+          aria-pressed={allRepos}
+          title={
+            allRepos
+              ? "Showing tasks from every repository"
+              : "Showing only tasks in the open repository"
+          }
+          onClick={() => props.onAllReposChange(!allRepos)}
+        >
+          All repositories
+          {!allRepos && hiddenCount > 0 && <span className="scope-toggle__count">{hiddenCount}</span>}
+        </button>
+      </SidebarHeader>
       <div className="wb-view__body">
         {loadWarning && (
           <p className="wb-note wb-note--error" role="alert">
@@ -55,7 +81,11 @@ export default function AgentsPanel(props: Props) {
             Loading tasks…
           </p>
         ) : tasks.length === 0 ? (
-          <p className="wb-note">No agents yet.</p>
+          <p className="wb-note">
+            {!allRepos && hiddenCount > 0
+              ? `No agents in this repository (${hiddenCount} in others).`
+              : "No agents yet."}
+          </p>
         ) : (
           <ul className="agents" aria-label="Tasks">
             {tasks.map((task) => (
@@ -92,6 +122,8 @@ function NewAgentForm({
   const [prompt, setPrompt] = useState("");
   const [agent, setAgent] = useState<TaskAgent>("claude_code");
   const [permission, setPermission] = useState<TaskPermission>("edits");
+  const [claimsText, setClaimsText] = useState("");
+  const [autoHandoff, setAutoHandoff] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -100,10 +132,20 @@ function NewAgentForm({
     if (focusToken > 0) titleRef.current?.focus();
   }, [focusToken]);
 
+  const claims = parseClaims(claimsText);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!workspace) return;
-    const request = { repo_path: workspace, title: title.trim(), prompt: prompt.trim(), agent, permission };
+    const request: CreateTaskRequest = {
+      repo_path: workspace,
+      title: title.trim(),
+      prompt: prompt.trim(),
+      agent,
+      permission,
+      auto_handoff: autoHandoff,
+    };
+    if (claims.length > 0) request.claims = claims;
     if (!request.title || !request.prompt) {
       setError("Title and prompt are required.");
       return;
@@ -114,6 +156,7 @@ function NewAgentForm({
       const task = await createTask(request);
       setTitle("");
       setPrompt("");
+      setClaimsText("");
       onCreated(task);
     } catch (e) {
       setError(errorText(e));
@@ -180,6 +223,33 @@ function NewAgentForm({
           </div>
           <span className="new-agent__hint">{PERMISSION_HINTS[permission]}</span>
         </div>
+        <label className="wb-field">
+          <span>Owns (files or folders)</span>
+          <textarea
+            rows={2}
+            className="new-agent__claims"
+            placeholder="src/parser/, docs/SCHEMA.md"
+            value={claimsText}
+            onChange={(e) => setClaimsText(e.target.value)}
+          />
+        </label>
+        {claims.length > 0 && (
+          <ul className="claim-chips" aria-label="Owned paths">
+            {claims.map((claim) => (
+              <li key={claim} className="claim-chip mono">
+                {claim}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="new-agent__hint">
+          Other agents are told not to touch these. A commit that changes another agent&rsquo;s files needs
+          confirmation. End a folder with <span className="mono">/</span>; separate with commas or new lines.
+        </p>
+        <label className="new-agent__check">
+          <input type="checkbox" checked={autoHandoff} onChange={(e) => setAutoHandoff(e.target.checked)} />
+          <span>Auto-handoff on usage limit</span>
+        </label>
         {error && (
           <p className="wb-note wb-note--error" role="alert">
             {error}
@@ -281,6 +351,14 @@ const TaskRow = memo(function TaskRow({
             >
               <OverlapIcon />
               {overlapCount}
+            </span>
+          )}
+          {task.auto_handoff === false && !task.merged_into && (
+            <span
+              className="row-flag row-flag--manual"
+              title="Auto-handoff is off: this task waits for you when the agent hits a usage limit."
+            >
+              manual handoff
             </span>
           )}
           {task.merged_into && (

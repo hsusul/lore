@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const open = vi.fn();
+const listen = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listen(...a) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => open(...a) }));
 
 import {
@@ -11,7 +13,10 @@ import {
   continueTask,
   createTask,
   discardTask,
+  getTask,
+  listDecisions,
   listTasks,
+  onTasksChanged,
   listWorkspaceDir,
   mergeTask,
   openTaskWorktree,
@@ -26,6 +31,7 @@ import {
 beforeEach(() => {
   invoke.mockReset();
   open.mockReset();
+  listen.mockReset();
 });
 
 describe("ipc contract", () => {
@@ -82,6 +88,32 @@ describe("ipc contract", () => {
       ["task_diff", { id: "t1" }],
       ["task_activity", { id: "t1" }],
     ]);
+  });
+
+  it("sends force on a commit only when it was asked for, and scopes the decision log", async () => {
+    invoke.mockResolvedValue(undefined);
+    await getTask("t1");
+    await commitTask("t1", "m", true);
+    await commitTask("t1", "m", false);
+    await listDecisions("/repo", 50);
+    await listDecisions();
+    expect(invoke.mock.calls).toEqual([
+      ["get_task", { id: "t1" }],
+      ["commit_task", { id: "t1", message: "m", force: true }],
+      ["commit_task", { id: "t1", message: "m" }],
+      ["list_decisions", { repoPath: "/repo", limit: 50 }],
+      ["list_decisions", { repoPath: null, limit: null }],
+    ]);
+  });
+
+  it("unwraps the tasks_changed payload into the changed ids", async () => {
+    const unlisten = vi.fn();
+    listen.mockResolvedValue(unlisten);
+    const seen: string[][] = [];
+    await expect(onTasksChanged((ids) => seen.push(ids))).resolves.toBe(unlisten);
+    expect(listen.mock.calls[0][0]).toBe("tasks_changed");
+    (listen.mock.calls[0][1] as (e: { payload: { ids: string[] } }) => void)({ payload: { ids: ["a", ""] } });
+    expect(seen).toEqual([["a", ""]]);
   });
 
   it("repository selection uses a single-directory native dialog", async () => {

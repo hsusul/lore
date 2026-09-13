@@ -62,6 +62,7 @@ export default function Workbench() {
     readStoredNumber(STORAGE_KEYS.panelHeight, 220, PANEL_MIN, PANEL_MAX),
   );
   const [panelTab, setPanelTab] = useState<PanelTab>("output");
+  const [allRepos, setAllRepos] = useState(() => readStored(STORAGE_KEYS.allRepos) === "true");
   const [scope, setScope] = useState("repo");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -86,21 +87,30 @@ export default function Workbench() {
   useEffect(() => writeStored(STORAGE_KEYS.sidebarWidth, String(sidebarWidth)), [sidebarWidth]);
   useEffect(() => writeStored(STORAGE_KEYS.panelHeight, String(panelHeight)), [panelHeight]);
   useEffect(() => writeStored(STORAGE_KEYS.panelOpen, String(panelOpen)), [panelOpen]);
+  useEffect(() => writeStored(STORAGE_KEYS.allRepos, String(allRepos)), [allRepos]);
   useEffect(() => {
     if (sidebarView) lastViewRef.current = sidebarView;
   }, [sidebarView]);
 
+  // Every task is addressable (an open tab may belong to another repository),
+  // but the Agents view, the explorer scope, and the counts follow the scope.
   const taskById = useMemo(() => new Map((tasks ?? []).map((t) => [t.id, t])), [tasks]);
-  const runningCount = (tasks ?? []).filter((t) => t.state === "running").length;
-  const attentionCount = (tasks ?? []).filter((t) => t.attention).length;
+  const visibleTasks = useMemo(() => {
+    if (tasks === null) return null;
+    if (allRepos || workspace === null) return tasks;
+    return tasks.filter((t) => t.repo_path === workspace);
+  }, [tasks, allRepos, workspace]);
+  const hiddenCount = (tasks?.length ?? 0) - (visibleTasks?.length ?? 0);
+  const runningCount = (visibleTasks ?? []).filter((t) => t.state === "running").length;
+  const attentionCount = (visibleTasks ?? []).filter((t) => t.attention).length;
   const selectedTask = selectedTaskId ? taskById.get(selectedTaskId) : undefined;
   const scopeTask = scope === "repo" ? undefined : taskById.get(scope);
   const scopeRoot = scope === "repo" ? workspace : (scopeTask?.worktree_path ?? null);
 
-  // A discarded task can no longer be the explorer scope.
+  // A discarded — or now out-of-scope — task can no longer be the explorer scope.
   useEffect(() => {
-    if (scope !== "repo" && tasks && !taskById.has(scope)) setScope("repo");
-  }, [scope, tasks, taskById]);
+    if (scope !== "repo" && visibleTasks && !visibleTasks.some((t) => t.id === scope)) setScope("repo");
+  }, [scope, visibleTasks]);
 
   const openFolder = useCallback(async () => {
     setWorkspaceError(null);
@@ -165,9 +175,12 @@ export default function Workbench() {
   );
 
   const handleCommit = useCallback(
-    async (id: string, message: string) => {
-      await commitTask(id, message);
-      await refresh();
+    async (id: string, message: string, force?: boolean) => {
+      try {
+        await commitTask(id, message, force);
+      } finally {
+        await refresh();
+      }
     },
     [refresh],
   );
@@ -344,7 +357,7 @@ export default function Workbench() {
           <div hidden={sidebarView !== "explorer"} className="wb-sidebar__view">
             <ExplorerPanel
               workspace={workspace}
-              tasks={tasks}
+              tasks={visibleTasks}
               scope={scope}
               onScopeChange={setScope}
               root={scopeRoot}
@@ -357,7 +370,10 @@ export default function Workbench() {
           <div hidden={sidebarView !== "agents"} className="wb-sidebar__view">
             <AgentsPanel
               workspace={workspace}
-              tasks={tasks}
+              tasks={visibleTasks}
+              allRepos={allRepos}
+              onAllReposChange={setAllRepos}
+              hiddenCount={hiddenCount}
               listError={listError}
               loadWarning={loadWarning}
               selectedTaskId={selectedTaskId}
@@ -412,6 +428,7 @@ export default function Workbench() {
                 onTabChange={setPanelTab}
                 onClose={() => setPanelOpen(false)}
                 task={selectedTask}
+                repoPath={workspace}
                 onOpenChange={(task, rel) => openFile(task.worktree_path, rel)}
               />
             </>

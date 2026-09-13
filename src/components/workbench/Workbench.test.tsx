@@ -7,6 +7,9 @@ vi.mock("../../ipc", () => ({
   listWorkspaceDir: vi.fn(),
   readWorkspaceFile: vi.fn(),
   listTasks: vi.fn(),
+  getTask: vi.fn(),
+  listDecisions: vi.fn(() => Promise.resolve([])),
+  onTasksChanged: vi.fn(() => Promise.resolve(() => {})),
   createTask: vi.fn(),
   stopTask: vi.fn(),
   discardTask: vi.fn(),
@@ -170,7 +173,7 @@ describe("Workbench", () => {
   });
 
   it("selecting an agent opens its tab, output, and changes; discard closes its tabs", async () => {
-    vi.mocked(listTasks).mockResolvedValue([task({ state: "finished" })]);
+    vi.mocked(listTasks).mockResolvedValue([task({ state: "finished", repo_path: "/work/repo" })]);
     vi.mocked(taskActivity).mockResolvedValue([{ kind: "message", text: "All done" }]);
     vi.mocked(discardTask).mockResolvedValue(undefined);
     render(<Workbench />);
@@ -195,6 +198,29 @@ describe("Workbench", () => {
     fireEvent.click(within(row).getByRole("button", { name: "Confirm discard" }));
     await waitFor(() => expect(discardTask).toHaveBeenCalledWith("t1"));
     await waitFor(() => expect(tabNames()).toEqual([]));
+  });
+
+  it("scopes tasks, counts, and the explorer picker to the open repository", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      task({ state: "running", repo_path: "/work/repo" }),
+      task({ id: "t2", title: "Other repo", repo_path: "/work/other", state: "running" }),
+    ]);
+    render(<Workbench />);
+    fireEvent.click(screen.getByRole("button", { name: "Agents" }));
+
+    await screen.findByRole("listitem", { name: "Fix parser" });
+    expect(screen.queryByRole("listitem", { name: "Other repo" })).toBeNull();
+    expect(screen.getByRole("button", { name: /1 agent running/ })).toBeTruthy();
+    expect(
+      within(screen.getByLabelText("Explorer scope")).queryByText("Worktree: Other repo"),
+    ).toBeNull();
+
+    // The toggle widens the scope and is remembered.
+    fireEvent.click(screen.getByRole("button", { name: /All repositories/ }));
+    expect(await screen.findByRole("listitem", { name: "Other repo" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /2 agents running/ })).toBeTruthy();
+    expect(within(screen.getByLabelText("Explorer scope")).getByText("Worktree: Other repo")).toBeTruthy();
+    expect(window.localStorage.getItem(STORAGE_KEYS.allRepos)).toBe("true");
   });
 
   it("opens a folder through the native picker and resolves the repo top-level", async () => {

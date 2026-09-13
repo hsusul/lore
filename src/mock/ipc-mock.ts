@@ -7,11 +7,13 @@ import type {
   ActivityDto,
   ContinueTaskRequest,
   CreateTaskRequest,
+  DecisionDto,
   DirEntryDto,
   FileContentDto,
   MergeResultDto,
   TaskDiffDto,
   TaskDto,
+  UnlistenFn,
 } from "../ipc";
 
 const WORKSPACE = "/Users/you/code/acme-web";
@@ -274,6 +276,7 @@ function task(partial: Partial<TaskDto> & Pick<TaskDto, "id" | "title" | "agent"
     permission: "edits",
     runs: 1,
     uncommitted_count: 0,
+    auto_handoff: true,
     ...partial,
   };
 }
@@ -291,6 +294,7 @@ const tasks: MockTask[] = [
       changed_files: ["services/pricing/src/lib.rs"],
       permission: "auto",
       uncommitted_count: 1,
+      claims: ["services/pricing/"],
     }),
     activity: [
       { kind: "message", text: "I'll start by looking at how the pricing service computes tax." },
@@ -329,6 +333,8 @@ index 1c2d3e4..5f6a7b8 100644
       changed_files: ["src/lib/money.ts", "src/lib/money.test.ts", "src/checkout/Cart.tsx"],
       last_activity: "Committed 2 changes on lore/currency-formatting",
       runs: 2,
+      claims: ["src/lib/", "src/checkout/Cart.tsx"],
+      auto_handoff: false,
     }),
     activity: [
       { kind: "message", text: "Plan: widen formatPrice's signature with defaults so existing callers keep working, cache one Intl.NumberFormat per locale/currency, then cover it with tests." },
@@ -444,19 +450,100 @@ index 7a0c9d1..c11e2f0 100644
   },
 ];
 
-/** Other unmerged tasks in the same repository that changed the same files. */
+/** A claim matches a file exactly, or any file under it when it ends in "/". */
+function claimed(claim: string, file: string): boolean {
+  return claim.endsWith("/") ? file.startsWith(claim) : file === claim;
+}
+
+/**
+ * Other unmerged tasks in the same repository that changed the same files
+ * (`overlaps`), and changed files those tasks own (`claim_conflicts`).
+ */
 function withOverlaps(dto: TaskDto): TaskDto {
-  if (dto.merged_into) return { ...dto, overlaps: [] };
-  const overlaps = tasks
+  if (dto.merged_into) return { ...dto, overlaps: [], claim_conflicts: [] };
+  const others = tasks
     .map((t) => t.dto)
-    .filter((o) => o.id !== dto.id && o.repo_path === dto.repo_path && !o.merged_into)
+    .filter((o) => o.id !== dto.id && o.repo_path === dto.repo_path && !o.merged_into);
+  const overlaps = others
     .map((o) => ({
       task_id: o.id,
       title: o.title,
       files: o.changed_files.filter((f) => dto.changed_files.includes(f)),
     }))
     .filter((o) => o.files.length > 0);
-  return { ...dto, overlaps };
+  const claim_conflicts = others
+    .map((o) => ({
+      task_id: o.id,
+      title: o.title,
+      files: dto.changed_files.filter((f) => (o.claims ?? []).some((c) => claimed(c, f))),
+    }))
+    .filter((o) => o.files.length > 0);
+  return { ...dto, overlaps, claim_conflicts };
+}
+
+// ── Decision log ─────────────────────────────────────────────────────────
+
+const decisions: DecisionDto[] = [];
+
+function record(dto: TaskDto, kind: string, detail: string, atMs = Date.now()) {
+  decisions.unshift({
+    at_ms: atMs,
+    task_id: dto.id,
+    task_title: dto.title,
+    repo_path: dto.repo_path,
+    kind,
+    detail,
+  });
+}
+
+// Seed the log with what the pre-existing tasks did, oldest first.
+for (const t of [...tasks].reverse()) {
+  record(t.dto, "created", `${t.dto.agent === "codex" ? "Codex" : "Claude Code"} started in ${t.dto.branch}.`, t.dto.created_at_ms);
+  if ((t.dto.runs ?? 1) > 1) {
+    record(t.dto, "auto_handoff", "Usage limit reached; handed off with a context brief.", t.dto.created_at_ms + 60_000);
+  }
+  if (t.dto.commits_ahead > 0) {
+    record(t.dto, "committed", `${t.dto.commits_ahead} commit(s) on ${t.dto.branch}.`, t.dto.created_at_ms + 120_000);
+  }
+  if (t.dto.merged_into) {
+    record(t.dto, "merged", `Merged ${t.dto.branch} into ${t.dto.merged_into}.`, t.dto.created_at_ms + 180_000);
+  }
+}
+decisions.sort((a, b) => b.at_ms - a.at_ms);
+
+// ── tasks_changed ────────────────────────────────────────────────────────
+
+const listeners = new Set<(ids: string[]) => void>();
+let ticker: ReturnType<typeof setInterval> | null = null;
+const seen = new Map<string, string>();
+
+function fingerprint(dto: TaskDto): string {
+  return `${dto.state}|${dto.last_activity ?? ""}|${dto.commits_ahead}|${dto.uncommitted_count ?? 0}|${dto.merged_into ?? ""}`;
+}
+
+/** Emit the ids whose state or output moved since the last tick. */
+function tick() {
+  tasks.forEach(advance);
+  const ids: string[] = [];
+  for (const t of tasks) {
+    const now = fingerprint(t.dto);
+    if (seen.get(t.dto.id) !== now) {
+      seen.set(t.dto.id, now);
+      ids.push(t.dto.id);
+    }
+  }
+  if (ids.length > 0) emit(ids);
+}
+
+function emit(ids: string[]) {
+  for (const listener of listeners) listener(ids);
+}
+
+/** The list itself changed (a task was added or removed). */
+function emitList() {
+  seen.clear();
+  for (const t of tasks) seen.set(t.dto.id, fingerprint(t.dto));
+  emit([""]);
 }
 
 /** Stream scripted events into running tasks based on elapsed time. */
@@ -497,6 +584,33 @@ export function listTasks(): Promise<TaskDto[]> {
   return delay(tasks.map((t) => withOverlaps(t.dto)));
 }
 
+export function getTask(id: string): Promise<TaskDto> {
+  const t = find(id);
+  advance(t);
+  return delay(withOverlaps(t.dto), 20);
+}
+
+export function listDecisions(repoPath?: string | null, limit?: number): Promise<DecisionDto[]> {
+  const scoped = repoPath ? decisions.filter((d) => d.repo_path === repoPath) : decisions;
+  return delay(scoped.slice(0, limit ?? scoped.length));
+}
+
+/** Drives the UI's live updates in the browser preview: one tick a second. */
+export function onTasksChanged(cb: (ids: string[]) => void): Promise<UnlistenFn> {
+  listeners.add(cb);
+  if (ticker === null) {
+    for (const t of tasks) seen.set(t.dto.id, fingerprint(t.dto));
+    ticker = setInterval(tick, 1000);
+  }
+  return delay(() => {
+    listeners.delete(cb);
+    if (listeners.size === 0 && ticker !== null) {
+      clearInterval(ticker);
+      ticker = null;
+    }
+  }, 0);
+}
+
 export function createTask(request: CreateTaskRequest): Promise<TaskDto> {
   const slug =
     request.title
@@ -516,6 +630,8 @@ export function createTask(request: CreateTaskRequest): Promise<TaskDto> {
       created_at_ms: Date.now(),
       repo_path: request.repo_path,
       permission: request.permission ?? "edits",
+      claims: request.claims,
+      auto_handoff: request.auto_handoff ?? true,
     }),
     activity: [{ kind: "message", text: `Starting on: ${request.prompt}` }],
     script: [
@@ -529,6 +645,14 @@ export function createTask(request: CreateTaskRequest): Promise<TaskDto> {
     diff: "",
   };
   tasks.unshift(created);
+  record(
+    created.dto,
+    "created",
+    (created.dto.claims ?? []).length > 0
+      ? `Owns ${(created.dto.claims ?? []).join(", ")}.`
+      : `${request.agent === "codex" ? "Codex" : "Claude Code"} started in ${created.dto.branch}.`,
+  );
+  emitList();
   return delay(created.dto, 250);
 }
 
@@ -537,6 +661,7 @@ export function stopTask(id: string): Promise<TaskDto> {
   if (t.dto.state === "running") {
     t.activity.push({ kind: "error", text: "Stopped by user." });
     t.dto = { ...t.dto, state: "stopped", last_activity: "Stopped by user." };
+    emit([t.dto.id]);
   }
   return delay(t.dto);
 }
@@ -568,16 +693,26 @@ export function continueTask(request: ContinueTaskRequest): Promise<TaskDto> {
     attention: undefined,
     last_activity: request.prompt.slice(0, 120),
   };
+  record(t.dto, handoff ? "handoff" : "continued", request.prompt.slice(0, 120));
+  emit([t.dto.id]);
   return delay(withOverlaps(t.dto), 200);
 }
 
-export function commitTask(id: string, message: string): Promise<TaskDto> {
+export function commitTask(id: string, message: string, force?: boolean): Promise<TaskDto> {
   const t = find(id);
   if (t.dto.state === "running") return Promise.reject(new Error("task is still running"));
   if (!t.dto.uncommitted_count) return Promise.reject(new Error("nothing to commit"));
+  const conflicts = withOverlaps(t.dto).claim_conflicts ?? [];
+  if (!force && conflicts.length > 0) {
+    return Promise.reject(
+      new Error(`this task changed files another agent owns: ${conflicts.flatMap((c) => c.files).join(", ")}`),
+    );
+  }
   const subject = message.trim() || t.dto.title;
   t.activity.push({ kind: "tool", text: `git commit -m "${subject}"` });
   t.dto = { ...t.dto, commits_ahead: t.dto.commits_ahead + 1, uncommitted_count: 0, last_activity: `Committed: ${subject}` };
+  record(t.dto, "committed", force ? `${subject} (forced over another agent's claim)` : subject);
+  emit([t.dto.id]);
   return delay(withOverlaps(t.dto), 200);
 }
 
@@ -591,6 +726,8 @@ export function mergeTask(id: string): Promise<MergeResultDto> {
     .filter((o) => o !== t && o.dto.merged_into && o.dto.repo_path === t.dto.repo_path)
     .flatMap((o) => o.dto.changed_files.filter((f) => t.dto.changed_files.includes(f)));
   if (conflicts.length > 0) {
+    record(t.dto, "merge_conflict", `Aborted: ${[...new Set(conflicts)].join(", ")}`);
+    emit([t.dto.id]);
     return delay(
       {
         merged: false,
@@ -602,6 +739,8 @@ export function mergeTask(id: string): Promise<MergeResultDto> {
     );
   }
   t.dto = { ...t.dto, merged_into: USER_BRANCH };
+  record(t.dto, "merged", `Merged ${t.dto.branch} into ${USER_BRANCH}.`);
+  emit([t.dto.id]);
   return delay(
     {
       merged: true,
@@ -615,7 +754,11 @@ export function mergeTask(id: string): Promise<MergeResultDto> {
 
 export function discardTask(id: string): Promise<void> {
   const i = tasks.findIndex((t) => t.dto.id === id);
-  if (i >= 0) tasks.splice(i, 1);
+  if (i >= 0) {
+    record(tasks[i].dto, "discarded", `Deleted ${tasks[i].dto.branch} and its worktree.`);
+    tasks.splice(i, 1);
+    emitList();
+  }
   return delay(undefined);
 }
 

@@ -889,10 +889,83 @@ body.is-resizing-horizontal .sash--horizontal::before {
 }
 
 .new-agent__hint {
+  margin: 0;
   min-width: 0;
   color: var(--wb-fg-faint);
   font-size: 11px;
   line-height: 1.35;
+}
+
+/* Claims: the files or folders a task owns. */
+textarea.new-agent__claims {
+  resize: vertical;
+}
+
+.claim-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.claim-chip {
+  padding: 1px 7px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: var(--r-pill);
+  background: var(--wb-widget-bg);
+  color: var(--wb-fg-muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.new-agent__check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--wb-fg-muted);
+  font-size: 11.5px;
+}
+
+.new-agent__check input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--wb-accent-strong);
+}
+
+/* Repository scope toggle in the Agents header. */
+.scope-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--wb-fg-faint);
+  font-size: 10.5px;
+  white-space: nowrap;
+  transition: background-color 120ms var(--ease), color 120ms var(--ease);
+}
+
+.scope-toggle:hover {
+  color: var(--wb-fg-strong);
+}
+
+.scope-toggle--on {
+  background: var(--wb-accent-soft);
+  border-color: rgba(143, 148, 246, 0.3);
+  color: var(--wb-fg-strong);
+}
+
+.scope-toggle__count {
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  background: var(--wb-active-row);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Small inline indicators on task rows. */
@@ -923,6 +996,14 @@ body.is-resizing-horizontal .sash--horizontal::before {
 
 .row-flag--merged {
   color: var(--wb-success);
+}
+
+.row-flag--manual {
+  padding: 0 6px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: var(--r-pill);
+  color: var(--wb-fg-faint);
+  font-size: 10px;
 }
 
 .agents {
@@ -1833,6 +1914,16 @@ body.is-resizing-horizontal .sash--horizontal::before {
   color: var(--wb-amber);
 }
 
+/* An ownership clash is firmer than a plain overlap. */
+.agent-callout--claim {
+  border-color: rgba(234, 138, 126, 0.3);
+  background: rgba(234, 138, 126, 0.08);
+}
+
+.agent-callout--claim > .icon {
+  color: var(--wb-danger);
+}
+
 .agent-callout__body {
   min-width: 0;
 }
@@ -2253,6 +2344,84 @@ input.git-actions__input {
   overflow: hidden;
   color: var(--wb-fg-faint);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Decision log (History panel) ──────────────────────────────────────── */
+
+.decisions {
+  margin: 0;
+  padding: 4px 6px 8px;
+  list-style: none;
+}
+
+.decisions__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 10px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+}
+
+.decisions__row:hover {
+  background: var(--wb-hover);
+}
+
+.decisions__time {
+  flex: none;
+  width: 54px;
+  color: var(--wb-fg-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.decisions__kind {
+  flex: none;
+  min-width: 74px;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: var(--wb-active-row);
+  color: var(--wb-fg-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.decisions__kind--committed,
+.decisions__kind--merged {
+  background: rgba(141, 197, 146, 0.13);
+  color: var(--wb-success);
+}
+
+.decisions__kind--handoff,
+.decisions__kind--auto_handoff {
+  background: var(--wb-amber-soft);
+  color: var(--wb-amber);
+}
+
+.decisions__kind--merge_conflict,
+.decisions__kind--discarded {
+  background: var(--wb-danger-bg);
+  color: var(--wb-danger);
+}
+
+.decisions__title {
+  flex: none;
+  max-width: 30%;
+  overflow: hidden;
+  color: var(--wb-fg-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.decisions__detail {
+  overflow: hidden;
+  color: var(--wb-fg-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

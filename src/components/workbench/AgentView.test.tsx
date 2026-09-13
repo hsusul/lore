@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../ipc", () => ({ taskActivity: vi.fn(() => Promise.resolve([])) }));
+vi.mock("../../ipc", () => ({
+  taskActivity: vi.fn(() => Promise.resolve([])),
+  onTasksChanged: vi.fn(() => Promise.resolve(() => {})),
+}));
 
 import { taskActivity, type ContinueTaskRequest, type MergeResultDto, type TaskDto } from "../../ipc";
 import AgentView from "./AgentView";
@@ -13,7 +16,7 @@ const handlers = () => ({
   onReveal: vi.fn(() => Promise.resolve()),
   onOpenDiff: vi.fn(),
   onContinue: vi.fn<(request: ContinueTaskRequest) => Promise<void>>(() => Promise.resolve()),
-  onCommit: vi.fn<(id: string, message: string) => Promise<void>>(() => Promise.resolve()),
+  onCommit: vi.fn<(id: string, message: string, force?: boolean) => Promise<void>>(() => Promise.resolve()),
   onMerge: vi.fn<(id: string) => Promise<MergeResultDto>>(() =>
     Promise.resolve({ merged: true, into_branch: "main", conflicts: [], message: "Merged lore/fix-parser into main." }),
   ),
@@ -129,10 +132,55 @@ describe("AgentView", () => {
     expect(message.placeholder).toBe("Fix parser");
     fireEvent.change(message, { target: { value: "parser: handle eof" } });
     fireEvent.click(screen.getByRole("button", { name: "Commit" }));
-    expect(h.onCommit).toHaveBeenCalledWith("t1", "parser: handle eof");
+    expect(h.onCommit).toHaveBeenCalledWith("t1", "parser: handle eof", undefined);
     expect(screen.getByRole("button", { name: "Committing…" }).matches(":disabled")).toBe(true);
     finish();
     await waitFor(() => expect(message.value).toBe(""));
+  });
+
+  it("warns about claim conflicts separately from overlaps and links the owning task", () => {
+    const h = renderView({
+      claims: ["src/parser/"],
+      overlaps: [{ task_id: "t3", title: "Cart copy", files: ["src/a.rs"] }],
+      claim_conflicts: [{ task_id: "t2", title: "Money owner", files: ["src/lib/money.ts", "src/b.ts"] }],
+    });
+    // The task's own claims show as chips in the header.
+    expect(within(screen.getByRole("list", { name: "Owned paths" })).getByText("src/parser/")).toBeTruthy();
+
+    const conflict = screen.getByRole("alert", { name: "Claim conflicts" });
+    expect(conflict.textContent).toContain("Changed files owned by Money owner:");
+    expect(within(conflict).getByText("src/lib/money.ts, src/b.ts")).toBeTruthy();
+    // Still a distinct region from the plain overlap warning.
+    expect(screen.getByRole("region", { name: "Overlapping tasks" })).toBeTruthy();
+
+    fireEvent.click(within(conflict).getByRole("button", { name: "Money owner" }));
+    expect(h.onSelectTask).toHaveBeenCalledWith("t2");
+  });
+
+  it("offers a confirmed force commit after an ownership refusal", async () => {
+    const h = handlers();
+    h.onCommit.mockRejectedValueOnce(new Error("this task changed files another agent owns: src/b.ts"));
+    renderView({ uncommitted_count: 1, claim_conflicts: [{ task_id: "t2", title: "Owner", files: ["src/b.ts"] }] }, h);
+
+    fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    expect(await screen.findByText(/another agent owns: src\/b\.ts/)).toBeTruthy();
+    expect(h.onCommit).toHaveBeenLastCalledWith("t1", "", undefined);
+
+    // The force path needs its own confirmation before it re-sends.
+    fireEvent.click(screen.getByRole("button", { name: "Commit anyway" }));
+    expect(h.onCommit).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm commit" }));
+    await waitFor(() => expect(h.onCommit).toHaveBeenLastCalledWith("t1", "", true));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Commit anyway" })).toBeNull());
+  });
+
+  it("does not offer a force commit for an unrelated commit error", async () => {
+    const h = handlers();
+    h.onCommit.mockRejectedValue(new Error("nothing to commit"));
+    renderView({ uncommitted_count: 1 }, h);
+    fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    expect(await screen.findByText("nothing to commit")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Commit anyway" })).toBeNull();
   });
 
   it("merges only after confirmation and shows the success message", async () => {

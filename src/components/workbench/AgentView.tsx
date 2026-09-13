@@ -13,7 +13,7 @@ import {
   TrashIcon,
   WarningIcon,
 } from "./icons";
-import { AGENT_LABELS, errorText } from "./state";
+import { AGENT_LABELS, errorText, isOwnershipError } from "./state";
 import { useActivity } from "./useTasks";
 
 type Props = {
@@ -24,7 +24,7 @@ type Props = {
   onReveal: (id: string) => Promise<void>;
   onOpenDiff: (id: string) => void;
   onContinue: (request: ContinueTaskRequest) => Promise<void>;
-  onCommit: (id: string, message: string) => Promise<void>;
+  onCommit: (id: string, message: string, force?: boolean) => Promise<void>;
   onMerge: (id: string) => Promise<MergeResultDto>;
   /** Open or focus another task's agent tab. */
   onSelectTask: (id: string) => void;
@@ -56,6 +56,9 @@ export default function AgentView({
   const [commitMessage, setCommitMessage] = useState("");
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
+  /** Set when the backend refused a commit because another task owns the files. */
+  const [commitBlocked, setCommitBlocked] = useState(false);
+  const [confirmingForce, setConfirmingForce] = useState(false);
 
   const [confirmingMerge, setConfirmingMerge] = useState(false);
   const [merging, setMerging] = useState(false);
@@ -80,6 +83,8 @@ export default function AgentView({
   const merged = Boolean(task.merged_into);
   const uncommitted = task.uncommitted_count ?? 0;
   const overlaps = task.overlaps ?? [];
+  const claimConflicts = task.claim_conflicts ?? [];
+  const claims = task.claims ?? [];
   const canCommit = !running && !merged && uncommitted > 0;
   const mergedNow = mergeOutcome?.kind === "result" && mergeOutcome.result.merged;
   const canMerge = !running && !merged && !mergedNow && uncommitted === 0 && task.commits_ahead > 0;
@@ -98,15 +103,19 @@ export default function AgentView({
     }
   }
 
-  async function commit(event: FormEvent) {
-    event.preventDefault();
+  async function commit(force = false) {
     setCommitting(true);
     setCommitError(null);
     try {
-      await onCommit(taskId, commitMessage.trim());
+      await onCommit(taskId, commitMessage.trim(), force || undefined);
       setCommitMessage("");
+      setCommitBlocked(false);
+      setConfirmingForce(false);
     } catch (e) {
-      setCommitError(errorText(e));
+      const message = errorText(e);
+      setCommitError(message);
+      setCommitBlocked(isOwnershipError(message));
+      setConfirmingForce(false);
     } finally {
       setCommitting(false);
     }
@@ -161,6 +170,20 @@ export default function AgentView({
           )}
           <span className="agent-view__agent">{AGENT_LABELS[task.agent] ?? task.agent}</span>
           {task.runs !== undefined && task.runs > 0 && <span className="agent-view__runs">Run {task.runs}</span>}
+          {task.auto_handoff === false && (
+            <span className="agent-view__runs" title="Auto-handoff is off: a usage limit waits for you.">
+              manual handoff
+            </span>
+          )}
+          {claims.length > 0 && (
+            <ul className="claim-chips" aria-label="Owned paths">
+              {claims.map((claim) => (
+                <li key={claim} className="claim-chip mono" title="Other agents are told not to touch this">
+                  {claim}
+                </li>
+              ))}
+            </ul>
+          )}
           <span className="agent-view__spacer" />
           {confirming ? (
             <>
@@ -243,6 +266,31 @@ export default function AgentView({
           </div>
         )}
 
+        {claimConflicts.length > 0 && (
+          <div className="agent-callout agent-callout--claim" role="alert" aria-label="Claim conflicts">
+            <WarningIcon />
+            <div className="agent-callout__body">
+              <span>
+                This task changed files another agent owns. Committing them needs confirmation.
+              </span>
+              <ul className="overlap-list">
+                {claimConflicts.map((conflict) => (
+                  <li key={conflict.task_id}>
+                    <span>
+                      Changed files owned by{" "}
+                      <button type="button" className="wb-link" onClick={() => onSelectTask(conflict.task_id)}>
+                        {conflict.title}
+                      </button>
+                      :
+                    </span>
+                    <span className="overlap-list__files mono">{conflict.files.join(", ")}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
         {overlaps.length > 0 && (
           <div className="agent-callout agent-callout--overlap" role="region" aria-label="Overlapping tasks">
             <OverlapIcon />
@@ -268,7 +316,14 @@ export default function AgentView({
         {(canCommit || canMerge || mergeOutcome) && (
           <div className="git-actions">
             {canCommit && (
-              <form className="git-actions__row" aria-label="Commit changes" onSubmit={(e) => void commit(e)}>
+              <form
+                className="git-actions__row"
+                aria-label="Commit changes"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void commit();
+                }}
+              >
                 <span className="git-actions__label">
                   <CommitIcon /> {uncommitted} uncommitted {uncommitted === 1 ? "change" : "changes"}
                 </span>
@@ -291,6 +346,36 @@ export default function AgentView({
                 {commitError}
               </p>
             )}
+            {commitBlocked &&
+              (confirmingForce ? (
+                <div className="git-actions__row">
+                  <span className="git-actions__label">
+                    Commit these files even though another agent owns them?
+                  </span>
+                  <button
+                    type="button"
+                    className="wb-btn wb-btn--danger"
+                    disabled={committing}
+                    onClick={() => void commit(true)}
+                  >
+                    {committing ? "Committing…" : "Confirm commit"}
+                  </button>
+                  <button
+                    type="button"
+                    className="wb-btn"
+                    disabled={committing}
+                    onClick={() => setConfirmingForce(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="git-actions__row">
+                  <button type="button" className="wb-btn" onClick={() => setConfirmingForce(true)}>
+                    Commit anyway
+                  </button>
+                </div>
+              ))}
             {canMerge && (
               <div className="git-actions__row">
                 {confirmingMerge ? (
