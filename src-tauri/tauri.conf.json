@@ -35,7 +35,7 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "Local, git-aware memory for your AI coding sessions",
+    "shortDescription": "Run coding agents in parallel, each in its own git worktree",
     "macOS": {
       "minimumSystemVersion": "10.15"
     }

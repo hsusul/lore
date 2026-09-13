@@ -7,25 +7,29 @@
 
 # Lore
 
-Lore is a local desktop app for browsing and searching your coding-agent history.
+Lore is a local desktop app for running coding agents in parallel.
 
-It reads the session files Claude Code and Codex already save on your computer, connects them to their repositories and Git history, and puts everything in one searchable archive. It does not wrap your agents or change their files.
+Each task runs Claude Code or Codex in its own git worktree and branch, so agents never touch your checkout or each other. You watch their progress, continue a task or hand it to the other agent, commit, and merge the result back into your branch.
+
+> **Status: early and unreleased.** The orchestrator and workbench are built and tested against a fake agent. They have not yet been proven end to end with signed-in agents, and there is no signed build.
 
 ## How it works
 
 ```text
-Claude Code and Codex logs
+you write a task
         ↓
-read-only adapters
+Lore creates a worktree on branch lore/<task>
         ↓
-local SQLite archive + Git evidence
+claude -p / codex exec runs headless in that worktree
         ↓
-search and browse in the desktop app
+live activity, diff, commits, overlap warnings
+        ↓
+continue · hand off · commit · merge into your branch
 ```
 
-Lore keeps different kinds of evidence separate. A commit recorded during a session is not treated as the same thing as repository state observed later during ingestion.
-
-Everything in the archive stays on the machine. V0 has no accounts, telemetry, cloud database, or LLM calls.
+- Agents launch with their own permission settings. Lore never passes permission-bypass flags; Claude runs in `acceptEdits` by default (opt-in `auto` per task), Codex in its `workspace-write` sandbox.
+- Your checkout only changes when you confirm a merge. Lore refuses to merge into a dirty checkout and aborts on conflict.
+- Everything runs on your machine. Lore has no accounts, telemetry, or server; the agents talk to their own providers as they normally do.
 
 ## Development
 
@@ -44,20 +48,22 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Run the web UI with `npm run dev`. Run the desktop app with `cargo tauri dev` once the Tauri CLI is installed.
+Run the web UI with sample data using `npm run dev`. Run the desktop app with `npm run tauri dev`.
 
 ## Repository layout
 
 ```text
-crates/lore-core/   ingestion, storage, Git, search, and safety
-crates/lore-ipc/    Rust IPC types and generated TypeScript bindings
-src-tauri/          Tauri application layer
-src/                React interface
+crates/lore-orchestrator/  tasks, worktrees, agent processes, handoff, merge
+crates/lore-ipc/           Rust IPC types and generated TypeScript bindings
+src-tauri/                 Tauri application layer
+src/                       React workbench (npm run dev uses sample data)
+crates/lore-core/          session-archive library (not used by the app)
+crates/lorectl/            archive CLI (not used by the app)
 ```
 
 ## Scope
 
-Lore currently focuses on Claude Code and Codex. It is an archive, not an IDE, agent runtime, or cloud memory service. More integrations and generated skills are deliberately deferred until the core archive is finished.
+Lore focuses on Claude Code and Codex. It supervises agents; it is not a code editor, and editing stays in your own editor. Coordination features (file claims, automatic handoff on usage limits, a shared decision log, a merge queue) are planned next.
 
 ## License
 

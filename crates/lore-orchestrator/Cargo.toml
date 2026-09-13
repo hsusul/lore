@@ -1,0 +1,22 @@
+[package]
+name = "lore-orchestrator"
+description = "Runs coding agents in parallel, each in a Lore-owned git worktree (ADR-0007)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lore-ipc = { path = "../lore-ipc" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"

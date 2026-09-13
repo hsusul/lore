@@ -3,7 +3,7 @@
 # logic stays in lore-core, which keeps that guarantee.
 [package]
 name = "lore-app"
-description = "Lore desktop shell (Tauri 2). Thin binary over lore-core; no archive logic lives here."
+description = "Lore desktop shell (Tauri 2): parallel coding agents in git worktrees."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -36,11 +36,10 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-lore-core = { path = "../crates/lore-core" }
 lore-ipc = { path = "../crates/lore-ipc" }
+lore-orchestrator = { path = "../crates/lore-orchestrator" }
 # Same version as lore-core so the Connection type unifies (features are additive
 # across the graph; lore-core already enables the bundled SQLite).
-rusqlite = "0.32"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }

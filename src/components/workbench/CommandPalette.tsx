@@ -1,0 +1,150 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+
+export type PaletteItem = {
+  id: string;
+  label: string;
+  detail?: string;
+  group: "Command" | "File";
+  hint?: string;
+  run: () => void;
+};
+
+const MAX_RESULTS = 100;
+
+/**
+ * Ordered fuzzy match: every query character must appear in order. Higher is
+ * better; consecutive and word-start matches score more. Null when no match.
+ */
+export function fuzzyScore(query: string, text: string): number | null {
+  const q = query.toLowerCase().replace(/\s+/g, "");
+  if (!q) return 0;
+  const t = text.toLowerCase();
+  let score = 0;
+  let ti = 0;
+  let prev = -2;
+  for (const ch of q) {
+    const found = t.indexOf(ch, ti);
+    if (found < 0) return null;
+    score += 1;
+    if (found === prev + 1) score += 3;
+    if (found === 0 || /[\s/._-]/.test(t[found - 1])) score += 2;
+    prev = found;
+    ti = found + 1;
+  }
+  return score - t.length * 0.01;
+}
+
+export function filterItems(items: PaletteItem[], query: string): PaletteItem[] {
+  if (!query.trim()) {
+    return items.filter((i) => i.group === "Command").concat(items.filter((i) => i.group === "File")).slice(0, MAX_RESULTS);
+  }
+  return items
+    .map((item) => {
+      const label = fuzzyScore(query, item.label);
+      const detail = item.detail ? fuzzyScore(query, item.detail) : null;
+      const best = label === null ? (detail === null ? null : detail - 1) : label;
+      return { item, score: best };
+    })
+    .filter((x): x is { item: PaletteItem; score: number } => x.score !== null)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_RESULTS)
+    .map((x) => x.item);
+}
+
+type Props = { items: PaletteItem[]; onClose: () => void };
+
+/** ⌘K / ⌘P quick switcher over commands and files already loaded in the explorer. */
+export default function CommandPalette({ items, onClose }: Props) {
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    inputRef.current?.focus();
+    return () => {
+      if (previous && document.contains(previous)) previous.focus();
+    };
+  }, []);
+
+  const results = useMemo(() => filterItems(items, query), [items, query]);
+  const current = Math.min(active, Math.max(results.length - 1, 0));
+
+  useEffect(() => {
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-index="${current}"]`)
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [current]);
+
+  function run(item: PaletteItem | undefined) {
+    if (!item) return;
+    onClose();
+    item.run();
+  }
+
+  return (
+    <div className="palette-backdrop" onMouseDown={onClose}>
+      <div
+        className="palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <input
+          ref={inputRef}
+          className="palette__input"
+          role="combobox"
+          aria-expanded="true"
+          aria-controls="palette-list"
+          aria-autocomplete="list"
+          aria-activedescendant={results.length ? `palette-opt-${current}` : undefined}
+          aria-label="Search commands and files"
+          placeholder="Type a command or file name"
+          value={query}
+          spellCheck={false}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setActive(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setActive(results.length ? (current + 1) % results.length : 0);
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setActive(results.length ? (current - 1 + results.length) % results.length : 0);
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              run(results[current]);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              onClose();
+            }
+          }}
+        />
+        <ul id="palette-list" ref={listRef} className="palette__list" role="listbox" aria-label="Results">
+          {results.length === 0 && <li className="palette__empty">No matching commands or files</li>}
+          {results.map((item, i) => (
+            <li
+              key={item.id}
+              id={`palette-opt-${i}`}
+              data-index={i}
+              role="option"
+              aria-selected={i === current}
+              className={`palette__item${i === current ? " palette__item--active" : ""}`}
+              onMouseMove={() => i !== current && setActive(i)}
+              onClick={() => run(item)}
+            >
+              <span className="palette__label">{item.label}</span>
+              {item.detail && <span className="palette__detail">{item.detail}</span>}
+              <span className="palette__hint">{item.hint ?? (item.group === "File" ? "file" : "")}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}

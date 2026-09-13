@@ -395,6 +395,207 @@ pub struct CheckUpdateResultDto {
     pub published_at: Option<String>,
 }
 
+/// Which coding-agent CLI runs an orchestrated task (ADR-0007).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TaskAgent {
+    ClaudeCode,
+    Codex,
+}
+
+/// Lifecycle of an orchestrated task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TaskState {
+    Running,
+    /// The agent exited with status 0.
+    Finished,
+    /// The agent exited non-zero or could not be started.
+    Failed,
+    /// The user stopped it.
+    Stopped,
+    /// It was running when Lore last quit; the process is no longer supervised.
+    Interrupted,
+}
+
+/// Input of `create_task`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CreateTaskRequest {
+    /// Any path inside the target git repository.
+    pub repo_path: String,
+    pub title: String,
+    pub prompt: String,
+    pub agent: TaskAgent,
+    /// Defaults to `edits`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub permission: Option<TaskPermission>,
+}
+
+/// How much an agent may do without asking (ADR-0007). Lore never bypasses
+/// permission prompts or sandboxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TaskPermission {
+    /// Claude: edit files only (`acceptEdits`); shell commands are denied.
+    /// Codex: sandboxed to the worktree.
+    #[default]
+    Edits,
+    /// Claude: `auto` mode, where the agent's own safety classifier approves
+    /// routine actions such as running tests. Codex: same sandbox as `edits`.
+    Auto,
+}
+
+/// Input of `continue_task`: send more work to a finished, failed, stopped, or
+/// interrupted task in the same worktree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ContinueTaskRequest {
+    pub id: String,
+    pub prompt: String,
+    /// Switch agents (a handoff). Omit to keep the current agent, which resumes
+    /// its own session when possible.
+    #[serde(default)]
+    #[ts(optional)]
+    pub agent: Option<TaskAgent>,
+}
+
+/// Outcome of `merge_task`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MergeResultDto {
+    pub merged: bool,
+    /// Branch of the primary checkout the task was merged into.
+    pub into_branch: String,
+    /// Conflicting paths when the merge was aborted.
+    pub conflicts: Vec<String>,
+    pub message: String,
+}
+
+/// One orchestrated task with its live status. Payload element of `list_tasks`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TaskDto {
+    pub id: String,
+    pub title: String,
+    pub prompt: String,
+    pub agent: TaskAgent,
+    pub state: TaskState,
+    /// Repository top-level the worktree was created from.
+    pub repo_path: String,
+    /// Lore-owned worktree the agent runs in.
+    pub worktree_path: String,
+    pub branch: String,
+    /// Commit the worktree branched from.
+    pub base_commit: String,
+    #[ts(type = "number")]
+    pub created_at_ms: i64,
+    #[ts(type = "number | null")]
+    pub exit_code: Option<i64>,
+    /// Commits on the task branch since `base_commit`.
+    #[ts(type = "number")]
+    pub commits_ahead: i64,
+    /// Paths changed relative to `base_commit`, committed or not (capped).
+    pub changed_files: Vec<String>,
+    /// Most recent human-readable line from the agent's output, truncated.
+    pub last_activity: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub permission: Option<TaskPermission>,
+    /// How many times an agent has run in this worktree (1 + continuations).
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub runs: Option<i64>,
+    /// Paths with uncommitted changes in the worktree.
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub uncommitted_count: Option<i64>,
+    /// Something needs the user: e.g. usage limit reached or not logged in.
+    #[serde(default)]
+    #[ts(optional)]
+    pub attention: Option<String>,
+    /// Other unmerged tasks in the same repository that changed the same files.
+    #[serde(default)]
+    #[ts(optional)]
+    pub overlaps: Option<Vec<TaskOverlapDto>>,
+    /// Branch currently checked out in the task's repository (the merge target).
+    #[serde(default)]
+    #[ts(optional)]
+    pub repo_branch: Option<String>,
+    /// Set once the task branch was merged into the primary checkout.
+    #[serde(default)]
+    #[ts(optional)]
+    pub merged_into: Option<String>,
+}
+
+/// Files a task shares with another unmerged task (overlap warning, step 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TaskOverlapDto {
+    pub task_id: String,
+    pub title: String,
+    pub files: Vec<String>,
+}
+
+/// One entry of a workspace directory listing (`list_workspace_dir`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DirEntryDto {
+    pub name: String,
+    /// Path relative to the workspace root, `/`-separated.
+    pub rel_path: String,
+    pub is_dir: bool,
+}
+
+/// A read-only file view (`read_workspace_file`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FileContentDto {
+    pub rel_path: String,
+    /// UTF-8 text, or null for binary files.
+    pub text: Option<String>,
+    #[ts(type = "number")]
+    pub size: i64,
+    /// Only the first part of a large file was returned.
+    pub truncated: bool,
+}
+
+/// What an agent is doing, parsed from its output (`task_activity`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ActivityKind {
+    /// Assistant prose.
+    Message,
+    /// A tool call, e.g. "Edit src/lib.rs".
+    Tool,
+    /// The final result.
+    Result,
+    /// An error reported by the agent or on stderr.
+    Error,
+    /// A non-JSON output line.
+    Output,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ActivityDto {
+    pub kind: ActivityKind,
+    pub text: String,
+}
+
+/// Unified diff of a task's worktree against its base commit (`task_diff`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TaskDiffDto {
+    pub text: String,
+    pub truncated: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

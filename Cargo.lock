@@ -2836,9 +2836,8 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 name = "lore-app"
 version = "0.0.0"
 dependencies = [
- "lore-core",
  "lore-ipc",
- "rusqlite",
+ "lore-orchestrator",
  "serde",
  "serde_json",
  "tauri",
@@ -2872,6 +2871,17 @@ dependencies = [
  "serde",
  "serde_json",
  "ts-rs",
+]
+
+[[package]]
+name = "lore-orchestrator"
+version = "0.0.0"
+dependencies = [
+ "lore-ipc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
