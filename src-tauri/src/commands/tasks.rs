@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use lore_ipc::{
-    ActivityDto, ContinueTaskRequest, CreateTaskRequest, DirEntryDto, FileContentDto,
+    ActivityDto, ContinueTaskRequest, CreateTaskRequest, DecisionDto, DirEntryDto, FileContentDto,
     MergeResultDto, TaskDiffDto, TaskDto,
 };
 use lore_orchestrator::{describe, AgentPrograms, TaskSnapshot};
@@ -78,15 +78,47 @@ pub async fn continue_task(
     describe_one(snapshot).await
 }
 
-/// Commit all uncommitted changes in a task's worktree.
+/// Commit all uncommitted changes in a task's worktree. `force` commits even
+/// when the task changed files another task owns.
 #[tauri::command]
-pub async fn commit_task(app: AppHandle, id: String, message: String) -> Result<TaskDto, String> {
+pub async fn commit_task(
+    app: AppHandle,
+    id: String,
+    message: String,
+    force: Option<bool>,
+) -> Result<TaskDto, String> {
     check_id(&id)?;
     let snapshot = with_orchestrator(app, move |o| {
-        o.commit_task(&id, &message).map_err(|e| e.to_string())
+        o.commit_task_forced(&id, &message, force.unwrap_or(false))
+            .map_err(|e| e.to_string())
     })
     .await?;
     describe_one(snapshot).await
+}
+
+/// One task with fresh status, for refreshing after a change event.
+#[tauri::command]
+pub async fn get_task(app: AppHandle, id: String) -> Result<TaskDto, String> {
+    check_id(&id)?;
+    let snapshot =
+        with_orchestrator(app, move |o| o.snapshot(&id).map_err(|e| e.to_string())).await?;
+    describe_one(snapshot).await
+}
+
+/// The shared decision log: what agents did across tasks, newest first.
+#[tauri::command]
+pub async fn list_decisions(
+    app: AppHandle,
+    repo_path: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<DecisionDto>, String> {
+    with_orchestrator(app, move |o| {
+        Ok(o.decisions(
+            repo_path.as_deref(),
+            limit.unwrap_or(100).min(1_000) as usize,
+        ))
+    })
+    .await
 }
 
 /// Merge a task's branch into the repository's checked-out branch.

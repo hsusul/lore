@@ -62,6 +62,8 @@ fn request(repo: &Path, title: &str) -> CreateTaskRequest {
         prompt: "do the thing".into(),
         agent: TaskAgent::ClaudeCode,
         permission: None,
+        claims: None,
+        auto_handoff: Some(false),
     }
 }
 
@@ -719,4 +721,147 @@ fn changed_file_totals_and_bounded_diffs() {
     let diff = lore_orchestrator::diff(&orch.snapshot(&id).unwrap()).unwrap();
     assert!(diff.truncated);
     assert!(diff.text.len() <= 2 * 1024 * 1024);
+}
+
+#[test]
+fn claims_are_shared_with_agents_and_guard_commits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = recording_agent(tmp.path());
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+
+    let mut owner = request(&repo, "auth work");
+    owner.claims = Some(vec!["src/auth/".into(), "README.md".into()]);
+    let owner_id = orch.create_task(&owner).unwrap().id().to_string();
+    wait_for(&orch, &owner_id, TaskState::Finished);
+
+    // A second task is told what the first one owns.
+    let other_id = orch
+        .create_task(&request(&repo, "other work"))
+        .unwrap()
+        .id()
+        .to_string();
+    wait_for(&orch, &other_id, TaskState::Finished);
+    let prompt = call_args(&root, 1).join("\n");
+    assert!(
+        prompt.contains("Working alongside other agents"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("\"auth work\""), "{prompt}");
+    assert!(prompt.contains("README.md, src/auth/"), "{prompt}");
+    assert!(prompt.contains("## Your task"), "{prompt}");
+
+    // The second task edited a claimed file: commit is refused, then forced.
+    let wt = orch
+        .snapshot(&other_id)
+        .unwrap()
+        .worktree_path()
+        .to_path_buf();
+    fs::write(wt.join("README.md"), "trespass\n").unwrap();
+    let err = orch.commit_task(&other_id, "x").unwrap_err().to_string();
+    assert!(err.contains("another agent owns"), "{err}");
+    assert!(err.contains("README.md"), "{err}");
+    orch.commit_task_forced(&other_id, "x", true).unwrap();
+
+    let mut all = orch.list_tasks().unwrap();
+    lore_orchestrator::annotate_overlaps(&mut all);
+    let other = all.iter().find(|t| t.id == other_id).unwrap();
+    let conflicts = other.claim_conflicts.clone().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].task_id, owner_id);
+    assert_eq!(conflicts[0].files, ["README.md"]);
+    assert_eq!(
+        all.iter().find(|t| t.id == owner_id).unwrap().claims,
+        Some(vec!["README.md".to_string(), "src/auth/".to_string()])
+    );
+
+    // Bad claims are refused.
+    let mut bad = request(&repo, "bad");
+    bad.claims = Some(vec!["../escape".into()]);
+    assert!(orch.create_task(&bad).is_err());
+}
+
+#[test]
+fn decisions_are_recorded_and_reach_the_next_agent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = recording_agent(tmp.path());
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+
+    let first = orch
+        .create_task(&request(&repo, "first task"))
+        .unwrap()
+        .id()
+        .to_string();
+    wait_for(&orch, &first, TaskState::Finished);
+    orch.commit_task(&first, "first commit").unwrap();
+    assert!(orch.merge_task(&first).unwrap().merged);
+
+    let kinds: Vec<String> = orch
+        .decisions(None, 50)
+        .into_iter()
+        .map(|d| d.kind)
+        .collect();
+    assert!(kinds.contains(&"created".to_string()));
+    assert!(kinds.contains(&"committed".to_string()));
+    assert!(kinds.contains(&"merged".to_string()));
+    assert_eq!(orch.decisions(Some("/nowhere"), 50).len(), 0);
+
+    // A handoff brief carries that history to the next agent.
+    let second = orch
+        .create_task(&request(&repo, "second task"))
+        .unwrap()
+        .id()
+        .to_string();
+    wait_for(&orch, &second, TaskState::Finished);
+    orch.continue_task(&lore_ipc::ContinueTaskRequest {
+        id: second.clone(),
+        prompt: "keep going".into(),
+        agent: Some(TaskAgent::Codex),
+    })
+    .unwrap();
+    wait_for(&orch, &second, TaskState::Finished);
+    let brief = call_args(&root, 2).join("\n");
+    assert!(
+        brief.contains("What other agents did in this repository"),
+        "{brief}"
+    );
+    assert!(brief.contains("first task"), "{brief}");
+}
+
+#[test]
+fn a_usage_limit_hands_off_to_the_other_agent_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    // Mimics Codex 0.154.0 output when out of quota, then succeeds on the retry.
+    let agent = fake_agent(
+        tmp.path(),
+        r#"n=$(ls "$PWD"/../../calls-* 2>/dev/null | wc -l | tr -d ' ')
+printf '%s\n' "$@" > "$PWD/../../calls-$n.txt"
+if [ "$n" = "0" ]; then
+  echo '{"type":"error","message":"You'"'"'ve hit your usage limit. Try again at 4:30 PM."}'
+  exit 1
+fi
+echo '{"type":"result","is_error":false,"result":"picked it up"}'"#,
+    );
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let mut req = request(&repo, "limited");
+    req.auto_handoff = Some(true);
+    let id = orch.create_task(&req).unwrap().id().to_string();
+    let failed = wait_for(&orch, &id, TaskState::Failed);
+    assert!(failed.attention.unwrap().contains("Usage limit"));
+
+    assert_eq!(orch.run_auto_handoffs(), vec![id.clone()]);
+    let after = wait_for(&orch, &id, TaskState::Finished);
+    assert_eq!(after.agent, TaskAgent::Codex, "handed to the other agent");
+    assert_eq!(after.runs, Some(2));
+    // Only once per run, and the handoff is in the shared log.
+    assert!(orch.run_auto_handoffs().is_empty());
+    assert!(orch
+        .decisions(None, 20)
+        .iter()
+        .any(|d| d.kind == "auto_handoff"));
 }

@@ -53,6 +53,14 @@ attention?: string,
  */
 overlaps?: Array<TaskOverlapDto>, 
 /**
+ * Files or folders this task owns.
+ */
+claims?: Array<string>, 
+/**
+ * Changed files that fall under another unmerged task's claims.
+ */
+claim_conflicts?: Array<TaskOverlapDto>, auto_handoff?: boolean, 
+/**
  * Branch currently checked out in the task's repository (the merge target).
  */
 repo_branch?: string, 

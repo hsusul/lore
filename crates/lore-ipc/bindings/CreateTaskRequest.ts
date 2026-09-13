@@ -13,4 +13,15 @@ repo_path: string, title: string, prompt: string, agent: TaskAgent,
 /**
  * Defaults to `edits`.
  */
-permission?: TaskPermission, };
+permission?: TaskPermission, 
+/**
+ * Repository-relative files or folders (ending in `/`) this task owns.
+ * Other agents are told not to edit them, and commits touching them are
+ * refused for other tasks unless forced.
+ */
+claims?: Array<string>, 
+/**
+ * Hand off to the other agent automatically if this one hits a usage
+ * limit. Defaults to true.
+ */
+auto_handoff?: boolean, };

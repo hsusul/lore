@@ -173,6 +173,12 @@ pub fn attention(log: &Path) -> Option<String> {
         })
 }
 
+/// Whether the latest run stopped because the agent ran out of quota, which is
+/// what an automatic handoff to the other agent reacts to.
+pub fn usage_limited(log: &Path) -> bool {
+    attention(log).is_some_and(|a| a.starts_with("Usage limit"))
+}
+
 /// Written between runs in a task log.
 pub const RUN_MARKER: &str = "--- Lore:";
 
@@ -248,6 +254,16 @@ fn event_text(v: &serde_json::Value) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" ");
         return non_empty(&text);
+    }
+    // Codex errors: {"type":"error","message":...} and turn.failed.
+    if matches!(
+        v.get("type").and_then(|t| t.as_str()),
+        Some("error") | Some("turn.failed")
+    ) {
+        return ["/message", "/error/message"]
+            .iter()
+            .find_map(|p| v.pointer(p).and_then(|s| s.as_str()))
+            .and_then(non_empty);
     }
     // Codex: only agent messages, never reasoning items.
     if let Some(item) = v.get("item") {
@@ -375,9 +391,23 @@ fn activity_from_event(v: &serde_json::Value) -> Vec<ActivityDto> {
                     Some("file_change") | Some("patch") => {
                         push(&mut out, ActivityKind::Tool, "edit files");
                     }
+                    Some("error") => {
+                        if let Some(s) = item.get("message").and_then(|s| s.as_str()) {
+                            push(&mut out, ActivityKind::Error, s);
+                        }
+                    }
                     _ => {}
                 }
-            } else if let Some(s) = v.pointer("/error/message").and_then(|s| s.as_str()) {
+            } else if let Some(s) = ["/message", "/error/message"]
+                .iter()
+                .filter(|_| {
+                    matches!(
+                        v.get("type").and_then(|t| t.as_str()),
+                        Some("error") | Some("turn.failed")
+                    )
+                })
+                .find_map(|p| v.pointer(p).and_then(|s| s.as_str()))
+            {
                 push(&mut out, ActivityKind::Error, s);
             }
         }
@@ -571,6 +601,21 @@ mod tests {
             None,
             "earlier runs and prose do not count"
         );
+    }
+
+    /// Shapes captured from `codex exec --json` 0.154.0 on 2026-09-13.
+    #[test]
+    fn codex_usage_limit_is_detected() {
+        let f = log_with(&[
+            r#"{"type":"turn.started"}"#,
+            r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Skill descriptions were shortened to fit the skills context budget."}}"#,
+            r#"{"type":"error","message":"You've hit your usage limit. Upgrade to Pro or try again at 4:30 PM."}"#,
+            r#"{"type":"turn.failed","error":{"message":"You've hit your usage limit. Upgrade to Pro or try again at 4:30 PM."}}"#,
+        ]);
+        assert!(attention(f.path()).unwrap().contains("Usage limit reached"));
+        assert!(usage_limited(f.path()));
+        let events = activity(f.path(), 10);
+        assert_eq!(events.last().map(|e| e.kind), Some(ActivityKind::Error));
     }
 
     #[test]

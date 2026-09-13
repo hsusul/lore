@@ -35,8 +35,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lore_ipc::{
-    ActivityDto, ActivityKind, ContinueTaskRequest, CreateTaskRequest, MergeResultDto, TaskAgent,
-    TaskDiffDto, TaskDto, TaskOverlapDto, TaskPermission, TaskState,
+    ActivityDto, ActivityKind, ContinueTaskRequest, CreateTaskRequest, DecisionDto, MergeResultDto,
+    TaskAgent, TaskDiffDto, TaskDto, TaskOverlapDto, TaskPermission, TaskState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +60,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 const STORE_FILE: &str = "tasks.json";
 const LOCK_FILE: &str = "lock";
+const DECISIONS_FILE: &str = "decisions.jsonl";
+const MAX_DECISIONS: usize = 2_000;
 const BRANCH_PREFIX: &str = "lore/";
 const MAX_TITLE: usize = 200;
 const MAX_PROMPT: usize = 100_000;
@@ -93,6 +95,18 @@ struct TaskRecord {
     /// Branch of the primary checkout this task was merged into.
     #[serde(default)]
     merged_into: Option<String>,
+    /// Repository-relative files/folders this task owns.
+    #[serde(default)]
+    claims: Vec<String>,
+    #[serde(default = "yes")]
+    auto_handoff: bool,
+    /// `runs` value at which an automatic handoff already happened.
+    #[serde(default)]
+    handoff_run: Option<u32>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn one() -> u32 {
@@ -357,6 +371,8 @@ impl Orchestrator {
             ));
         }
 
+        let claims = normalize_claims(req.claims.as_deref().unwrap_or(&[]))?;
+
         // Git work, without the lock.
         let repo = git::toplevel(&requested)?;
         let base_commit = git::head_commit(&repo)?;
@@ -392,10 +408,18 @@ impl Orchestrator {
             permission: req.permission.unwrap_or_default(),
             runs: 1,
             merged_into: None,
+            claims: claims.clone(),
+            auto_handoff: req.auto_handoff.unwrap_or(true),
+            handoff_run: None,
         };
 
         let mut inner = self.lock();
-        match spawn(&inner.programs, &record, &record.prompt, None) {
+        let opening = format!(
+            "{}{}",
+            coordination_preamble(&inner.tasks, &record),
+            record.prompt
+        );
+        match spawn(&inner.programs, &record, &opening, None) {
             Ok(child) => {
                 record.pid = Some(child.id());
                 inner.children.insert(id.clone(), child);
@@ -411,16 +435,30 @@ impl Orchestrator {
         if let Ok(top) = fs::canonicalize(&record.repo_path) {
             inner.opened_roots.insert(top);
         }
-        inner.tasks.push(record);
+        inner.tasks.push(record.clone());
         if let Err(e) = self.save(&inner) {
             // Without a record nothing could ever clean this up, so roll back.
             drop(inner);
             let _ = self.discard_task(&id);
             return Err(e);
         }
-        Ok(TaskSnapshot(
-            inner.tasks.last().cloned().ok_or(Error::NotFound)?,
-        ))
+        let created = inner.tasks.last().cloned().ok_or(Error::NotFound)?;
+        drop(inner);
+        self.record_decision(
+            &created,
+            "created",
+            &format!(
+                "{} on {} (owns: {})",
+                agent_name(created.agent),
+                created.branch,
+                if created.claims.is_empty() {
+                    "nothing declared".to_string()
+                } else {
+                    created.claims.join(", ")
+                }
+            ),
+        );
+        Ok(TaskSnapshot(created))
     }
 
     /// Send more work to a task that is not running, in the same worktree.
@@ -459,7 +497,11 @@ impl Orchestrator {
             .flatten();
         let full_prompt = match session {
             Some(_) => prompt.to_string(),
-            None => handoff_brief(&task, prompt),
+            None => handoff_brief(
+                &task,
+                prompt,
+                &self.decisions(Some(&task.repo_path.display().to_string()), 15),
+            ),
         };
 
         let mut inner = self.lock();
@@ -498,19 +540,65 @@ impl Orchestrator {
         if let Some(child) = child {
             inner.children.insert(req.id.clone(), child);
         }
-        Ok(TaskSnapshot(inner.tasks[index].clone()))
+        let updated = inner.tasks[index].clone();
+        drop(inner);
+        self.record_decision(
+            &updated,
+            if req.agent.is_some_and(|a| a != previous.agent) {
+                "handoff"
+            } else {
+                "continued"
+            },
+            &format!("run {} with {}", updated.runs, agent_name(updated.agent)),
+        );
+        Ok(TaskSnapshot(updated))
     }
 
     /// Commit every uncommitted change in the task's worktree.
     pub fn commit_task(&self, id: &str, message: &str) -> Result<TaskSnapshot> {
-        let (task, _busy) = {
+        self.commit_task_forced(id, message, false)
+    }
+
+    /// As [`Orchestrator::commit_task`], but `force` commits even when the task
+    /// changed files another unmerged task claims.
+    pub fn commit_task_forced(&self, id: &str, message: &str, force: bool) -> Result<TaskSnapshot> {
+        let (task, others, _busy) = {
             let mut inner = self.lock();
             self.reap(&mut inner)?;
             let task = inner.task(id)?.clone();
             ensure_idle(&inner, &task)?;
             let busy = self.mark_busy(&mut inner, id)?;
-            (task, busy)
+            let others: Vec<(String, Vec<String>)> = inner
+                .tasks
+                .iter()
+                .filter(|t| {
+                    t.id != task.id && t.repo_path == task.repo_path && t.merged_into.is_none()
+                })
+                .map(|t| (t.title.clone(), t.claims.clone()))
+                .collect();
+            (task, others, busy)
         };
+        if !force {
+            let (changed, _) = git::changed_files(&task.worktree_path, &task.base_commit, 500);
+            let mut trespass: Vec<String> = Vec::new();
+            for (title, claims) in &others {
+                for file in &changed {
+                    if claims.iter().any(|c| claim_covers(c, file)) {
+                        trespass.push(format!("{file} (owned by \"{title}\")"));
+                    }
+                }
+            }
+            if !trespass.is_empty() {
+                trespass.sort();
+                trespass.dedup();
+                trespass.truncate(20);
+                return Err(Error::Invalid(format!(
+                    "this task changed files another agent owns: {}. Review them, then commit \
+                     again with force if that is intended.",
+                    trespass.join(", ")
+                )));
+            }
+        }
         let message = message.trim();
         let message = if message.is_empty() {
             task.title.clone()
@@ -523,6 +611,7 @@ impl Orchestrator {
         if !git::commit_all(&task.worktree_path, &message)? {
             return Err(Error::Invalid("there is nothing to commit".into()));
         }
+        self.record_decision(&task, "committed", &message);
         Ok(TaskSnapshot(task))
     }
 
@@ -590,6 +679,7 @@ impl Orchestrator {
                         note = format!(" (Lore could not save this: {e})");
                     }
                 }
+                self.record_decision(&task, "merged", &format!("into {into}"));
                 Ok(MergeResultDto {
                     merged: true,
                     message: format!("Merged {} into {into}.{note}", task.branch),
@@ -597,17 +687,139 @@ impl Orchestrator {
                     conflicts: Vec::new(),
                 })
             }
-            Err(conflicts) => Ok(MergeResultDto {
-                merged: false,
-                message: format!(
-                    "Merging {} into {into} conflicts in {} files; nothing was changed.",
-                    task.branch,
-                    conflicts.len()
-                ),
-                into_branch: into,
-                conflicts,
-            }),
+            Err(conflicts) => {
+                self.record_decision(
+                    &task,
+                    "merge_conflict",
+                    &format!("into {into}: {}", conflicts.join(", ")),
+                );
+                Ok(MergeResultDto {
+                    merged: false,
+                    message: format!(
+                        "Merging {} into {into} conflicts in {} files; nothing was changed.",
+                        task.branch,
+                        conflicts.len()
+                    ),
+                    into_branch: into,
+                    conflicts,
+                })
+            }
         }
+    }
+
+    /// Append one entry to the shared decision log. Best-effort: a task must
+    /// never fail because its history could not be written.
+    fn record_decision(&self, task: &TaskRecord, kind: &str, detail: &str) {
+        let entry = DecisionDto {
+            at_ms: now_ms(),
+            task_id: task.id.clone(),
+            task_title: task.title.clone(),
+            repo_path: task.repo_path.display().to_string(),
+            kind: kind.to_string(),
+            detail: detail.chars().take(2_000).collect(),
+        };
+        if let (Ok(mut file), Ok(line)) = (
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.root.join(DECISIONS_FILE)),
+            serde_json::to_string(&entry),
+        ) {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+
+    /// The most recent decisions, newest first, optionally for one repository.
+    pub fn decisions(&self, repo_path: Option<&str>, limit: usize) -> Vec<DecisionDto> {
+        let Ok(text) = fs::read_to_string(self.root.join(DECISIONS_FILE)) else {
+            return Vec::new();
+        };
+        let mut out: Vec<DecisionDto> = text
+            .lines()
+            .rev()
+            .take(MAX_DECISIONS)
+            .filter_map(|l| serde_json::from_str::<DecisionDto>(l).ok())
+            .filter(|d| repo_path.is_none_or(|r| d.repo_path == r))
+            .take(limit)
+            .collect();
+        out.sort_by_key(|d| std::cmp::Reverse(d.at_ms));
+        out
+    }
+
+    /// Cheap per-task change signals for the UI: state and how much output the
+    /// agent has produced. No git, no parsing.
+    pub fn change_signatures(&self) -> Vec<(String, TaskState, u64)> {
+        let mut inner = self.lock();
+        let _ = self.reap(&mut inner);
+        inner
+            .tasks
+            .iter()
+            .map(|t| {
+                let len = fs::metadata(&t.log_path).map(|m| m.len()).unwrap_or(0);
+                (t.id.clone(), t.state, len)
+            })
+            .collect()
+    }
+
+    /// Hand tasks that stopped on a usage limit to the other agent, once per
+    /// run. Returns the ids that were handed off.
+    pub fn run_auto_handoffs(&self) -> Vec<String> {
+        let candidates: Vec<TaskRecord> = {
+            let mut inner = self.lock();
+            let _ = self.reap(&mut inner);
+            inner
+                .tasks
+                .iter()
+                .filter(|t| {
+                    t.auto_handoff
+                        && t.merged_into.is_none()
+                        && matches!(t.state, TaskState::Failed | TaskState::Finished)
+                        && t.handoff_run != Some(t.runs)
+                        && !inner.busy.contains(&t.id)
+                })
+                .cloned()
+                .collect()
+        };
+        let mut handed = Vec::new();
+        for task in candidates {
+            if !agent::usage_limited(&task.log_path) {
+                continue;
+            }
+            let other = match task.agent {
+                TaskAgent::ClaudeCode => TaskAgent::Codex,
+                TaskAgent::Codex => TaskAgent::ClaudeCode,
+            };
+            // Mark the attempt first: a failing handoff must not retry forever.
+            {
+                let mut inner = self.lock();
+                if let Ok(index) = inner.index(&task.id) {
+                    inner.tasks[index].handoff_run = Some(task.runs);
+                    let _ = self.save(&inner);
+                }
+            }
+            let request = ContinueTaskRequest {
+                id: task.id.clone(),
+                prompt: format!(
+                    "The previous agent stopped because it hit its usage limit. \
+                     Continue this task from where it left off: {}",
+                    task.title
+                ),
+                agent: Some(other),
+            };
+            if self.continue_task(&request).is_ok() {
+                self.record_decision(
+                    &task,
+                    "auto_handoff",
+                    &format!(
+                        "{} hit its usage limit; handed off to {}",
+                        agent_name(task.agent),
+                        agent_name(other)
+                    ),
+                );
+                handed.push(task.id);
+            }
+        }
+        handed
     }
 
     /// Refresh process states and snapshot every task, newest first.
@@ -710,7 +922,10 @@ impl Orchestrator {
         if let Ok(index) = inner.index(id) {
             inner.tasks.remove(index);
         }
-        self.save(&inner)
+        let result = self.save(&inner);
+        drop(inner);
+        self.record_decision(&task, "discarded", &task.branch);
+        result
     }
 
     /// Stop every running agent (called when the app quits). No git work.
@@ -963,6 +1178,9 @@ pub fn describe(snapshot: &TaskSnapshot) -> TaskDto {
             agent::attention(&t.log_path)
         },
         overlaps: None,
+        claims: Some(t.claims.clone()),
+        claim_conflicts: None,
+        auto_handoff: Some(t.auto_handoff),
         repo_branch: git::current_branch(&t.repo_path).ok(),
         merged_into: t.merged_into.clone(),
     }
@@ -1005,6 +1223,46 @@ pub fn annotate_overlaps(tasks: &mut [TaskDto]) {
     for (task, overlaps) in tasks.iter_mut().zip(result) {
         task.overlaps = Some(overlaps);
     }
+    annotate_claim_conflicts(tasks);
+}
+
+/// Mark files a task changed that another unmerged task in the same repository
+/// claims as its own.
+fn annotate_claim_conflicts(tasks: &mut [TaskDto]) {
+    let mut result: Vec<Vec<TaskOverlapDto>> = vec![Vec::new(); tasks.len()];
+    for i in 0..tasks.len() {
+        for j in 0..tasks.len() {
+            if i == j {
+                continue;
+            }
+            let (mine, theirs) = (&tasks[i], &tasks[j]);
+            if mine.repo_path != theirs.repo_path
+                || mine.merged_into.is_some()
+                || theirs.merged_into.is_some()
+            {
+                continue;
+            }
+            let claims = theirs.claims.clone().unwrap_or_default();
+            let mut files: Vec<String> = mine
+                .changed_files
+                .iter()
+                .filter(|f| claims.iter().any(|c| claim_covers(c, f)))
+                .cloned()
+                .collect();
+            if files.is_empty() {
+                continue;
+            }
+            files.sort();
+            result[i].push(TaskOverlapDto {
+                task_id: theirs.id.clone(),
+                title: theirs.title.clone(),
+                files,
+            });
+        }
+    }
+    for (task, conflicts) in tasks.iter_mut().zip(result) {
+        task.claim_conflicts = Some(conflicts);
+    }
 }
 
 fn agent_name(agent: TaskAgent) -> &'static str {
@@ -1014,8 +1272,117 @@ fn agent_name(agent: TaskAgent) -> &'static str {
     }
 }
 
+const MAX_CLAIMS: usize = 50;
+
+/// Validate and normalize claimed paths: repository-relative, no `..`, folders
+/// keep their trailing `/`.
+fn normalize_claims(claims: &[String]) -> Result<Vec<String>> {
+    if claims.len() > MAX_CLAIMS {
+        return Err(Error::Invalid(format!("at most {MAX_CLAIMS} claims")));
+    }
+    let mut out = Vec::new();
+    for claim in claims {
+        let claim = claim.trim().trim_start_matches("./");
+        if claim.is_empty() {
+            continue;
+        }
+        let is_dir = claim.ends_with('/');
+        let path = Path::new(claim.trim_end_matches('/'));
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)) || c.as_os_str() == ".git")
+            || claim.len() > 300
+        {
+            return Err(Error::Invalid(format!(
+                "claim must be a repository-relative path: {claim}"
+            )));
+        }
+        out.push(if is_dir {
+            format!("{}/", path.display())
+        } else {
+            path.display().to_string()
+        });
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// Whether `file` falls under `claim` (exact file, or anything under a folder).
+fn claim_covers(claim: &str, file: &str) -> bool {
+    match claim.strip_suffix('/') {
+        Some(dir) => file.starts_with(&format!("{dir}/")),
+        None => file == claim,
+    }
+}
+
+/// What an agent is told about the other agents working in the same repository,
+/// prepended to its first prompt (the "shared brain", step 4).
+fn coordination_preamble(tasks: &[TaskRecord], task: &TaskRecord) -> String {
+    let others: Vec<&TaskRecord> = tasks
+        .iter()
+        .filter(|t| {
+            t.id != task.id
+                && t.repo_path == task.repo_path
+                && t.merged_into.is_none()
+                && matches!(
+                    t.state,
+                    TaskState::Running | TaskState::Interrupted | TaskState::Finished
+                )
+        })
+        .collect();
+    if others.is_empty() && task.claims.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "## Working alongside other agents (from Lore)\n\
+         You are one of several agents working in the same repository, each in its own \
+         git worktree. Stay inside your own scope so your work merges cleanly.\n\n",
+    );
+    if !task.claims.is_empty() {
+        out.push_str(&format!("You own: {}\n", task.claims.join(", ")));
+    }
+    for other in &others {
+        let owns = if other.claims.is_empty() {
+            "no declared files".to_string()
+        } else {
+            other.claims.join(", ")
+        };
+        out.push_str(&format!(
+            "- \"{}\" ({}, {}) owns: {owns}\n",
+            other.title,
+            agent_name(other.agent),
+            state_word(other.state),
+        ));
+    }
+    let claimed: Vec<&str> = others
+        .iter()
+        .flat_map(|o| o.claims.iter().map(String::as_str))
+        .collect();
+    if !claimed.is_empty() {
+        out.push_str(&format!(
+            "\nDo not edit files owned by another agent ({}). If your task needs them, \
+             say so in your final message instead of editing them.\n",
+            claimed.join(", ")
+        ));
+    }
+    out.push_str("\n## Your task\n");
+    out
+}
+
+fn state_word(state: TaskState) -> &'static str {
+    match state {
+        TaskState::Running => "running",
+        TaskState::Finished => "finished",
+        TaskState::Failed => "failed",
+        TaskState::Stopped => "stopped",
+        TaskState::Interrupted => "interrupted",
+    }
+}
+
 /// Context for an agent picking up a task it has no session for.
-fn handoff_brief(task: &TaskRecord, prompt: &str) -> String {
+fn handoff_brief(task: &TaskRecord, prompt: &str, history: &[DecisionDto]) -> String {
     let wt = &task.worktree_path;
     let commits = git::log_oneline(wt, &task.base_commit, 30);
     let (changed, _) = git::changed_files(wt, &task.base_commit, 100);
@@ -1047,15 +1414,39 @@ fn handoff_brief(task: &TaskRecord, prompt: &str) -> String {
                 .join("\n")
         }
     };
+    let owns = if task.claims.is_empty() {
+        "nothing declared; stay within the task's scope".to_string()
+    } else {
+        task.claims.join(", ")
+    };
+    let history_lines: Vec<String> = history
+        .iter()
+        .take(15)
+        .map(|d| {
+            format!(
+                "- {} \"{}\": {}",
+                d.kind,
+                d.task_title,
+                d.detail.chars().take(200).collect::<String>()
+            )
+        })
+        .collect();
     format!(
         "You are continuing a task another agent session started in this git worktree \
          (branch {branch}). Inspect the code yourself before relying on this summary.\n\n\
          ## Original task: {title}\n{original}\n\n\
+         ## Files this task owns\n{owns}\n\n\
          ## Commits so far\n{commits}\n\n\
          ## Files changed since the task began\n{changed}\n\n\
          ## Uncommitted paths\n{uncommitted}\n\n\
          ## Recent notes from the previous agent\n{recent}\n\n\
+         ## What other agents did in this repository\n{history}\n\n\
          ## What to do now\n{prompt}\n",
+        history = if history_lines.is_empty() {
+            "(nothing recorded)".to_string()
+        } else {
+            history_lines.join("\n")
+        },
         branch = task.branch,
         title = task.title,
         original = task.prompt,

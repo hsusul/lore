@@ -433,6 +433,17 @@ pub struct CreateTaskRequest {
     #[serde(default)]
     #[ts(optional)]
     pub permission: Option<TaskPermission>,
+    /// Repository-relative files or folders (ending in `/`) this task owns.
+    /// Other agents are told not to edit them, and commits touching them are
+    /// refused for other tasks unless forced.
+    #[serde(default)]
+    #[ts(optional)]
+    pub claims: Option<Vec<String>>,
+    /// Hand off to the other agent automatically if this one hits a usage
+    /// limit. Defaults to true.
+    #[serde(default)]
+    #[ts(optional)]
+    pub auto_handoff: Option<bool>,
 }
 
 /// How much an agent may do without asking (ADR-0007). Lore never bypasses
@@ -526,6 +537,17 @@ pub struct TaskDto {
     #[serde(default)]
     #[ts(optional)]
     pub overlaps: Option<Vec<TaskOverlapDto>>,
+    /// Files or folders this task owns.
+    #[serde(default)]
+    #[ts(optional)]
+    pub claims: Option<Vec<String>>,
+    /// Changed files that fall under another unmerged task's claims.
+    #[serde(default)]
+    #[ts(optional)]
+    pub claim_conflicts: Option<Vec<TaskOverlapDto>>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub auto_handoff: Option<bool>,
     /// Branch currently checked out in the task's repository (the merge target).
     #[serde(default)]
     #[ts(optional)]
@@ -534,6 +556,30 @@ pub struct TaskDto {
     #[serde(default)]
     #[ts(optional)]
     pub merged_into: Option<String>,
+}
+
+/// One entry of the shared decision log (`list_decisions`), the orchestrator's
+/// memory of what happened across tasks in a repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DecisionDto {
+    #[ts(type = "number")]
+    pub at_ms: i64,
+    pub task_id: String,
+    pub task_title: String,
+    pub repo_path: String,
+    /// `created` | `continued` | `handoff` | `auto_handoff` | `committed` |
+    /// `merged` | `merge_conflict` | `stopped` | `discarded`.
+    pub kind: String,
+    pub detail: String,
+}
+
+/// Emitted when tasks change (state, new output, or an automatic handoff), so
+/// the UI can refresh just those tasks instead of polling everything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TasksChangedEvent {
+    pub ids: Vec<String>,
 }
 
 /// Files a task shares with another unmerged task (overlap warning, step 3).
