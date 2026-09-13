@@ -51,7 +51,7 @@ export default function BottomPanel({ height, tab, onTabChange, onClose, task, o
             >
               {t.label}
               {t.id === "changes" && task && task.changed_files.length > 0 && (
-                <span className="panel__count">{task.changed_files.length}</span>
+                <span className="panel__count">{task.changed_files_total ?? task.changed_files.length}</span>
               )}
             </button>
           ))}
@@ -95,6 +95,11 @@ export default function BottomPanel({ height, tab, onTabChange, onClose, task, o
                 </button>
               </li>
             ))}
+            {(task.changed_files_total ?? 0) > task.changed_files.length && (
+              <li className="wb-note">
+                …and {(task.changed_files_total ?? 0) - task.changed_files.length} more (list capped)
+              </li>
+            )}
           </ul>
         )}
       </div>

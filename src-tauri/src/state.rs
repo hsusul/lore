@@ -1,5 +1,4 @@
 use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager};
 
@@ -10,7 +9,7 @@ use tauri::{AppHandle, Manager};
 pub struct AppState {
     /// Parallel agent tasks. Agent binaries are resolved lazily on the first
     /// launch so startup does not pay for a login-shell lookup.
-    pub orchestrator: Mutex<lore_orchestrator::Orchestrator>,
+    pub orchestrator: lore_orchestrator::Orchestrator,
     pub agents_resolved: AtomicBool,
 }
 
@@ -18,10 +17,10 @@ pub fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error
     let data_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
     Ok(AppState {
-        orchestrator: Mutex::new(lore_orchestrator::Orchestrator::open(
+        orchestrator: lore_orchestrator::Orchestrator::open(
             data_dir.join("orchestrator"),
             lore_orchestrator::AgentPrograms::default(),
-        )?),
+        )?,
         agents_resolved: AtomicBool::new(false),
     })
 }

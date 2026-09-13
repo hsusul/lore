@@ -240,7 +240,7 @@ const TaskRow = memo(function TaskRow({
     }
   }
 
-  const fileCount = task.changed_files.length;
+  const fileCount = task.changed_files_total ?? task.changed_files.length;
   const uncommitted = task.uncommitted_count ?? 0;
   const overlapCount = task.overlaps?.length ?? 0;
 

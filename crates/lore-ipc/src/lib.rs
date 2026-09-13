@@ -501,6 +501,10 @@ pub struct TaskDto {
     pub commits_ahead: i64,
     /// Paths changed relative to `base_commit`, committed or not (capped).
     pub changed_files: Vec<String>,
+    /// Total changed paths; larger than `changed_files.len()` when capped.
+    #[serde(default)]
+    #[ts(optional, type = "number")]
+    pub changed_files_total: Option<i64>,
     /// Most recent human-readable line from the agent's output, truncated.
     pub last_activity: Option<String>,
     #[serde(default)]

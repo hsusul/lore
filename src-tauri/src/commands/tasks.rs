@@ -1,8 +1,8 @@
 //! Parallel agent tasks (ADR-0007, `ORCHESTRATOR_PLAN.md` step 1).
 //!
-//! Thin wrappers over `lore-orchestrator`. The orchestrator lock is held only
-//! for quick bookkeeping; git-derived status and process waits run on the
-//! blocking pool so they never stall the window or each other.
+//! Thin wrappers over `lore-orchestrator`, run on Tauri's blocking pool. The
+//! orchestrator locks only around bookkeeping; git, process waits, and status
+//! derivation (`describe`) run without it.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -29,22 +29,17 @@ fn check_id(id: &str) -> Result<(), String> {
     }
 }
 
-/// Run `f` against the orchestrator on the blocking pool.
+/// Run `f` against the orchestrator on the blocking pool. The orchestrator
+/// locks internally only around bookkeeping, so slow git and process work in
+/// one command does not stall others.
 async fn with_orchestrator<T, F>(app: AppHandle, f: F) -> Result<T, String>
 where
     T: Send + 'static,
-    F: FnOnce(&mut lore_orchestrator::Orchestrator) -> Result<T, String> + Send + 'static,
+    F: FnOnce(&lore_orchestrator::Orchestrator) -> Result<T, String> + Send + 'static,
 {
-    spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let mut orchestrator = state
-            .orchestrator
-            .lock()
-            .map_err(|_| "state lock poisoned".to_string())?;
-        f(&mut orchestrator)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    spawn_blocking(move || f(&app.state::<AppState>().orchestrator))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 async fn describe_all(snapshots: Vec<TaskSnapshot>) -> Result<Vec<TaskDto>, String> {
@@ -104,11 +99,7 @@ pub async fn merge_task(app: AppHandle, id: String) -> Result<MergeResultDto, St
 /// Why saved tasks could not be loaded at startup, if that happened.
 #[tauri::command]
 pub fn task_load_warning(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let orchestrator = state
-        .orchestrator
-        .lock()
-        .map_err(|_| "state lock poisoned")?;
-    Ok(orchestrator.load_warning().map(str::to_string))
+    Ok(state.orchestrator.load_warning())
 }
 
 /// Create a Lore-owned worktree for the request and launch its agent.
@@ -127,19 +118,16 @@ pub async fn create_task(app: AppHandle, request: CreateTaskRequest) -> Result<T
     } else {
         None
     };
-    let app_for_flag = app.clone();
-    let snapshot = with_orchestrator(app, move |o| {
-        if let Some((programs, complete)) = resolved {
-            o.set_programs(programs);
-            // Only stop looking once both agents were found, so installing one
-            // later works without restarting Lore.
-            if complete {
-                app_for_flag
-                    .state::<AppState>()
-                    .agents_resolved
-                    .store(true, Ordering::Relaxed);
-            }
+    if let Some((programs, complete)) = resolved {
+        let state = app.state::<AppState>();
+        state.orchestrator.set_programs(programs);
+        // Only stop looking once both agents were found, so installing one
+        // later works without restarting Lore.
+        if complete {
+            state.agents_resolved.store(true, Ordering::Relaxed);
         }
+    }
+    let snapshot = with_orchestrator(app, move |o| {
         o.create_task(&request).map_err(|e| e.to_string())
     })
     .await?;
@@ -197,11 +185,17 @@ pub async fn list_workspace_dir(
 
 /// Read a workspace file for display (read-only, capped at 1 MB).
 #[tauri::command]
-pub async fn read_workspace_file(root: String, rel_path: String) -> Result<FileContentDto, String> {
-    spawn_blocking(move || lore_orchestrator::workspace::read_file(&root, &rel_path))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+pub async fn read_workspace_file(
+    app: AppHandle,
+    root: String,
+    rel_path: String,
+) -> Result<FileContentDto, String> {
+    with_orchestrator(app, move |o| {
+        let root = o.browsable_root(&root).map_err(|e| e.to_string())?;
+        lore_orchestrator::workspace::read_file(&root.to_string_lossy(), &rel_path)
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Resolve a user-chosen folder to its repository top-level.

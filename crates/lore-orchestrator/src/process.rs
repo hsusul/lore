@@ -25,6 +25,11 @@ pub fn group_alive(pgid: u32) -> bool {
     pgid > 1 && kill(&["-0", "--", &format!("-{pgid}")])
 }
 
+/// Whether process `pid` exists.
+pub fn group_alive_pid(pid: u32) -> bool {
+    pid > 1 && kill(&["-0", &pid.to_string()])
+}
+
 /// Send `signal` (e.g. `TERM`) to every process in group `pgid`.
 pub fn signal_group(pgid: u32, signal: &str) {
     if pgid > 1 {

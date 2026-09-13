@@ -204,7 +204,7 @@ export default function AgentView({
           </div>
           <div>
             <dt>Changed files</dt>
-            <dd>{task.changed_files.length}</dd>
+            <dd>{task.changed_files_total ?? task.changed_files.length}</dd>
           </div>
           {!merged && (
             <div>

@@ -81,14 +81,17 @@ pub fn list_dir(root: &str, rel: &str) -> Result<Vec<DirEntryDto>> {
         return Err(Error::Invalid("not a directory".into()));
     }
     let mut out = Vec::new();
-    for entry in fs::read_dir(&dir)?.flatten().take(MAX_ENTRIES) {
+    let entries = fs::read_dir(&dir)?
+        .flatten()
+        .filter(|e| !HIDDEN.contains(&e.file_name().to_string_lossy().as_ref()))
+        .take(MAX_ENTRIES);
+    for entry in entries {
         let name = entry.file_name().to_string_lossy().to_string();
-        if HIDDEN.contains(&name.as_str()) {
-            continue;
-        }
-        // Symlinks are listed by their own type; following one that leaves the
-        // workspace is refused later by `resolve`.
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        // Follow symlinks for the folder/file distinction; opening one that
+        // leaves the workspace is still refused by `resolve`.
+        let is_dir = fs::metadata(entry.path())
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
         out.push(DirEntryDto {
             rel_path: rel_string(&root, &dir.join(&name)),
             name,

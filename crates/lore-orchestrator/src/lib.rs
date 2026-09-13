@@ -1,7 +1,7 @@
 //! # lore-orchestrator
 //!
 //! Runs coding agents in parallel, each in its own Lore-owned git worktree
-//! (ADR-0007, `docs/product/ORCHESTRATOR_PLAN.md` step 1).
+//! (ADR-0007, `docs/product/ORCHESTRATOR_PLAN.md`).
 //!
 //! Boundaries:
 //! - Worktrees and logs live only under `<root>/worktrees` and `<root>/logs`;
@@ -12,31 +12,33 @@
 //! - Agents are launched without permission-bypass flags (see [`agent`]), each
 //!   as its own process group so stopping a task stops everything it started.
 //! - No archive access and no network: this crate only spawns local processes.
+//! - One orchestrator per root: `open` takes an exclusive lock on `<root>/lock`.
 //!
-//! Locking: `snapshots`/`snapshot` are cheap. `create_task`, `continue_task`,
-//! `commit_task`, `merge_task`, `stop_task`, and `discard_task` run git or wait
-//! on processes while holding the orchestrator. Git-derived status comes from
-//! [`describe`], which callers run on a [`TaskSnapshot`] outside any lock.
+//! Locking: every method takes `&self`. The internal mutex guards only task
+//! records and child handles. Git commands, process waits, and log parsing run
+//! without it; a per-task busy marker keeps two operations off the same task.
+//! Git-derived status comes from [`describe`] on a [`TaskSnapshot`].
 
 pub mod agent;
 mod git;
 mod process;
 pub mod workspace;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
+use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lore_ipc::{
     ActivityDto, ActivityKind, ContinueTaskRequest, CreateTaskRequest, MergeResultDto, TaskAgent,
     TaskDiffDto, TaskDto, TaskOverlapDto, TaskPermission, TaskState,
 };
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 
 pub use agent::AgentPrograms;
 
@@ -57,10 +59,13 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 const STORE_FILE: &str = "tasks.json";
+const LOCK_FILE: &str = "lock";
 const BRANCH_PREFIX: &str = "lore/";
 const MAX_TITLE: usize = 200;
 const MAX_PROMPT: usize = 100_000;
-const MAX_CHANGED_FILES: usize = 200;
+const MAX_CHANGED_FILES: usize = 1_000;
+/// How long helper processes may outlive a finished agent before SIGKILL.
+const LINGER_GRACE: Duration = Duration::from_secs(3);
 
 /// A task as persisted on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,26 +113,116 @@ impl TaskSnapshot {
     }
 }
 
-/// Owns task records, their worktrees, and the agent processes it started.
-pub struct Orchestrator {
-    root: PathBuf,
+struct Inner {
     programs: AgentPrograms,
     tasks: Vec<TaskRecord>,
     children: HashMap<String, Child>,
+    /// Tasks with an operation in progress outside the lock.
+    busy: HashSet<String>,
+    /// Process groups whose leader exited but which may still have helpers:
+    /// group id → deadline for SIGKILL.
+    lingering: HashMap<u32, Instant>,
+    /// Workspace roots the user opened (canonical).
+    opened_roots: HashSet<PathBuf>,
     load_warning: Option<String>,
+}
+
+/// Owns task records, their worktrees, and the agent processes it started.
+pub struct Orchestrator {
+    root: PathBuf,
+    inner: Mutex<Inner>,
+    _instance: InstanceLock,
+}
+
+/// One orchestrator per root, across and within processes.
+///
+/// Within a process, a registry of open roots. Across processes, `<root>/lock`
+/// records the owner's pid; a live owner running the same executable blocks
+/// opening. (An `flock` was tried first, but descriptors inherited by children
+/// forked elsewhere in the process kept it held after the owner closed it.)
+struct InstanceLock {
+    root: PathBuf,
+}
+
+fn open_roots() -> &'static Mutex<HashSet<PathBuf>> {
+    static ROOTS: std::sync::OnceLock<Mutex<HashSet<PathBuf>>> = std::sync::OnceLock::new();
+    ROOTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+impl InstanceLock {
+    fn acquire(root: &Path) -> Result<Self> {
+        let already = || {
+            Error::Invalid("Lore is already running (another window holds the task list)".into())
+        };
+        let root = fs::canonicalize(root)?;
+        let lock_path = root.join(LOCK_FILE);
+        if let Some(pid) = fs::read_to_string(&lock_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+        {
+            let me = std::process::id();
+            if pid != me && process::group_alive_pid(pid) {
+                if let Ok(exe) = std::env::current_exe() {
+                    if process::runs_program(pid, &exe) {
+                        return Err(already());
+                    }
+                }
+            }
+        }
+        {
+            let mut roots = open_roots().lock().unwrap_or_else(|p| p.into_inner());
+            if !roots.insert(root.clone()) {
+                return Err(already());
+            }
+        }
+        if let Err(e) = fs::write(&lock_path, std::process::id().to_string()) {
+            open_roots()
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&root);
+            return Err(e.into());
+        }
+        Ok(Self { root })
+    }
+}
+
+impl Drop for InstanceLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(self.root.join(LOCK_FILE));
+        open_roots()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.root);
+    }
+}
+
+/// Clears a task's busy marker when an operation ends, however it ends.
+struct Busy<'a> {
+    orchestrator: &'a Orchestrator,
+    id: String,
+}
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.orchestrator.lock();
+        inner.busy.remove(&self.id);
+    }
 }
 
 impl Orchestrator {
     /// Open (or create) the orchestrator rooted at `root`.
     ///
-    /// Never fails because of a damaged store: an unreadable `tasks.json` is
-    /// moved aside and reported via [`Orchestrator::load_warning`]. Tasks that
-    /// were running when the previous process exited become `Interrupted`, and
-    /// any of their agents still alive are stopped.
+    /// Fails if another process already has this root open. Never fails because
+    /// of a damaged store: an unreadable `tasks.json` is moved aside and reported
+    /// via [`Orchestrator::load_warning`]. Tasks that were running when the
+    /// previous process exited become `Interrupted`, and any of their agents
+    /// still alive are stopped.
     pub fn open(root: impl Into<PathBuf>, programs: AgentPrograms) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(root.join("worktrees"))?;
         fs::create_dir_all(root.join("logs"))?;
+        let instance = InstanceLock::acquire(&root)?;
+
         let store = root.join(STORE_FILE);
         let mut load_warning = None;
         let mut tasks: Vec<TaskRecord> = match fs::read(&store) {
@@ -164,29 +259,82 @@ impl Orchestrator {
         }
         let orchestrator = Self {
             root,
-            programs,
-            tasks,
-            children: HashMap::new(),
-            load_warning,
+            inner: Mutex::new(Inner {
+                programs,
+                tasks,
+                children: HashMap::new(),
+                busy: HashSet::new(),
+                lingering: HashMap::new(),
+                opened_roots: HashSet::new(),
+                load_warning,
+            }),
+            _instance: instance,
         };
         if changed {
-            orchestrator.save()?;
+            let inner = orchestrator.lock();
+            orchestrator.save(&inner)?;
         }
         Ok(orchestrator)
     }
 
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        // A panic while holding the lock leaves records consistent enough to
+        // keep serving; recover rather than failing every later call.
+        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Why previously saved tasks could not be loaded, if that happened.
-    pub fn load_warning(&self) -> Option<&str> {
-        self.load_warning.as_deref()
+    pub fn load_warning(&self) -> Option<String> {
+        self.lock().load_warning.clone()
     }
 
     /// Replace the programs used for tasks launched from now on.
-    pub fn set_programs(&mut self, programs: AgentPrograms) {
-        self.programs = programs;
+    pub fn set_programs(&self, programs: AgentPrograms) {
+        self.lock().programs = programs;
+    }
+
+    /// Record a workspace root the user opened, allowing it to be browsed.
+    /// Returns the repository top-level.
+    pub fn open_workspace(&self, path: &str) -> Result<PathBuf> {
+        let top = workspace::repository_root(path)?;
+        self.lock().opened_roots.insert(top.clone());
+        Ok(top)
+    }
+
+    /// Validate a root the webview wants to browse: an opened workspace, the
+    /// repository of a task, or a task worktree. Returns the canonical root.
+    pub fn browsable_root(&self, root: &str) -> Result<PathBuf> {
+        let canonical = workspace::workspace_root(root)?;
+        let inner = self.lock();
+        let allowed = inner.opened_roots.contains(&canonical)
+            || inner.tasks.iter().any(|t| {
+                [&t.repo_path, &t.worktree_path]
+                    .iter()
+                    .any(|p| fs::canonicalize(p).is_ok_and(|p| p == canonical))
+            });
+        if allowed {
+            Ok(canonical)
+        } else {
+            Err(Error::Invalid(
+                "open this folder in Lore before browsing it".into(),
+            ))
+        }
+    }
+
+    fn mark_busy(&self, inner: &mut Inner, id: &str) -> Result<Busy<'_>> {
+        if !inner.busy.insert(id.to_string()) {
+            return Err(Error::Invalid(
+                "another action on this task is still in progress".into(),
+            ));
+        }
+        Ok(Busy {
+            orchestrator: self,
+            id: id.to_string(),
+        })
     }
 
     /// Create a worktree for the request and launch its agent there.
-    pub fn create_task(&mut self, req: &CreateTaskRequest) -> Result<TaskSnapshot> {
+    pub fn create_task(&self, req: &CreateTaskRequest) -> Result<TaskSnapshot> {
         let title = req.title.trim();
         let prompt = req.prompt.trim();
         if title.is_empty()
@@ -208,14 +356,14 @@ impl Orchestrator {
                 "repository path must be an existing absolute directory".into(),
             ));
         }
+
+        // Git work, without the lock.
         let repo = git::toplevel(&requested)?;
         let base_commit = git::head_commit(&repo)?;
-
         let created_at_ms = now_ms();
         let id = new_id(created_at_ms);
         let worktree_path = self.root.join("worktrees").join(&id);
         let log_path = self.root.join("logs").join(format!("{id}.log"));
-
         let preferred = format!("{BRANCH_PREFIX}{}", slug(title));
         let fallback = format!("{preferred}-{id}");
         let branch = if !git::branch_exists(&repo, &preferred)
@@ -246,10 +394,11 @@ impl Orchestrator {
             merged_into: None,
         };
 
-        match self.spawn(&record, &record.prompt, None) {
+        let mut inner = self.lock();
+        match spawn(&inner.programs, &record, &record.prompt, None) {
             Ok(child) => {
                 record.pid = Some(child.id());
-                self.children.insert(id.clone(), child);
+                inner.children.insert(id.clone(), child);
             }
             Err(e) => {
                 record.state = TaskState::Failed;
@@ -259,47 +408,19 @@ impl Orchestrator {
                 );
             }
         }
-        self.tasks.push(record);
-        if let Err(e) = self.save() {
+        if let Ok(top) = fs::canonicalize(&record.repo_path) {
+            inner.opened_roots.insert(top);
+        }
+        inner.tasks.push(record);
+        if let Err(e) = self.save(&inner) {
             // Without a record nothing could ever clean this up, so roll back.
+            drop(inner);
             let _ = self.discard_task(&id);
             return Err(e);
         }
-        self.snapshot(&id)
-    }
-
-    /// Start one agent run for `task`, appending its output to the task log.
-    fn spawn(&self, task: &TaskRecord, prompt: &str, resume: Option<&str>) -> Result<Child> {
-        let mut log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&task.log_path)?;
-        if task.runs > 1 {
-            writeln!(
-                log,
-                "{} run {} ({}) ---",
-                agent::RUN_MARKER,
-                task.runs,
-                agent_name(task.agent)
-            )?;
-        }
-        let err = log.try_clone()?;
-        let child = agent::command(
-            &self.programs,
-            agent::Launch {
-                agent: task.agent,
-                permission: task.permission,
-                worktree: &task.worktree_path,
-                prompt,
-                resume_session: resume,
-            },
-        )
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(err))
-        .spawn()?;
-        Ok(child)
+        Ok(TaskSnapshot(
+            inner.tasks.last().cloned().ok_or(Error::NotFound)?,
+        ))
     }
 
     /// Send more work to a task that is not running, in the same worktree.
@@ -307,45 +428,52 @@ impl Orchestrator {
     /// Keeping the agent resumes its own session when it supports that (Claude);
     /// otherwise, including every switch of agent (a handoff), the new run gets a
     /// brief built from the task's commits, changes, and recent activity.
-    pub fn continue_task(&mut self, req: &ContinueTaskRequest) -> Result<TaskSnapshot> {
-        self.reap()?;
-        let index = self.index(&req.id)?;
+    pub fn continue_task(&self, req: &ContinueTaskRequest) -> Result<TaskSnapshot> {
         let prompt = req.prompt.trim();
         if prompt.is_empty() || prompt.len() > MAX_PROMPT {
             return Err(Error::Invalid(
                 "prompt must be non-empty and under 100 KB".into(),
             ));
         }
-        let task = &self.tasks[index];
-        if task.state == TaskState::Running {
-            return Err(Error::Invalid("the task is still running".into()));
-        }
-        if task.merged_into.is_some() {
-            return Err(Error::Invalid("the task was already merged".into()));
-        }
+        let (task, _busy) = {
+            let mut inner = self.lock();
+            self.reap(&mut inner)?;
+            let task = inner.task(&req.id)?.clone();
+            ensure_idle(&inner, &task)?;
+            if task.merged_into.is_some() {
+                return Err(Error::Invalid("the task was already merged".into()));
+            }
+            let busy = self.mark_busy(&mut inner, &req.id)?;
+            (task, busy)
+        };
         if !task.worktree_path.is_dir() {
             return Err(Error::Invalid(
                 "the task's worktree no longer exists".into(),
             ));
         }
+
+        // Log parsing and git for the brief, without the lock.
         let new_agent = req.agent.unwrap_or(task.agent);
         let session = (new_agent == task.agent && new_agent == TaskAgent::ClaudeCode)
             .then(|| agent::claude_session_id(&task.log_path))
             .flatten();
         let full_prompt = match session {
             Some(_) => prompt.to_string(),
-            None => handoff_brief(task, prompt),
+            None => handoff_brief(&task, prompt),
         };
 
-        let mut record = task.clone();
+        let mut inner = self.lock();
+        let index = inner.index(&req.id)?;
+        let previous = inner.tasks[index].clone();
+        let mut record = previous.clone();
         record.agent = new_agent;
         record.runs += 1;
         record.exit_code = None;
-        match self.spawn(&record, &full_prompt, session.as_deref()) {
+        let child = match spawn(&inner.programs, &record, &full_prompt, session.as_deref()) {
             Ok(child) => {
                 record.pid = Some(child.id());
                 record.state = TaskState::Running;
-                self.children.insert(record.id.clone(), child);
+                Some(child)
             }
             Err(e) => {
                 record.state = TaskState::Failed;
@@ -354,20 +482,35 @@ impl Orchestrator {
                     .append(true)
                     .open(&record.log_path)
                     .and_then(|mut f| writeln!(f, "Lore could not start the agent: {e}"));
+                None
             }
+        };
+        inner.tasks[index] = record;
+        if let Err(e) = self.save(&inner) {
+            // Keep memory and disk in agreement: undo the run.
+            if let Some(mut child) = child {
+                let pgid = child.id();
+                process::stop_group(pgid, Some(&mut child));
+            }
+            inner.tasks[index] = previous;
+            return Err(e);
         }
-        self.tasks[index] = record;
-        self.save()?;
-        self.snapshot(&req.id)
+        if let Some(child) = child {
+            inner.children.insert(req.id.clone(), child);
+        }
+        Ok(TaskSnapshot(inner.tasks[index].clone()))
     }
 
     /// Commit every uncommitted change in the task's worktree.
-    pub fn commit_task(&mut self, id: &str, message: &str) -> Result<TaskSnapshot> {
-        self.reap()?;
-        let task = &self.tasks[self.index(id)?];
-        if task.state == TaskState::Running {
-            return Err(Error::Invalid("stop the agent before committing".into()));
-        }
+    pub fn commit_task(&self, id: &str, message: &str) -> Result<TaskSnapshot> {
+        let (task, _busy) = {
+            let mut inner = self.lock();
+            self.reap(&mut inner)?;
+            let task = inner.task(id)?.clone();
+            ensure_idle(&inner, &task)?;
+            let busy = self.mark_busy(&mut inner, id)?;
+            (task, busy)
+        };
         let message = message.trim();
         let message = if message.is_empty() {
             task.title.clone()
@@ -380,7 +523,7 @@ impl Orchestrator {
         if !git::commit_all(&task.worktree_path, &message)? {
             return Err(Error::Invalid("there is nothing to commit".into()));
         }
-        self.snapshot(id)
+        Ok(TaskSnapshot(task))
     }
 
     /// Merge the task's branch into the branch checked out in its repository.
@@ -388,18 +531,20 @@ impl Orchestrator {
     /// Refuses while the agent runs, while the worktree has uncommitted changes,
     /// or while the primary checkout has uncommitted changes. A conflicting merge
     /// is aborted, leaving the checkout exactly as it was.
-    pub fn merge_task(&mut self, id: &str) -> Result<MergeResultDto> {
-        self.reap()?;
-        let index = self.index(id)?;
-        let task = self.tasks[index].clone();
-        if task.state == TaskState::Running {
-            return Err(Error::Invalid("stop the agent before merging".into()));
-        }
-        if let Some(into) = &task.merged_into {
-            return Err(Error::Invalid(format!(
-                "the task was already merged into {into}"
-            )));
-        }
+    pub fn merge_task(&self, id: &str) -> Result<MergeResultDto> {
+        let (task, _busy) = {
+            let mut inner = self.lock();
+            self.reap(&mut inner)?;
+            let task = inner.task(id)?.clone();
+            ensure_idle(&inner, &task)?;
+            if let Some(into) = &task.merged_into {
+                return Err(Error::Invalid(format!(
+                    "the task was already merged into {into}"
+                )));
+            }
+            let busy = self.mark_busy(&mut inner, id)?;
+            (task, busy)
+        };
         if !task.branch.starts_with(BRANCH_PREFIX) {
             return Err(Error::Invalid(
                 "refusing to merge a branch Lore did not create".into(),
@@ -435,11 +580,19 @@ impl Orchestrator {
         let message = format!("Merge {} ({})", task.branch, task.title);
         match git::merge_branch(&task.repo_path, &task.branch, &message)? {
             Ok(()) => {
-                self.tasks[index].merged_into = Some(into.clone());
-                self.save()?;
+                let mut inner = self.lock();
+                let mut note = String::new();
+                if let Ok(index) = inner.index(id) {
+                    inner.tasks[index].merged_into = Some(into.clone());
+                    // The merge already happened in git; a failed save must not
+                    // turn it into an error the user might retry.
+                    if let Err(e) = self.save(&inner) {
+                        note = format!(" (Lore could not save this: {e})");
+                    }
+                }
                 Ok(MergeResultDto {
                     merged: true,
-                    message: format!("Merged {} into {into}.", task.branch),
+                    message: format!("Merged {} into {into}.{note}", task.branch),
                     into_branch: into,
                     conflicts: Vec::new(),
                 })
@@ -458,69 +611,79 @@ impl Orchestrator {
     }
 
     /// Refresh process states and snapshot every task, newest first.
-    pub fn snapshots(&mut self) -> Result<Vec<TaskSnapshot>> {
-        self.reap()?;
-        let mut out: Vec<TaskSnapshot> = self.tasks.iter().cloned().map(TaskSnapshot).collect();
+    pub fn snapshots(&self) -> Result<Vec<TaskSnapshot>> {
+        let mut inner = self.lock();
+        self.reap(&mut inner)?;
+        let mut out: Vec<TaskSnapshot> = inner.tasks.iter().cloned().map(TaskSnapshot).collect();
         out.sort_by_key(|t| std::cmp::Reverse(t.0.created_at_ms));
         Ok(out)
     }
 
     /// Refresh process states and snapshot one task.
-    pub fn snapshot(&mut self, id: &str) -> Result<TaskSnapshot> {
-        self.reap()?;
-        self.tasks
-            .iter()
-            .find(|t| t.id == id)
-            .cloned()
-            .map(TaskSnapshot)
-            .ok_or(Error::NotFound)
+    pub fn snapshot(&self, id: &str) -> Result<TaskSnapshot> {
+        let mut inner = self.lock();
+        self.reap(&mut inner)?;
+        inner.task(id).cloned().map(TaskSnapshot)
     }
 
     /// Convenience for callers that do not care about lock scope (tests, CLI).
-    pub fn list_tasks(&mut self) -> Result<Vec<TaskDto>> {
+    pub fn list_tasks(&self) -> Result<Vec<TaskDto>> {
         Ok(self.snapshots()?.iter().map(describe).collect())
     }
 
     /// Convenience: one task with git-derived status.
-    pub fn task(&mut self, id: &str) -> Result<TaskDto> {
+    pub fn task(&self, id: &str) -> Result<TaskDto> {
         self.snapshot(id).map(|s| describe(&s))
     }
 
     /// Stop a running agent and everything it started. No-op otherwise.
-    pub fn stop_task(&mut self, id: &str) -> Result<TaskSnapshot> {
-        self.reap()?;
-        let index = self.index(id)?;
-        if self.tasks[index].state == TaskState::Running {
-            self.kill_task_processes(index);
-            self.tasks[index].state = TaskState::Stopped;
-            self.save()?;
-        }
+    pub fn stop_task(&self, id: &str) -> Result<TaskSnapshot> {
+        let target = {
+            let mut inner = self.lock();
+            self.reap(&mut inner)?;
+            let index = inner.index(id)?;
+            if inner.tasks[index].state != TaskState::Running {
+                return Ok(TaskSnapshot(inner.tasks[index].clone()));
+            }
+            let child = inner.children.remove(id);
+            let task = &mut inner.tasks[index];
+            task.state = TaskState::Stopped;
+            let target = (task.pid, task.agent, child, inner.programs.clone());
+            self.save(&inner)?;
+            target
+        };
+        // Waiting for the process group happens without the lock.
+        let (pid, agent, mut child, programs) = target;
+        kill_processes(pid, agent, child.as_mut(), &programs);
         self.snapshot(id)
     }
 
     /// Stop the agent, remove the worktree and its branch, and forget the task.
     /// Uncommitted and unmerged work in that worktree is lost.
-    pub fn discard_task(&mut self, id: &str) -> Result<()> {
-        let index = self.index(id)?;
-        let task = self.tasks[index].clone();
+    pub fn discard_task(&self, id: &str) -> Result<()> {
         let owned = self.root.join("worktrees");
+        let (task, mut child, programs, _busy) = {
+            let mut inner = self.lock();
+            let task = inner.task(id)?.clone();
+            // Records are data on disk; never trust them to point somewhere safe.
+            if !is_strictly_inside(&task.worktree_path, &owned)
+                || task.worktree_path.file_name().and_then(|n| n.to_str()) != Some(task.id.as_str())
+            {
+                return Err(Error::Invalid(
+                    "refusing to remove a worktree outside Lore's directory".into(),
+                ));
+            }
+            if !task.branch.starts_with(BRANCH_PREFIX) || task.branch.len() <= BRANCH_PREFIX.len() {
+                return Err(Error::Invalid(
+                    "refusing to delete a branch Lore did not create".into(),
+                ));
+            }
+            let busy = self.mark_busy(&mut inner, id)?;
+            let child = inner.children.remove(id);
+            (task, child, inner.programs.clone(), busy)
+        };
 
-        // Records are data on disk; never trust them to point somewhere safe.
-        if !is_strictly_inside(&task.worktree_path, &owned)
-            || task.worktree_path.file_name().and_then(|n| n.to_str()) != Some(task.id.as_str())
-        {
-            return Err(Error::Invalid(
-                "refusing to remove a worktree outside Lore's directory".into(),
-            ));
-        }
-        if !task.branch.starts_with(BRANCH_PREFIX) || task.branch.len() <= BRANCH_PREFIX.len() {
-            return Err(Error::Invalid(
-                "refusing to delete a branch Lore did not create".into(),
-            ));
-        }
-
-        self.kill_task_processes(index);
-
+        kill_processes(task.pid, task.agent, child.as_mut(), &programs);
         let repo_exists = task.repo_path.is_dir();
         let removed_by_git =
             repo_exists && git::remove_worktree(&task.repo_path, &task.worktree_path).is_ok();
@@ -543,51 +706,88 @@ impl Orchestrator {
         if is_strictly_inside(&task.log_path, &self.root.join("logs")) {
             let _ = fs::remove_file(&task.log_path);
         }
-        self.tasks.remove(index);
-        self.save()
+        let mut inner = self.lock();
+        if let Ok(index) = inner.index(id) {
+            inner.tasks.remove(index);
+        }
+        self.save(&inner)
     }
 
     /// Stop every running agent (called when the app quits). No git work.
-    pub fn shutdown(&mut self) {
-        let running: Vec<usize> = (0..self.tasks.len())
-            .filter(|&i| self.tasks[i].state == TaskState::Running)
-            .collect();
-        for index in running {
-            self.kill_task_processes(index);
-            self.tasks[index].state = TaskState::Stopped;
-        }
-        let _ = self.save();
-    }
-
-    fn kill_task_processes(&mut self, index: usize) {
-        let task = &self.tasks[index];
-        let mut child = self.children.remove(&task.id);
-        if let Some(pid) = task.pid {
-            // Only signal a group we started in this process, or one whose
-            // leader is verifiably still our agent (guards against pid reuse).
-            if child.is_some()
-                || process::runs_program(pid, program_for(&self.programs, task.agent))
-            {
-                process::stop_group(pid, child.as_mut());
-            }
-        } else if let Some(c) = child.as_mut() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-    }
-
-    fn index(&self, id: &str) -> Result<usize> {
-        self.tasks
+    pub fn shutdown(&self) {
+        let mut inner = self.lock();
+        let running: Vec<(Option<u32>, Option<Child>)> = inner
+            .tasks
             .iter()
-            .position(|t| t.id == id)
-            .ok_or(Error::NotFound)
+            .filter(|t| t.state == TaskState::Running)
+            .map(|t| t.id.clone())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|id| {
+                let pid = inner.task(&id).ok().and_then(|t| t.pid);
+                (pid, inner.children.remove(&id))
+            })
+            .collect();
+        for task in inner
+            .tasks
+            .iter_mut()
+            .filter(|t| t.state == TaskState::Running)
+        {
+            task.state = TaskState::Stopped;
+        }
+        let _ = self.save(&inner);
+        drop(inner);
+        // Signal every group first, then wait once, so quitting with many
+        // agents takes one grace period rather than one per agent.
+        for (pid, _) in &running {
+            if let Some(pid) = pid {
+                process::signal_group(*pid, "TERM");
+            }
+        }
+        let deadline = Instant::now() + LINGER_GRACE;
+        let mut running = running;
+        while Instant::now() < deadline
+            && running
+                .iter()
+                .any(|(pid, _)| pid.is_some_and(process::group_alive))
+        {
+            for (_, child) in &mut running {
+                if let Some(c) = child {
+                    let _ = c.try_wait();
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        for (pid, child) in &mut running {
+            if let Some(pid) = pid {
+                if process::group_alive(*pid) {
+                    process::signal_group(*pid, "KILL");
+                }
+            }
+            if let Some(c) = child {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+        }
     }
 
-    /// Record the exit of any finished agents, and clean up what they left
-    /// running in their process group.
-    fn reap(&mut self) -> Result<()> {
+    /// Record the exit of any finished agents. Helpers left in a finished
+    /// agent's process group get SIGTERM now and SIGKILL after a grace period;
+    /// until they are gone the task counts as not idle.
+    fn reap(&self, inner: &mut Inner) -> Result<()> {
+        let now = Instant::now();
+        inner.lingering.retain(|&pgid, deadline| {
+            if !process::group_alive(pgid) {
+                return false;
+            }
+            if now >= *deadline {
+                process::signal_group(pgid, "KILL");
+            }
+            true
+        });
+
         let mut done = Vec::new();
-        for (id, child) in &mut self.children {
+        for (id, child) in &mut inner.children {
             if let Ok(Some(status)) = child.try_wait() {
                 done.push((id.clone(), status, child.id()));
             }
@@ -596,9 +796,12 @@ impl Orchestrator {
             return Ok(());
         }
         for (id, status, pid) in done {
-            self.children.remove(&id);
-            process::signal_group(pid, "TERM");
-            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
+            inner.children.remove(&id);
+            if process::group_alive(pid) {
+                process::signal_group(pid, "TERM");
+                inner.lingering.insert(pid, now + LINGER_GRACE);
+            }
+            if let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) {
                 task.exit_code = status.code().map(i64::from);
                 task.state = if status.success() {
                     TaskState::Finished
@@ -607,14 +810,14 @@ impl Orchestrator {
                 };
             }
         }
-        self.save()
+        self.save(inner)
     }
 
-    fn save(&self) -> Result<()> {
+    fn save(&self, inner: &Inner) -> Result<()> {
         let tmp = self.root.join(format!("{STORE_FILE}.tmp"));
         {
             let file = File::create(&tmp)?;
-            serde_json::to_writer_pretty(&file, &self.tasks)?;
+            serde_json::to_writer_pretty(&file, &inner.tasks)?;
             file.sync_all()?;
         }
         fs::rename(tmp, self.root.join(STORE_FILE))?;
@@ -622,11 +825,111 @@ impl Orchestrator {
     }
 }
 
+impl Inner {
+    fn index(&self, id: &str) -> Result<usize> {
+        self.tasks
+            .iter()
+            .position(|t| t.id == id)
+            .ok_or(Error::NotFound)
+    }
+
+    fn task(&self, id: &str) -> Result<&TaskRecord> {
+        self.tasks
+            .iter()
+            .find(|t| t.id == id)
+            .ok_or(Error::NotFound)
+    }
+}
+
+/// The task is not running and nothing it started is still exiting.
+fn ensure_idle(inner: &Inner, task: &TaskRecord) -> Result<()> {
+    if task.state == TaskState::Running {
+        return Err(Error::Invalid("the agent is still running".into()));
+    }
+    if task
+        .pid
+        .is_some_and(|pid| inner.lingering.contains_key(&pid) && process::group_alive(pid))
+    {
+        return Err(Error::Invalid(
+            "the agent's helper processes are still exiting; try again in a moment".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Stop a task's process group. Signals a stored pid only when we own the child
+/// or the pid still runs the agent program (guards against pid reuse).
+fn kill_processes(
+    pid: Option<u32>,
+    agent: TaskAgent,
+    child: Option<&mut Child>,
+    programs: &AgentPrograms,
+) {
+    match (pid, child) {
+        (Some(pid), Some(child)) => process::stop_group(pid, Some(child)),
+        (Some(pid), None) => {
+            if process::group_alive(pid) && process::runs_program(pid, program_for(programs, agent))
+            {
+                process::stop_group(pid, None);
+            }
+        }
+        (None, Some(child)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        (None, None) => {}
+    }
+}
+
+/// Start one agent run for `task`, appending its output to the task log.
+fn spawn(
+    programs: &AgentPrograms,
+    task: &TaskRecord,
+    prompt: &str,
+    resume: Option<&str>,
+) -> Result<Child> {
+    let mut log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&task.log_path)?;
+    if task.runs > 1 {
+        writeln!(
+            log,
+            "{} run {} ({}) ---",
+            agent::RUN_MARKER,
+            task.runs,
+            agent_name(task.agent)
+        )?;
+    }
+    let err = log.try_clone()?;
+    let child = agent::command(
+        programs,
+        agent::Launch {
+            agent: task.agent,
+            permission: task.permission,
+            worktree: &task.worktree_path,
+            prompt,
+            resume_session: resume,
+        },
+    )
+    .process_group(0)
+    .stdin(Stdio::null())
+    .stdout(Stdio::from(log))
+    .stderr(Stdio::from(err))
+    .spawn()?;
+    Ok(child)
+}
+
 /// Full status for a task, including git-derived fields. Runs git subprocesses,
 /// so call it without holding the orchestrator.
 pub fn describe(snapshot: &TaskSnapshot) -> TaskDto {
     let t = &snapshot.0;
     let exists = t.worktree_path.is_dir();
+    let changed = if exists {
+        git::changed_files(&t.worktree_path, &t.base_commit, MAX_CHANGED_FILES)
+    } else {
+        (Vec::new(), 0)
+    };
     TaskDto {
         id: t.id.clone(),
         title: t.title.clone(),
@@ -644,11 +947,8 @@ pub fn describe(snapshot: &TaskSnapshot) -> TaskDto {
         } else {
             0
         },
-        changed_files: if exists {
-            git::changed_files(&t.worktree_path, &t.base_commit, MAX_CHANGED_FILES)
-        } else {
-            Vec::new()
-        },
+        changed_files: changed.0,
+        changed_files_total: Some(i64::try_from(changed.1).unwrap_or(i64::MAX)),
         last_activity: agent::last_activity(&t.log_path),
         permission: Some(t.permission),
         runs: Some(i64::from(t.runs)),
@@ -718,7 +1018,7 @@ fn agent_name(agent: TaskAgent) -> &'static str {
 fn handoff_brief(task: &TaskRecord, prompt: &str) -> String {
     let wt = &task.worktree_path;
     let commits = git::log_oneline(wt, &task.base_commit, 30);
-    let changed = git::changed_files(wt, &task.base_commit, 100);
+    let (changed, _) = git::changed_files(wt, &task.base_commit, 100);
     let uncommitted = git::uncommitted(wt);
     let recent: Vec<String> = agent::activity(&task.log_path, 40)
         .into_iter()

@@ -29,6 +29,10 @@ commits_ahead: number,
  */
 changed_files: Array<string>, 
 /**
+ * Total changed paths; larger than `changed_files.len()` when capped.
+ */
+changed_files_total?: number, 
+/**
  * Most recent human-readable line from the agent's output, truncated.
  */
 last_activity: string | null, permission?: TaskPermission, 

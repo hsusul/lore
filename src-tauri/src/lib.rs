@@ -47,9 +47,7 @@ pub fn run() {
         // Agents launched by Lore stop with it (ORCHESTRATOR_PLAN.md step 1).
         if let RunEvent::Exit = event {
             if let Some(state) = app_handle.try_state::<AppState>() {
-                if let Ok(mut orchestrator) = state.orchestrator.lock() {
-                    orchestrator.shutdown();
-                }
+                state.orchestrator.shutdown();
             }
         }
     });

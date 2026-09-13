@@ -27,6 +27,49 @@ fn run(dir: &Path, args: &[&str]) -> Result<String> {
     run_ok_codes(dir, args, &[0])
 }
 
+/// Like `run_ok_codes`, but never reads more than `max` bytes of stdout. Returns
+/// the (possibly cut) output and whether more was available.
+fn run_capped(dir: &Path, args: &[&str], ok: &[i32], max: usize) -> Result<(String, bool)> {
+    use std::io::Read;
+    let mut child = git(dir)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| Error::Git(format!("could not run git: {e}")))?;
+    let mut buf = Vec::new();
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    if let Some(stdout) = child.stdout.take() {
+        let _ = stdout.take(limit).read_to_end(&mut buf);
+    }
+    let cut = buf.len() > max;
+    if cut {
+        // Stop git instead of letting it block on a full pipe.
+        let _ = child.kill();
+        let _ = child.wait();
+        buf.truncate(max);
+    } else {
+        let status = child
+            .wait()
+            .map_err(|e| Error::Git(format!("could not run git: {e}")))?;
+        if !status.code().is_some_and(|c| ok.contains(&c)) {
+            return Err(Error::Git(format!(
+                "git {} failed",
+                args.first().copied().unwrap_or_default()
+            )));
+        }
+    }
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    if cut {
+        // from_utf8_lossy may have replaced a split trailing character; fine.
+        while text.len() > max {
+            text.pop();
+        }
+    }
+    Ok((text, cut))
+}
+
 fn run_ok_codes(dir: &Path, args: &[&str], ok: &[i32]) -> Result<String> {
     let out = git(dir)
         .args(args)
@@ -105,7 +148,8 @@ pub fn commits_ahead(worktree: &Path, base: &str) -> i64 {
 }
 
 /// Paths changed relative to `base`: committed, staged, unstaged, and untracked.
-pub fn changed_files(worktree: &Path, base: &str, cap: usize) -> Vec<String> {
+/// Returns at most `cap` paths plus the total count.
+pub fn changed_files(worktree: &Path, base: &str, cap: usize) -> (Vec<String>, usize) {
     let mut files: Vec<String> = Vec::new();
     for args in [
         &["diff", "--name-only", "-z", base][..],
@@ -118,44 +162,43 @@ pub fn changed_files(worktree: &Path, base: &str, cap: usize) -> Vec<String> {
     files.retain(|f| !f.is_empty());
     files.sort();
     files.dedup();
+    let total = files.len();
     files.truncate(cap);
-    files
+    (files, total)
 }
 
 /// Unified diff of `worktree` against `base`, including untracked files as
-/// additions, capped at `max_bytes`. Returns the text and whether it was cut.
+/// additions. Never buffers more than `max_bytes` of git output.
 pub fn diff_against(worktree: &Path, base: &str, max_bytes: usize) -> Result<(String, bool)> {
-    let mut text = run(
+    let (mut text, mut truncated) = run_capped(
         worktree,
         &["diff", "--no-color", "--no-ext-diff", base, "--"],
+        &[0],
+        max_bytes,
     )?;
     let untracked = run(
         worktree,
         &["ls-files", "-z", "--others", "--exclude-standard"],
     )?;
     for file in untracked.split('\0').filter(|f| !f.is_empty()) {
-        if text.len() >= max_bytes {
+        let remaining = max_bytes.saturating_sub(text.len() + 1);
+        if truncated || remaining == 0 {
+            truncated = true;
             break;
         }
         // `--no-index` exits 1 when the files differ, which is always here.
-        if let Ok(part) = run_ok_codes(
+        if let Ok((part, cut)) = run_capped(
             worktree,
             &["diff", "--no-color", "--no-index", "--", "/dev/null", file],
             &[0, 1],
+            remaining,
         ) {
             if !text.is_empty() {
                 text.push('\n');
             }
             text.push_str(&part);
+            truncated |= cut;
         }
-    }
-    let truncated = text.len() > max_bytes;
-    if truncated {
-        let mut cut = max_bytes;
-        while !text.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        text.truncate(cut);
     }
     Ok((text, truncated))
 }

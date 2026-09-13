@@ -65,7 +65,7 @@ fn request(repo: &Path, title: &str) -> CreateTaskRequest {
     }
 }
 
-fn wait_for(orch: &mut Orchestrator, id: &str, state: TaskState) -> lore_ipc::TaskDto {
+fn wait_for(orch: &Orchestrator, id: &str, state: TaskState) -> lore_ipc::TaskDto {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let task = orch.task(id).unwrap();
@@ -94,7 +94,7 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"committed
 echo '{"type":"result","result":"All done"}'"#,
     );
     let root = tmp.path().join("orch");
-    let mut orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
 
     let a = lore_orchestrator::describe(&orch.create_task(&request(&repo, "Task A")).unwrap());
     let b = lore_orchestrator::describe(&orch.create_task(&request(&repo, "Task A")).unwrap());
@@ -107,7 +107,7 @@ echo '{"type":"result","result":"All done"}'"#,
     );
 
     for id in [&a.id, &b.id] {
-        let done = wait_for(&mut orch, id, TaskState::Finished);
+        let done = wait_for(&orch, id, TaskState::Finished);
         assert_eq!(done.exit_code, Some(0));
         assert_eq!(done.commits_ahead, 1);
         assert_eq!(done.last_activity.as_deref(), Some("All done"));
@@ -171,7 +171,7 @@ fn stop_kills_agent_and_everything_it_started() {
         "sleep 1000 &\necho $! > \"$PWD/../helper-$$.pid\"\necho started\nwait",
     );
     let root = tmp.path().join("orch");
-    let mut orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
     let t = orch.create_task(&request(&repo, "long")).unwrap();
     let helper_file = || {
         fs::read_dir(root.join("worktrees"))
@@ -213,15 +213,15 @@ fn restart_marks_running_tasks_interrupted_and_stops_leftover_agents() {
     let agent = fake_agent(tmp.path(), "sleep 1000 &\nwait");
     let root = tmp.path().join("orch");
 
-    let mut orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
     let stopped = orch.create_task(&request(&repo, "stopped")).unwrap();
     orch.stop_task(stopped.id()).unwrap();
     let left = orch.create_task(&request(&repo, "left running")).unwrap();
     let left_dto = orch.task(left.id()).unwrap();
     assert_eq!(left_dto.state, TaskState::Running);
-    std::mem::forget(orch); // the app crashed: no shutdown, children not reaped
+    drop(orch); // the app crashed: no shutdown, children never reaped or killed
 
-    let mut reopened = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let reopened = Orchestrator::open(&root, programs(&agent)).unwrap();
     assert!(reopened.load_warning().is_none());
     assert_eq!(
         reopened.task(stopped.id()).unwrap().state,
@@ -256,7 +256,7 @@ fn corrupt_store_is_moved_aside_instead_of_failing() {
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("tasks.json"), "{not json").unwrap();
     let agent = fake_agent(tmp.path(), "true");
-    let mut orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
     assert!(orch.load_warning().unwrap().contains("could not be read"));
     assert!(orch.list_tasks().unwrap().is_empty());
     assert!(fs::read_dir(&root).unwrap().flatten().any(|e| e
@@ -271,7 +271,7 @@ fn tampered_records_cannot_delete_outside_lore() {
     let repo = repo(tmp.path());
     let agent = fake_agent(tmp.path(), "true");
     let root = tmp.path().join("orch");
-    let mut orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
     let t = orch.create_task(&request(&repo, "victim")).unwrap();
     let id = t.id().to_string();
     drop(orch);
@@ -283,7 +283,7 @@ fn tampered_records_cannot_delete_outside_lore() {
     // Branch outside lore/ (e.g. main) is refused.
     store[0]["branch"] = "main".into();
     fs::write(&store_path, store.to_string()).unwrap();
-    let mut orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
     assert!(orch.discard_task(&id).is_err());
     drop(orch);
 
@@ -293,7 +293,7 @@ fn tampered_records_cannot_delete_outside_lore() {
     let mut store: serde_json::Value = serde_json::from_str(&original).unwrap();
     store[0]["worktree_path"] = outside.display().to_string().into();
     fs::write(&store_path, store.to_string()).unwrap();
-    let mut orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
     assert!(orch.discard_task(&id).is_err());
     assert!(outside.exists());
     drop(orch);
@@ -309,7 +309,7 @@ fn tampered_records_cannot_delete_outside_lore() {
         .status()
         .unwrap();
     std::os::unix::fs::symlink(&outside, &wt).unwrap();
-    let mut orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
     assert!(orch.discard_task(&id).is_err());
     assert!(outside.exists());
     fs::remove_file(&wt).unwrap();
@@ -323,7 +323,7 @@ fn tampered_records_cannot_delete_outside_lore() {
 fn rejects_bad_input_and_non_repos() {
     let tmp = tempfile::tempdir().unwrap();
     let agent = fake_agent(tmp.path(), "true");
-    let mut orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
 
     let not_repo = tmp.path().join("plain");
     fs::create_dir_all(&not_repo).unwrap();
@@ -344,7 +344,7 @@ fn rejects_bad_input_and_non_repos() {
 fn missing_agent_binary_fails_the_task_instead_of_erroring() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(tmp.path());
-    let mut orch = Orchestrator::open(
+    let orch = Orchestrator::open(
         tmp.path().join("orch"),
         programs(&tmp.path().join("no-such-agent")),
     )
@@ -400,11 +400,11 @@ fn continue_resumes_claude_and_hands_off_to_codex_with_a_brief() {
     let repo = commit_env_repo(tmp.path());
     let agent = recording_agent(tmp.path());
     let root = tmp.path().join("orch");
-    let mut orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
 
     let t = orch.create_task(&request(&repo, "shared work")).unwrap();
     let id = t.id().to_string();
-    wait_for(&mut orch, &id, TaskState::Finished);
+    wait_for(&orch, &id, TaskState::Finished);
 
     // Same agent: resumes its own session with just the new prompt.
     let cont = lore_ipc::ContinueTaskRequest {
@@ -413,7 +413,7 @@ fn continue_resumes_claude_and_hands_off_to_codex_with_a_brief() {
         agent: None,
     };
     orch.continue_task(&cont).unwrap();
-    let done = wait_for(&mut orch, &id, TaskState::Finished);
+    let done = wait_for(&orch, &id, TaskState::Finished);
     assert_eq!(done.runs, Some(2));
     let a1 = call_args(&root, 1);
     assert!(
@@ -432,7 +432,7 @@ fn continue_resumes_claude_and_hands_off_to_codex_with_a_brief() {
     };
     orch.commit_task(&id, "wip").unwrap();
     orch.continue_task(&handoff).unwrap();
-    let done = wait_for(&mut orch, &id, TaskState::Finished);
+    let done = wait_for(&orch, &id, TaskState::Finished);
     assert_eq!(done.agent, TaskAgent::Codex);
     let a2 = call_args(&root, 2);
     assert!(!a2.iter().any(|a| a.starts_with("--resume")));
@@ -450,13 +450,13 @@ fn commit_and_merge_into_primary_checkout() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = commit_env_repo(tmp.path());
     let agent = fake_agent(tmp.path(), "echo feature > feature.txt");
-    let mut orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
     let id = orch
         .create_task(&request(&repo, "feature"))
         .unwrap()
         .id()
         .to_string();
-    let done = wait_for(&mut orch, &id, TaskState::Finished);
+    let done = wait_for(&orch, &id, TaskState::Finished);
     assert_eq!(done.uncommitted_count, Some(1));
 
     // Uncommitted work blocks merging.
@@ -500,7 +500,7 @@ fn conflicting_merge_is_aborted_and_overlaps_are_reported() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = commit_env_repo(tmp.path());
     let agent = fake_agent(tmp.path(), "echo \"$PWD\" > README.md");
-    let mut orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
     let a = orch
         .create_task(&request(&repo, "a"))
         .unwrap()
@@ -511,8 +511,8 @@ fn conflicting_merge_is_aborted_and_overlaps_are_reported() {
         .unwrap()
         .id()
         .to_string();
-    wait_for(&mut orch, &a, TaskState::Finished);
-    wait_for(&mut orch, &b, TaskState::Finished);
+    wait_for(&orch, &a, TaskState::Finished);
+    wait_for(&orch, &b, TaskState::Finished);
 
     let mut all = orch.list_tasks().unwrap();
     lore_orchestrator::annotate_overlaps(&mut all);
@@ -550,13 +550,13 @@ fn merge_refuses_a_worktree_off_its_branch() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = commit_env_repo(tmp.path());
     let agent = fake_agent(tmp.path(), "echo x > x.txt");
-    let mut orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
     let id = orch
         .create_task(&request(&repo, "detach"))
         .unwrap()
         .id()
         .to_string();
-    let done = wait_for(&mut orch, &id, TaskState::Finished);
+    let done = wait_for(&orch, &id, TaskState::Finished);
     orch.commit_task(&id, "x").unwrap();
     // The agent detaches HEAD and commits somewhere the branch ref does not see.
     sh(
@@ -568,4 +568,155 @@ fn merge_refuses_a_worktree_off_its_branch() {
     assert!(err.contains("no longer on"), "{err}");
     assert_eq!(git_out(&repo, &["rev-parse", "HEAD"]), head);
     assert!(orch.task(&id).unwrap().merged_into.is_none());
+}
+
+#[test]
+fn a_second_orchestrator_on_the_same_root_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let agent = fake_agent(tmp.path(), "true");
+    let root = tmp.path().join("orch");
+    let first = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let err = Orchestrator::open(&root, programs(&agent)).err().unwrap();
+    assert!(err.to_string().contains("already running"), "{err}");
+    drop(first);
+    if let Err(e) = Orchestrator::open(&root, programs(&agent)) {
+        let holders = Command::new("lsof")
+            .arg(root.join("lock"))
+            .output()
+            .unwrap();
+        panic!(
+            "reopen failed: {e}\n{}",
+            String::from_utf8_lossy(&holders.stdout)
+        );
+    }
+}
+
+#[test]
+fn only_opened_roots_and_task_worktrees_are_browsable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let other = tmp.path().join("other");
+    fs::create_dir_all(&other).unwrap();
+    sh(&other, &["init", "-q"]);
+    let agent = fake_agent(tmp.path(), "true");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+
+    let s = |p: &Path| p.display().to_string();
+    assert!(orch.browsable_root(&s(&repo)).is_err(), "not opened yet");
+    orch.open_workspace(&s(&repo.join("."))).unwrap();
+    assert!(orch.browsable_root(&s(&repo)).is_ok());
+    assert!(orch.browsable_root(&s(&other)).is_err(), "unrelated repo");
+
+    let t = orch.create_task(&request(&repo, "wt")).unwrap();
+    assert!(orch.browsable_root(&s(t.worktree_path())).is_ok());
+}
+
+#[test]
+fn slow_stop_does_not_block_status_and_helpers_block_commit_until_gone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    // Ignores SIGTERM, so Stop has to wait out the grace period before SIGKILL.
+    let agent = fake_agent(
+        tmp.path(),
+        "trap '' TERM\necho > edit.txt\nwhile true; do sleep 0.1; done",
+    );
+    let orch =
+        std::sync::Arc::new(Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap());
+    let id = orch
+        .create_task(&request(&repo, "stubborn"))
+        .unwrap()
+        .id()
+        .to_string();
+    std::thread::sleep(Duration::from_millis(300));
+
+    let stopper = {
+        let orch = orch.clone();
+        let id = id.clone();
+        std::thread::spawn(move || orch.stop_task(&id).unwrap())
+    };
+    std::thread::sleep(Duration::from_millis(200));
+    let started = Instant::now();
+    let state = orch
+        .snapshot(&id)
+        .map(|s| lore_orchestrator::describe(&s).state)
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "status blocked behind Stop"
+    );
+    assert_eq!(state, TaskState::Stopped);
+    stopper.join().unwrap();
+
+    // A finished agent whose helper ignores TERM: commit waits for it to be killed.
+    let agent2 = fake_agent(
+        tmp.path(),
+        "(trap '' TERM; while true; do sleep 0.1; done) &\necho x > y.txt",
+    );
+    let orch2 = Orchestrator::open(tmp.path().join("orch2"), programs(&agent2)).unwrap();
+    let id2 = orch2
+        .create_task(&request(&repo, "helper"))
+        .unwrap()
+        .id()
+        .to_string();
+    wait_for(&orch2, &id2, TaskState::Finished);
+    let err = orch2.commit_task(&id2, "c").unwrap_err().to_string();
+    assert!(err.contains("still exiting"), "{err}");
+    assert!(
+        wait_until(|| {
+            let _ = orch2.snapshot(&id2);
+            orch2.commit_task(&id2, "c").is_ok()
+        }),
+        "helper was never killed"
+    );
+}
+
+#[test]
+fn continue_rolls_back_when_the_store_cannot_be_saved() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "sleep 1000 &\necho x > f.txt\nwait");
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&fake_agent(tmp.path(), "true"))).unwrap();
+    let id = orch
+        .create_task(&request(&repo, "r"))
+        .unwrap()
+        .id()
+        .to_string();
+    wait_for(&orch, &id, TaskState::Finished);
+    orch.set_programs(programs(&agent));
+
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o500)).unwrap();
+    let result = orch.continue_task(&lore_ipc::ContinueTaskRequest {
+        id: id.clone(),
+        prompt: "more".into(),
+        agent: None,
+    });
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err());
+    let t = orch.task(&id).unwrap();
+    assert_eq!(t.state, TaskState::Finished, "state reverted");
+    assert_eq!(t.runs, Some(1));
+}
+
+#[test]
+fn changed_file_totals_and_bounded_diffs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(
+        tmp.path(),
+        "i=0; while [ $i -lt 1100 ]; do echo $i > f$i.txt; i=$((i+1)); done\nhead -c 3000000 /dev/zero | tr '\\0' 'a' > big.txt",
+    );
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let id = orch
+        .create_task(&request(&repo, "many"))
+        .unwrap()
+        .id()
+        .to_string();
+    let t = wait_for(&orch, &id, TaskState::Finished);
+    assert_eq!(t.changed_files.len(), 1000);
+    assert_eq!(t.changed_files_total, Some(1101));
+    let diff = lore_orchestrator::diff(&orch.snapshot(&id).unwrap()).unwrap();
+    assert!(diff.truncated);
+    assert!(diff.text.len() <= 2 * 1024 * 1024);
 }
