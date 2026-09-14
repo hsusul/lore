@@ -329,7 +329,11 @@ fn rejects_bad_input_and_non_repos() {
 
     let not_repo = tmp.path().join("plain");
     fs::create_dir_all(&not_repo).unwrap();
-    assert!(orch.create_task(&request(&not_repo, "x")).is_err());
+    let err = orch
+        .create_task(&request(&not_repo, "x"))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err, "That folder isn't inside a git repository");
     assert!(orch
         .create_task(&request(Path::new("relative/path"), "x"))
         .is_err());
@@ -614,6 +618,50 @@ fn only_opened_roots_and_task_worktrees_are_browsable() {
 }
 
 #[test]
+fn activity_paths_are_relative_to_the_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "true");
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let snap = orch.create_task(&request(&repo, "paths")).unwrap();
+    wait_for(&orch, snap.id(), TaskState::Finished);
+    let abs = snap.worktree_path().join("greet.py");
+    let log = root.join("logs").join(format!("{}.log", snap.id()));
+    fs::write(
+        &log,
+        format!(
+            "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{{\"file_path\":\"{}\"}}}}]}}}}\n",
+            abs.display()
+        ),
+    )
+    .unwrap();
+    let events = lore_orchestrator::activity(&orch.snapshot(snap.id()).unwrap(), 20);
+    let texts: Vec<_> = events.iter().map(|e| e.text.as_str()).collect();
+    assert!(texts.contains(&"Edit greet.py"), "{texts:?}");
+    assert!(
+        events.iter().all(|e| !e.text.contains("worktrees")),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn open_workspace_maps_a_non_git_folder_to_a_plain_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let agent = fake_agent(tmp.path(), "true");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let plain = tmp.path().join("not-a-repo");
+    fs::create_dir_all(&plain).unwrap();
+    let err = orch
+        .open_workspace(&plain.display().to_string())
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err, "That folder isn't inside a git repository");
+    assert!(!err.contains("fatal"), "{err}");
+    assert!(!err.contains("rev-parse"), "{err}");
+}
+
+#[test]
 fn slow_stop_does_not_block_status_and_helpers_block_commit_until_gone() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = commit_env_repo(tmp.path());
@@ -751,6 +799,13 @@ fn claims_are_shared_with_agents_and_guard_commits() {
     assert!(prompt.contains("\"auth work\""), "{prompt}");
     assert!(prompt.contains("README.md, src/auth/"), "{prompt}");
     assert!(prompt.contains("## Your task"), "{prompt}");
+
+    let log = fs::read_to_string(root.join("logs").join(format!("{other_id}.log"))).unwrap();
+    assert!(
+        log.contains("Working alongside other agents"),
+        "opening prompt must be in the task log so History can show it:\n{log}"
+    );
+    assert!(log.contains("\"auth work\""), "{log}");
 
     // The second task edited a claimed file: commit is refused, then forced.
     let wt = orch

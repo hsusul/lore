@@ -436,7 +436,7 @@ impl Orchestrator {
         let claims = normalize_claims(req.claims.as_deref().unwrap_or(&[]))?;
 
         // Git work, without the lock.
-        let repo = git::toplevel(&requested)?;
+        let repo = git::toplevel(&requested).map_err(workspace::not_a_git_repository)?;
         let base_commit = git::head_commit(&repo)?;
         let created_at_ms = now_ms();
         let id = new_id(created_at_ms);
@@ -1666,6 +1666,8 @@ fn spawn(
         .create(true)
         .append(true)
         .open(&task.log_path)?;
+    writeln!(log, "{} opening prompt ---", agent::RUN_MARKER)?;
+    writeln!(log, "{prompt}")?;
     if task.runs > 1 {
         writeln!(
             log,
@@ -1723,7 +1725,8 @@ pub fn describe(snapshot: &TaskSnapshot) -> TaskDto {
         },
         changed_files: changed.0,
         changed_files_total: Some(i64::try_from(changed.1).unwrap_or(i64::MAX)),
-        last_activity: agent::last_activity(&t.log_path),
+        last_activity: agent::last_activity(&t.log_path)
+            .map(|s| strip_worktree_prefix(&s, &t.worktree_path)),
         permission: Some(t.permission),
         runs: Some(i64::from(t.runs)),
         uncommitted_count: Some(if exists {
@@ -2037,8 +2040,35 @@ pub fn diff(snapshot: &TaskSnapshot) -> Result<TaskDiffDto> {
 }
 
 /// The task agent's recent activity timeline (see [`agent::activity`]).
+/// Tool targets that include the worktree path are shown relative to it.
 pub fn activity(snapshot: &TaskSnapshot, max_events: usize) -> Vec<ActivityDto> {
+    let worktree = &snapshot.0.worktree_path;
     agent::activity(&snapshot.0.log_path, max_events)
+        .into_iter()
+        .map(|mut e| {
+            e.text = strip_worktree_prefix(&e.text, worktree);
+            e
+        })
+        .collect()
+}
+
+fn strip_worktree_prefix(text: &str, worktree: &Path) -> String {
+    let wt = worktree.to_string_lossy();
+    if wt.is_empty() {
+        return text.to_string();
+    }
+    let slash = if wt.ends_with('/') {
+        wt.to_string()
+    } else {
+        format!("{wt}/")
+    };
+    if text.contains(&slash) {
+        text.replace(&slash, "")
+    } else if text.contains(wt.as_ref()) {
+        text.replace(wt.as_ref(), "")
+    } else {
+        text.to_string()
+    }
 }
 
 fn program_for(programs: &AgentPrograms, agent: TaskAgent) -> &Path {
