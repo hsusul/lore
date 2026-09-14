@@ -116,6 +116,10 @@ export default function AgentMenu({
 
   function pickAgent(next: TaskAgent) {
     onAgentChange(next);
+    if (full) {
+      setPane("root");
+      return;
+    }
     setOpen(false);
   }
 

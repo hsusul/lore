@@ -102,6 +102,7 @@ describe("AgentView", () => {
     const menu = screen.getByRole("menu");
     expect(menu.parentElement).toBe(document.body);
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Codex" }));
+    expect(screen.queryByRole("menu")).toBeNull();
     expect(screen.getByRole("button", { name: "Hand off to Codex" })).toBeTruthy();
     fireEvent.change(input, { target: { value: "take over" } });
     fireEvent.click(screen.getByRole("button", { name: "Hand off to Codex" }));

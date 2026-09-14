@@ -35,6 +35,10 @@ function chooseAgent(name: "Claude Code" | "Codex") {
   fireEvent.click(screen.getByLabelText("Agent"));
   fireEvent.click(screen.getByRole("menuitem", { name: /^Agent\b/ }));
   fireEvent.click(screen.getByRole("menuitemradio", { name }));
+  // The picker returns to the root pane; the chosen agent is shown, menu stays open.
+  expect(screen.queryByRole("menuitemradio", { name })).toBeNull();
+  expect(screen.getByRole("menuitem", { name: /^Permission\b/ })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: /^Agent\b/ }).textContent).toContain(name);
 }
 
 function openPermission() {
