@@ -146,6 +146,54 @@ export const CommitIcon = () => (
   </Icon>
 );
 
+export const ArrowUpIcon = () => (
+  <Icon size={14}>
+    <path d="M8 12.75v-9.5M4.25 7 8 3.25 11.75 7" />
+  </Icon>
+);
+
+export const ArrowDownIcon = () => (
+  <Icon size={14}>
+    <path d="M8 3.25v9.5M4.25 9 8 12.75 11.75 9" />
+  </Icon>
+);
+
+/** Merge-queue step waiting its turn: an open ring. */
+export const PendingIcon = () => (
+  <Icon size={14}>
+    <circle cx="8" cy="8" r="5.25" strokeDasharray="2 2.4" />
+  </Icon>
+);
+
+/** Merge-queue step in progress: a three-quarter arc (spun by CSS). */
+export const ProgressIcon = () => (
+  <Icon size={14}>
+    <path d="M13.25 8A5.25 5.25 0 1 1 8 2.75" />
+  </Icon>
+);
+
+export const CheckIcon = () => (
+  <Icon size={14}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="m5.5 8.25 1.75 1.75 3.25-3.5" />
+  </Icon>
+);
+
+export const FailedIcon = () => (
+  <Icon size={14}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="m6 6 4 4M10 6l-4 4" />
+  </Icon>
+);
+
+/** Skipped or cancelled: a ring with a bar through it. */
+export const SkippedIcon = () => (
+  <Icon size={14}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M5.5 8h5" />
+  </Icon>
+);
+
 /** The Lore mark: a node linked to two overlapping rings. */
 export function Mark() {
   return (

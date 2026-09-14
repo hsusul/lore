@@ -1985,6 +1985,12 @@ input.git-actions__input {
   margin: 0;
 }
 
+/* Why commit, merge, and continue are disabled while a merge queue runs. */
+.wb-note.queue-lock {
+  margin: 10px 0 0 40px;
+  color: var(--wb-warn);
+}
+
 .merge-note {
   margin: 0;
   padding: 6px 10px;
@@ -2424,6 +2430,299 @@ input.git-actions__input {
   color: var(--wb-fg-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Merge queue (panel) ───────────────────────────────────────────────── */
+
+/* Setup on the left, progress on the right; stacks when the panel is narrow. */
+.merge-queue {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 8px 24px;
+  align-items: start;
+  padding: 8px 16px 12px;
+}
+
+.merge-queue__setup,
+.merge-queue__run {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.merge-queue .wb-subhead {
+  margin: 8px 0 2px;
+}
+
+.merge-queue .wb-note {
+  margin: 0;
+}
+
+.merge-queue__command input {
+  font-size: 12px;
+}
+
+.merge-queue__hint {
+  margin: 0;
+  color: var(--wb-fg-faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.merge-queue__saved {
+  color: var(--wb-success);
+}
+
+.merge-queue__fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.mq-picks,
+.mq-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mq-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 2px 0 8px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+}
+
+.mq-pick:hover {
+  background: var(--wb-hover);
+}
+
+.mq-pick--on {
+  background: var(--wb-accent-soft);
+}
+
+.mq-pick__main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.mq-pick__main input {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--wb-accent-strong);
+}
+
+.mq-pick__title {
+  overflow: hidden;
+  color: var(--wb-fg-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mq-pick__pos {
+  flex: none;
+  min-width: 16px;
+  color: var(--wb-accent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: center;
+}
+
+.mq-pick__meta {
+  flex: none;
+  max-width: 30%;
+  overflow: hidden;
+  color: var(--wb-fg-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mq-pick__moves {
+  flex: none;
+  display: flex;
+}
+
+.merge-queue__fields:disabled .mq-pick {
+  opacity: 0.6;
+}
+
+.merge-queue__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.merge-queue__confirm {
+  margin-top: 4px;
+  padding: 7px 10px;
+  border: 1px solid rgba(143, 148, 246, 0.3);
+  border-radius: var(--r);
+  background: var(--wb-accent-soft);
+  color: var(--wb-fg-strong);
+  font-size: 12px;
+}
+
+.merge-queue__confirm p {
+  margin: 0 0 6px;
+  line-height: 1.45;
+}
+
+.merge-queue__runhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.merge-queue__summary {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--wb-fg-strong);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.mq-item {
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+}
+
+.mq-item__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mq-item__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--wb-fg-faint);
+}
+
+.mq-item__status {
+  flex: none;
+  min-width: 62px;
+  color: var(--wb-fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.mq-item__title {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--wb-fg-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mq-item__detail {
+  overflow: hidden;
+  color: var(--wb-fg-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mq-item--active .mq-item__icon,
+.mq-item--active .mq-item__status {
+  color: var(--wb-amber);
+}
+
+.mq-item--active .mq-item__icon .icon {
+  animation: mq-spin 1.4s linear infinite;
+}
+
+.mq-item--merged .mq-item__icon,
+.mq-item--merged .mq-item__status {
+  color: var(--wb-success);
+}
+
+.mq-item--failed {
+  background: var(--wb-danger-bg);
+}
+
+.mq-item--failed .mq-item__icon,
+.mq-item--failed .mq-item__status {
+  color: var(--wb-danger);
+}
+
+.mq-item--muted .mq-item__title,
+.mq-item--muted .mq-item__status {
+  color: var(--wb-fg-faint);
+}
+
+.mq-item__failure {
+  margin: 3px 0 2px 22px;
+  color: var(--wb-danger);
+  font-size: 11.5px;
+}
+
+.mq-item__failure summary {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mq-item__failure summary:focus-visible {
+  outline: 2px solid var(--wb-focus);
+  outline-offset: 1px;
+  border-radius: var(--r-sm);
+}
+
+.mq-item__output {
+  max-height: 240px;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border: 1px solid rgba(234, 138, 126, 0.25);
+  border-radius: var(--r-sm);
+  background: var(--wb-input-bg);
+  color: var(--wb-fg);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@keyframes mq-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Colour and the status text still say "in progress". */
+  .mq-item--active .mq-item__icon .icon {
+    animation: none;
+  }
 }
 
 /* ── Status bar ────────────────────────────────────────────────────────── */

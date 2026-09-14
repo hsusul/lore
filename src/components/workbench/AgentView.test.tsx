@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../ipc", () => ({
@@ -209,6 +209,47 @@ describe("AgentView", () => {
     expect(within(files).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["src/a.rs", "src/b.rs"]);
     expect(screen.getByText(/Nothing was changed in your checkout/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Merge into checked-out branch" })).toBeTruthy();
+  });
+
+  it("disables commit, merge, and continue with a reason while the repository's merge queue runs", async () => {
+    const reason = "Commit, merge, and continue are paused while this repository’s merge queue runs.";
+    const h = handlers();
+    const view = render(
+      <AgentView taskId="t1" task={task({ state: "finished", uncommitted_count: 1 })} mergeQueueRunning {...h} />,
+    );
+    await screen.findByText("No activity yet.");
+    expect(screen.getByText(reason).getAttribute("role")).toBe("status");
+    expect(screen.getByRole("button", { name: "Commit" }).matches(":disabled")).toBe(true);
+    fireEvent.submit(screen.getByRole("form", { name: "Commit changes" }));
+    expect(h.onCommit).not.toHaveBeenCalled();
+
+    // Continue stays disabled, and ⌘Enter does not send either.
+    expect(screen.getByRole("button", { name: "Continue" }).matches(":disabled")).toBe(true);
+    expect(screen.getByText("Paused while the merge queue runs")).toBeTruthy();
+    const input = screen.getByLabelText("Follow-up prompt");
+    fireEvent.change(input, { target: { value: "more" } });
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    await act(async () => {});
+    expect(h.onContinue).not.toHaveBeenCalled();
+    view.unmount();
+
+    // A committed task: the merge button is disabled too.
+    render(<AgentView taskId="t1" task={task({ state: "finished", repo_branch: "main" })} mergeQueueRunning {...h} />);
+    await screen.findByText("No activity yet.");
+    expect(screen.getByRole("button", { name: "Merge into main" }).matches(":disabled")).toBe(true);
+    expect(screen.getByText(reason)).toBeTruthy();
+  });
+
+  it("does not show the queue reason for a running task, or when no queue runs", async () => {
+    const view = render(<AgentView taskId="t1" task={task({ state: "running" })} mergeQueueRunning {...handlers()} />);
+    await screen.findByText("No activity yet.");
+    expect(screen.queryByText(/paused while this repository/)).toBeNull();
+    view.unmount();
+    renderView({ repo_branch: "main" });
+    await screen.findByText("No activity yet.");
+    expect(screen.queryByText(/paused while this repository/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Merge into main" }).matches(":disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "Continue" }).matches(":disabled")).toBe(false);
   });
 
   it("shows the backend error when the merge is refused", async () => {

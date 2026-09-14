@@ -32,6 +32,14 @@ function renderPanel(tab: PanelTab = "history") {
     task: task({ state: "finished" }),
     onOpenChange: vi.fn(),
     repoPath: "/repo",
+    tasks: [],
+    mergeQueues: {
+      entries: {},
+      isRunning: () => false,
+      start: vi.fn(() => Promise.resolve()),
+      cancel: vi.fn(() => Promise.resolve()),
+      dismiss: vi.fn(),
+    },
   };
   const view = render(<BottomPanel {...props} />);
   return { props, view };
@@ -75,7 +83,7 @@ describe("BottomPanel History", () => {
     expect(await screen.findByText("No decisions recorded yet.")).toBeTruthy();
   });
 
-  it("shows the History tab beside Output and Changes and cycles with arrow keys", () => {
+  it("shows the History and Merge Queue tabs beside Output and Changes and cycles with arrow keys", () => {
     vi.mocked(listDecisions).mockResolvedValue([]);
     const { props } = renderPanel("changes");
     const tabs = screen.getByRole("tablist", { name: "Panel views" });
@@ -83,6 +91,7 @@ describe("BottomPanel History", () => {
       "Agent Output",
       "Changes2",
       "History",
+      "Merge Queue",
     ]);
     fireEvent.keyDown(tabs, { key: "ArrowRight" });
     expect(props.onTabChange).toHaveBeenCalledWith("history");

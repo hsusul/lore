@@ -8,11 +8,14 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listen(..
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => open(...a) }));
 
 import {
+  cancelMergeQueue,
   chooseRepositoryDirectory,
   commitTask,
   continueTask,
   createTask,
   discardTask,
+  getMergeQueue,
+  getRepoSettings,
   getTask,
   listDecisions,
   listTasks,
@@ -22,6 +25,8 @@ import {
   openTaskWorktree,
   openWorkspace,
   readWorkspaceFile,
+  setRepoTestCommand,
+  startMergeQueue,
   stopTask,
   taskActivity,
   taskDiff,
@@ -103,6 +108,24 @@ describe("ipc contract", () => {
       ["commit_task", { id: "t1", message: "m" }],
       ["list_decisions", { repoPath: "/repo", limit: 50 }],
       ["list_decisions", { repoPath: null, limit: null }],
+    ]);
+  });
+
+  it("merge-queue and repo-settings commands pass camelCase args Tauri maps to snake_case", async () => {
+    invoke.mockResolvedValue(undefined);
+    await getRepoSettings("/repo");
+    await setRepoTestCommand("/repo", "npm test");
+    await setRepoTestCommand("/repo", null);
+    await startMergeQueue("/repo", ["t2", "t1"]);
+    await getMergeQueue("/repo");
+    await cancelMergeQueue("/repo");
+    expect(invoke.mock.calls).toEqual([
+      ["get_repo_settings", { repoPath: "/repo" }],
+      ["set_repo_test_command", { repoPath: "/repo", command: "npm test" }],
+      ["set_repo_test_command", { repoPath: "/repo", command: null }],
+      ["start_merge_queue", { repoPath: "/repo", taskIds: ["t2", "t1"] }],
+      ["get_merge_queue", { repoPath: "/repo" }],
+      ["cancel_merge_queue", { repoPath: "/repo" }],
     ]);
   });
 

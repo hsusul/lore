@@ -13,7 +13,10 @@ import type { CreateTaskRequest } from "../crates/lore-ipc/bindings/CreateTaskRe
 import type { DecisionDto } from "../crates/lore-ipc/bindings/DecisionDto";
 import type { DirEntryDto } from "../crates/lore-ipc/bindings/DirEntryDto";
 import type { FileContentDto } from "../crates/lore-ipc/bindings/FileContentDto";
+import type { MergeQueueDto } from "../crates/lore-ipc/bindings/MergeQueueDto";
+import type { MergeQueueItemDto } from "../crates/lore-ipc/bindings/MergeQueueItemDto";
 import type { MergeResultDto } from "../crates/lore-ipc/bindings/MergeResultDto";
+import type { RepoSettingsDto } from "../crates/lore-ipc/bindings/RepoSettingsDto";
 import type { TaskAgent } from "../crates/lore-ipc/bindings/TaskAgent";
 import type { TaskDiffDto } from "../crates/lore-ipc/bindings/TaskDiffDto";
 import type { TaskDto } from "../crates/lore-ipc/bindings/TaskDto";
@@ -30,7 +33,10 @@ export type {
   DecisionDto,
   DirEntryDto,
   FileContentDto,
+  MergeQueueDto,
+  MergeQueueItemDto,
   MergeResultDto,
+  RepoSettingsDto,
   TaskAgent,
   TaskDiffDto,
   TaskDto,
@@ -129,6 +135,40 @@ export function commitTask(id: string, message: string, force?: boolean): Promis
 export function mergeTask(id: string): Promise<MergeResultDto> {
   if (mock) return mock.then((m) => m.mergeTask(id));
   return invoke<MergeResultDto>("merge_task", { id });
+}
+
+/** Lore's settings for a repository: the command the merge queue tests with. */
+export function getRepoSettings(repoPath: string): Promise<RepoSettingsDto> {
+  if (mock) return mock.then((m) => m.getRepoSettings(repoPath));
+  return invoke<RepoSettingsDto>("get_repo_settings", { repoPath });
+}
+
+/** Set the merge queue's test command for a repository; empty or null clears it. */
+export function setRepoTestCommand(repoPath: string, command: string | null): Promise<RepoSettingsDto> {
+  if (mock) return mock.then((m) => m.setRepoTestCommand(repoPath, command));
+  return invoke<RepoSettingsDto>("set_repo_test_command", { repoPath, command });
+}
+
+/**
+ * Merge tasks one after another in the given order: update each branch from the
+ * target, run the test command, then merge. Runs in the background; poll
+ * `getMergeQueue` for progress. Refused while a queue or merge is running.
+ */
+export function startMergeQueue(repoPath: string, taskIds: string[]): Promise<MergeQueueDto> {
+  if (mock) return mock.then((m) => m.startMergeQueue(repoPath, taskIds));
+  return invoke<MergeQueueDto>("start_merge_queue", { repoPath, taskIds });
+}
+
+/** The repository's latest merge queue this session, or null. */
+export function getMergeQueue(repoPath: string): Promise<MergeQueueDto | null> {
+  if (mock) return mock.then((m) => m.getMergeQueue(repoPath));
+  return invoke<MergeQueueDto | null>("get_merge_queue", { repoPath });
+}
+
+/** Stop a running merge queue after its current step (a running test is stopped). */
+export function cancelMergeQueue(repoPath: string): Promise<void> {
+  if (mock) return mock.then((m) => m.cancelMergeQueue(repoPath));
+  return invoke<void>("cancel_merge_queue", { repoPath });
 }
 
 /** Stop the agent and delete the task's Lore-owned worktree and branch. */

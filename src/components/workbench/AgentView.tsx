@@ -30,6 +30,8 @@ type Props = {
   onMerge: (id: string) => Promise<MergeResultDto>;
   /** Open or focus another task's agent tab. */
   onSelectTask: (id: string) => void;
+  /** A merge queue is running in this task's repository. */
+  mergeQueueRunning?: boolean;
 };
 
 /** Short agent names for handoff labels. */
@@ -50,6 +52,7 @@ export default function AgentView({
   onCommit,
   onMerge,
   onSelectTask,
+  mergeQueueRunning = false,
 }: Props) {
   const activity = useActivity(task && active ? taskId : null, task?.state === "running");
   const [confirming, setConfirming] = useState(false);
@@ -92,6 +95,8 @@ export default function AgentView({
   const mergedNow = mergeOutcome?.kind === "result" && mergeOutcome.result.merged;
   const canMerge = !running && !merged && !mergedNow && uncommitted === 0 && task.commits_ahead > 0;
   const canContinue = !running && !merged;
+  // The queue owns the repository's merge slot and may be updating this branch.
+  const queueLocked = mergeQueueRunning && !running && !merged;
   const handoff = nextAgent !== task.agent;
 
   async function act(action: (id: string) => Promise<void>) {
@@ -107,6 +112,7 @@ export default function AgentView({
   }
 
   async function commit(force = false) {
+    if (queueLocked) return;
     setCommitting(true);
     setCommitError(null);
     try {
@@ -125,6 +131,7 @@ export default function AgentView({
   }
 
   async function merge() {
+    if (queueLocked) return;
     setMerging(true);
     setMergeOutcome(null);
     try {
@@ -140,6 +147,7 @@ export default function AgentView({
 
   async function submitContinue(event: FormEvent) {
     event.preventDefault();
+    if (queueLocked) return;
     const text = prompt.trim();
     if (!text) {
       setContinueError("Describe what the agent should do next.");
@@ -316,6 +324,12 @@ export default function AgentView({
           </div>
         )}
 
+        {queueLocked && (
+          <p className="wb-note queue-lock" role="status">
+            Commit, merge, and continue are paused while this repository&rsquo;s merge queue runs.
+          </p>
+        )}
+
         {(canCommit || canMerge || mergeOutcome) && (
           <div className="git-actions">
             {canCommit && (
@@ -339,7 +353,7 @@ export default function AgentView({
                   disabled={committing}
                   onChange={(e) => setCommitMessage(e.target.value)}
                 />
-                <button type="submit" className="wb-btn" disabled={committing}>
+                <button type="submit" className="wb-btn" disabled={committing || queueLocked}>
                   {committing ? "Committing…" : "Commit"}
                 </button>
               </form>
@@ -358,7 +372,7 @@ export default function AgentView({
                   <button
                     type="button"
                     className="wb-btn wb-btn--danger"
-                    disabled={committing}
+                    disabled={committing || queueLocked}
                     onClick={() => void commit(true)}
                   >
                     {committing ? "Committing…" : "Confirm commit"}
@@ -374,7 +388,12 @@ export default function AgentView({
                 </div>
               ) : (
                 <div className="git-actions__row">
-                  <button type="button" className="wb-btn" onClick={() => setConfirmingForce(true)}>
+                  <button
+                    type="button"
+                    className="wb-btn"
+                    disabled={queueLocked}
+                    onClick={() => setConfirmingForce(true)}
+                  >
                     Commit anyway
                   </button>
                 </div>
@@ -390,7 +409,7 @@ export default function AgentView({
                     <button
                       type="button"
                       className="wb-btn wb-btn--primary"
-                      disabled={merging}
+                      disabled={merging || queueLocked}
                       onClick={() => void merge()}
                     >
                       {merging ? "Merging…" : "Confirm merge"}
@@ -412,6 +431,7 @@ export default function AgentView({
                     <button
                       type="button"
                       className="wb-btn"
+                      disabled={queueLocked}
                       onClick={() => {
                         setMergeOutcome(null);
                         setConfirmingMerge(true);
@@ -487,9 +507,18 @@ export default function AgentView({
               <option value="codex">{AGENT_LABELS.codex}</option>
             </select>
             <span className="composer__hint">
-              {handoff ? "Lore passes a context brief to the new agent." : "⌘Enter to send"}
+              {queueLocked
+                ? "Paused while the merge queue runs"
+                : handoff
+                  ? "Lore passes a context brief to the new agent."
+                  : "⌘Enter to send"}
             </span>
-            <button type="submit" className="wb-btn wb-btn--primary" disabled={continuing} title="⌘Enter">
+            <button
+              type="submit"
+              className="wb-btn wb-btn--primary"
+              disabled={continuing || queueLocked}
+              title="⌘Enter"
+            >
               {continuing ? "Sending…" : handoff ? `Hand off to ${AGENT_SHORT[nextAgent]}` : "Continue"}
             </button>
           </div>

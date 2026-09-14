@@ -43,6 +43,7 @@ import {
 } from "./state";
 import StatusBar from "./StatusBar";
 import { dirKey, useDirCache } from "./useDirCache";
+import { useMergeQueues } from "./useMergeQueue";
 import { useTasks } from "./useTasks";
 
 /** Lore's VS Code style workbench: explorer, agents, tabbed editors, and a bottom panel. */
@@ -51,6 +52,7 @@ export default function Workbench() {
   const dirs = useDirCache();
 
   const [workspace, setWorkspace] = useState<string | null>(null);
+  const mergeQueues = useMergeQueues(workspace, refresh);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [{ tabs, activeKey }, dispatch] = useReducer(tabsReducer, initialTabs);
   const [sidebarView, setSidebarView] = useState<SidebarView | null>("explorer");
@@ -254,12 +256,14 @@ export default function Workbench() {
         return <FileView root={tab.root} relPath={tab.relPath} />;
       case "diff":
         return <DiffView taskId={tab.taskId} title={taskTitle(tab.taskId)} />;
-      case "agent":
+      case "agent": {
+        const task = taskById.get(tab.taskId);
         return (
           <AgentView
             active={active}
             taskId={tab.taskId}
-            task={taskById.get(tab.taskId)}
+            task={task}
+            mergeQueueRunning={task ? mergeQueues.isRunning(task.repo_path) : false}
             onStop={handleStop}
             onDiscard={handleDiscard}
             onReveal={handleReveal}
@@ -270,6 +274,7 @@ export default function Workbench() {
             onSelectTask={selectTask}
           />
         );
+      }
     }
   };
 
@@ -282,6 +287,15 @@ export default function Workbench() {
       { id: "cmd:new-agent", group: "Command", label: "New Agent", run: newAgent },
       { id: "cmd:toggle-sidebar", group: "Command", label: "Toggle Sidebar", hint: "⌘B", run: toggleSidebar },
       { id: "cmd:toggle-panel", group: "Command", label: "Toggle Panel", hint: "⌘J", run: () => setPanelOpen((o) => !o) },
+      {
+        id: "cmd:merge-queue",
+        group: "Command",
+        label: "Merge Queue",
+        run: () => {
+          setPanelOpen(true);
+          setPanelTab("queue");
+        },
+      },
       { id: "cmd:close-tab", group: "Command", label: "Close Tab", hint: "⌘W", run: () => dispatch({ type: "closeActive" }) },
     ];
     if (!paletteOpen) return commands;
@@ -430,6 +444,8 @@ export default function Workbench() {
                 onClose={() => setPanelOpen(false)}
                 task={selectedTask}
                 repoPath={workspace}
+                tasks={tasks}
+                mergeQueues={mergeQueues}
                 onOpenChange={(task, rel) => openFile(task.worktree_path, rel)}
               />
             </>

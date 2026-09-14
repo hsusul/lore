@@ -4,14 +4,17 @@ import { formatRelative, formatTime } from "../../format";
 import type { TaskDto } from "../../ipc";
 import ActivityList from "./ActivityList";
 import { CloseIcon, FileIcon } from "./icons";
+import MergeQueueView from "./MergeQueueView";
+import type { MergeQueuesHandle } from "./useMergeQueue";
 import { useActivity, useDecisions } from "./useTasks";
 
-export type PanelTab = "output" | "changes" | "history";
+export type PanelTab = "output" | "changes" | "history" | "queue";
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: "output", label: "Agent Output" },
   { id: "changes", label: "Changes" },
   { id: "history", label: "History" },
+  { id: "queue", label: "Merge Queue" },
 ];
 
 type Props = {
@@ -21,11 +24,14 @@ type Props = {
   onClose: () => void;
   task: TaskDto | undefined;
   onOpenChange: (task: TaskDto, relPath: string) => void;
-  /** Repository whose shared decision log the History tab shows. */
+  /** Repository whose shared decision log and merge queue the panel shows. */
   repoPath: string | null;
+  /** Every task; the merge queue offers the repository's ready ones. */
+  tasks: TaskDto[] | null;
+  mergeQueues: MergeQueuesHandle;
 };
 
-/** Bottom panel: the selected agent's output, its changed files, and the decision log. */
+/** Bottom panel: the selected agent's output, its changed files, the decision log, and the merge queue. */
 export default function BottomPanel({
   height,
   tab,
@@ -34,9 +40,12 @@ export default function BottomPanel({
   task,
   onOpenChange,
   repoPath,
+  tasks,
+  mergeQueues,
 }: Props) {
   const activity = useActivity(tab === "output" && task ? task.id : null, task?.state === "running");
   const decisions = useDecisions(repoPath, tab === "history");
+  const queueRunning = repoPath !== null && mergeQueues.isRunning(repoPath);
 
   function onKeyDown(event: KeyboardEvent) {
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
@@ -67,10 +76,21 @@ export default function BottomPanel({
               {t.id === "changes" && task && task.changed_files.length > 0 && (
                 <span className="panel__count">{task.changed_files_total ?? task.changed_files.length}</span>
               )}
+              {t.id === "queue" && queueRunning && (
+                <>
+                  <span className="pulse-dot" aria-hidden="true" />
+                  <span className="visually-hidden"> (running)</span>
+                </>
+              )}
             </button>
           ))}
         </div>
-        {task && <span className="panel__context">{task.title}</span>}
+        {tab === "queue" ? (
+          // The queue is about the repository, not the selected agent.
+          <span className="panel__context" />
+        ) : (
+          task && <span className="panel__context">{task.title}</span>
+        )}
         <button
           type="button"
           className="wb-icon-btn"
@@ -89,6 +109,15 @@ export default function BottomPanel({
       >
         {tab === "history" ? (
           <DecisionLog items={decisions.items} error={decisions.error} />
+        ) : tab === "queue" ? (
+          <MergeQueueView
+            repoPath={repoPath}
+            tasks={tasks}
+            entry={repoPath ? (mergeQueues.entries[repoPath] ?? null) : null}
+            onStart={mergeQueues.start}
+            onCancel={mergeQueues.cancel}
+            onDismiss={mergeQueues.dismiss}
+          />
         ) : !task ? (
           <p className="wb-note wb-view-pad">Select an agent to see its output.</p>
         ) : tab === "output" ? (

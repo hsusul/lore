@@ -17,11 +17,13 @@ vi.mock("../../ipc", () => ({
   taskLoadWarning: vi.fn(() => Promise.resolve(null)),
   taskActivity: vi.fn(() => Promise.resolve([])),
   taskDiff: vi.fn(() => Promise.resolve({ text: "", truncated: false })),
+  getMergeQueue: vi.fn(() => Promise.resolve(null)),
 }));
 
 import {
   chooseRepositoryDirectory,
   discardTask,
+  getMergeQueue,
   listTasks,
   listWorkspaceDir,
   openWorkspace,
@@ -49,6 +51,7 @@ beforeEach(() => {
   window.localStorage.setItem(STORAGE_KEYS.workspace, "/work/repo");
   vi.mocked(openWorkspace).mockImplementation((p) => Promise.resolve(p));
   vi.mocked(listTasks).mockResolvedValue([]);
+  vi.mocked(getMergeQueue).mockResolvedValue(null);
   vi.mocked(listWorkspaceDir).mockImplementation((_root, rel) => Promise.resolve(TREE[rel] ?? []));
   vi.mocked(readWorkspaceFile).mockImplementation((_root, rel) =>
     Promise.resolve({ rel_path: rel, text: `// ${rel}\nconst x = 1;\n`, size: 20, truncated: false }),
@@ -221,6 +224,27 @@ describe("Workbench", () => {
     expect(screen.getByRole("button", { name: /2 agents running/ })).toBeTruthy();
     expect(within(screen.getByLabelText("Explorer scope")).getByText("Worktree: Other repo")).toBeTruthy();
     expect(window.localStorage.getItem(STORAGE_KEYS.allRepos)).toBe("true");
+  });
+
+  it("picks up a merge queue already running in the opened repository and pauses its agents' git actions", async () => {
+    vi.mocked(listTasks).mockResolvedValue([task({ state: "finished", repo_path: "/work/repo" })]);
+    vi.mocked(getMergeQueue).mockResolvedValue({
+      repo_path: "/work/repo",
+      running: true,
+      test_command: null,
+      items: [{ task_id: "t1", title: "Fix parser", status: "merging", detail: null }],
+    });
+    render(<Workbench />);
+    fireEvent.click(screen.getByRole("button", { name: "Agents" }));
+    fireEvent.click(within(await screen.findByRole("listitem", { name: "Fix parser" })).getByText("Fix parser"));
+
+    expect(
+      await screen.findByText("Commit, merge, and continue are paused while this repository’s merge queue runs."),
+    ).toBeTruthy();
+    expect(getMergeQueue).toHaveBeenCalledWith("/work/repo");
+    expect(screen.getByRole("button", { name: /Merge into/ }).matches(":disabled")).toBe(true);
+    const panelTabs = within(screen.getByRole("tablist", { name: "Panel views" }));
+    expect(panelTabs.getByRole("tab", { name: /Merge Queue/ }).textContent).toBe("Merge Queue (running)");
   });
 
   it("opens a folder through the native picker and resolves the repo top-level", async () => {

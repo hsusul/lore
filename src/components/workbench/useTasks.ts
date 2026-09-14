@@ -82,6 +82,7 @@ function sameTask(a: TaskDto, b: TaskDto): boolean {
     a.uncommitted_count === b.uncommitted_count &&
     a.attention === b.attention &&
     a.merged_into === b.merged_into &&
+    a.repo_branch === b.repo_branch &&
     sameOverlaps(a.overlaps, b.overlaps) &&
     a.changed_files.length === b.changed_files.length &&
     a.changed_files.every((file, i) => file === b.changed_files[i])

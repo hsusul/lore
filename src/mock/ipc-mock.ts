@@ -10,7 +10,9 @@ import type {
   DecisionDto,
   DirEntryDto,
   FileContentDto,
+  MergeQueueDto,
   MergeResultDto,
+  RepoSettingsDto,
   TaskDiffDto,
   TaskDto,
   UnlistenFn,
@@ -277,6 +279,7 @@ function task(partial: Partial<TaskDto> & Pick<TaskDto, "id" | "title" | "agent"
     runs: 1,
     uncommitted_count: 0,
     auto_handoff: true,
+    repo_branch: USER_BRANCH,
     ...partial,
   };
 }
@@ -351,6 +354,52 @@ index 1c2d3e4..5f6a7b8 100644
     startedAt: START,
     emitted: 0,
     diff: CODEX_DIFF,
+  },
+  {
+    // Committed and mergeable, but its tests fail in the merge queue.
+    dto: task({
+      id: "checkout-retry",
+      title: "Retry pricing requests on 503",
+      prompt: "When the pricing service returns 503, retry twice with backoff before showing an error.",
+      agent: "claude_code",
+      state: "finished",
+      created_at_ms: START - 38 * 60_000,
+      exit_code: 0,
+      commits_ahead: 1,
+      changed_files: ["src/checkout/pricingClient.ts", "src/checkout/pricingClient.test.ts"],
+      last_activity: "Added retries with backoff and a test for the 503 path.",
+      claims: ["src/checkout/pricingClient.ts"],
+    }),
+    activity: [
+      { kind: "tool", text: "Read src/checkout/pricingClient.ts" },
+      { kind: "tool", text: "Edit src/checkout/pricingClient.ts" },
+      { kind: "tool", text: "Edit src/checkout/pricingClient.test.ts" },
+      { kind: "tool", text: "Bash git commit -am \"checkout: retry pricing on 503\"" },
+      { kind: "result", text: "Added retries with backoff and a test for the 503 path. 1 commit on lore/checkout-retry." },
+    ],
+    script: [],
+    startedAt: START,
+    emitted: 0,
+    diff: `diff --git a/src/checkout/pricingClient.ts b/src/checkout/pricingClient.ts
+index 5d1e0a2..8c4b7f3 100644
+--- a/src/checkout/pricingClient.ts
++++ b/src/checkout/pricingClient.ts
+@@ -1,8 +1,17 @@
++const MAX_RETRIES = 2;
++
+ export async function quote(cart: CartLine[]): Promise<Quote> {
+-  const res = await fetch("/api/quote", { method: "POST", body: JSON.stringify(cart) });
+-  if (!res.ok) throw new Error("pricing unavailable");
+-  return res.json();
++  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
++    const res = await fetch("/api/quote", { method: "POST", body: JSON.stringify(cart) });
++    if (res.ok) return res.json();
++    if (res.status !== 503) break;
++    await sleep(200 * 2 ** attempt);
++  }
++  throw new Error("pricing unavailable");
+ }
+`,
   },
   {
     dto: task({
@@ -573,6 +622,125 @@ function find(id: string): MockTask {
   return t;
 }
 
+// ── Merge queue ──────────────────────────────────────────────────────────
+
+const MAX_TEST_COMMAND = 2_000;
+const QUEUE_STEP_MS = 1200;
+/** Ticks a test command "runs" before it passes or fails. */
+const TEST_TICKS = 3;
+/** The sample task whose tests fail in the queue, so the failure path is visible. */
+const FAILING_TASK = "checkout-retry";
+const FAILING_OUTPUT = `exit 1; last output:
+ RUN  v2.1.8 ${WORKTREES}/checkout-retry
+
+ ✓ src/lib/money.test.ts (2 tests) 11ms
+ ❯ src/checkout/pricingClient.test.ts (4 tests | 1 failed) 38ms
+   × pricingClient > retries a 503 twice before giving up 21ms
+     → expected "spy" to be called 3 times, but got 2 times
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/checkout/pricingClient.test.ts > pricingClient > retries a 503 twice before giving up
+AssertionError: expected "spy" to be called 3 times, but got 2 times
+ ❯ src/checkout/pricingClient.test.ts:41:23
+     39|     await expect(quote(cart)).rejects.toThrow("pricing unavailable");
+     40|
+     41|     expect(fetchMock).toHaveBeenCalledTimes(3);
+       |                       ^
+     42|   });
+     43| });
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 5 passed (6)
+   Start at  14:02:17
+   Duration  612ms (transform 48ms, setup 0ms, collect 97ms, tests 49ms)`;
+
+/** Per-repository test commands; the sample repository starts with one set. */
+const testCommands = new Map<string, string | null>([[WORKSPACE, "npm test"]]);
+
+type MockQueue = { dto: MergeQueueDto; cancel: boolean; ticks: number };
+const queues = new Map<string, MockQueue>();
+
+const FINAL_STATUSES = new Set(["merged", "failed", "skipped", "cancelled"]);
+
+function copyQueue(dto: MergeQueueDto): MergeQueueDto {
+  return { ...dto, items: dto.items.map((item) => ({ ...item })) };
+}
+
+/**
+ * Advance a queue by one step, the way the backend runner does: each task goes
+ * pending → updating → testing (only with a test command) → merging → merged.
+ * The first failure stops the queue and skips the rest; a cancel stops the
+ * current step and cancels the rest.
+ */
+function stepQueue(q: MockQueue) {
+  const items = q.dto.items;
+  const index = items.findIndex((item) => !FINAL_STATUSES.has(item.status));
+  const finish = () => {
+    q.dto.running = false;
+    emit(items.map((item) => item.task_id));
+  };
+  if (index < 0) return finish();
+  const item = items[index];
+  const t = tasks.find((x) => x.dto.id === item.task_id);
+
+  if (q.cancel && item.status !== "merging") {
+    for (const later of items.slice(index)) {
+      const inTest = later === item && item.status === "testing";
+      later.detail = inTest ? "tests failed: cancelled" : null;
+      later.status = "cancelled";
+    }
+    return finish();
+  }
+
+  const fail = (detail: string) => {
+    item.status = "failed";
+    item.detail = detail;
+    if (t) record(t.dto, "queue_failed", detail.split("\n")[0]);
+    for (const later of items.slice(index + 1)) {
+      later.status = "skipped";
+      later.detail = "an earlier task failed";
+    }
+    finish();
+  };
+
+  switch (item.status) {
+    case "pending":
+      if (!t) return fail("no such task");
+      if (t.dto.state === "running") return fail("the agent is still running");
+      if (t.dto.uncommitted_count) return fail("the task has uncommitted changes; commit them first");
+      if (t.dto.commits_ahead === 0) return fail("the task has no commits to merge");
+      item.status = "updating";
+      break;
+    case "updating":
+      if (q.dto.test_command) {
+        item.status = "testing";
+        item.detail = q.dto.test_command;
+        q.ticks = 0;
+      } else {
+        item.status = "merging";
+      }
+      break;
+    case "testing":
+      q.ticks += 1;
+      if (q.ticks < TEST_TICKS) break;
+      if (item.task_id === FAILING_TASK) return fail(`tests failed: ${FAILING_OUTPUT}`);
+      item.status = "merging";
+      item.detail = null;
+      break;
+    case "merging": {
+      if (!t) return fail("no such task");
+      const n = t.dto.commits_ahead;
+      t.dto = { ...t.dto, merged_into: USER_BRANCH };
+      item.status = "merged";
+      item.detail = `Merged ${t.dto.branch} into ${USER_BRANCH} (${n} ${n === 1 ? "commit" : "commits"}).`;
+      record(t.dto, "merged", `Merged ${t.dto.branch} into ${USER_BRANCH}.`);
+      break;
+    }
+  }
+  setTimeout(() => stepQueue(q), QUEUE_STEP_MS);
+}
+
 // ── Commands (same names and signatures as src/ipc.ts) ───────────────────
 
 export function chooseRepositoryDirectory(): Promise<string | null> {
@@ -718,6 +886,9 @@ export function commitTask(id: string, message: string, force?: boolean): Promis
 
 export function mergeTask(id: string): Promise<MergeResultDto> {
   const t = find(id);
+  if (queues.get(t.dto.repo_path)?.dto.running) {
+    return Promise.reject(new Error("another merge into this repository is in progress"));
+  }
   if (t.dto.state === "running") return Promise.reject(new Error("task is still running"));
   if (t.dto.uncommitted_count) return Promise.reject(new Error("task has uncommitted changes; commit them first"));
   if (t.dto.commits_ahead === 0) return Promise.reject(new Error("task has no commits to merge"));
@@ -793,4 +964,54 @@ export function taskActivity(id: string): Promise<ActivityDto[]> {
   const t = find(id);
   advance(t);
   return delay([...t.activity]);
+}
+
+export function getRepoSettings(repoPath: string): Promise<RepoSettingsDto> {
+  return delay({ repo_path: repoPath, test_command: testCommands.get(repoPath) ?? null });
+}
+
+export function setRepoTestCommand(repoPath: string, command: string | null): Promise<RepoSettingsDto> {
+  const trimmed = command?.trim() || null;
+  if (trimmed && trimmed.length > MAX_TEST_COMMAND) {
+    return Promise.reject(new Error(`test command must be under ${MAX_TEST_COMMAND} characters`));
+  }
+  testCommands.set(repoPath, trimmed);
+  return delay({ repo_path: repoPath, test_command: trimmed }, 150);
+}
+
+export function startMergeQueue(repoPath: string, taskIds: string[]): Promise<MergeQueueDto> {
+  if (taskIds.length === 0) return Promise.reject(new Error("choose at least one task to merge"));
+  const items: MergeQueueDto["items"] = [];
+  for (const id of new Set(taskIds)) {
+    const t = tasks.find((x) => x.dto.id === id);
+    if (!t) return Promise.reject(new Error(`No task with id ${id}`));
+    if (t.dto.repo_path !== repoPath) {
+      return Promise.reject(new Error(`"${t.dto.title}" belongs to a different repository`));
+    }
+    if (t.dto.merged_into) return Promise.reject(new Error(`"${t.dto.title}" is already merged`));
+    if (t.dto.state === "running") return Promise.reject(new Error("the agent is still running"));
+    items.push({ task_id: id, title: t.dto.title, status: "pending", detail: null });
+  }
+  if (queues.get(repoPath)?.dto.running) {
+    return Promise.reject(new Error("a merge queue is already running for this repository"));
+  }
+  const q: MockQueue = {
+    dto: { repo_path: repoPath, running: true, test_command: testCommands.get(repoPath) ?? null, items },
+    cancel: false,
+    ticks: 0,
+  };
+  queues.set(repoPath, q);
+  setTimeout(() => stepQueue(q), QUEUE_STEP_MS);
+  return delay(copyQueue(q.dto), 150);
+}
+
+export function getMergeQueue(repoPath: string): Promise<MergeQueueDto | null> {
+  const q = queues.get(repoPath);
+  return delay(q ? copyQueue(q.dto) : null, 30);
+}
+
+export function cancelMergeQueue(repoPath: string): Promise<void> {
+  const q = queues.get(repoPath);
+  if (q?.dto.running) q.cancel = true;
+  return delay(undefined, 30);
 }
