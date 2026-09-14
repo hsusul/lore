@@ -153,6 +153,7 @@ function RepoMergeQueue({ repoPath, tasks, entry, onStart, onCancel, onDismiss }
 
   return (
     <div className="merge-queue">
+      <div className="merge-queue__main">
       <section className="merge-queue__setup" aria-label="Set up merge queue">
         <label className="wb-field merge-queue__command">
           <span>Test command</span>
@@ -266,89 +267,85 @@ function RepoMergeQueue({ repoPath, tasks, entry, onStart, onCancel, onDismiss }
             changes, or no commits.
           </p>
         )}
-
-        {confirming ? (
-          <div className="merge-queue__confirm" role="group" aria-label="Confirm merge queue">
-            <p>
-              Merge {count} {count === 1 ? "task" : "tasks"} into{" "}
-              {targetBranch ? <span className="mono">{targetBranch}</span> : "your checked-out branch"}, in this
-              order?{" "}
-              {command ? (
-                <>
-                  Tests run first: <span className="mono">{command}</span>
-                </>
-              ) : (
-                "No test command is set, so tasks merge without testing."
-              )}
-            </p>
-            <div className="merge-queue__actions">
-              <button type="button" className="wb-btn wb-btn--primary" disabled={starting} onClick={() => void start()}>
-                {starting ? "Starting…" : "Confirm merge"}
-              </button>
-              <button type="button" className="wb-btn" disabled={starting} onClick={() => setConfirming(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="merge-queue__actions">
-            <button
-              type="button"
-              className="wb-btn wb-btn--primary"
-              // Not disabled while saving: blurring the field starts a save between
-              // mousedown and click, and openConfirm waits for it anyway.
-              disabled={count === 0 || running}
-              onClick={() => void openConfirm()}
-            >
-              Merge {count} in order
-            </button>
-            {running && <span className="merge-queue__hint">A queue is running for this repository.</span>}
-          </div>
-        )}
-        {startError && (
-          <p className="wb-note wb-note--error" role="alert">
-            {startError}
-          </p>
-        )}
       </section>
 
-      {entry && (
-        <QueueProgress
-          entry={entry}
-          onCancel={() => void onCancel(repoPath)}
-          onDismiss={() => onDismiss(repoPath)}
-        />
-      )}
+      {entry && <QueueProgress entry={entry} />}
+      </div>
+
+        <div className="merge-queue__dock">
+          {entry && (
+            <div className="merge-queue__runhead">
+              <p className="merge-queue__summary" role="status">
+                {summarize(entry.queue.items, entry.queue.running)}
+              </p>
+              {entry.queue.running ? (
+                <button
+                  type="button"
+                  className="wb-btn wb-btn--small"
+                  disabled={entry.cancelling}
+                  onClick={() => void onCancel(repoPath)}
+                >
+                  {entry.cancelling ? "Cancelling…" : "Cancel queue"}
+                </button>
+              ) : (
+                <button type="button" className="wb-btn wb-btn--small" onClick={() => onDismiss(repoPath)}>
+                  Dismiss
+                </button>
+              )}
+            </div>
+          )}
+          {confirming ? (
+            <div className="merge-queue__confirm" role="group" aria-label="Confirm merge queue">
+              <p>
+                Merge {count} {count === 1 ? "task" : "tasks"} into{" "}
+                {targetBranch ? <span className="mono">{targetBranch}</span> : "your checked-out branch"}, in this
+                order?{" "}
+                {command ? (
+                  <>
+                    Tests run first: <span className="mono">{command}</span>
+                  </>
+                ) : (
+                  "No test command is set, so tasks merge without testing."
+                )}
+              </p>
+              <div className="merge-queue__actions">
+                <button type="button" className="wb-btn wb-btn--primary" disabled={starting} onClick={() => void start()}>
+                  {starting ? "Starting…" : "Confirm merge"}
+                </button>
+                <button type="button" className="wb-btn" disabled={starting} onClick={() => setConfirming(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="merge-queue__actions">
+              <button
+                type="button"
+                className="wb-btn wb-btn--primary"
+                // Not disabled while saving: blurring the field starts a save between
+                // mousedown and click, and openConfirm waits for it anyway.
+                disabled={count === 0 || running}
+                onClick={() => void openConfirm()}
+              >
+                Merge {count} in order
+              </button>
+              {running && <span className="merge-queue__hint">A queue is running for this repository.</span>}
+            </div>
+          )}
+          {startError && (
+            <p className="wb-note wb-note--error" role="alert">
+              {startError}
+            </p>
+          )}
+        </div>
     </div>
   );
 }
 
-function QueueProgress({
-  entry,
-  onCancel,
-  onDismiss,
-}: {
-  entry: MergeQueueEntry;
-  onCancel: () => void;
-  onDismiss: () => void;
-}) {
-  const { queue, cancelling, error } = entry;
+function QueueProgress({ entry }: { entry: MergeQueueEntry }) {
+  const { queue, error } = entry;
   return (
     <section className="merge-queue__run" aria-label="Merge queue progress">
-      <div className="merge-queue__runhead">
-        <p className="merge-queue__summary" role="status">
-          {summarize(queue.items, queue.running)}
-        </p>
-        {queue.running ? (
-          <button type="button" className="wb-btn wb-btn--small" disabled={cancelling} onClick={onCancel}>
-            {cancelling ? "Cancelling…" : "Cancel queue"}
-          </button>
-        ) : (
-          <button type="button" className="wb-btn wb-btn--small" onClick={onDismiss}>
-            Dismiss
-          </button>
-        )}
-      </div>
       <p className="merge-queue__hint">
         {queue.test_command ? (
           <>

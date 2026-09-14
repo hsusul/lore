@@ -533,24 +533,25 @@ kbd {
   font-size: 10px;
 }
 
-.wb-titlebar__error {
+.wb-banner {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1 1 8rem;
-  overflow: hidden;
+  gap: 12px;
+  flex: none;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--wb-border);
+  background: var(--wb-danger-bg);
   color: var(--wb-danger);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
-.wb-titlebar__error-text {
+.wb-banner__text {
+  flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.wb-titlebar__error-dismiss {
+.wb-banner__dismiss {
   flex: none;
   margin: 0;
   padding: 0;
@@ -631,8 +632,8 @@ kbd {
 }
 
 .activitybar__btn .icon {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
 }
 
 .activitybar__btn:hover {
@@ -1070,23 +1071,14 @@ textarea.new-agent__claims {
 }
 
 .model-menu {
-  position: absolute;
-  left: 0;
-  z-index: 20;
+  position: fixed;
+  z-index: 40;
   min-width: 240px;
   padding: 6px;
   border: 1px solid var(--wb-border-strong);
   border-radius: var(--r-xl);
   background: #1c1c1c;
   box-shadow: var(--wb-shadow);
-}
-
-.model-picker--down .model-menu {
-  top: calc(100% + 6px);
-}
-
-.model-picker--up .model-menu {
-  bottom: calc(100% + 6px);
 }
 
 .model-menu__group + .model-menu__group {
@@ -2524,6 +2516,10 @@ input.git-actions__input {
   overflow: auto;
 }
 
+.panel__body:has(.merge-queue) {
+  overflow: hidden;
+}
+
 .changes {
   margin: 0;
   padding: 4px 6px 8px;
@@ -2641,13 +2637,24 @@ input.git-actions__input {
 
 /* ── Merge queue (panel) ───────────────────────────────────────────────── */
 
-/* Setup on the left, progress on the right; stacks when the panel is narrow. */
+/* Setup and progress scroll; Confirm / Cancel stay pinned to the panel fold. */
 .merge-queue {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.merge-queue__main {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 8px 24px;
   align-items: start;
-  padding: 8px 16px 12px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 16px 8px;
 }
 
 .merge-queue__setup,
@@ -2656,6 +2663,16 @@ input.git-actions__input {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+}
+
+.merge-queue__dock {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 16px 10px;
+  border-top: 1px solid var(--wb-border);
+  background: var(--wb-panel-bg);
 }
 
 .merge-queue .wb-subhead {
@@ -2796,7 +2813,6 @@ input.git-actions__input {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
 }
 
 .merge-queue__summary {

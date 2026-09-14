@@ -107,6 +107,7 @@ describe("MergeQueueView setup", () => {
     const { view } = renderQueue([task({ state: "running" })]);
     expect(await screen.findByText(/No tasks are ready/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Merge 0 in order" }).matches(":disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Merge 0 in order" }).closest(".merge-queue__dock")).toBeTruthy();
     view.unmount();
     render(<MergeQueueView repoPath={null} tasks={[]} entry={null} onStart={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />);
     expect(screen.getByText("Open a folder to merge its tasks in order.")).toBeTruthy();

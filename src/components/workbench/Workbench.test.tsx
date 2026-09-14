@@ -268,6 +268,7 @@ describe("Workbench", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Open Folder…" })[0]);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("That folder isn't inside a git repository");
+    expect(alert.className).toContain("wb-banner");
     fireEvent.click(within(alert).getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByRole("alert")).toBeNull();
   });

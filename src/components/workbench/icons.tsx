@@ -1,5 +1,6 @@
 // Line icons on a 16px grid (1.5px stroke, round caps), inline so there is no
-// dependency. Drawn for Lore: soft corners, few strokes, ring motifs.
+// dependency. Activity-bar glyphs are filled Codicon silhouettes so the strip
+// matches Cursor/VS Code.
 
 import type { ReactNode } from "react";
 
@@ -23,21 +24,46 @@ function Icon({ children, size = 16 }: { children: ReactNode; size?: number }) {
   );
 }
 
-/** Explorer: a folder with a small tree branch. */
+/** Filled glyphs for the activity bar (VS Code Codicons, MIT). */
+function FilledIcon({
+  children,
+  size = 24,
+  viewBox = "0 0 16 16",
+}: {
+  children: ReactNode;
+  size?: number;
+  viewBox?: string;
+}) {
+  return (
+    <svg
+      className="icon"
+      width={size}
+      height={size}
+      viewBox={viewBox}
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {children}
+    </svg>
+  );
+}
+
+/** Explorer: two overlapping documents. */
 export const FilesIcon = ({ size = 24 }: { size?: number }) => (
-  <Icon size={size}>
-    <path d="M2 5.25c0-.97.78-1.75 1.75-1.75h2.1l1.4 1.5h5c.97 0 1.75.78 1.75 1.75v4.5c0 .97-.78 1.75-1.75 1.75H3.75C2.78 13 2 12.22 2 11.25Z" />
-    <path d="M6 8.75h4" />
-  </Icon>
+  <FilledIcon size={size} viewBox="0 0 24 24">
+    <path d="M17.5 0h-9L7 1.5V6H2.5L1 7.5v15.07L2.5 24h12.07L16 22.57V18h4.7l1.3-1.43V4.5L17.5 0zm0 2.12l2.38 2.38H17.5V2.12zm-3 20.38h-12v-15H7v9.07L8.5 18h6v4.5zm6-6h-12v-15H16V6h4.5v10.5z" />
+  </FilledIcon>
 );
 
-/** Agents: a node with an orbit, echoing the Lore mark. */
+/** Agents: two conversation bubbles. */
 export const AgentsIcon = ({ size = 24 }: { size?: number }) => (
-  <Icon size={size}>
-    <circle cx="8" cy="8" r="2" />
-    <path d="M13.4 6.2A5.75 5.75 0 1 0 12 12.1" />
-    <circle cx="13.25" cy="9.25" r=".6" fill="currentColor" stroke="none" />
-  </Icon>
+  <FilledIcon size={size}>
+    <path
+      fillRule="evenodd"
+      d="M4 11.29l1-1v1.42l-1.15 1.14L3 12.5V10H1.5L1 9.5v-8l.5-.5h12l.5.5V6h-1V2H2v7h1.5l.5.5v1.79zM10.29 13l1.86 1.85.85-.35V13h1.5l.5-.5v-5l-.5-.5h-8l-.5.5v5l.5.5h3.79zm.21-1H7V8h7v4h-1.5l-.5.5v.79l-1.15-1.14-.35-.15z"
+    />
+  </FilledIcon>
 );
 
 export const RefreshIcon = () => (

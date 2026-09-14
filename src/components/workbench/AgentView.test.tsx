@@ -99,6 +99,8 @@ describe("AgentView", () => {
     await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(""));
 
     fireEvent.click(screen.getByLabelText("Next agent"));
+    const menu = screen.getByRole("menu");
+    expect(menu.parentElement).toBe(document.body);
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Codex" }));
     expect(screen.getByRole("button", { name: "Hand off to Codex" })).toBeTruthy();
     fireEvent.change(input, { target: { value: "take over" } });

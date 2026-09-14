@@ -61,7 +61,7 @@ export default function Workbench() {
   );
   const [panelOpen, setPanelOpen] = useState(() => readStored(STORAGE_KEYS.panelOpen) !== "false");
   const [panelHeight, setPanelHeight] = useState(() =>
-    readStoredNumber(STORAGE_KEYS.panelHeight, 220, PANEL_MIN, PANEL_MAX),
+    readStoredNumber(STORAGE_KEYS.panelHeight, 280, PANEL_MIN, PANEL_MAX),
   );
   const [panelTab, setPanelTab] = useState<PanelTab>("output");
   const [allRepos, setAllRepos] = useState(() => readStored(STORAGE_KEYS.allRepos) === "true");
@@ -350,18 +350,6 @@ export default function Workbench() {
           <h1 className="wb-titlebar__workspace visually-hidden" title={workspace ?? undefined}>
             {workspace ? baseName(workspace) : "No folder open"}
           </h1>
-          {workspaceError && (
-            <span className="wb-titlebar__error" role="alert">
-              <span className="wb-titlebar__error-text">{workspaceError}</span>
-              <button
-                type="button"
-                className="wb-titlebar__error-dismiss"
-                onClick={() => setWorkspaceError(null)}
-              >
-                Dismiss
-              </button>
-            </span>
-          )}
         </div>
         <button
           type="button"
@@ -402,6 +390,14 @@ export default function Workbench() {
           </button>
         </div>
       </header>
+      {workspaceError && (
+        <div className="wb-banner" role="alert">
+          <span className="wb-banner__text">{workspaceError}</span>
+          <button type="button" className="wb-banner__dismiss" onClick={() => setWorkspaceError(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div className="wb-main">
         <ActivityBar view={sidebarView} runningCount={runningCount} onSelect={showView} />
