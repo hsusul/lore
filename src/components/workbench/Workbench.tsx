@@ -248,7 +248,7 @@ export default function Workbench() {
 
   const taskTitle = useCallback((id: string) => taskById.get(id)?.title ?? "Discarded agent", [taskById]);
 
-  const renderTab = (tab: Tab) => {
+  const renderTab = (tab: Tab, active: boolean) => {
     switch (tab.kind) {
       case "file":
         return <FileView root={tab.root} relPath={tab.relPath} />;
@@ -257,6 +257,7 @@ export default function Workbench() {
       case "agent":
         return (
           <AgentView
+            active={active}
             taskId={tab.taskId}
             task={taskById.get(tab.taskId)}
             onStop={handleStop}

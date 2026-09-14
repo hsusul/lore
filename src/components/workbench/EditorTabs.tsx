@@ -9,7 +9,7 @@ type Props = {
   taskTitle: (taskId: string) => string;
   onActivate: (key: string) => void;
   onClose: (key: string) => void;
-  renderTab: (tab: Tab) => ReactNode;
+  renderTab: (tab: Tab, active: boolean) => ReactNode;
   welcome: ReactNode;
 };
 
@@ -114,7 +114,7 @@ export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onC
           className="editor__panel"
           hidden={tab.key !== activeKey}
         >
-          {renderTab(tab)}
+          {renderTab(tab, tab.key === activeKey)}
         </div>
       ))}
     </div>

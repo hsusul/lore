@@ -321,7 +321,12 @@ pub fn merge_branch(
             let conflicts: Vec<String> = run(repo, &["diff", "--name-only", "--diff-filter=U"])
                 .map(|s| s.lines().map(str::to_string).collect())
                 .unwrap_or_default();
-            if run(repo, &["merge", "--abort"]).is_err() {
+            let head_now = run(repo, &["rev-parse", "HEAD"]).ok();
+            // Only undo what this merge did: if HEAD moved, something else
+            // committed and resetting would discard it.
+            if head_now.as_deref() == Some(head_before.as_str())
+                && run(repo, &["merge", "--abort"]).is_err()
+            {
                 let _ = run(repo, &["reset", "--merge", &head_before]);
             }
             let restored = run(repo, &["rev-parse", "HEAD"]).ok().as_deref()

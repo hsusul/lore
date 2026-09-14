@@ -150,8 +150,9 @@ pub fn attention(log: &Path) -> Option<String> {
         .filter(|e| matches!(e.kind, ActivityKind::Error | ActivityKind::Output))
         .find_map(|e| {
             let lower = e.text.to_lowercase();
+            // Only quota exhaustion, not transient 429 "rate limit" retries.
             if lower.contains("usage limit")
-                || lower.contains("rate limit")
+                || lower.contains("hit your limit")
                 || lower.contains("quota exceeded")
             {
                 Some(

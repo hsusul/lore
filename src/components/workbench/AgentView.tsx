@@ -17,6 +17,8 @@ import { AGENT_LABELS, errorText, isOwnershipError } from "./state";
 import { useActivity } from "./useTasks";
 
 type Props = {
+  /** Only the visible tab polls for activity. */
+  active?: boolean;
   taskId: string;
   task: TaskDto | undefined;
   onStop: (id: string) => Promise<void>;
@@ -37,6 +39,7 @@ type MergeOutcome = { kind: "result"; result: MergeResultDto } | { kind: "error"
 
 /** Editor tab for one agent: status, git actions, activity timeline, and a composer to continue. */
 export default function AgentView({
+  active = true,
   taskId,
   task,
   onStop,
@@ -48,7 +51,7 @@ export default function AgentView({
   onMerge,
   onSelectTask,
 }: Props) {
-  const activity = useActivity(task ? taskId : null, task?.state === "running");
+  const activity = useActivity(task && active ? taskId : null, task?.state === "running");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

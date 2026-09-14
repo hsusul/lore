@@ -865,3 +865,145 @@ echo '{"type":"result","is_error":false,"result":"picked it up"}'"#,
         .iter()
         .any(|d| d.kind == "auto_handoff"));
 }
+
+#[test]
+fn stop_kills_the_agent_even_when_saving_fails() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(
+        tmp.path(),
+        "echo $$ > \"$PWD/../../agent.pid\"\nsleep 1000 &\nwait",
+    );
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let id = orch
+        .create_task(&request(&repo, "unsavable"))
+        .unwrap()
+        .id()
+        .to_string();
+    assert!(wait_until(|| root.join("agent.pid").exists()));
+    let pid = fs::read_to_string(root.join("agent.pid"))
+        .unwrap()
+        .trim()
+        .to_string();
+
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o500)).unwrap();
+    let result = orch.stop_task(&id);
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err(), "save failure is reported");
+    assert!(
+        wait_until(|| !pid_alive(&pid)),
+        "agent survived a failed save"
+    );
+}
+
+#[test]
+fn auto_handoff_does_not_bounce_when_both_agents_are_limited() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(
+        tmp.path(),
+        r#"echo '{"type":"error","message":"You'"'"'ve hit your usage limit."}'
+exit 1"#,
+    );
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let mut req = request(&repo, "both limited");
+    req.auto_handoff = Some(true);
+    let id = orch.create_task(&req).unwrap().id().to_string();
+    wait_for(&orch, &id, TaskState::Failed);
+    assert_eq!(orch.run_auto_handoffs().len(), 1);
+    wait_for(&orch, &id, TaskState::Failed);
+    assert!(
+        orch.run_auto_handoffs().is_empty(),
+        "second automatic handoff must not happen"
+    );
+    assert_eq!(orch.task(&id).unwrap().runs, Some(2));
+
+    // A transient rate-limit message is not a usage limit.
+    let flaky = fake_agent(
+        tmp.path(),
+        "echo 'API error 429: rate limit, retrying'\necho '{\"type\":\"result\",\"is_error\":false,\"result\":\"done\"}'",
+    );
+    let orch2 = Orchestrator::open(tmp.path().join("orch2"), programs(&flaky)).unwrap();
+    let mut req2 = request(&repo, "flaky");
+    req2.auto_handoff = Some(true);
+    let id2 = orch2.create_task(&req2).unwrap().id().to_string();
+    wait_for(&orch2, &id2, TaskState::Finished);
+    assert!(orch2.task(&id2).unwrap().attention.is_none());
+    assert!(orch2.run_auto_handoffs().is_empty());
+}
+
+#[test]
+fn concurrent_merges_into_one_repository_are_serialized() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo \"$$\" > \"f-$$.txt\"");
+    let orch =
+        std::sync::Arc::new(Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap());
+    let ids: Vec<String> = (0..4)
+        .map(|i| {
+            orch.create_task(&request(&repo, &format!("m{i}")))
+                .unwrap()
+                .id()
+                .to_string()
+        })
+        .collect();
+    for id in &ids {
+        wait_for(&orch, id, TaskState::Finished);
+        orch.commit_task(id, "c").unwrap();
+    }
+    let handles: Vec<_> = ids
+        .iter()
+        .cloned()
+        .map(|id| {
+            let orch = orch.clone();
+            std::thread::spawn(move || orch.merge_task(&id))
+        })
+        .collect();
+    let outcomes: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let merged = outcomes
+        .iter()
+        .filter(|r| matches!(r, Ok(m) if m.merged))
+        .count();
+    for r in &outcomes {
+        if let Err(e) = r {
+            assert!(e.to_string().contains("another merge"), "unexpected: {e}");
+        }
+    }
+    // Whatever merged must still be on main: nothing was rewound.
+    let log = git_out(&repo, &["log", "--oneline", "main"]);
+    assert_eq!(log.matches("Merge lore/").count(), merged, "{log}");
+    assert_eq!(git_out(&repo, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn discard_succeeds_when_the_branch_is_checked_out_elsewhere() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "true");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let t = orch.create_task(&request(&repo, "inspect me")).unwrap();
+    let id = t.id().to_string();
+    let branch = lore_orchestrator::describe(&t).branch;
+    wait_for(&orch, &id, TaskState::Finished);
+    // The user checks the branch out in a second worktree of their own.
+    let mine = tmp.path().join("mine");
+    sh(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-f",
+            mine.to_str().unwrap(),
+            &branch,
+        ],
+    );
+    orch.discard_task(&id).unwrap();
+    assert!(orch.list_tasks().unwrap().is_empty());
+    assert!(orch
+        .decisions(None, 5)
+        .iter()
+        .any(|d| d.kind == "discarded" && d.detail.contains("branch kept")));
+}

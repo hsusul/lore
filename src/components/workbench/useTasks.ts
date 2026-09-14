@@ -184,7 +184,23 @@ export function useTasks(): TasksHandle {
         const byId = new Map(updated.filter((t): t is TaskDto => t !== null).map((t) => [t.id, t]));
         if (byId.size > 0) {
           setTasks((previous) =>
-            previous ? reconcile(previous, previous.map((t) => byId.get(t.id) ?? t)) : previous,
+            previous
+              ? reconcile(
+                  previous,
+                  previous.map((t) => {
+                    const fresh = byId.get(t.id);
+                    // get_task cannot see other tasks, so it returns no overlaps or
+                    // claim conflicts; keep the ones from the last full list.
+                    return fresh
+                      ? {
+                          ...fresh,
+                          overlaps: fresh.overlaps ?? t.overlaps,
+                          claim_conflicts: fresh.claim_conflicts ?? t.claim_conflicts,
+                        }
+                      : t;
+                  }),
+                )
+              : previous,
           );
           setListError(null);
         }

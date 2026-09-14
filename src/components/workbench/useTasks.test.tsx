@@ -86,6 +86,26 @@ describe("useTasks", () => {
     expect(result.current.tasks?.map((t) => t.state)).toEqual(["running", "finished"]);
   });
 
+  it("keeps overlap and claim warnings from the full list when one task refreshes", async () => {
+    const overlap = [{ task_id: "t2", title: "Other", files: ["a.ts"] }];
+    vi.mocked(listTasks).mockResolvedValue([
+      task({ overlaps: overlap, claim_conflicts: overlap }),
+      task({ id: "t2", title: "Other" }),
+    ]);
+    // get_task cannot see other tasks, so it reports no annotations.
+    // The backend serializes the missing fields as null.
+    vi.mocked(getTask).mockResolvedValue(
+      task({ state: "finished", overlaps: null as never, claim_conflicts: null as never }),
+    );
+    const { result } = renderHook(() => useTasks());
+    await act(async () => {});
+    await act(async () => emit(["t1"]));
+    const refreshed = result.current.tasks?.find((t) => t.id === "t1");
+    expect(refreshed?.state).toBe("finished");
+    expect(refreshed?.overlaps).toEqual(overlap);
+    expect(refreshed?.claim_conflicts).toEqual(overlap);
+  });
+
   it("falls back to list_tasks for an empty or unknown id", async () => {
     vi.mocked(listTasks).mockResolvedValue([task({})]);
     renderHook(() => useTasks());

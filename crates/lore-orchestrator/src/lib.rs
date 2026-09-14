@@ -103,6 +103,10 @@ struct TaskRecord {
     /// `runs` value at which an automatic handoff already happened.
     #[serde(default)]
     handoff_run: Option<u32>,
+    /// Automatic handoffs since the user last continued the task by hand. One
+    /// is allowed; if the other agent is also out of quota, the task waits.
+    #[serde(default)]
+    auto_handoffs: u32,
 }
 
 fn yes() -> bool {
@@ -138,6 +142,10 @@ struct Inner {
     lingering: HashMap<u32, Instant>,
     /// Workspace roots the user opened (canonical).
     opened_roots: HashSet<PathBuf>,
+    /// Repositories with a merge in progress; git allows one at a time.
+    merging_repos: HashSet<PathBuf>,
+    /// Set by `shutdown`; no new agent may start afterwards.
+    shutting_down: bool,
     load_warning: Option<String>,
 }
 
@@ -207,6 +215,18 @@ impl Drop for InstanceLock {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&self.root);
+    }
+}
+
+/// Releases a repository's merge slot when a merge ends, however it ends.
+struct RepoMerge<'a> {
+    orchestrator: &'a Orchestrator,
+    repo: PathBuf,
+}
+
+impl Drop for RepoMerge<'_> {
+    fn drop(&mut self) {
+        self.orchestrator.lock().merging_repos.remove(&self.repo);
     }
 }
 
@@ -280,6 +300,8 @@ impl Orchestrator {
                 busy: HashSet::new(),
                 lingering: HashMap::new(),
                 opened_roots: HashSet::new(),
+                merging_repos: HashSet::new(),
+                shutting_down: false,
                 load_warning,
             }),
             _instance: instance,
@@ -411,9 +433,16 @@ impl Orchestrator {
             claims: claims.clone(),
             auto_handoff: req.auto_handoff.unwrap_or(true),
             handoff_run: None,
+            auto_handoffs: 0,
         };
 
         let mut inner = self.lock();
+        if inner.shutting_down {
+            drop(inner);
+            let _ = git::remove_worktree(&record.repo_path, &record.worktree_path);
+            let _ = git::delete_branch(&record.repo_path, &record.branch);
+            return Err(Error::Invalid("Lore is quitting".into()));
+        }
         let opening = format!(
             "{}{}",
             coordination_preamble(&inner.tasks, &record),
@@ -467,6 +496,14 @@ impl Orchestrator {
     /// otherwise, including every switch of agent (a handoff), the new run gets a
     /// brief built from the task's commits, changes, and recent activity.
     pub fn continue_task(&self, req: &ContinueTaskRequest) -> Result<TaskSnapshot> {
+        self.continue_task_inner(req, false)
+    }
+
+    fn continue_task_inner(
+        &self,
+        req: &ContinueTaskRequest,
+        automatic: bool,
+    ) -> Result<TaskSnapshot> {
         let prompt = req.prompt.trim();
         if prompt.is_empty() || prompt.len() > MAX_PROMPT {
             return Err(Error::Invalid(
@@ -505,11 +542,17 @@ impl Orchestrator {
         };
 
         let mut inner = self.lock();
+        if inner.shutting_down {
+            return Err(Error::Invalid("Lore is quitting".into()));
+        }
         let index = inner.index(&req.id)?;
         let previous = inner.tasks[index].clone();
         let mut record = previous.clone();
         record.agent = new_agent;
         record.runs += 1;
+        if !automatic {
+            record.auto_handoffs = 0;
+        }
         record.exit_code = None;
         let child = match spawn(&inner.programs, &record, &full_prompt, session.as_deref()) {
             Ok(child) => {
@@ -579,7 +622,8 @@ impl Orchestrator {
             (task, others, busy)
         };
         if !force {
-            let (changed, _) = git::changed_files(&task.worktree_path, &task.base_commit, 500);
+            let (changed, _) =
+                git::changed_files(&task.worktree_path, &task.base_commit, usize::MAX);
             let mut trespass: Vec<String> = Vec::new();
             for (title, claims) in &others {
                 for file in &changed {
@@ -631,8 +675,24 @@ impl Orchestrator {
                     "the task was already merged into {into}"
                 )));
             }
-            let busy = self.mark_busy(&mut inner, id)?;
+            if !inner.merging_repos.insert(task.repo_path.clone()) {
+                return Err(Error::Invalid(
+                    "another merge into this repository is in progress".into(),
+                ));
+            }
+            let busy = self.mark_busy(&mut inner, id);
+            let busy = match busy {
+                Ok(b) => b,
+                Err(e) => {
+                    inner.merging_repos.remove(&task.repo_path);
+                    return Err(e);
+                }
+            };
             (task, busy)
+        };
+        let _merging = RepoMerge {
+            orchestrator: self,
+            repo: task.repo_path.clone(),
         };
         if !task.branch.starts_with(BRANCH_PREFIX) {
             return Err(Error::Invalid(
@@ -737,10 +797,9 @@ impl Orchestrator {
         let mut out: Vec<DecisionDto> = text
             .lines()
             .rev()
-            .take(MAX_DECISIONS)
             .filter_map(|l| serde_json::from_str::<DecisionDto>(l).ok())
             .filter(|d| repo_path.is_none_or(|r| d.repo_path == r))
-            .take(limit)
+            .take(limit.min(MAX_DECISIONS))
             .collect();
         out.sort_by_key(|d| std::cmp::Reverse(d.at_ms));
         out
@@ -775,6 +834,7 @@ impl Orchestrator {
                         && t.merged_into.is_none()
                         && matches!(t.state, TaskState::Failed | TaskState::Finished)
                         && t.handoff_run != Some(t.runs)
+                        && t.auto_handoffs == 0
                         && !inner.busy.contains(&t.id)
                 })
                 .cloned()
@@ -794,6 +854,7 @@ impl Orchestrator {
                 let mut inner = self.lock();
                 if let Ok(index) = inner.index(&task.id) {
                     inner.tasks[index].handoff_run = Some(task.runs);
+                    inner.tasks[index].auto_handoffs += 1;
                     let _ = self.save(&inner);
                 }
             }
@@ -806,7 +867,7 @@ impl Orchestrator {
                 ),
                 agent: Some(other),
             };
-            if self.continue_task(&request).is_ok() {
+            if self.continue_task_inner(&request, true).is_ok() {
                 self.record_decision(
                     &task,
                     "auto_handoff",
@@ -861,12 +922,14 @@ impl Orchestrator {
             let task = &mut inner.tasks[index];
             task.state = TaskState::Stopped;
             let target = (task.pid, task.agent, child, inner.programs.clone());
-            self.save(&inner)?;
-            target
+            let saved = self.save(&inner);
+            (target, saved)
         };
-        // Waiting for the process group happens without the lock.
-        let (pid, agent, mut child, programs) = target;
+        // Waiting for the process group happens without the lock. Stop the agent
+        // even if saving failed: an untracked agent must never keep running.
+        let ((pid, agent, mut child, programs), saved) = target;
         kill_processes(pid, agent, child.as_mut(), &programs);
+        saved?;
         self.snapshot(id)
     }
 
@@ -911,9 +974,14 @@ impl Orchestrator {
             }
             fs::remove_dir_all(&real)?;
         }
+        let mut branch_note = String::new();
         if repo_exists {
             let _ = git::prune_worktrees(&task.repo_path);
-            git::delete_branch(&task.repo_path, &task.branch)?;
+            // A branch checked out elsewhere cannot be deleted; the task is still
+            // discarded, and the branch is left for the user.
+            if let Err(e) = git::delete_branch(&task.repo_path, &task.branch) {
+                branch_note = format!(" (branch kept: {e})");
+            }
         }
         if is_strictly_inside(&task.log_path, &self.root.join("logs")) {
             let _ = fs::remove_file(&task.log_path);
@@ -924,13 +992,14 @@ impl Orchestrator {
         }
         let result = self.save(&inner);
         drop(inner);
-        self.record_decision(&task, "discarded", &task.branch);
+        self.record_decision(&task, "discarded", &format!("{}{branch_note}", task.branch));
         result
     }
 
     /// Stop every running agent (called when the app quits). No git work.
     pub fn shutdown(&self) {
         let mut inner = self.lock();
+        inner.shutting_down = true;
         let running: Vec<(Option<u32>, Option<Child>)> = inner
             .tasks
             .iter()
