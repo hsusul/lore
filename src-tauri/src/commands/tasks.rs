@@ -168,11 +168,21 @@ pub async fn start_merge_queue(
     })
     .await?;
     let repo = queue.repo_path.clone();
-    std::thread::spawn(move || {
-        let state = app.state::<AppState>();
-        state.orchestrator.run_merge_queue(&repo);
-        let _ = app.emit("tasks_changed", TasksChangedEvent { ids: task_ids });
-    });
+    let runner_app = app.clone();
+    let runner_repo = repo.clone();
+    let spawned = std::thread::Builder::new()
+        .name("lore-merge-queue".into())
+        .spawn(move || {
+            let state = runner_app.state::<AppState>();
+            state.orchestrator.run_merge_queue(&runner_repo);
+            let _ = runner_app.emit("tasks_changed", TasksChangedEvent { ids: task_ids });
+        });
+    if let Err(e) = spawned {
+        app.state::<AppState>()
+            .orchestrator
+            .abandon_merge_queue(&repo);
+        return Err(format!("could not start the merge queue: {e}"));
+    }
     Ok(queue)
 }
 

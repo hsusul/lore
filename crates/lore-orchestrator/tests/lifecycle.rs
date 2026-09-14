@@ -1166,3 +1166,90 @@ fn merge_queue_refuses_bad_input() {
         .set_repo_test_command(&repo.display().to_string(), Some(&"x".repeat(5000)))
         .is_err());
 }
+
+#[test]
+fn queue_update_keeps_task_diffs_about_its_own_work() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo mine > \"own-$(basename \"$PWD\").txt\"");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let a = finished_committed_task(&orch, &repo, "a");
+    let b = finished_committed_task(&orch, &repo, "b");
+    let repo_s = repo.display().to_string();
+    // b's tests fail, so its update merge stays on its branch.
+    orch.set_repo_test_command(
+        &repo_s,
+        Some(&format!("test \"$(basename \"$PWD\")\" != {b}")),
+    )
+    .unwrap();
+    orch.start_merge_queue(&repo_s, &[a.clone(), b.clone()])
+        .unwrap();
+    let done = orch.run_merge_queue(&repo_s);
+    assert_eq!(done.items[1].status, "failed");
+
+    // b now contains a's file, but b's diff and changed files are only b's own.
+    let b_task = orch.task(&b).unwrap();
+    assert!(Path::new(&b_task.worktree_path)
+        .join(format!("own-{a}.txt"))
+        .exists());
+    assert_eq!(b_task.changed_files, [format!("own-{b}.txt")]);
+    let diff = lore_orchestrator::diff(&orch.snapshot(&b).unwrap()).unwrap();
+    assert!(
+        !diff.text.contains(&format!("own-{a}.txt")),
+        "{}",
+        diff.text
+    );
+
+    // A task with no commits of its own is refused rather than fast-forwarded.
+    let empty_agent = fake_agent(tmp.path(), "true");
+    let orch2 = Orchestrator::open(tmp.path().join("orch2"), programs(&empty_agent)).unwrap();
+    let e = orch2
+        .create_task(&request(&repo, "empty"))
+        .unwrap()
+        .id()
+        .to_string();
+    wait_for(&orch2, &e, TaskState::Finished);
+    orch2
+        .start_merge_queue(&repo_s, std::slice::from_ref(&e))
+        .unwrap();
+    let done = orch2.run_merge_queue(&repo_s);
+    assert_eq!(done.items[0].status, "failed");
+    assert!(done.items[0].detail.clone().unwrap().contains("no commits"));
+}
+
+#[test]
+fn shutdown_stops_a_running_queue_test() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo x > \"f-$(basename \"$PWD\").txt\"");
+    let orch =
+        std::sync::Arc::new(Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap());
+    let a = finished_committed_task(&orch, &repo, "slow");
+    let repo_s = repo.display().to_string();
+    let marker = tmp.path().join("test.pid");
+    orch.set_repo_test_command(
+        &repo_s,
+        Some(&format!("echo $$ > '{}'; sleep 300", marker.display())),
+    )
+    .unwrap();
+    orch.start_merge_queue(&repo_s, std::slice::from_ref(&a))
+        .unwrap();
+    let runner = {
+        let orch = orch.clone();
+        let repo_s = repo_s.clone();
+        std::thread::spawn(move || orch.run_merge_queue(&repo_s))
+    };
+    assert!(wait_until(
+        || marker.exists() && !fs::read_to_string(&marker).unwrap().trim().is_empty()
+    ));
+    let pid = fs::read_to_string(&marker).unwrap().trim().to_string();
+    orch.shutdown();
+    let done = runner.join().unwrap();
+    assert!(!done.running);
+    assert_eq!(done.items[0].status, "cancelled");
+    assert!(
+        wait_until(|| !pid_alive(&pid)),
+        "test command survived shutdown"
+    );
+    assert!(orch.task(&a).unwrap().merged_into.is_none());
+}

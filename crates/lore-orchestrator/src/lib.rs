@@ -155,6 +155,8 @@ struct Inner {
     queues: HashMap<PathBuf, MergeQueueDto>,
     /// Repositories whose running queue was asked to stop.
     cancel_queues: HashSet<PathBuf>,
+    /// Process groups of merge-queue test commands that are running.
+    queue_tests: HashSet<u32>,
     test_timeout: Duration,
     load_warning: Option<String>,
 }
@@ -225,6 +227,30 @@ impl Drop for InstanceLock {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&self.root);
+    }
+}
+
+/// Marks a repository's merge queue finished when its runner ends, however it ends.
+struct QueueFinish<'a> {
+    orchestrator: &'a Orchestrator,
+    repo: PathBuf,
+}
+
+impl Drop for QueueFinish<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.orchestrator.lock();
+        inner.cancel_queues.remove(&self.repo);
+        if let Some(q) = inner.queues.get_mut(&self.repo) {
+            q.running = false;
+            for item in &mut q.items {
+                if matches!(
+                    item.status.as_str(),
+                    "pending" | "updating" | "testing" | "merging"
+                ) {
+                    item.status = "cancelled".into();
+                }
+            }
+        }
     }
 }
 
@@ -314,6 +340,7 @@ impl Orchestrator {
                 shutting_down: false,
                 queues: HashMap::new(),
                 cancel_queues: HashSet::new(),
+                queue_tests: HashSet::new(),
                 test_timeout: DEFAULT_TEST_TIMEOUT,
                 load_warning,
             }),
@@ -928,6 +955,11 @@ impl Orchestrator {
             orchestrator: self,
             repo: top.clone(),
         };
+        // Clears `running` however this function ends, including a panic.
+        let _finish = QueueFinish {
+            orchestrator: self,
+            repo: top.clone(),
+        };
         let (ids, test_command, timeout) = {
             let inner = self.lock();
             let Some(q) = inner.queues.get(&top) else {
@@ -948,15 +980,15 @@ impl Orchestrator {
             )
         };
 
-        let mut stopped = false;
+        let mut stopped: Option<&str> = None;
         for (index, id) in ids.iter().enumerate() {
-            if stopped {
-                self.set_queue_item(&top, index, "skipped", Some("an earlier task failed"));
-                continue;
-            }
             if self.queue_cancelled(&top) {
                 self.set_queue_item(&top, index, "cancelled", None);
-                stopped = true;
+                stopped = Some("the queue was cancelled");
+                continue;
+            }
+            if let Some(why) = stopped {
+                self.set_queue_item(&top, index, "skipped", Some(why));
                 continue;
             }
             match self.run_queue_item(&top, index, id, test_command.as_deref(), timeout) {
@@ -969,7 +1001,11 @@ impl Orchestrator {
                         if cancelled { "cancelled" } else { "failed" },
                         Some(&reason),
                     );
-                    stopped = true;
+                    stopped = Some(if cancelled {
+                        "the queue was cancelled"
+                    } else {
+                        "an earlier task failed"
+                    });
                 }
             }
         }
@@ -988,6 +1024,17 @@ impl Orchestrator {
                 items: Vec::new(),
             },
         }
+    }
+
+    /// Release a started queue whose runner could not be started.
+    pub fn abandon_merge_queue(&self, repo_path: &str) {
+        let top =
+            workspace::repository_root(repo_path).unwrap_or_else(|_| PathBuf::from(repo_path));
+        drop(QueueFinish {
+            orchestrator: self,
+            repo: top.clone(),
+        });
+        self.lock().merging_repos.remove(&top);
     }
 
     fn queue_cancelled(&self, repo: &Path) -> bool {
@@ -1029,11 +1076,30 @@ impl Orchestrator {
         if !git::uncommitted(&task.worktree_path).is_empty() {
             return Err("the task has uncommitted changes; commit them first".into());
         }
+        // Never commit an update onto anything but the task's own branch.
+        if git::checked_out_branch(&task.worktree_path).as_deref() != Some(task.branch.as_str()) {
+            return Err(format!(
+                "the task's worktree is no longer on {}; check out that branch there first",
+                task.branch
+            ));
+        }
+        if git::branch_commits_ahead(&task.repo_path, &task.base_commit, &task.branch) == 0 {
+            return Err("the task has no commits to merge".into());
+        }
 
         self.set_queue_item(repo, index, "updating", None);
+        // Pin the target: the branch and commit tested are the ones merged into.
         let into = git::current_branch(&task.repo_path).map_err(|e| e.to_string())?;
-        match git::merge_into_worktree(&task.worktree_path, &into) {
-            Ok(Ok(())) => {}
+        let target = git::head_commit(&task.repo_path).map_err(|e| e.to_string())?;
+        match git::merge_into_worktree(&task.worktree_path, &target) {
+            Ok(Ok(())) => {
+                // Diffs, changed files, and claims stay about this task's own work.
+                let mut inner = self.lock();
+                if let Ok(i) = inner.index(id) {
+                    inner.tasks[i].base_commit = target.clone();
+                    let _ = self.save(&inner);
+                }
+            }
             Ok(Err(conflicts)) => {
                 self.record_decision(
                     &task,
@@ -1051,17 +1117,42 @@ impl Orchestrator {
         if let Some(command) = test_command {
             self.set_queue_item(repo, index, "testing", Some(command));
             let log = self.root.join("logs").join(format!("{id}.test.log"));
-            let outcome = run_test_command(&task.worktree_path, command, &log, timeout, || {
-                self.queue_cancelled(repo)
-            });
+            let outcome = run_test_command(
+                &task.worktree_path,
+                command,
+                &log,
+                timeout,
+                || self.queue_cancelled(repo),
+                |pgid, running| {
+                    let mut inner = self.lock();
+                    if running {
+                        inner.queue_tests.insert(pgid);
+                    } else {
+                        inner.queue_tests.remove(&pgid);
+                    }
+                },
+            );
             if let Err(reason) = outcome {
                 self.record_decision(&task, "queue_failed", &format!("tests: {reason}"));
                 return Err(format!("tests failed: {reason}"));
             }
         }
 
+        if self.queue_cancelled(repo) {
+            return Err("cancelled before merging".into());
+        }
+        // The target branch must be the one that was tested.
+        let now = git::current_branch(&task.repo_path).map_err(|e| e.to_string())?;
+        let head = git::head_commit(&task.repo_path).map_err(|e| e.to_string())?;
+        if now != into || head != target {
+            return Err(format!(
+                "{into} changed while this task was being tested; run the queue again"
+            ));
+        }
         self.set_queue_item(repo, index, "merging", None);
-        let result = self.merge_prepared(&task).map_err(|e| e.to_string())?;
+        let mut updated = task.clone();
+        updated.base_commit = target;
+        let result = self.merge_prepared(&updated).map_err(|e| e.to_string())?;
         if result.merged {
             self.set_queue_item(repo, index, "merged", Some(&result.message));
             Ok(())
@@ -1303,6 +1394,17 @@ impl Orchestrator {
     pub fn shutdown(&self) {
         let mut inner = self.lock();
         inner.shutting_down = true;
+        // Running merge queues stop, and so do their test commands.
+        let running_queues: Vec<PathBuf> = inner
+            .queues
+            .iter()
+            .filter(|(_, q)| q.running)
+            .map(|(repo, _)| repo.clone())
+            .collect();
+        inner.cancel_queues.extend(running_queues);
+        for pgid in inner.queue_tests.drain() {
+            process::signal_group(pgid, "TERM");
+        }
         let running: Vec<(Option<u32>, Option<Child>)> = inner
             .tasks
             .iter()
@@ -1438,6 +1540,7 @@ fn run_test_command(
     log: &Path,
     timeout: Duration,
     cancelled: impl Fn() -> bool,
+    track: impl Fn(u32, bool),
 ) -> std::result::Result<(), String> {
     let out = File::create(log).map_err(|e| e.to_string())?;
     let err = out.try_clone().map_err(|e| e.to_string())?;
@@ -1452,6 +1555,19 @@ fn run_test_command(
         .spawn()
         .map_err(|e| format!("could not start the test command: {e}"))?;
     let pgid = child.id();
+    track(pgid, true);
+    let result = wait_test_command(&mut child, pgid, log, timeout, cancelled);
+    track(pgid, false);
+    result
+}
+
+fn wait_test_command(
+    child: &mut Child,
+    pgid: u32,
+    log: &Path,
+    timeout: Duration,
+    cancelled: impl Fn() -> bool,
+) -> std::result::Result<(), String> {
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
@@ -1476,11 +1592,11 @@ fn run_test_command(
             Err(e) => return Err(e.to_string()),
         }
         if cancelled() {
-            process::stop_group(pgid, Some(&mut child));
+            process::stop_group(pgid, Some(child));
             return Err("cancelled".into());
         }
         if Instant::now() >= deadline {
-            process::stop_group(pgid, Some(&mut child));
+            process::stop_group(pgid, Some(child));
             return Err(format!("timed out after {}s", timeout.as_secs()));
         }
         std::thread::sleep(Duration::from_millis(100));
