@@ -196,7 +196,7 @@ function NewAgentForm({
         <label className="wb-field">
           <span>Prompt</span>
           <textarea
-            rows={4}
+            rows={3}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
