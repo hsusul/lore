@@ -8,7 +8,18 @@ import {
   type TaskDto,
   type TaskPermission,
 } from "../../ipc";
-import { CommitIcon, DiffIcon, MergeIcon, OverlapIcon, RevealIcon, StopIcon, TrashIcon, WarningIcon } from "./icons";
+import AgentMenu from "./AgentMenu";
+import {
+  ArrowUpIcon,
+  CommitIcon,
+  DiffIcon,
+  MergeIcon,
+  OverlapIcon,
+  RevealIcon,
+  StopIcon,
+  TrashIcon,
+  WarningIcon,
+} from "./icons";
 import { SidebarHeader } from "./Sidebar";
 import { AGENT_LABELS, baseName, errorText, parseClaims, stateLabel } from "./state";
 
@@ -71,7 +82,6 @@ export default function AgentsPanel(props: Props) {
           focusToken={props.focusToken}
         />
         <div className="agents-pane">
-          <h3 className="wb-subhead">Tasks</h3>
           {listError && (
             <p className="wb-note wb-note--error" role="alert">
               {listError}
@@ -170,7 +180,6 @@ function NewAgentForm({
   const disabled = !workspace;
   return (
     <form className="new-agent" aria-label="New agent" onSubmit={(e) => void submit(e)}>
-      <h3 className="wb-subhead">New agent</h3>
       {disabled && (
         <p className="wb-note">
           Open a folder to launch agents in it.{" "}
@@ -180,23 +189,21 @@ function NewAgentForm({
         </p>
       )}
       <fieldset disabled={disabled} className="new-agent__fields">
-        <div className="new-agent__row">
-          <label className="wb-field new-agent__title">
-            <span>Title</span>
-            <input ref={titleRef} type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
-          </label>
-          <label className="wb-field">
-            <span>Agent</span>
-            <select value={agent} onChange={(e) => setAgent(e.target.value as TaskAgent)}>
-              <option value="claude_code">{AGENT_LABELS.claude_code}</option>
-              <option value="codex">{AGENT_LABELS.codex}</option>
-            </select>
-          </label>
-        </div>
-        <label className="wb-field">
-          <span>Prompt</span>
+        <div className="composer__box">
+          <input
+            ref={titleRef}
+            className="new-agent__name"
+            type="text"
+            aria-label="Title"
+            placeholder="Title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
           <textarea
+            className="composer__input"
+            aria-label="Prompt"
             rows={3}
+            placeholder="What should the agent do?"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
@@ -206,77 +213,66 @@ function NewAgentForm({
               }
             }}
           />
-        </label>
-        <div className="new-agent__permission">
-          <div className="segmented" role="radiogroup" aria-label="Permission">
-            {(Object.keys(PERMISSION_LABELS) as TaskPermission[]).map((value) => (
-              <button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={permission === value}
-                className={`segmented__option${permission === value ? " segmented__option--on" : ""}`}
-                title={PERMISSION_HINTS[value]}
-                onClick={() => setPermission(value)}
-              >
-                {PERMISSION_LABELS[value]}
-              </button>
-            ))}
-          </div>
-          <span className="new-agent__hint">{PERMISSION_HINTS[permission]}</span>
-        </div>
-        <label className="wb-field">
-          <span>Owns (files or folders)</span>
-          <textarea
-            rows={2}
-            className="new-agent__claims"
-            placeholder="e.g. calc.py, greet.py"
-            value={claimsText}
-            onChange={(e) => setClaimsText(e.target.value)}
-          />
-        </label>
-        {claims.length > 0 && (
-          <ul className="claim-chips" aria-label="Owned paths">
-            {claims.map((claim) => (
-              <li key={claim} className="claim-chip mono">
-                {claim}
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="new-agent__hint">
-          Other agents are told not to touch these. A commit that changes another agent&rsquo;s files needs
-          confirmation. End a folder with <span className="mono">/</span>; separate with commas or new lines.
-        </p>
-        <label className="new-agent__check">
-          <input type="checkbox" checked={autoHandoff} onChange={(e) => setAutoHandoff(e.target.checked)} />
-          <span>Auto-handoff on usage limit</span>
-        </label>
-        {error && (
-          <p className="wb-note wb-note--error" role="alert">
-            {error}
-          </p>
-        )}
-        <div className="new-agent__actions">
-          {workspace && (
-            <span className="new-agent__repo" title={workspace}>
-              in {baseName(workspace)}
-            </span>
+          <details className="new-agent__more">
+            <summary>Owns paths</summary>
+            <textarea
+              rows={2}
+              className="new-agent__claims"
+              aria-label="Owns (files or folders)"
+              placeholder="e.g. calc.py, greet.py"
+              value={claimsText}
+              onChange={(e) => setClaimsText(e.target.value)}
+            />
+            <p className="new-agent__hint">
+              Other agents are told not to touch these. A commit that changes another agent&rsquo;s files needs
+              confirmation. End a folder with <span className="mono">/</span>; separate with commas or new lines.
+            </p>
+          </details>
+          {claims.length > 0 && (
+            <ul className="claim-chips" aria-label="Owned paths">
+              {claims.map((claim) => (
+                <li key={claim} className="claim-chip mono">
+                  {claim}
+                </li>
+              ))}
+            </ul>
           )}
-          <button type="submit" className="wb-btn wb-btn--primary" disabled={busy} title="Launch (⌘Enter)">
-            {busy ? "Launching…" : "Launch"}
-          </button>
+          {error && (
+            <p className="wb-note wb-note--error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="composer__bar">
+            <AgentMenu
+              label="Agent"
+              agent={agent}
+              onAgentChange={setAgent}
+              permission={permission}
+              onPermissionChange={setPermission}
+              autoHandoff={autoHandoff}
+              onAutoHandoffChange={setAutoHandoff}
+              disabled={disabled}
+            />
+            {workspace && (
+              <span className="new-agent__repo" title={workspace}>
+                {baseName(workspace)}
+              </span>
+            )}
+            <button
+              type="submit"
+              className="composer__send"
+              disabled={busy}
+              title="Launch (⌘Enter)"
+              aria-label={busy ? "Launching…" : "Launch"}
+            >
+              <ArrowUpIcon />
+            </button>
+          </div>
         </div>
       </fieldset>
     </form>
   );
 }
-
-const PERMISSION_LABELS: Record<TaskPermission, string> = { edits: "Edits", auto: "Auto" };
-const PERMISSION_HINTS: Record<TaskPermission, string> = {
-  edits: "Claude may edit files but not run shell commands.",
-  auto: "Claude's safety classifier approves routine actions like running tests.",
-};
 
 type RowProps = TaskActions & { task: TaskDto; selected: boolean };
 
@@ -382,8 +378,6 @@ const TaskRow = memo(function TaskRow({
           <span className="mono agent-row__branch" title={task.worktree_path}>
             {task.branch}
           </span>
-        </span>
-        <span className="agent-row__meta">
           <span>
             {task.commits_ahead} {task.commits_ahead === 1 ? "commit" : "commits"} ahead
           </span>
@@ -391,11 +385,6 @@ const TaskRow = memo(function TaskRow({
             {fileCount} {fileCount === 1 ? "file" : "files"} changed
           </span>
         </span>
-        {task.last_activity && (
-          <span className="mono agent-row__activity" title={task.last_activity}>
-            {task.last_activity}
-          </span>
-        )}
       </button>
       {error && (
         <p className="wb-note wb-note--error" role="alert">

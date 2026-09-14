@@ -31,6 +31,17 @@ function renderPanel(overrides: Partial<Parameters<typeof AgentsPanel>[0]> = {})
   return props;
 }
 
+function chooseAgent(name: "Claude Code" | "Codex") {
+  fireEvent.click(screen.getByLabelText("Agent"));
+  fireEvent.click(screen.getByRole("menuitem", { name: /^Agent\b/ }));
+  fireEvent.click(screen.getByRole("menuitemradio", { name }));
+}
+
+function openPermission() {
+  fireEvent.click(screen.getByLabelText("Agent"));
+  fireEvent.click(screen.getByRole("menuitem", { name: /^Permission\b/ }));
+}
+
 beforeEach(() => {
   vi.mocked(createTask).mockReset();
 });
@@ -62,7 +73,7 @@ describe("AgentsPanel", () => {
     const props = renderPanel({ tasks: [] });
 
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: " Fix parser " } });
-    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "codex" } });
+    chooseAgent("Codex");
     const prompt = screen.getByLabelText("Prompt");
     fireEvent.change(prompt, { target: { value: "fix it" } });
     fireEvent.keyDown(prompt, { key: "Enter", metaKey: true });
@@ -83,15 +94,18 @@ describe("AgentsPanel", () => {
   it("sends the chosen permission, defaulting to Edits", async () => {
     vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
     renderPanel({ tasks: [] });
+    openPermission();
     const group = screen.getByRole("radiogroup", { name: "Permission" });
     const edits = within(group).getByRole("radio", { name: "Edits" });
     const auto = within(group).getByRole("radio", { name: "Auto" });
     expect(edits.getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByText("Claude may edit files but not run shell commands.")).toBeTruthy();
+    expect(edits.getAttribute("title")).toBe("Claude may edit files but not run shell commands.");
+    expect(auto.getAttribute("title")).toMatch(/safety classifier/);
 
     fireEvent.click(auto);
-    expect(auto.getAttribute("aria-checked")).toBe("true");
-    expect(auto.getAttribute("title")).toMatch(/safety classifier/);
+    // The picker returns to the root pane; Auto is the shown permission.
+    expect(screen.queryByRole("radiogroup", { name: "Permission" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /^Permission\b/ }).textContent).toContain("Auto");
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));
@@ -178,8 +192,9 @@ describe("AgentsPanel", () => {
     expect(chips.map((li) => li.textContent)).toEqual(["src/parser/", "docs/SCHEMA.md"]);
     expect(screen.getByText(/Other agents are told not to touch these/)).toBeTruthy();
 
-    const autoHandoff = screen.getByLabelText("Auto-handoff on usage limit") as HTMLInputElement;
-    expect(autoHandoff.checked).toBe(true);
+    fireEvent.click(screen.getByLabelText("Agent"));
+    const autoHandoff = screen.getByLabelText("Auto-handoff on usage limit");
+    expect(autoHandoff.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(autoHandoff);
 
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));

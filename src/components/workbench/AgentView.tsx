@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type { ContinueTaskRequest, MergeResultDto, TaskAgent, TaskDto } from "../../ipc";
 import ActivityList from "./ActivityList";
-import { AgentChip, StateBadge } from "./AgentsPanel";
+import AgentMenu from "./AgentMenu";
+import { StateBadge } from "./AgentsPanel";
 import {
   CommitIcon,
   DiffIcon,
@@ -14,7 +15,7 @@ import {
   WarningIcon,
   ArrowUpIcon,
 } from "./icons";
-import { AGENT_LABELS, errorText, isOwnershipError } from "./state";
+import { errorText, isOwnershipError } from "./state";
 import { useActivity } from "./useTasks";
 
 type Props = {
@@ -172,7 +173,6 @@ export default function AgentView({
     <div className="agent-view">
       <header className="agent-view__header">
         <div className="agent-view__titleline">
-          <AgentChip task={task} large />
           <h2 className="agent-view__title">{task.title}</h2>
           <StateBadge task={task} />
           {task.merged_into && (
@@ -180,13 +180,50 @@ export default function AgentView({
               <MergeIcon /> Merged into {task.merged_into}
             </span>
           )}
-          <span className="agent-view__agent">{AGENT_LABELS[task.agent] ?? task.agent}</span>
           {task.runs !== undefined && task.runs > 0 && <span className="agent-view__runs">Run {task.runs}</span>}
           {task.auto_handoff === false && (
             <span className="agent-view__runs" title="Auto-handoff is off: a usage limit waits for you.">
               manual handoff
             </span>
           )}
+          <span className="agent-view__spacer" />
+          {confirming ? (
+            <>
+              <span className="agent-view__confirm">Delete this worktree and branch?</span>
+              <button
+                type="button"
+                className="wb-btn wb-btn--danger wb-btn--small"
+                disabled={busy}
+                onClick={() => void act(onDiscard)}
+              >
+                Confirm discard
+              </button>
+              <button type="button" className="wb-btn wb-btn--small" onClick={() => setConfirming(false)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              {running && (
+                <button
+                  type="button"
+                  className="wb-btn wb-btn--small"
+                  disabled={busy}
+                  onClick={() => void act(onStop)}
+                >
+                  <StopIcon /> Stop
+                </button>
+              )}
+              <button type="button" className="wb-btn wb-btn--small" onClick={() => onOpenDiff(taskId)}>
+                <DiffIcon /> Diff
+              </button>
+              <button type="button" className="wb-btn wb-btn--small" onClick={() => setConfirming(true)}>
+                <TrashIcon /> Discard
+              </button>
+            </>
+          )}
+        </div>
+        <div className="agent-view__meta">
           {claims.length > 0 && (
             <ul className="claim-chips" aria-label="Owned paths">
               {claims.map((claim) => (
@@ -196,75 +233,20 @@ export default function AgentView({
               ))}
             </ul>
           )}
-          <span className="agent-view__spacer" />
-          {confirming ? (
-            <>
-              <span className="agent-view__confirm">Delete this worktree and branch?</span>
-              <button
-                type="button"
-                className="wb-btn wb-btn--danger"
-                disabled={busy}
-                onClick={() => void act(onDiscard)}
-              >
-                Confirm discard
-              </button>
-              <button type="button" className="wb-btn" onClick={() => setConfirming(false)}>
-                Cancel
-              </button>
-            </>
-          ) : (
-            <>
-              {running && (
-                <button type="button" className="wb-btn" disabled={busy} onClick={() => void act(onStop)}>
-                  <StopIcon /> Stop
-                </button>
-              )}
-              <button type="button" className="wb-btn" onClick={() => onOpenDiff(taskId)}>
-                <DiffIcon /> Diff
-              </button>
-              <button type="button" className="wb-btn" onClick={() => setConfirming(true)}>
-                <TrashIcon /> Discard
-              </button>
-            </>
-          )}
+          <span className="mono">{task.branch}</span>
+          <span className="mono agent-view__worktree" title={task.worktree_path}>
+            {task.worktree_path}
+          </span>
+          <button
+            type="button"
+            className="wb-icon-btn"
+            aria-label="Reveal in Finder"
+            title="Reveal in Finder"
+            onClick={() => void act(onReveal)}
+          >
+            <RevealIcon />
+          </button>
         </div>
-        <dl className="agent-view__meta">
-          <div>
-            <dt>Branch</dt>
-            <dd className="mono">{task.branch}</dd>
-          </div>
-          <div>
-            <dt>Commits ahead</dt>
-            <dd>{task.commits_ahead}</dd>
-          </div>
-          <div>
-            <dt>Changed files</dt>
-            <dd>{task.changed_files_total ?? task.changed_files.length}</dd>
-          </div>
-          {!merged && (
-            <div>
-              <dt>Uncommitted</dt>
-              <dd>{uncommitted}</dd>
-            </div>
-          )}
-          <div className="agent-view__worktree">
-            <dt>Worktree</dt>
-            <dd>
-              <span className="mono" title={task.worktree_path}>
-                {task.worktree_path}
-              </span>
-              <button
-                type="button"
-                className="wb-icon-btn"
-                aria-label="Reveal in Finder"
-                title="Reveal in Finder"
-                onClick={() => void act(onReveal)}
-              >
-                <RevealIcon />
-              </button>
-            </dd>
-          </div>
-        </dl>
         {error && (
           <p className="wb-note wb-note--error" role="alert">
             {error}
@@ -498,23 +480,20 @@ export default function AgentView({
               </p>
             )}
             <div className="composer__bar">
-              <select
-                className="wb-select composer__agent"
-                aria-label="Next agent"
-                value={nextAgent}
+              <AgentMenu
+                label="Next agent"
+                agent={nextAgent}
+                onAgentChange={setNextAgent}
                 disabled={continuing}
-                onChange={(e) => setNextAgent(e.target.value as TaskAgent)}
-              >
-                <option value="claude_code">{AGENT_LABELS.claude_code}</option>
-                <option value="codex">{AGENT_LABELS.codex}</option>
-              </select>
-              <span className="composer__hint">
-                {queueLocked
-                  ? "Paused while the merge queue runs"
-                  : handoff
-                    ? "Lore passes a context brief to the new agent."
-                    : "⌘Enter to send"}
-              </span>
+                placement="up"
+              />
+              {(queueLocked || handoff) && (
+                <span className="composer__hint">
+                  {queueLocked
+                    ? "Paused while the merge queue runs"
+                    : "Lore passes a context brief to the new agent."}
+                </span>
+              )}
               <button
                 type="submit"
                 className="composer__send"

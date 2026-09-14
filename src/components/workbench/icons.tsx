@@ -54,9 +54,16 @@ export const CloseIcon = ({ size = 16 }: { size?: number }) => (
   </Icon>
 );
 
-export const ChevronIcon = () => (
-  <Icon>
+export const ChevronIcon = ({ size = 16 }: { size?: number }) => (
+  <Icon size={size}>
     <path d="M6.25 4.25 10 8l-3.75 3.75" />
+  </Icon>
+);
+
+/** Selected row in the agent/model menu. */
+export const TickIcon = ({ size = 12 }: { size?: number }) => (
+  <Icon size={size}>
+    <path d="m3.25 8.25 3 3 6.5-7" />
   </Icon>
 );
 

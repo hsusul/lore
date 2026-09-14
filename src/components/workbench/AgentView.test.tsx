@@ -92,13 +92,14 @@ describe("AgentView", () => {
   it("continues with the same agent, or hands off when another agent is chosen (⌘Enter submits)", async () => {
     const h = renderView({});
     const input = screen.getByLabelText("Follow-up prompt");
-    expect((screen.getByLabelText("Next agent") as HTMLSelectElement).value).toBe("claude_code");
+    expect(screen.getByLabelText("Next agent").textContent).toContain("Claude Code");
     fireEvent.change(input, { target: { value: " add tests " } });
     fireEvent.keyDown(input, { key: "Enter", metaKey: true });
     await waitFor(() => expect(h.onContinue).toHaveBeenCalledWith({ id: "t1", prompt: "add tests" }));
     await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(""));
 
-    fireEvent.change(screen.getByLabelText("Next agent"), { target: { value: "codex" } });
+    fireEvent.click(screen.getByLabelText("Next agent"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Codex" }));
     expect(screen.getByRole("button", { name: "Hand off to Codex" })).toBeTruthy();
     fireEvent.change(input, { target: { value: "take over" } });
     fireEvent.click(screen.getByRole("button", { name: "Hand off to Codex" }));

@@ -742,10 +742,11 @@ kbd {
 }
 
 .wb-view--agents .new-agent {
-  flex: 0 1 auto;
-  max-height: 48%;
-  min-height: 0;
-  overflow: auto;
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  max-height: none;
+  overflow: visible;
 }
 
 .wb-view__body > .wb-note {
@@ -930,14 +931,9 @@ body.is-resizing-horizontal .sash--horizontal::before {
   background: transparent;
 }
 
-.new-agent > .wb-subhead {
-  margin: 8px 0;
-}
-
 .new-agent__fields {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -948,22 +944,32 @@ body.is-resizing-horizontal .sash--horizontal::before {
   opacity: 0.55;
 }
 
-.new-agent__row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  gap: 8px;
+.new-agent .composer__box {
+  box-shadow: none;
+  background: var(--wb-editor-bg);
 }
 
-.new-agent__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
+.new-agent__name {
+  width: 100%;
+  padding: 4px 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--wb-fg-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.new-agent__name:focus {
+  outline: none;
+}
+
+.new-agent__name::placeholder,
+.composer__input::placeholder {
+  color: var(--wb-fg-faint);
 }
 
 .new-agent__repo {
   overflow: hidden;
-  margin-right: auto;
   color: var(--wb-fg-faint);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -971,54 +977,41 @@ body.is-resizing-horizontal .sash--horizontal::before {
   white-space: nowrap;
 }
 
-/* Permission toggle: a compact two-option segmented control. */
-.new-agent__permission {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+.new-agent__more {
+  margin: 0 4px;
 }
 
-.segmented {
-  flex: none;
-  display: inline-flex;
-  padding: 2px;
-  border: 1px solid var(--wb-border-strong);
-  border-radius: var(--r);
-  background: var(--wb-input-bg);
+.new-agent__more summary {
+  color: var(--wb-fg-faint);
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
 }
 
-.segmented__option {
-  height: 20px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--wb-fg-muted);
-  font-size: 11.5px;
-  transition: background-color 120ms var(--ease), color 120ms var(--ease);
+.new-agent__more summary::-webkit-details-marker {
+  display: none;
 }
 
-.segmented__option:hover {
-  color: var(--wb-fg-strong);
+.new-agent__more summary::before {
+  content: "▸ ";
+  color: var(--wb-fg-faint);
 }
 
-.segmented__option--on {
-  background: var(--wb-accent-soft);
-  box-shadow: inset 0 0 0 1px rgba(143, 148, 246, 0.3);
-  color: var(--wb-fg-strong);
+.new-agent__more[open] summary::before {
+  content: "▾ ";
 }
 
 .new-agent__hint {
-  margin: 0;
+  margin: 6px 0 0;
   min-width: 0;
   color: var(--wb-fg-faint);
   font-size: 11px;
   line-height: 1.35;
 }
 
-/* Claims: the files or folders a task owns. */
 textarea.new-agent__claims {
+  width: 100%;
+  margin-top: 6px;
   resize: vertical;
 }
 
@@ -1026,7 +1019,7 @@ textarea.new-agent__claims {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin: 0;
+  margin: 0 4px;
   padding: 0;
   list-style: none;
 }
@@ -1041,19 +1034,137 @@ textarea.new-agent__claims {
   white-space: nowrap;
 }
 
-.new-agent__check {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--wb-fg-muted);
-  font-size: 11.5px;
+/* Quiet text trigger + compact popover (Cursor model picker). */
+.model-picker {
+  position: relative;
+  flex: none;
 }
 
-.new-agent__check input {
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  accent-color: var(--wb-accent-strong);
+.model-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  max-width: 160px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--wb-fg-muted);
+  font-size: 12px;
+}
+
+.model-picker__trigger:hover:not(:disabled) {
+  background: var(--wb-hover);
+  color: var(--wb-fg-strong);
+}
+
+.model-picker__trigger:focus-visible {
+  box-shadow: 0 0 0 1px var(--wb-focus);
+}
+
+.model-picker__trigger .icon {
+  width: 12px;
+  height: 12px;
+  color: var(--wb-fg-faint);
+}
+
+.model-menu {
+  position: absolute;
+  left: 0;
+  z-index: 20;
+  min-width: 240px;
+  padding: 6px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: var(--r-xl);
+  background: #1c1c1c;
+  box-shadow: var(--wb-shadow);
+}
+
+.model-picker--down .model-menu {
+  top: calc(100% + 6px);
+}
+
+.model-picker--up .model-menu {
+  bottom: calc(100% + 6px);
+}
+
+.model-menu__group + .model-menu__group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--wb-border);
+}
+
+.model-menu__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-fg-strong);
+  font-size: 13px;
+  text-align: left;
+}
+
+.model-menu__row:hover {
+  background: var(--wb-hover);
+}
+
+.model-menu__row:focus-visible {
+  background: var(--wb-active-row);
+}
+
+.model-menu__value {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--wb-fg-muted);
+  font-size: 13px;
+}
+
+.model-menu__value .icon,
+.model-menu__check .icon {
+  width: 12px;
+  height: 12px;
+  color: var(--wb-fg-faint);
+}
+
+.model-menu__check {
+  display: inline-flex;
+}
+
+.model-switch {
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 18px;
+  border-radius: var(--r-pill);
+  background: #3a3a3a;
+}
+
+.model-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e8e8e8;
+}
+
+.model-switch--on {
+  background: #e8e8e8;
+}
+
+.model-switch--on::after {
+  left: 16px;
+  background: #1a1a1a;
 }
 
 /* Repository scope toggle in the Agents header. */
@@ -1165,7 +1276,7 @@ textarea.new-agent__claims {
 .agent-row__main {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   width: 100%;
   padding: 6px 10px;
   border: 0;
@@ -1910,7 +2021,7 @@ textarea.new-agent__claims {
 /* Agent view */
 .agent-view__header {
   flex: none;
-  padding: 10px 16px 12px;
+  padding: 8px 16px 10px;
   border-bottom: 1px solid var(--wb-border);
   background: var(--wb-editor-bg);
 }
@@ -1919,10 +2030,9 @@ textarea.new-agent__claims {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
-.agent-view__agent,
 .agent-view__confirm {
   color: var(--wb-fg-muted);
   font-size: 12px;
@@ -1931,40 +2041,15 @@ textarea.new-agent__claims {
 .agent-view__meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 22px;
-  margin: 10px 0 0 40px;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 6px 0 0;
+  color: var(--wb-fg-muted);
   font-size: 12px;
 }
 
-.agent-view__meta div {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.agent-view__meta dt {
-  color: var(--wb-fg-faint);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.agent-view__meta dd {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  margin: 0;
-  color: var(--wb-fg-strong);
-}
-
 .agent-view__worktree {
-  flex: 1 1 280px;
-}
-
-.agent-view__worktree .mono {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2147,6 +2232,8 @@ input.git-actions__input {
 
 /* Continue / hand-off composer: Cursor-style rounded input card. */
 .composer {
+  position: relative;
+  z-index: 2;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -2195,19 +2282,8 @@ input.git-actions__input {
   gap: 8px;
 }
 
-.wb-select.composer__agent {
-  width: auto;
-  height: 24px;
-  padding: 0 4px;
-  border: 0;
-  background: transparent;
-}
-
-.wb-select.composer__agent:hover,
-.wb-select.composer__agent:focus-visible {
-  border: 0;
-  box-shadow: none;
-  background: var(--wb-hover);
+.composer__bar .composer__send {
+  margin-left: auto;
 }
 
 .composer__hint {
