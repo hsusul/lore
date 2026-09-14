@@ -149,6 +149,9 @@ pub fn attention(log: &Path) -> Option<String> {
         .rev()
         .filter(|e| matches!(e.kind, ActivityKind::Error | ActivityKind::Output))
         .find_map(|e| {
+            if is_claude_hook_failure(&e.text) {
+                return None;
+            }
             let lower = e.text.to_lowercase();
             // Only quota exhaustion, not transient 429 "rate limit" retries.
             if lower.contains("usage limit")
@@ -229,7 +232,7 @@ pub fn last_activity(log: &Path) -> Option<String> {
             lines
                 .iter()
                 .rev()
-                .find(|l| !l.starts_with('{'))
+                .find(|l| !l.starts_with('{') && !is_claude_hook_failure(l))
                 .map(|l| l.to_string())
         })
         .map(|s| truncate(&s))
@@ -287,6 +290,26 @@ fn event_text(v: &serde_json::Value) -> Option<String> {
 const ACTIVITY_TAIL_BYTES: u64 = 512 * 1024;
 const MAX_EVENT_CHARS: usize = 2_000;
 
+/// Claude settings/hooks can fail on stderr without the agent itself failing.
+/// Those lines mention "error" so they used to show as errors and steal focus.
+fn is_claude_hook_failure(line: &str) -> bool {
+    let l = line.to_ascii_lowercase();
+    l.contains("hook")
+        && (l.contains("econnrefused")
+            || l.contains("hook failed")
+            || (l.contains("hook [") && l.contains("failed")))
+}
+
+fn line_kind(line: &str) -> ActivityKind {
+    if is_claude_hook_failure(line) {
+        ActivityKind::Output
+    } else if line.to_ascii_lowercase().contains("error") {
+        ActivityKind::Error
+    } else {
+        ActivityKind::Output
+    }
+}
+
 /// The agent's recent activity as a readable timeline, oldest first.
 ///
 /// Thinking/reasoning and tool results (which may contain whole files) are
@@ -304,11 +327,7 @@ fn activity_with_tail(log: &Path, max_events: usize, tail: u64) -> Vec<ActivityD
         match serde_json::from_str::<serde_json::Value>(line) {
             Ok(v) => events.extend(activity_from_event(&v)),
             Err(_) if !line.starts_with('{') => events.push(ActivityDto {
-                kind: if line.to_lowercase().contains("error") {
-                    ActivityKind::Error
-                } else {
-                    ActivityKind::Output
-                },
+                kind: line_kind(line),
                 text: cap(line),
             }),
             Err(_) => {}
@@ -518,7 +537,7 @@ mod tests {
                 (ActivityKind::Tool, "Edit src/auth.ts"),
                 (ActivityKind::Result, "Fixed"),
                 (
-                    ActivityKind::Error,
+                    ActivityKind::Output,
                     "hook failed: connect ECONNREFUSED error"
                 ),
             ]
@@ -527,6 +546,18 @@ mod tests {
         assert!(!events
             .iter()
             .any(|e| e.text.contains("private") || e.text.contains("whole file")));
+    }
+
+    #[test]
+    fn claude_hook_failures_are_output_and_never_attention() {
+        let f = log_with(&[
+            "SessionEnd hook [http://127.0.0.1:8737/agents/hooks/claude/event?managed_by=headroom&version=3] failed: connect ECONNREFUSED 127.0.0.1:8737",
+        ]);
+        let events = activity(f.path(), 10);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, ActivityKind::Output);
+        assert!(attention(f.path()).is_none());
+        assert!(last_activity(f.path()).is_none());
     }
 
     fn args(launch: Launch<'_>) -> Vec<String> {
