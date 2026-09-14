@@ -352,7 +352,14 @@ export default function Workbench() {
         </h1>
         {workspaceError && (
           <span className="wb-titlebar__error" role="alert">
-            {workspaceError}
+            <span className="wb-titlebar__error-text">{workspaceError}</span>
+            <button
+              type="button"
+              className="wb-titlebar__error-dismiss"
+              onClick={() => setWorkspaceError(null)}
+            >
+              Dismiss
+            </button>
           </span>
         )}
         <span className="wb-titlebar__spacer" />

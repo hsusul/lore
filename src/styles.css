@@ -459,10 +459,32 @@ kbd {
 }
 
 .wb-titlebar__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 12rem;
   overflow: hidden;
   color: var(--wb-danger);
+}
+
+.wb-titlebar__error-text {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wb-titlebar__error-dismiss {
+  flex: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .wb-titlebar__spacer,
@@ -627,7 +649,24 @@ kbd {
 }
 
 .wb-view--agents .wb-view__body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   padding: 0 12px 12px;
+}
+
+.wb-view--agents .agents-pane {
+  flex: 1 1 auto;
+  min-height: 8rem;
+  overflow: auto;
+}
+
+.wb-view--agents .new-agent {
+  flex: 0 1 auto;
+  max-height: 48%;
+  min-height: 0;
+  overflow: auto;
 }
 
 .wb-view__body > .wb-note {
@@ -829,7 +868,7 @@ body.is-resizing-horizontal .sash--horizontal::before {
 
 .new-agent__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
+  grid-template-columns: minmax(0, 1fr) max-content;
   gap: 8px;
 }
 

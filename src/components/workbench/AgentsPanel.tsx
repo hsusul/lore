@@ -70,38 +70,40 @@ export default function AgentsPanel(props: Props) {
           onOpenFolder={props.onOpenFolder}
           focusToken={props.focusToken}
         />
-        <h3 className="wb-subhead">Tasks</h3>
-        {listError && (
-          <p className="wb-note wb-note--error" role="alert">
-            {listError}
-          </p>
-        )}
-        {tasks === null ? (
-          <p className="wb-note" role="status">
-            Loading tasks…
-          </p>
-        ) : tasks.length === 0 ? (
-          <p className="wb-note">
-            {!allRepos && hiddenCount > 0
-              ? `No agents in this repository (${hiddenCount} in others).`
-              : "No agents yet."}
-          </p>
-        ) : (
-          <ul className="agents" aria-label="Tasks">
-            {tasks.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                selected={task.id === selectedTaskId}
-                onSelect={props.onSelect}
-                onStop={props.onStop}
-                onDiscard={props.onDiscard}
-                onReveal={props.onReveal}
-                onOpenDiff={props.onOpenDiff}
-              />
-            ))}
-          </ul>
-        )}
+        <div className="agents-pane">
+          <h3 className="wb-subhead">Tasks</h3>
+          {listError && (
+            <p className="wb-note wb-note--error" role="alert">
+              {listError}
+            </p>
+          )}
+          {tasks === null ? (
+            <p className="wb-note" role="status">
+              Loading tasks…
+            </p>
+          ) : tasks.length === 0 ? (
+            <p className="wb-note">
+              {!allRepos && hiddenCount > 0
+                ? `No agents in this repository (${hiddenCount} in others).`
+                : "No agents yet."}
+            </p>
+          ) : (
+            <ul className="agents" aria-label="Tasks">
+              {tasks.map((task) => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  selected={task.id === selectedTaskId}
+                  onSelect={props.onSelect}
+                  onStop={props.onStop}
+                  onDiscard={props.onDiscard}
+                  onReveal={props.onReveal}
+                  onOpenDiff={props.onOpenDiff}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -228,7 +230,7 @@ function NewAgentForm({
           <textarea
             rows={2}
             className="new-agent__claims"
-            placeholder="src/parser/, docs/SCHEMA.md"
+            placeholder="e.g. calc.py, greet.py"
             value={claimsText}
             onChange={(e) => setClaimsText(e.target.value)}
           />

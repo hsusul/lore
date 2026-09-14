@@ -260,6 +260,18 @@ describe("Workbench", () => {
     await screen.findByRole("treeitem", { name: "src" });
   });
 
+  it("shows a dismissible alert when the chosen folder is not a git repository", async () => {
+    window.localStorage.clear();
+    vi.mocked(chooseRepositoryDirectory).mockResolvedValue("/tmp/not-a-repo");
+    vi.mocked(openWorkspace).mockRejectedValue("That folder isn't inside a git repository");
+    render(<Workbench />);
+    fireEvent.click(screen.getAllByRole("button", { name: "Open Folder…" })[0]);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("That folder isn't inside a git repository");
+    fireEvent.click(within(alert).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("command palette opens with ⌘K, lists loaded files, and runs commands", async () => {
     render(<Workbench />);
     await screen.findByRole("treeitem", { name: "README.md" });
