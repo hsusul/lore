@@ -283,6 +283,10 @@ describe("Workbench", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await screen.findByRole("tab", { name: /README\.md/ })).toBeTruthy();
 
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(await screen.findByRole("combobox", { name: "Search commands and files" })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search commands and files" }), { key: "Escape" });
+
     fireEvent.keyDown(window, { key: "p", metaKey: true });
     fireEvent.change(await screen.findByRole("combobox", { name: "Search commands and files" }), { target: { value: "toggle panel" } });
     await act(async () => {

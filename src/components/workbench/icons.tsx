@@ -152,6 +152,29 @@ export const ArrowUpIcon = () => (
   </Icon>
 );
 
+export const SearchIcon = ({ size = 16 }: { size?: number }) => (
+  <Icon size={size}>
+    <circle cx="7" cy="7" r="4.25" />
+    <path d="m10.25 10.25 3 3" />
+  </Icon>
+);
+
+/** Titlebar layout: primary sidebar. */
+export const SidebarIcon = () => (
+  <Icon>
+    <rect x="2.25" y="3.25" width="11.5" height="9.5" rx="1.25" />
+    <path d="M6.25 3.25v9.5" />
+  </Icon>
+);
+
+/** Titlebar layout: bottom panel. */
+export const PanelIcon = () => (
+  <Icon>
+    <rect x="2.25" y="3.25" width="11.5" height="9.5" rx="1.25" />
+    <path d="M2.25 9.25h11.5" />
+  </Icon>
+);
+
 export const ArrowDownIcon = () => (
   <Icon size={14}>
     <path d="M8 3.25v9.5M4.25 9 8 12.75 11.75 9" />

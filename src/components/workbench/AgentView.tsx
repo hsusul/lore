@@ -12,6 +12,7 @@ import {
   StopIcon,
   TrashIcon,
   WarningIcon,
+  ArrowUpIcon,
 } from "./icons";
 import { AGENT_LABELS, errorText, isOwnershipError } from "./state";
 import { useActivity } from "./useTasks";
@@ -475,52 +476,55 @@ export default function AgentView({
       <ActivityList items={activity.items} error={activity.error} label={`Activity of ${task.title}`} />
       {canContinue && (
         <form className="composer" aria-label="Continue task" onSubmit={(e) => void submitContinue(e)}>
-          <textarea
-            className="composer__input"
-            aria-label="Follow-up prompt"
-            rows={2}
-            placeholder={handoff ? `Brief ${AGENT_SHORT[nextAgent]} on what to do next…` : "What should the agent do next?"}
-            value={prompt}
-            disabled={continuing}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                e.currentTarget.form?.requestSubmit();
-              }
-            }}
-          />
-          {continueError && (
-            <p className="wb-note wb-note--error" role="alert">
-              {continueError}
-            </p>
-          )}
-          <div className="composer__bar">
-            <select
-              className="wb-select composer__agent"
-              aria-label="Next agent"
-              value={nextAgent}
+          <div className="composer__box">
+            <textarea
+              className="composer__input"
+              aria-label="Follow-up prompt"
+              rows={2}
+              placeholder={handoff ? `Brief ${AGENT_SHORT[nextAgent]} on what to do next…` : "Plan, search, @ for context"}
+              value={prompt}
               disabled={continuing}
-              onChange={(e) => setNextAgent(e.target.value as TaskAgent)}
-            >
-              <option value="claude_code">{AGENT_LABELS.claude_code}</option>
-              <option value="codex">{AGENT_LABELS.codex}</option>
-            </select>
-            <span className="composer__hint">
-              {queueLocked
-                ? "Paused while the merge queue runs"
-                : handoff
-                  ? "Lore passes a context brief to the new agent."
-                  : "⌘Enter to send"}
-            </span>
-            <button
-              type="submit"
-              className="wb-btn wb-btn--primary"
-              disabled={continuing || queueLocked}
-              title="⌘Enter"
-            >
-              {continuing ? "Sending…" : handoff ? `Hand off to ${AGENT_SHORT[nextAgent]}` : "Continue"}
-            </button>
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
+            />
+            {continueError && (
+              <p className="wb-note wb-note--error" role="alert">
+                {continueError}
+              </p>
+            )}
+            <div className="composer__bar">
+              <select
+                className="wb-select composer__agent"
+                aria-label="Next agent"
+                value={nextAgent}
+                disabled={continuing}
+                onChange={(e) => setNextAgent(e.target.value as TaskAgent)}
+              >
+                <option value="claude_code">{AGENT_LABELS.claude_code}</option>
+                <option value="codex">{AGENT_LABELS.codex}</option>
+              </select>
+              <span className="composer__hint">
+                {queueLocked
+                  ? "Paused while the merge queue runs"
+                  : handoff
+                    ? "Lore passes a context brief to the new agent."
+                    : "⌘Enter to send"}
+              </span>
+              <button
+                type="submit"
+                className="composer__send"
+                disabled={continuing || queueLocked}
+                title="⌘Enter"
+                aria-label={continuing ? "Sending…" : handoff ? `Hand off to ${AGENT_SHORT[nextAgent]}` : "Continue"}
+              >
+                <ArrowUpIcon />
+              </button>
+            </div>
           </div>
         </form>
       )}

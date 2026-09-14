@@ -20,7 +20,7 @@ import CommandPalette, { type PaletteItem } from "./CommandPalette";
 import DiffView from "./DiffView";
 import EditorTabs from "./EditorTabs";
 import FileView from "./FileView";
-import { Mark } from "./icons";
+import { Mark, PanelIcon, SearchIcon, SidebarIcon } from "./icons";
 import Sash from "./Sash";
 import { ExplorerPanel } from "./Sidebar";
 import {
@@ -46,7 +46,7 @@ import { dirKey, useDirCache } from "./useDirCache";
 import { useMergeQueues } from "./useMergeQueue";
 import { useTasks } from "./useTasks";
 
-/** Lore's VS Code style workbench: explorer, agents, tabbed editors, and a bottom panel. */
+/** Lore's Cursor-style workbench: overlay titlebar, explorer, agents, tabbed editors, and a bottom panel. */
 export default function Workbench() {
   const { tasks, listError, loadWarning, refresh } = useTasks();
   const dirs = useDirCache();
@@ -344,28 +344,63 @@ export default function Workbench() {
   return (
     <div className="wb">
       <header className="wb-titlebar">
-        <Mark />
-        <span className="wb-titlebar__app">Lore</span>
-        <span className="wb-titlebar__sep" aria-hidden="true">—</span>
-        <h1 className="wb-titlebar__workspace" title={workspace ?? undefined}>
-          {workspace ? baseName(workspace) : "No folder open"}
-        </h1>
-        {workspaceError && (
-          <span className="wb-titlebar__error" role="alert">
-            <span className="wb-titlebar__error-text">{workspaceError}</span>
-            <button
-              type="button"
-              className="wb-titlebar__error-dismiss"
-              onClick={() => setWorkspaceError(null)}
-            >
-              Dismiss
-            </button>
+        <div className="wb-titlebar__left">
+          <TitlebarLights />
+          <Mark />
+          <h1 className="wb-titlebar__workspace visually-hidden" title={workspace ?? undefined}>
+            {workspace ? baseName(workspace) : "No folder open"}
+          </h1>
+          {workspaceError && (
+            <span className="wb-titlebar__error" role="alert">
+              <span className="wb-titlebar__error-text">{workspaceError}</span>
+              <button
+                type="button"
+                className="wb-titlebar__error-dismiss"
+                onClick={() => setWorkspaceError(null)}
+              >
+                Dismiss
+              </button>
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          className="wb-titlebar__search"
+          aria-label="Search"
+          title="Search (⌘K)"
+          onClick={() => setPaletteOpen(true)}
+        >
+          <SearchIcon />
+          <span className="wb-titlebar__search-label">
+            {workspace ? baseName(workspace) : "Search"}
           </span>
-        )}
-        <span className="wb-titlebar__spacer" />
-        <button type="button" className="wb-btn wb-btn--small" onClick={() => void openFolder()}>
-          Open Folder…
+          <kbd>⌘K</kbd>
         </button>
+        <div className="wb-titlebar__right">
+          <button
+            type="button"
+            className={`wb-icon-btn${sidebarView ? " wb-icon-btn--on" : ""}`}
+            aria-label="Toggle sidebar"
+            aria-pressed={sidebarView !== null}
+            title="Toggle sidebar (⌘B)"
+            onClick={toggleSidebar}
+          >
+            <SidebarIcon />
+          </button>
+          <button
+            type="button"
+            className={`wb-icon-btn${panelOpen ? " wb-icon-btn--on" : ""}`}
+            aria-label="Toggle panel"
+            aria-pressed={panelOpen}
+            title="Toggle panel (⌘J)"
+            onClick={() => setPanelOpen((open) => !open)}
+          >
+            <PanelIcon />
+          </button>
+          <button type="button" className="wb-btn wb-btn--small" onClick={() => void openFolder()}>
+            Open Folder…
+          </button>
+        </div>
       </header>
 
       <div className="wb-main">
@@ -470,5 +505,21 @@ export default function Workbench() {
 
       {paletteOpen && <CommandPalette items={paletteItems} onClose={() => setPaletteOpen(false)} />}
     </div>
+  );
+}
+
+/** macOS traffic lights: drawn in the browser preview; a spacer under Tauri's overlay controls. */
+function TitlebarLights() {
+  const native = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  return (
+    <span className="wb-titlebar__lights" aria-hidden="true">
+      {!native && (
+        <>
+          <i className="wb-titlebar__light wb-titlebar__light--close" />
+          <i className="wb-titlebar__light wb-titlebar__light--min" />
+          <i className="wb-titlebar__light wb-titlebar__light--zoom" />
+        </>
+      )}
+    </span>
   );
 }

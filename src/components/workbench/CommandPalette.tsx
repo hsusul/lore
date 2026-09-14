@@ -101,7 +101,7 @@ export default function CommandPalette({ items, onClose }: Props) {
           aria-autocomplete="list"
           aria-activedescendant={results.length ? `palette-opt-${current}` : undefined}
           aria-label="Search commands and files"
-          placeholder="Type a command or file name"
+          placeholder="Search files and commands"
           value={query}
           spellCheck={false}
           onChange={(e) => {
