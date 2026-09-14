@@ -582,6 +582,38 @@ pub struct TasksChangedEvent {
     pub ids: Vec<String>,
 }
 
+/// Per-repository settings Lore keeps (`get_repo_settings` / `set_repo_test_command`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RepoSettingsDto {
+    pub repo_path: String,
+    /// Shell command the merge queue runs in a task's worktree before merging,
+    /// e.g. `npm test`. None means merges are not gated on tests.
+    pub test_command: Option<String>,
+}
+
+/// One task in a merge queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MergeQueueItemDto {
+    pub task_id: String,
+    pub title: String,
+    /// `pending` | `updating` | `testing` | `merging` | `merged` | `failed` |
+    /// `skipped` | `cancelled`.
+    pub status: String,
+    pub detail: Option<String>,
+}
+
+/// State of a repository's merge queue (`get_merge_queue`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MergeQueueDto {
+    pub repo_path: String,
+    pub running: bool,
+    pub test_command: Option<String>,
+    pub items: Vec<MergeQueueItemDto>,
+}
+
 /// Files a task shares with another unmerged task (overlap warning, step 3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

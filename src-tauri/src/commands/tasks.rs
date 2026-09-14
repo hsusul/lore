@@ -11,11 +11,11 @@ use std::time::{Duration, Instant};
 
 use lore_ipc::{
     ActivityDto, ContinueTaskRequest, CreateTaskRequest, DecisionDto, DirEntryDto, FileContentDto,
-    MergeResultDto, TaskDiffDto, TaskDto,
+    MergeQueueDto, MergeResultDto, RepoSettingsDto, TaskDiffDto, TaskDto, TasksChangedEvent,
 };
 use lore_orchestrator::{describe, AgentPrograms, TaskSnapshot};
 use tauri::async_runtime::spawn_blocking;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::state::AppState;
 
@@ -117,6 +117,79 @@ pub async fn list_decisions(
             repo_path.as_deref(),
             limit.unwrap_or(100).min(1_000) as usize,
         ))
+    })
+    .await
+}
+
+/// Lore's settings for a repository (the merge-queue test command).
+#[tauri::command]
+pub async fn get_repo_settings(
+    app: AppHandle,
+    repo_path: String,
+) -> Result<RepoSettingsDto, String> {
+    with_orchestrator(app, move |o| {
+        o.repo_settings(&repo_path).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Set or clear the command the merge queue runs before each merge.
+#[tauri::command]
+pub async fn set_repo_test_command(
+    app: AppHandle,
+    repo_path: String,
+    command: Option<String>,
+) -> Result<RepoSettingsDto, String> {
+    with_orchestrator(app, move |o| {
+        o.set_repo_test_command(&repo_path, command.as_deref())
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Start merging tasks in order on a background thread. Poll `get_merge_queue`
+/// for progress; `tasks_changed` fires for every task when it finishes.
+#[tauri::command]
+pub async fn start_merge_queue(
+    app: AppHandle,
+    repo_path: String,
+    task_ids: Vec<String>,
+) -> Result<MergeQueueDto, String> {
+    for id in &task_ids {
+        check_id(id)?;
+    }
+    if task_ids.len() > 100 {
+        return Err("at most 100 tasks per queue".into());
+    }
+    let ids = task_ids.clone();
+    let path = repo_path.clone();
+    let queue = with_orchestrator(app.clone(), move |o| {
+        o.start_merge_queue(&path, &ids).map_err(|e| e.to_string())
+    })
+    .await?;
+    let repo = queue.repo_path.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        state.orchestrator.run_merge_queue(&repo);
+        let _ = app.emit("tasks_changed", TasksChangedEvent { ids: task_ids });
+    });
+    Ok(queue)
+}
+
+/// The latest merge queue for a repository, if one ran this session.
+#[tauri::command]
+pub async fn get_merge_queue(
+    app: AppHandle,
+    repo_path: String,
+) -> Result<Option<MergeQueueDto>, String> {
+    with_orchestrator(app, move |o| Ok(o.merge_queue(&repo_path))).await
+}
+
+/// Stop a running merge queue after its current step (a running test is stopped).
+#[tauri::command]
+pub async fn cancel_merge_queue(app: AppHandle, repo_path: String) -> Result<(), String> {
+    with_orchestrator(app, move |o| {
+        o.cancel_merge_queue(&repo_path).map_err(|e| e.to_string())
     })
     .await
 }

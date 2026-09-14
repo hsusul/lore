@@ -35,8 +35,9 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lore_ipc::{
-    ActivityDto, ActivityKind, ContinueTaskRequest, CreateTaskRequest, DecisionDto, MergeResultDto,
-    TaskAgent, TaskDiffDto, TaskDto, TaskOverlapDto, TaskPermission, TaskState,
+    ActivityDto, ActivityKind, ContinueTaskRequest, CreateTaskRequest, DecisionDto, MergeQueueDto,
+    MergeQueueItemDto, MergeResultDto, RepoSettingsDto, TaskAgent, TaskDiffDto, TaskDto,
+    TaskOverlapDto, TaskPermission, TaskState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +62,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 const STORE_FILE: &str = "tasks.json";
 const LOCK_FILE: &str = "lock";
 const DECISIONS_FILE: &str = "decisions.jsonl";
+const REPOS_FILE: &str = "repos.json";
+const MAX_TEST_COMMAND: usize = 2_000;
+/// How long a merge-queue test command may run before it is stopped.
+const DEFAULT_TEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_DECISIONS: usize = 2_000;
 const BRANCH_PREFIX: &str = "lore/";
 const MAX_TITLE: usize = 200;
@@ -146,6 +151,11 @@ struct Inner {
     merging_repos: HashSet<PathBuf>,
     /// Set by `shutdown`; no new agent may start afterwards.
     shutting_down: bool,
+    /// Merge queues by repository, including finished ones until replaced.
+    queues: HashMap<PathBuf, MergeQueueDto>,
+    /// Repositories whose running queue was asked to stop.
+    cancel_queues: HashSet<PathBuf>,
+    test_timeout: Duration,
     load_warning: Option<String>,
 }
 
@@ -302,6 +312,9 @@ impl Orchestrator {
                 opened_roots: HashSet::new(),
                 merging_repos: HashSet::new(),
                 shutting_down: false,
+                queues: HashMap::new(),
+                cancel_queues: HashSet::new(),
+                test_timeout: DEFAULT_TEST_TIMEOUT,
                 load_warning,
             }),
             _instance: instance,
@@ -694,6 +707,13 @@ impl Orchestrator {
             orchestrator: self,
             repo: task.repo_path.clone(),
         };
+        self.merge_prepared(&task)
+    }
+
+    /// The merge itself, for a caller that already holds the task's busy marker
+    /// and the repository's merge slot.
+    fn merge_prepared(&self, task: &TaskRecord) -> Result<MergeResultDto> {
+        let id = task.id.as_str();
         if !task.branch.starts_with(BRANCH_PREFIX) {
             return Err(Error::Invalid(
                 "refusing to merge a branch Lore did not create".into(),
@@ -739,7 +759,7 @@ impl Orchestrator {
                         note = format!(" (Lore could not save this: {e})");
                     }
                 }
-                self.record_decision(&task, "merged", &format!("into {into}"));
+                self.record_decision(task, "merged", &format!("into {into}"));
                 Ok(MergeResultDto {
                     merged: true,
                     message: format!("Merged {} into {into}.{note}", task.branch),
@@ -749,7 +769,7 @@ impl Orchestrator {
             }
             Err(conflicts) => {
                 self.record_decision(
-                    &task,
+                    task,
                     "merge_conflict",
                     &format!("into {into}: {}", conflicts.join(", ")),
                 );
@@ -764,6 +784,289 @@ impl Orchestrator {
                     conflicts,
                 })
             }
+        }
+    }
+
+    fn load_repo_settings(&self) -> HashMap<String, RepoSettingsDto> {
+        fs::read(self.root.join(REPOS_FILE))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// Settings Lore keeps for a repository (any path inside it).
+    pub fn repo_settings(&self, repo_path: &str) -> Result<RepoSettingsDto> {
+        let top = workspace::repository_root(repo_path)?;
+        let key = top.display().to_string();
+        Ok(self
+            .load_repo_settings()
+            .remove(&key)
+            .unwrap_or(RepoSettingsDto {
+                repo_path: key,
+                test_command: None,
+            }))
+    }
+
+    /// Set or clear the command the merge queue runs before merging a task.
+    pub fn set_repo_test_command(
+        &self,
+        repo_path: &str,
+        command: Option<&str>,
+    ) -> Result<RepoSettingsDto> {
+        let top = workspace::repository_root(repo_path)?;
+        let key = top.display().to_string();
+        let command = command.map(str::trim).filter(|c| !c.is_empty());
+        if let Some(c) = command {
+            if c.len() > MAX_TEST_COMMAND || c.contains('\0') {
+                return Err(Error::Invalid(format!(
+                    "test command must be under {MAX_TEST_COMMAND} characters"
+                )));
+            }
+        }
+        // One writer at a time for the settings file.
+        let _guard = self.lock();
+        let mut all = self.load_repo_settings();
+        let settings = RepoSettingsDto {
+            repo_path: key.clone(),
+            test_command: command.map(str::to_string),
+        };
+        all.insert(key, settings.clone());
+        let tmp = self.root.join(format!("{REPOS_FILE}.tmp"));
+        fs::write(&tmp, serde_json::to_vec_pretty(&all)?)?;
+        fs::rename(tmp, self.root.join(REPOS_FILE))?;
+        Ok(settings)
+    }
+
+    /// Override the merge-queue test timeout (tests use a short one).
+    pub fn set_test_timeout(&self, timeout: Duration) {
+        self.lock().test_timeout = timeout;
+    }
+
+    /// The latest merge queue for a repository, if one ran this session.
+    pub fn merge_queue(&self, repo_path: &str) -> Option<MergeQueueDto> {
+        let top = workspace::repository_root(repo_path).ok()?;
+        self.lock().queues.get(&top).cloned()
+    }
+
+    /// Ask a running queue to stop after (or during) its current step.
+    pub fn cancel_merge_queue(&self, repo_path: &str) -> Result<()> {
+        let top = workspace::repository_root(repo_path)?;
+        let mut inner = self.lock();
+        if inner.queues.get(&top).is_some_and(|q| q.running) {
+            inner.cancel_queues.insert(top);
+        }
+        Ok(())
+    }
+
+    /// Validate a queue and register it as running, holding the repository's
+    /// merge slot. Call [`Orchestrator::run_merge_queue`] next (on a thread).
+    pub fn start_merge_queue(&self, repo_path: &str, task_ids: &[String]) -> Result<MergeQueueDto> {
+        if task_ids.is_empty() {
+            return Err(Error::Invalid("choose at least one task to merge".into()));
+        }
+        let top = workspace::repository_root(repo_path)?;
+        let test_command = self.repo_settings(&top.display().to_string())?.test_command;
+        let mut inner = self.lock();
+        self.reap(&mut inner)?;
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        for id in task_ids {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let task = inner.task(id)?;
+            let same_repo = fs::canonicalize(&task.repo_path).is_ok_and(|p| p == top);
+            if !same_repo {
+                return Err(Error::Invalid(format!(
+                    "\"{}\" belongs to a different repository",
+                    task.title
+                )));
+            }
+            if task.merged_into.is_some() {
+                return Err(Error::Invalid(format!(
+                    "\"{}\" is already merged",
+                    task.title
+                )));
+            }
+            ensure_idle(&inner, task)?;
+            items.push(MergeQueueItemDto {
+                task_id: id.clone(),
+                title: task.title.clone(),
+                status: "pending".into(),
+                detail: None,
+            });
+        }
+        if inner.queues.get(&top).is_some_and(|q| q.running) {
+            return Err(Error::Invalid(
+                "a merge queue is already running for this repository".into(),
+            ));
+        }
+        if !inner.merging_repos.insert(top.clone()) {
+            return Err(Error::Invalid(
+                "another merge into this repository is in progress".into(),
+            ));
+        }
+        inner.cancel_queues.remove(&top);
+        let queue = MergeQueueDto {
+            repo_path: top.display().to_string(),
+            running: true,
+            test_command,
+            items,
+        };
+        inner.queues.insert(top, queue.clone());
+        Ok(queue)
+    }
+
+    /// Run a started queue to completion: for each task in order, bring its
+    /// branch up to date with the target branch, run the repository's test
+    /// command in the task's worktree, then merge. Stops at the first failure;
+    /// later tasks are marked skipped. Blocking.
+    pub fn run_merge_queue(&self, repo_path: &str) -> MergeQueueDto {
+        let top =
+            workspace::repository_root(repo_path).unwrap_or_else(|_| PathBuf::from(repo_path));
+        let _slot = RepoMerge {
+            orchestrator: self,
+            repo: top.clone(),
+        };
+        let (ids, test_command, timeout) = {
+            let inner = self.lock();
+            let Some(q) = inner.queues.get(&top) else {
+                return MergeQueueDto {
+                    repo_path: top.display().to_string(),
+                    running: false,
+                    test_command: None,
+                    items: Vec::new(),
+                };
+            };
+            (
+                q.items
+                    .iter()
+                    .map(|i| i.task_id.clone())
+                    .collect::<Vec<_>>(),
+                q.test_command.clone(),
+                inner.test_timeout,
+            )
+        };
+
+        let mut stopped = false;
+        for (index, id) in ids.iter().enumerate() {
+            if stopped {
+                self.set_queue_item(&top, index, "skipped", Some("an earlier task failed"));
+                continue;
+            }
+            if self.queue_cancelled(&top) {
+                self.set_queue_item(&top, index, "cancelled", None);
+                stopped = true;
+                continue;
+            }
+            match self.run_queue_item(&top, index, id, test_command.as_deref(), timeout) {
+                Ok(()) => {}
+                Err(reason) => {
+                    let cancelled = self.queue_cancelled(&top);
+                    self.set_queue_item(
+                        &top,
+                        index,
+                        if cancelled { "cancelled" } else { "failed" },
+                        Some(&reason),
+                    );
+                    stopped = true;
+                }
+            }
+        }
+
+        let mut inner = self.lock();
+        inner.cancel_queues.remove(&top);
+        match inner.queues.get_mut(&top) {
+            Some(q) => {
+                q.running = false;
+                q.clone()
+            }
+            None => MergeQueueDto {
+                repo_path: top.display().to_string(),
+                running: false,
+                test_command,
+                items: Vec::new(),
+            },
+        }
+    }
+
+    fn queue_cancelled(&self, repo: &Path) -> bool {
+        self.lock().cancel_queues.contains(repo)
+    }
+
+    fn set_queue_item(&self, repo: &Path, index: usize, status: &str, detail: Option<&str>) {
+        let mut inner = self.lock();
+        if let Some(item) = inner
+            .queues
+            .get_mut(repo)
+            .and_then(|q| q.items.get_mut(index))
+        {
+            item.status = status.to_string();
+            item.detail = detail.map(|d| d.chars().take(2_000).collect());
+        }
+    }
+
+    /// One queue step. Returns a human-readable reason on failure.
+    fn run_queue_item(
+        &self,
+        repo: &Path,
+        index: usize,
+        id: &str,
+        test_command: Option<&str>,
+        timeout: Duration,
+    ) -> std::result::Result<(), String> {
+        let (task, _busy) = {
+            let mut inner = self.lock();
+            let _ = self.reap(&mut inner);
+            let task = inner.task(id).map_err(|e| e.to_string())?.clone();
+            ensure_idle(&inner, &task).map_err(|e| e.to_string())?;
+            if task.merged_into.is_some() {
+                return Err("already merged".into());
+            }
+            let busy = self.mark_busy(&mut inner, id).map_err(|e| e.to_string())?;
+            (task, busy)
+        };
+        if !git::uncommitted(&task.worktree_path).is_empty() {
+            return Err("the task has uncommitted changes; commit them first".into());
+        }
+
+        self.set_queue_item(repo, index, "updating", None);
+        let into = git::current_branch(&task.repo_path).map_err(|e| e.to_string())?;
+        match git::merge_into_worktree(&task.worktree_path, &into) {
+            Ok(Ok(())) => {}
+            Ok(Err(conflicts)) => {
+                self.record_decision(
+                    &task,
+                    "queue_failed",
+                    &format!("updating from {into} conflicts: {}", conflicts.join(", ")),
+                );
+                return Err(format!(
+                    "updating from {into} conflicts in {}; resolve it in the worktree or continue the agent",
+                    conflicts.join(", ")
+                ));
+            }
+            Err(e) => return Err(format!("could not update from {into}: {e}")),
+        }
+
+        if let Some(command) = test_command {
+            self.set_queue_item(repo, index, "testing", Some(command));
+            let log = self.root.join("logs").join(format!("{id}.test.log"));
+            let outcome = run_test_command(&task.worktree_path, command, &log, timeout, || {
+                self.queue_cancelled(repo)
+            });
+            if let Err(reason) = outcome {
+                self.record_decision(&task, "queue_failed", &format!("tests: {reason}"));
+                return Err(format!("tests failed: {reason}"));
+            }
+        }
+
+        self.set_queue_item(repo, index, "merging", None);
+        let result = self.merge_prepared(&task).map_err(|e| e.to_string())?;
+        if result.merged {
+            self.set_queue_item(repo, index, "merged", Some(&result.message));
+            Ok(())
+        } else {
+            Err(result.message)
         }
     }
 
@@ -1123,6 +1426,77 @@ impl Inner {
             .find(|t| t.id == id)
             .ok_or(Error::NotFound)
     }
+}
+
+const TEST_LOG_TAIL: u64 = 4_000;
+
+/// Run `command` with `/bin/sh -c` in `worktree`, output to `log`. Stops the
+/// whole process group on timeout or when `cancelled` turns true.
+fn run_test_command(
+    worktree: &Path,
+    command: &str,
+    log: &Path,
+    timeout: Duration,
+    cancelled: impl Fn() -> bool,
+) -> std::result::Result<(), String> {
+    let out = File::create(log).map_err(|e| e.to_string())?;
+    let err = out.try_clone().map_err(|e| e.to_string())?;
+    let mut child = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(worktree)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(out))
+        .stderr(Stdio::from(err))
+        .spawn()
+        .map_err(|e| format!("could not start the test command: {e}"))?;
+    let pgid = child.id();
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Clean up anything the tests left running.
+                if process::group_alive(pgid) {
+                    process::stop_group(pgid, None);
+                }
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "exit {}; last output:\n{}",
+                        status
+                            .code()
+                            .map_or("signal".to_string(), |c| c.to_string()),
+                        log_tail(log)
+                    ))
+                };
+            }
+            Ok(None) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        if cancelled() {
+            process::stop_group(pgid, Some(&mut child));
+            return Err("cancelled".into());
+        }
+        if Instant::now() >= deadline {
+            process::stop_group(pgid, Some(&mut child));
+            return Err(format!("timed out after {}s", timeout.as_secs()));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn log_tail(log: &Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = File::open(log) else {
+        return String::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let _ = f.seek(SeekFrom::Start(len.saturating_sub(TEST_LOG_TAIL)));
+    let mut buf = Vec::new();
+    let _ = f.read_to_end(&mut buf);
+    String::from_utf8_lossy(&buf).trim().to_string()
 }
 
 /// The task is not running and nothing it started is still exiting.

@@ -1007,3 +1007,162 @@ fn discard_succeeds_when_the_branch_is_checked_out_elsewhere() {
         .iter()
         .any(|d| d.kind == "discarded" && d.detail.contains("branch kept")));
 }
+
+fn finished_committed_task(orch: &Orchestrator, repo: &Path, title: &str) -> String {
+    let id = orch
+        .create_task(&request(repo, title))
+        .unwrap()
+        .id()
+        .to_string();
+    wait_for(orch, &id, TaskState::Finished);
+    orch.commit_task(&id, title).unwrap();
+    id
+}
+
+#[test]
+fn merge_queue_updates_tests_and_merges_in_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    // Each agent writes its own file.
+    let agent = fake_agent(
+        tmp.path(),
+        "echo \"$PWD\" > \"out-$(basename \"$PWD\").txt\"",
+    );
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let a = finished_committed_task(&orch, &repo, "first");
+    let b = finished_committed_task(&orch, &repo, "second");
+
+    // The test command sees the target branch's latest changes: by the time the
+    // second task is tested, the first task's file must be present.
+    let repo_s = repo.display().to_string();
+    let first_file = format!("out-{a}.txt");
+    orch.set_repo_test_command(
+        &repo_s,
+        Some(&format!(
+            "test -f README.md && (test \"$(basename \"$PWD\")\" = {a} || test -f {first_file})"
+        )),
+    )
+    .unwrap();
+    assert!(orch.repo_settings(&repo_s).unwrap().test_command.is_some());
+
+    let started = orch
+        .start_merge_queue(&repo_s, &[a.clone(), b.clone()])
+        .unwrap();
+    assert!(started.running);
+    // A second queue or a manual merge cannot run meanwhile.
+    assert!(orch
+        .start_merge_queue(&repo_s, std::slice::from_ref(&a))
+        .is_err());
+    assert!(orch.merge_task(&a).is_err());
+
+    let done = orch.run_merge_queue(&repo_s);
+    assert!(!done.running);
+    let statuses: Vec<_> = done.items.iter().map(|i| i.status.as_str()).collect();
+    assert_eq!(statuses, ["merged", "merged"], "{:?}", done.items);
+    assert!(repo.join(&first_file).exists());
+    assert!(repo.join(format!("out-{b}.txt")).exists());
+    assert_eq!(git_out(&repo, &["status", "--porcelain"]), "");
+    // The slot is released afterwards.
+    assert!(orch.merge_queue(&repo_s).is_some_and(|q| !q.running));
+}
+
+#[test]
+fn merge_queue_stops_at_the_first_failing_test() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo x > \"f-$(basename \"$PWD\").txt\"");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let a = finished_committed_task(&orch, &repo, "good");
+    let b = finished_committed_task(&orch, &repo, "bad");
+    let c = finished_committed_task(&orch, &repo, "never");
+    let repo_s = repo.display().to_string();
+    orch.set_repo_test_command(
+        &repo_s,
+        Some(&format!(
+            "if [ \"$(basename \"$PWD\")\" = {b} ]; then echo boom >&2; exit 3; fi"
+        )),
+    )
+    .unwrap();
+
+    orch.start_merge_queue(&repo_s, &[a.clone(), b.clone(), c.clone()])
+        .unwrap();
+    let done = orch.run_merge_queue(&repo_s);
+    let statuses: Vec<_> = done.items.iter().map(|i| i.status.as_str()).collect();
+    assert_eq!(
+        statuses,
+        ["merged", "failed", "skipped"],
+        "{:?}",
+        done.items
+    );
+    let detail = done.items[1].detail.clone().unwrap();
+    assert!(
+        detail.contains("exit 3") && detail.contains("boom"),
+        "{detail}"
+    );
+    assert!(orch.task(&b).unwrap().merged_into.is_none());
+    assert!(orch.task(&c).unwrap().merged_into.is_none());
+    assert!(orch
+        .decisions(None, 20)
+        .iter()
+        .any(|d| d.kind == "queue_failed"));
+}
+
+#[test]
+fn merge_queue_times_out_and_can_be_cancelled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo x > \"f-$(basename \"$PWD\").txt\"");
+    let orch =
+        std::sync::Arc::new(Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap());
+    let a = finished_committed_task(&orch, &repo, "slow");
+    let repo_s = repo.display().to_string();
+    orch.set_repo_test_command(&repo_s, Some("sleep 30"))
+        .unwrap();
+    orch.set_test_timeout(Duration::from_millis(500));
+    orch.start_merge_queue(&repo_s, std::slice::from_ref(&a))
+        .unwrap();
+    let started = Instant::now();
+    let done = orch.run_merge_queue(&repo_s);
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(done.items[0].status, "failed");
+    assert!(done.items[0].detail.clone().unwrap().contains("timed out"));
+
+    // Cancel while the test command runs.
+    orch.set_test_timeout(Duration::from_secs(60));
+    orch.start_merge_queue(&repo_s, std::slice::from_ref(&a))
+        .unwrap();
+    let runner = {
+        let orch = orch.clone();
+        let repo_s = repo_s.clone();
+        std::thread::spawn(move || orch.run_merge_queue(&repo_s))
+    };
+    assert!(wait_until(|| orch
+        .merge_queue(&repo_s)
+        .is_some_and(|q| q.items[0].status == "testing")));
+    orch.cancel_merge_queue(&repo_s).unwrap();
+    let done = runner.join().unwrap();
+    assert_eq!(done.items[0].status, "cancelled");
+    assert!(orch.task(&a).unwrap().merged_into.is_none());
+}
+
+#[test]
+fn merge_queue_refuses_bad_input() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let other = tmp.path().join("other");
+    fs::create_dir_all(&other).unwrap();
+    sh(&other, &["init", "-q", "-b", "main"]);
+    sh(&other, &["commit", "-q", "--allow-empty", "-m", "i"]);
+    let agent = fake_agent(tmp.path(), "echo x > x.txt");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let a = finished_committed_task(&orch, &repo, "a");
+    assert!(orch
+        .start_merge_queue(&repo.display().to_string(), &[])
+        .is_err());
+    assert!(orch
+        .start_merge_queue(&other.display().to_string(), std::slice::from_ref(&a))
+        .is_err());
+    assert!(orch
+        .set_repo_test_command(&repo.display().to_string(), Some(&"x".repeat(5000)))
+        .is_err());
+}

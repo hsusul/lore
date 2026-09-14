@@ -346,6 +346,33 @@ pub fn merge_branch(
     }
 }
 
+/// Merge `branch` into the branch checked out in `worktree`, bringing a task up
+/// to date before it is tested and merged. A conflicting merge is aborted and
+/// the conflicting paths returned.
+pub fn merge_into_worktree(
+    worktree: &Path,
+    branch: &str,
+) -> Result<std::result::Result<(), Vec<String>>> {
+    let message = format!("Update from {branch}");
+    match run(
+        worktree,
+        &["merge", "--no-edit", "--no-verify", "-m", &message, branch],
+    ) {
+        Ok(_) => Ok(Ok(())),
+        Err(err) => {
+            let conflicts: Vec<String> = run(worktree, &["diff", "--name-only", "--diff-filter=U"])
+                .map(|s| s.lines().map(str::to_string).collect())
+                .unwrap_or_default();
+            let _ = run(worktree, &["merge", "--abort"]);
+            if conflicts.is_empty() {
+                Err(err)
+            } else {
+                Ok(Err(conflicts))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_porcelain_z;

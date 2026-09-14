@@ -75,7 +75,12 @@ pub fn run() {
             commit_task,
             merge_task,
             get_task,
-            list_decisions
+            list_decisions,
+            get_repo_settings,
+            set_repo_test_command,
+            start_merge_queue,
+            get_merge_queue,
+            cancel_merge_queue
         ])
         .build(tauri::generate_context!());
     let app = match app {
