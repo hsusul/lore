@@ -25,7 +25,7 @@ pub fn workspace_root(root: &str) -> Result<PathBuf> {
             "workspace must be an existing absolute directory".into(),
         ));
     }
-    let top = git::toplevel(&root)?;
+    let top = git::toplevel(&root).map_err(not_a_git_repository)?;
     let (a, b) = (fs::canonicalize(&root)?, fs::canonicalize(&top)?);
     if a != b {
         return Err(Error::Invalid(
@@ -43,7 +43,17 @@ pub fn repository_root(path: &str) -> Result<PathBuf> {
             "choose an existing folder inside a git repository".into(),
         ));
     }
-    Ok(fs::canonicalize(git::toplevel(&path)?)?)
+    let top = git::toplevel(&path).map_err(not_a_git_repository)?;
+    Ok(fs::canonicalize(top)?)
+}
+
+pub(crate) fn not_a_git_repository(err: Error) -> Error {
+    match err {
+        Error::Git(msg) if msg.to_ascii_lowercase().contains("not a git repository") => {
+            Error::Invalid("That folder isn't inside a git repository".into())
+        }
+        other => other,
+    }
 }
 
 fn resolve(root: &Path, rel: &str) -> Result<PathBuf> {
