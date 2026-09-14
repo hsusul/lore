@@ -206,13 +206,16 @@ pub async fn open_task_worktree(app: AppHandle, id: String) -> Result<(), String
 /// List one directory of a workspace (a repository or task worktree root).
 #[tauri::command]
 pub async fn list_workspace_dir(
+    app: AppHandle,
     root: String,
     rel_path: String,
 ) -> Result<Vec<DirEntryDto>, String> {
-    spawn_blocking(move || lore_orchestrator::workspace::list_dir(&root, &rel_path))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    with_orchestrator(app, move |o| {
+        let root = o.browsable_root(&root).map_err(|e| e.to_string())?;
+        lore_orchestrator::workspace::list_dir(&root.to_string_lossy(), &rel_path)
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Read a workspace file for display (read-only, capped at 1 MB).
@@ -232,14 +235,13 @@ pub async fn read_workspace_file(
 
 /// Resolve a user-chosen folder to its repository top-level.
 #[tauri::command]
-pub async fn open_workspace(path: String) -> Result<String, String> {
-    spawn_blocking(move || {
-        let top =
-            lore_orchestrator::workspace::repository_root(&path).map_err(|e| e.to_string())?;
-        Ok(top.display().to_string())
+pub async fn open_workspace(app: AppHandle, path: String) -> Result<String, String> {
+    with_orchestrator(app, move |o| {
+        o.open_workspace(&path)
+            .map(|top| top.display().to_string())
+            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Unified diff of a task's worktree against its base commit.
