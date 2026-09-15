@@ -38,6 +38,7 @@ const STATUS: Record<string, { label: string; tone: Tone; icon: () => ReactNode 
   failed: { label: "Failed", tone: "failed", icon: FailedIcon },
   skipped: { label: "Skipped", tone: "muted", icon: SkippedIcon },
   cancelled: { label: "Cancelled", tone: "muted", icon: SkippedIcon },
+  interrupted: { label: "Interrupted", tone: "muted", icon: SkippedIcon },
 };
 
 /** Unknown statuses from a newer backend still render, as plain text. */
@@ -161,7 +162,7 @@ function RepoMergeQueue({ repoPath, tasks, entry, onStart, onCancel, onDismiss }
             type="text"
             className="mono"
             value={testCommand.value}
-            placeholder="e.g. npm test — leave empty to merge without testing"
+            placeholder="e.g. npm test - leave empty to merge without testing"
             disabled={!testCommand.loaded}
             spellCheck={false}
             autoComplete="off"
@@ -407,11 +408,18 @@ function summarize(items: MergeQueueItemDto[], running: boolean): string {
     const step = statusInfo(current.status).label.toLowerCase();
     return `Merge queue running: ${items.indexOf(current) + 1} of ${items.length}, ${step} ${current.title}`;
   }
-  const parts = (["merged", "failed", "skipped", "cancelled"] as const)
+  const parts = (["merged", "failed", "skipped", "cancelled", "interrupted"] as const)
     .map((status) => [status, count(status)] as const)
     .filter(([, n]) => n > 0)
     .map(([status, n]) => `${n} ${status}`);
-  const verb = count("cancelled") > 0 ? "cancelled" : count("failed") > 0 ? "stopped" : "finished";
+  const verb =
+    count("interrupted") > 0
+      ? "interrupted"
+      : count("cancelled") > 0
+        ? "cancelled"
+        : count("failed") > 0
+          ? "stopped"
+          : "finished";
   return `Merge queue ${verb}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`;
 }
 

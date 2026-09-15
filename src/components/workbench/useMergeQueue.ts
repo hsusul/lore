@@ -30,20 +30,22 @@ export type MergeQueuesHandle = {
  * the panel closes or another repository is opened. A running queue is polled
  * every second (never overlapping) until it reports `running: false`; its
  * results then stay until dismissed or replaced by a new queue. Opening a
- * repository picks up a queue that is already running there.
+ * repository picks up that repository's latest queue, including one restored
+ * after quit (cancelled or interrupted).
  */
 export function useMergeQueues(workspace: string | null, onFinished: () => void): MergeQueuesHandle {
   const [entries, setEntries] = useState<Record<string, MergeQueueEntry>>({});
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
 
-  // A queue may already be running in the repository being opened.
+  // A queue may already exist for the repository being opened (running, or
+  // restored after quit as cancelled/interrupted).
   useEffect(() => {
     if (!workspace) return;
     let cancelled = false;
     getMergeQueue(workspace)
       .then((queue) => {
-        if (cancelled || !queue?.running) return;
+        if (cancelled || !queue) return;
         setEntries((prev) =>
           prev[workspace]?.queue.running
             ? prev

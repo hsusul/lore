@@ -12,7 +12,6 @@ import {
   type ContinueTaskRequest,
   type TaskDto,
 } from "../../ipc";
-import ActivityBar, { type SidebarView } from "./ActivityBar";
 import AgentsPanel from "./AgentsPanel";
 import AgentView from "./AgentView";
 import BottomPanel, { type PanelTab } from "./BottomPanel";
@@ -21,6 +20,7 @@ import DiffView from "./DiffView";
 import EditorTabs from "./EditorTabs";
 import FileView from "./FileView";
 import { Mark, PanelIcon, SearchIcon, SidebarIcon } from "./icons";
+import type { SidebarView } from "./ActivityBar";
 import Sash from "./Sash";
 import { ExplorerPanel } from "./Sidebar";
 import {
@@ -29,7 +29,6 @@ import {
   SIDEBAR_MAX,
   SIDEBAR_MIN,
   STORAGE_KEYS,
-  agentTab,
   baseName,
   diffTab,
   errorText,
@@ -46,7 +45,7 @@ import { dirKey, useDirCache } from "./useDirCache";
 import { useMergeQueues } from "./useMergeQueue";
 import { useTasks } from "./useTasks";
 
-/** Lore's Cursor-style workbench: overlay titlebar, explorer, agents, tabbed editors, and a bottom panel. */
+/** IDE workbench: sidebar (Agents / Files), editor, optional bottom panel. No activity bar. */
 export default function Workbench() {
   const { tasks, listError, loadWarning, refresh } = useTasks();
   const dirs = useDirCache();
@@ -55,11 +54,12 @@ export default function Workbench() {
   const mergeQueues = useMergeQueues(workspace, refresh);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [{ tabs, activeKey }, dispatch] = useReducer(tabsReducer, initialTabs);
-  const [sidebarView, setSidebarView] = useState<SidebarView | null>("explorer");
   const [sidebarWidth, setSidebarWidth] = useState(() =>
-    readStoredNumber(STORAGE_KEYS.sidebarWidth, 280, SIDEBAR_MIN, SIDEBAR_MAX),
+    readStoredNumber(STORAGE_KEYS.sidebarWidth, 260, SIDEBAR_MIN, SIDEBAR_MAX),
   );
-  const [panelOpen, setPanelOpen] = useState(() => readStored(STORAGE_KEYS.panelOpen) !== "false");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarView, setSidebarView] = useState<SidebarView>("agents");
+  const [panelOpen, setPanelOpen] = useState(false);
   const [panelHeight, setPanelHeight] = useState(() =>
     readStoredNumber(STORAGE_KEYS.panelHeight, 280, PANEL_MIN, PANEL_MAX),
   );
@@ -69,9 +69,7 @@ export default function Workbench() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newAgentToken, setNewAgentToken] = useState(0);
-  const lastViewRef = useRef<SidebarView>("explorer");
 
-  // Restore the last workspace, re-validated by the backend.
   useEffect(() => {
     const stored = readStored(STORAGE_KEYS.workspace);
     if (!stored) return;
@@ -86,16 +84,15 @@ export default function Workbench() {
     };
   }, []);
 
+  useEffect(() => {
+    if (workspace) void dirs.load(workspace, "");
+  }, [workspace, dirs.load]);
+
   useEffect(() => writeStored(STORAGE_KEYS.sidebarWidth, String(sidebarWidth)), [sidebarWidth]);
   useEffect(() => writeStored(STORAGE_KEYS.panelHeight, String(panelHeight)), [panelHeight]);
   useEffect(() => writeStored(STORAGE_KEYS.panelOpen, String(panelOpen)), [panelOpen]);
   useEffect(() => writeStored(STORAGE_KEYS.allRepos, String(allRepos)), [allRepos]);
-  useEffect(() => {
-    if (sidebarView) lastViewRef.current = sidebarView;
-  }, [sidebarView]);
 
-  // Every task is addressable (an open tab may belong to another repository),
-  // but the Agents view, the explorer scope, and the counts follow the scope.
   const taskById = useMemo(() => new Map((tasks ?? []).map((t) => [t.id, t])), [tasks]);
   const visibleTasks = useMemo(() => {
     if (tasks === null) return null;
@@ -109,7 +106,6 @@ export default function Workbench() {
   const scopeTask = scope === "repo" ? undefined : taskById.get(scope);
   const scopeRoot = scope === "repo" ? workspace : (scopeTask?.worktree_path ?? null);
 
-  // A discarded — or now out-of-scope — task can no longer be the explorer scope.
   useEffect(() => {
     if (scope !== "repo" && visibleTasks && !visibleTasks.some((t) => t.id === scope)) setScope("repo");
   }, [scope, visibleTasks]);
@@ -123,7 +119,6 @@ export default function Workbench() {
       setWorkspace(top);
       writeStored(STORAGE_KEYS.workspace, top);
       setScope("repo");
-      setSidebarView((v) => v ?? "explorer");
     } catch (e) {
       setWorkspaceError(errorText(e));
     }
@@ -139,10 +134,11 @@ export default function Workbench() {
 
   const selectTask = useCallback((id: string) => {
     setSelectedTaskId(id);
-    dispatch({ type: "open", tab: agentTab(id) });
+    dispatch({ type: "clearActive" });
   }, []);
 
   const openDiff = useCallback((id: string) => {
+    setSelectedTaskId(id);
     dispatch({ type: "open", tab: diffTab(id) });
   }, []);
 
@@ -208,18 +204,21 @@ export default function Workbench() {
     [refresh, selectTask],
   );
 
-  const showView = useCallback((view: SidebarView) => {
-    setSidebarView((current) => (current === view ? null : view));
+  const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), []);
+  const togglePanel = useCallback(() => setPanelOpen((open) => !open), []);
+  const showAgents = useCallback(() => {
+    setSidebarOpen(true);
+    setSidebarView("agents");
   }, []);
-
-  const toggleSidebar = useCallback(() => {
-    setSidebarView((current) => (current ? null : lastViewRef.current));
+  const showFiles = useCallback(() => {
+    setSidebarOpen(true);
+    setSidebarView("explorer");
   }, []);
 
   const newAgent = useCallback(() => {
-    setSidebarView("agents");
+    showAgents();
     setNewAgentToken((n) => n + 1);
-  }, []);
+  }, [showAgents]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -236,7 +235,7 @@ export default function Workbench() {
           break;
         case "j":
           e.preventDefault();
-          setPanelOpen((open) => !open);
+          togglePanel();
           break;
         case "b":
           e.preventDefault();
@@ -246,7 +245,7 @@ export default function Workbench() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleSidebar]);
+  }, [toggleSidebar, togglePanel]);
 
   const taskTitle = useCallback((id: string) => taskById.get(id)?.title ?? "Discarded agent", [taskById]);
 
@@ -286,7 +285,9 @@ export default function Workbench() {
       { id: "cmd:open-folder", group: "Command", label: "Open Folder…", run: () => void openFolder() },
       { id: "cmd:new-agent", group: "Command", label: "New Agent", run: newAgent },
       { id: "cmd:toggle-sidebar", group: "Command", label: "Toggle Sidebar", hint: "⌘B", run: toggleSidebar },
-      { id: "cmd:toggle-panel", group: "Command", label: "Toggle Panel", hint: "⌘J", run: () => setPanelOpen((o) => !o) },
+      { id: "cmd:show-files", group: "Command", label: "Show Files", run: showFiles },
+      { id: "cmd:show-agents", group: "Command", label: "Show Agents", run: showAgents },
+      { id: "cmd:toggle-panel", group: "Command", label: "Toggle Panel", hint: "⌘J", run: togglePanel },
       {
         id: "cmd:merge-queue",
         group: "Command",
@@ -302,7 +303,7 @@ export default function Workbench() {
     const titleByRoot = new Map((tasks ?? []).map((t) => [t.worktree_path, t.title]));
     const files: PaletteItem[] = [];
     for (const [key, entries] of Object.entries(dirs.entries)) {
-      const root = key.slice(0, key.indexOf(" "));
+      const root = key.slice(0, key.indexOf("\0"));
       if (root !== workspace && !titleByRoot.has(root)) continue;
       const scopeLabel = root === workspace ? baseName(root) : titleByRoot.get(root);
       for (const entry of entries) {
@@ -317,7 +318,24 @@ export default function Workbench() {
       }
     }
     return commands.concat(files);
-  }, [paletteOpen, dirs.entries, tasks, workspace, openFolder, newAgent, toggleSidebar, openFile]);
+  }, [paletteOpen, dirs.entries, tasks, workspace, openFolder, newAgent, toggleSidebar, showFiles, showAgents, togglePanel, openFile]);
+
+  const agentStage = selectedTaskId ? (
+    <AgentView
+      active={activeKey === null}
+      taskId={selectedTaskId}
+      task={selectedTask}
+      mergeQueueRunning={selectedTask ? mergeQueues.isRunning(selectedTask.repo_path) : false}
+      onStop={handleStop}
+      onDiscard={handleDiscard}
+      onReveal={handleReveal}
+      onOpenDiff={openDiff}
+      onContinue={handleContinue}
+      onCommit={handleCommit}
+      onMerge={handleMerge}
+      onSelectTask={selectTask}
+    />
+  ) : null;
 
   const welcome = (
     <div className="welcome" role="region" aria-label="Welcome">
@@ -333,10 +351,30 @@ export default function Workbench() {
         </button>
       </div>
       <dl className="welcome__keys">
-        <div><dt>Command palette</dt><dd><kbd>⌘K</kbd></dd></div>
-        <div><dt>Toggle sidebar</dt><dd><kbd>⌘B</kbd></dd></div>
-        <div><dt>Toggle panel</dt><dd><kbd>⌘J</kbd></dd></div>
-        <div><dt>Close tab</dt><dd><kbd>⌘W</kbd></dd></div>
+        <div>
+          <dt>Command palette</dt>
+          <dd>
+            <kbd>⌘K</kbd>
+          </dd>
+        </div>
+        <div>
+          <dt>Toggle sidebar</dt>
+          <dd>
+            <kbd>⌘B</kbd>
+          </dd>
+        </div>
+        <div>
+          <dt>Toggle panel</dt>
+          <dd>
+            <kbd>⌘J</kbd>
+          </dd>
+        </div>
+        <div>
+          <dt>Close tab</dt>
+          <dd>
+            <kbd>⌘W</kbd>
+          </dd>
+        </div>
       </dl>
     </div>
   );
@@ -359,17 +397,15 @@ export default function Workbench() {
           onClick={() => setPaletteOpen(true)}
         >
           <SearchIcon />
-          <span className="wb-titlebar__search-label">
-            {workspace ? baseName(workspace) : "Search"}
-          </span>
+          <span className="wb-titlebar__search-label">{workspace ? baseName(workspace) : "Search"}</span>
           <kbd>⌘K</kbd>
         </button>
         <div className="wb-titlebar__right">
           <button
             type="button"
-            className={`wb-icon-btn${sidebarView ? " wb-icon-btn--on" : ""}`}
+            className={`wb-icon-btn${sidebarOpen ? " wb-icon-btn--on" : ""}`}
             aria-label="Toggle sidebar"
-            aria-pressed={sidebarView !== null}
+            aria-pressed={sidebarOpen}
             title="Toggle sidebar (⌘B)"
             onClick={toggleSidebar}
           >
@@ -381,7 +417,7 @@ export default function Workbench() {
             aria-label="Toggle panel"
             aria-pressed={panelOpen}
             title="Toggle panel (⌘J)"
-            onClick={() => setPanelOpen((open) => !open)}
+            onClick={togglePanel}
           >
             <PanelIcon />
           </button>
@@ -400,57 +436,72 @@ export default function Workbench() {
       )}
 
       <div className="wb-main">
-        <ActivityBar view={sidebarView} runningCount={runningCount} onSelect={showView} />
-        <aside
-          className="wb-sidebar"
-          style={{ width: sidebarWidth }}
-          hidden={sidebarView === null}
-          aria-label="Sidebar"
-        >
-          <div hidden={sidebarView !== "explorer"} className="wb-sidebar__view">
-            <ExplorerPanel
-              workspace={workspace}
-              tasks={visibleTasks}
-              scope={scope}
-              onScopeChange={setScope}
-              root={scopeRoot}
-              cache={dirs}
-              onOpenFile={openFile}
-              onOpenFolder={() => void openFolder()}
-              activeFile={activeFile}
+        {sidebarOpen && (
+          <>
+            <aside className="wb-sidebar" style={{ width: sidebarWidth }} aria-label="Sidebar">
+              <div className="wb-sidebar__switch" role="tablist" aria-label="Sidebar views">
+                <button
+                  type="button"
+                  role="tab"
+                  className={`wb-sidebar__tab${sidebarView === "agents" ? " wb-sidebar__tab--on" : ""}`}
+                  aria-selected={sidebarView === "agents"}
+                  onClick={showAgents}
+                >
+                  Agents
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`wb-sidebar__tab${sidebarView === "explorer" ? " wb-sidebar__tab--on" : ""}`}
+                  aria-selected={sidebarView === "explorer"}
+                  onClick={showFiles}
+                >
+                  Files
+                </button>
+              </div>
+              {sidebarView === "agents" ? (
+                <AgentsPanel
+                  workspace={workspace}
+                  tasks={visibleTasks}
+                  allRepos={allRepos}
+                  onAllReposChange={setAllRepos}
+                  hiddenCount={hiddenCount}
+                  listError={listError}
+                  loadWarning={loadWarning}
+                  selectedTaskId={selectedTaskId}
+                  onSelect={selectTask}
+                  onStop={handleStop}
+                  onDiscard={handleDiscard}
+                  onReveal={handleReveal}
+                  onOpenDiff={openDiff}
+                  onCreated={handleCreated}
+                  onOpenFolder={() => void openFolder()}
+                  focusToken={newAgentToken}
+                />
+              ) : (
+                <ExplorerPanel
+                  workspace={workspace}
+                  tasks={visibleTasks}
+                  scope={scope}
+                  onScopeChange={setScope}
+                  root={scopeRoot}
+                  cache={dirs}
+                  onOpenFile={openFile}
+                  onOpenFolder={() => void openFolder()}
+                  activeFile={activeFile}
+                />
+              )}
+            </aside>
+            <Sash
+              orientation="vertical"
+              label="Resize sidebar"
+              value={sidebarWidth}
+              min={SIDEBAR_MIN}
+              max={SIDEBAR_MAX}
+              direction={1}
+              onChange={setSidebarWidth}
             />
-          </div>
-          <div hidden={sidebarView !== "agents"} className="wb-sidebar__view">
-            <AgentsPanel
-              workspace={workspace}
-              tasks={visibleTasks}
-              allRepos={allRepos}
-              onAllReposChange={setAllRepos}
-              hiddenCount={hiddenCount}
-              listError={listError}
-              loadWarning={loadWarning}
-              selectedTaskId={selectedTaskId}
-              onSelect={selectTask}
-              onStop={handleStop}
-              onDiscard={handleDiscard}
-              onReveal={handleReveal}
-              onOpenDiff={openDiff}
-              onCreated={handleCreated}
-              onOpenFolder={() => void openFolder()}
-              focusToken={newAgentToken}
-            />
-          </div>
-        </aside>
-        {sidebarView !== null && (
-          <Sash
-            orientation="vertical"
-            label="Resize sidebar"
-            value={sidebarWidth}
-            min={SIDEBAR_MIN}
-            max={SIDEBAR_MAX}
-            direction={1}
-            onChange={setSidebarWidth}
-          />
+          </>
         )}
         <div className="wb-center">
           <main className="wb-editor" aria-label="Editor">
@@ -461,7 +512,7 @@ export default function Workbench() {
               onActivate={(key) => dispatch({ type: "activate", key })}
               onClose={(key) => dispatch({ type: "close", key })}
               renderTab={renderTab}
-              welcome={welcome}
+              stage={agentStage ?? welcome}
             />
           </main>
           {panelOpen && (
@@ -496,7 +547,7 @@ export default function Workbench() {
         runningCount={runningCount}
         attentionCount={attentionCount}
         selectedBranch={selectedTask?.branch ?? null}
-        onShowAgents={() => setSidebarView("agents")}
+        onShowAgents={showAgents}
       />
 
       {paletteOpen && <CommandPalette items={paletteItems} onClose={() => setPaletteOpen(false)} />}
@@ -504,7 +555,6 @@ export default function Workbench() {
   );
 }
 
-/** macOS traffic lights: drawn in the browser preview; a spacer under Tauri's overlay controls. */
 function TitlebarLights() {
   const native = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   return (

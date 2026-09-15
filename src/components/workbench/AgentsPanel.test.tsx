@@ -51,7 +51,7 @@ beforeEach(() => {
 });
 
 describe("AgentsPanel", () => {
-  it("renders tasks with state text, agent, branch, and counts", () => {
+  it("renders tasks with state text and agent", () => {
     renderPanel({
       tasks: [
         task({}),
@@ -61,13 +61,15 @@ describe("AgentsPanel", () => {
     const running = screen.getByRole("listitem", { name: "Fix parser" });
     expect(within(running).getByText("Running")).toBeTruthy();
     expect(within(running).getByText("Claude Code")).toBeTruthy();
-    expect(within(running).getByText("lore/fix-parser")).toBeTruthy();
-    expect(within(running).getByText("2 commits ahead")).toBeTruthy();
-    expect(within(running).getByText("2 files changed")).toBeTruthy();
+    expect(within(running).queryByText("lore/fix-parser")).toBeNull();
+    expect(within(running).getByRole("button", { name: "Fix parser" }).getAttribute("title")).toContain(
+      "lore/fix-parser",
+    );
     expect(within(running).getByRole("button", { name: "Stop" })).toBeTruthy();
 
     const failed = screen.getByRole("listitem", { name: "Add docs" });
-    expect(within(failed).getByText("Failed (exit 1)")).toBeTruthy();
+    expect(within(failed).getByText("Failed")).toBeTruthy();
+    expect(within(failed).queryByText("Failed (exit 1)")).toBeNull();
     expect(within(failed).getByText("Codex")).toBeTruthy();
     expect(within(failed).queryByRole("button", { name: "Stop" })).toBeNull();
   });
@@ -110,15 +112,23 @@ describe("AgentsPanel", () => {
     // The picker returns to the root pane; Auto is the shown permission.
     expect(screen.queryByRole("radiogroup", { name: "Permission" })).toBeNull();
     expect(screen.getByRole("menuitem", { name: /^Permission\b/ }).textContent).toContain("Auto");
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Model\b/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "Opus" }));
+    expect(screen.getByRole("menuitem", { name: /^Model\b/ }).textContent).toContain("Opus");
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Effort\b/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "High" }));
+    expect(screen.getByRole("menuitem", { name: /^Effort\b/ }).textContent).toContain("High");
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));
     await waitFor(() =>
-      expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ permission: "auto" })),
+      expect(createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ permission: "auto", model: "opus", effort: "high" }),
+      ),
     );
   });
 
-  it("shows compact attention, overlap, uncommitted, and merged indicators on rows", () => {
+  it("keeps row chrome to title, state, agent, and attention", () => {
     renderPanel({
       tasks: [
         task({
@@ -131,14 +141,19 @@ describe("AgentsPanel", () => {
     });
     const first = screen.getByRole("listitem", { name: "Fix parser" });
     expect(within(first).getByLabelText("Needs attention").getAttribute("title")).toBe("Usage limit reached");
-    expect(within(first).getByLabelText("Overlaps with 1 task").textContent).toBe("1");
-    expect(within(first).getByLabelText("3 uncommitted")).toBeTruthy();
-    expect(within(first).queryByLabelText("Merged into main")).toBeNull();
+    expect(within(first).queryByLabelText(/Overlaps/)).toBeNull();
+    expect(within(first).queryByLabelText(/uncommitted/)).toBeNull();
+    expect(within(first).getByRole("button", { name: "Fix parser" }).getAttribute("title")).toMatch(
+      /lore\/fix-parser.*3 uncommitted.*Overlaps 1 task/,
+    );
 
     const merged = screen.getByRole("listitem", { name: "Merged one" });
-    expect(within(merged).getByLabelText("Merged into main")).toBeTruthy();
+    expect(within(merged).getByText("Merged")).toBeTruthy();
     expect(within(merged).queryByLabelText("Needs attention")).toBeNull();
     expect(within(merged).queryByLabelText(/uncommitted/)).toBeNull();
+    expect(within(merged).getByRole("button", { name: "Merged one" }).getAttribute("title")).toContain(
+      "Merged into main",
+    );
   });
 
   it("disables the form with a hint when no workspace is open", () => {
@@ -231,12 +246,15 @@ describe("AgentsPanel", () => {
     expect(props.onAllReposChange).toHaveBeenCalledWith(true);
   });
 
-  it("marks a task whose auto-handoff is off", () => {
+  it("keeps manual handoff off the row and in the tooltip", () => {
     renderPanel({
       tasks: [task({ auto_handoff: false }), task({ id: "t2", title: "Auto one", auto_handoff: true })],
     });
     const manual = screen.getByRole("listitem", { name: "Fix parser" });
-    expect(within(manual).getByText("manual handoff")).toBeTruthy();
+    expect(within(manual).queryByText("manual handoff")).toBeNull();
+    expect(within(manual).getByRole("button", { name: "Fix parser" }).getAttribute("title")).toContain(
+      "manual handoff",
+    );
     expect(within(screen.getByRole("listitem", { name: "Auto one" })).queryByText("manual handoff")).toBeNull();
   });
 

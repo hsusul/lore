@@ -1,6 +1,6 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
-import { AgentsIcon, CloseIcon, DiffIcon, FileIcon } from "./icons";
+import { CloseIcon, DiffIcon, FileIcon } from "./icons";
 import { baseName, domId, type Tab } from "./state";
 
 type Props = {
@@ -10,7 +10,8 @@ type Props = {
   onActivate: (key: string) => void;
   onClose: (key: string) => void;
   renderTab: (tab: Tab, active: boolean) => ReactNode;
-  welcome: ReactNode;
+  /** Shown when no file or diff is active (welcome or the selected agent). */
+  stage: ReactNode;
 };
 
 export function tabLabel(tab: Tab, taskTitle: (taskId: string) => string): string {
@@ -24,28 +25,29 @@ export function tabLabel(tab: Tab, taskTitle: (taskId: string) => string): strin
   }
 }
 
-/** The editor area: a VS Code style tab strip over one panel per open tab. */
-export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onClose, renderTab, welcome }: Props) {
+/** Monitor labels for open files and diffs. The agent stage is not a tab. */
+export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onClose, renderTab, stage }: Props) {
   const tabRefs = useRef(new Map<string, HTMLDivElement>());
+  const fileTabs = tabs.filter((t) => t.kind !== "agent");
 
   useEffect(() => {
     if (activeKey) tabRefs.current.get(activeKey)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [activeKey]);
 
-  if (tabs.length === 0) {
-    return <div className="editor editor--empty">{welcome}</div>;
+  if (fileTabs.length === 0) {
+    return <div className="editor">{stage}</div>;
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const index = tabs.findIndex((t) => t.key === activeKey);
+    const index = fileTabs.findIndex((t) => t.key === activeKey);
     let next = -1;
-    if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
-    else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+    if (event.key === "ArrowRight") next = (index + 1) % fileTabs.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + fileTabs.length) % fileTabs.length;
     else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = tabs.length - 1;
+    else if (event.key === "End") next = fileTabs.length - 1;
     else return;
     event.preventDefault();
-    const key = tabs[next].key;
+    const key = fileTabs[next].key;
     onActivate(key);
     tabRefs.current.get(key)?.focus();
   }
@@ -53,7 +55,7 @@ export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onC
   return (
     <div className="editor">
       <div className="tabs" role="tablist" aria-label="Open editors" onKeyDown={onKeyDown}>
-        {tabs.map((tab) => {
+        {fileTabs.map((tab) => {
           const active = tab.key === activeKey;
           const label = tabLabel(tab, taskTitle);
           const title = tab.kind === "file" ? `${tab.root}/${tab.relPath}` : label;
@@ -79,12 +81,11 @@ export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onC
                 }
               }}
               onMouseDown={(e) => {
-                // Stop middle-click autoscroll so aux-click can close the tab.
                 if (e.button === 1) e.preventDefault();
               }}
             >
               <span className={`tab__icon tab__icon--${tab.kind}`}>
-                {tab.kind === "file" ? <FileIcon /> : tab.kind === "diff" ? <DiffIcon /> : <AgentsIcon size={16} />}
+                {tab.kind === "file" ? <FileIcon /> : <DiffIcon />}
               </span>
               <span className="tab__label">{label}</span>
               {tab.kind === "file" && tab.scopeLabel && <span className="tab__scope">{tab.scopeLabel}</span>}
@@ -105,7 +106,7 @@ export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onC
           );
         })}
       </div>
-      {tabs.map((tab) => (
+      {fileTabs.map((tab) => (
         <div
           key={tab.key}
           id={domId("tabpanel", tab.key)}
@@ -117,6 +118,7 @@ export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onC
           {renderTab(tab, tab.key === activeKey)}
         </div>
       ))}
+      {activeKey === null && <div className="editor__stage">{stage}</div>}
     </div>
   );
 }

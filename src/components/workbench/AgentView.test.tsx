@@ -95,19 +95,25 @@ describe("AgentView", () => {
     expect(screen.getByLabelText("Next agent").textContent).toContain("Claude Code");
     fireEvent.change(input, { target: { value: " add tests " } });
     fireEvent.keyDown(input, { key: "Enter", metaKey: true });
-    await waitFor(() => expect(h.onContinue).toHaveBeenCalledWith({ id: "t1", prompt: "add tests" }));
+    await waitFor(() => expect(h.onContinue).toHaveBeenCalledWith({ id: "t1", prompt: "add tests", model: "" }));
     await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(""));
 
     fireEvent.click(screen.getByLabelText("Next agent"));
-    const menu = screen.getByRole("menu");
-    expect(menu.parentElement).toBe(document.body);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Agent\b/ }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Codex" }));
+    expect(screen.getByRole("menuitem", { name: /^Agent\b/ }).textContent).toContain("Codex");
+    fireEvent.click(screen.getByLabelText("Next agent"));
     expect(screen.queryByRole("menu")).toBeNull();
     expect(screen.getByRole("button", { name: "Hand off to Codex" })).toBeTruthy();
     fireEvent.change(input, { target: { value: "take over" } });
     fireEvent.click(screen.getByRole("button", { name: "Hand off to Codex" }));
     await waitFor(() =>
-      expect(h.onContinue).toHaveBeenLastCalledWith({ id: "t1", prompt: "take over", agent: "codex" }),
+      expect(h.onContinue).toHaveBeenLastCalledWith({
+        id: "t1",
+        prompt: "take over",
+        agent: "codex",
+        model: "",
+      }),
     );
   });
 

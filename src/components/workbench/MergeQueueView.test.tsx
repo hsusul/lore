@@ -153,7 +153,7 @@ describe("MergeQueueView setup", () => {
     vi.mocked(getRepoSettings).mockResolvedValue({ repo_path: "/repo", test_command: null });
     renderQueue([task({ id: "a", title: "Alpha", state: "finished" })]);
     const input = (await screen.findByPlaceholderText(
-      "e.g. npm test — leave empty to merge without testing",
+      "e.g. npm test - leave empty to merge without testing",
     )) as HTMLInputElement;
     await waitFor(() => expect(input.disabled).toBe(false));
     expect(input.value).toBe("");
@@ -186,7 +186,7 @@ describe("MergeQueueView test command", () => {
     renderQueue();
     const input = (await screen.findByDisplayValue("npm test")) as HTMLInputElement;
     expect(getRepoSettings).toHaveBeenCalledWith("/repo");
-    expect(input.placeholder).toBe("e.g. npm test — leave empty to merge without testing");
+    expect(input.placeholder).toBe("e.g. npm test - leave empty to merge without testing");
 
     fireEvent.change(input, { target: { value: " cargo test " } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -319,6 +319,18 @@ describe("MergeQueueView while running", () => {
     expect(queueItem("Beta").className).toContain("mq-item--muted");
     expect(within(queueItem("Alpha")).getByText("tests failed: cancelled")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Cancel/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
+  });
+
+  it("picks up a cancelled queue restored after relaunch", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getMergeQueue).mockResolvedValue(
+      queue(false, [["a", "Alpha", "interrupted", "Lore exited while this merge queue was running."]]),
+    );
+    renderQueue();
+    await flush();
+    expect(within(queueItem("Alpha")).getByText("Interrupted")).toBeTruthy();
+    expect(screen.getByText("Merge queue interrupted: 1 interrupted")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
   });
 

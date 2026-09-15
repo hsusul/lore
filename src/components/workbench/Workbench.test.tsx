@@ -66,7 +66,12 @@ function editorTabs() {
   return within(screen.getByRole("tablist", { name: "Open editors" }));
 }
 
+async function openFiles() {
+  fireEvent.click(screen.getByRole("tab", { name: "Files" }));
+}
+
 async function openFileFromTree(name: string) {
+  await openFiles();
   fireEvent.click(await screen.findByRole("treeitem", { name }));
 }
 
@@ -74,6 +79,7 @@ describe("Workbench", () => {
   it("restores the workspace and lazily loads folders in the explorer", async () => {
     render(<Workbench />);
     expect(await screen.findByRole("heading", { name: "repo" })).toBeTruthy();
+    await openFiles();
     await screen.findByRole("treeitem", { name: "src" });
     expect(listWorkspaceDir).toHaveBeenCalledTimes(1);
     expect(listWorkspaceDir).toHaveBeenCalledWith("/work/repo", "");
@@ -95,6 +101,7 @@ describe("Workbench", () => {
 
   it("supports treeview keyboard navigation", async () => {
     render(<Workbench />);
+    await openFiles();
     const src = await screen.findByRole("treeitem", { name: "src" });
     act(() => src.focus());
     fireEvent.keyDown(src, { key: "ArrowRight" });
@@ -153,26 +160,28 @@ describe("Workbench", () => {
 
   it("toggles the bottom panel with ⌘J and its close button", async () => {
     render(<Workbench />);
-    await screen.findByRole("treeitem", { name: "src" });
-    expect(screen.getByRole("region", { name: "Panel" })).toBeTruthy();
-    fireEvent.keyDown(window, { key: "j", metaKey: true });
+    expect(screen.getByRole("region", { name: "Agents" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Panel" })).toBeNull();
-    expect(window.localStorage.getItem(STORAGE_KEYS.panelOpen)).toBe("false");
-    fireEvent.keyDown(window, { key: "j", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "j", metaKey: true });
     expect(screen.getByRole("region", { name: "Panel" })).toBeTruthy();
+    expect(window.localStorage.getItem(STORAGE_KEYS.panelOpen)).toBe("true");
+    fireEvent.keyDown(window, { key: "j", ctrlKey: true });
+    expect(screen.queryByRole("region", { name: "Panel" })).toBeNull();
+    fireEvent.keyDown(window, { key: "j", metaKey: true });
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
     expect(screen.queryByRole("region", { name: "Panel" })).toBeNull();
   });
 
-  it("toggles the sidebar from the activity bar", async () => {
+  it("switches the sidebar between agents and files", async () => {
     render(<Workbench />);
-    await screen.findByRole("treeitem", { name: "src" });
-    const explorer = screen.getByRole("button", { name: "Explorer" });
-    expect(explorer.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(explorer);
-    expect(screen.queryByRole("complementary", { name: "Sidebar" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Agents" }));
     expect(screen.getByRole("region", { name: "Agents" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Explorer" })).toBeNull();
+    await openFiles();
+    await screen.findByRole("treeitem", { name: "src" });
+    expect(screen.queryByRole("region", { name: "Agents" })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    expect(screen.getByRole("region", { name: "Agents" })).toBeTruthy();
+    expect(screen.getByRole("main", { name: "Editor" })).toBeTruthy();
   });
 
   it("selecting an agent opens its tab, output, and changes; discard closes its tabs", async () => {
@@ -181,15 +190,16 @@ describe("Workbench", () => {
     vi.mocked(discardTask).mockResolvedValue(undefined);
     render(<Workbench />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Agents" }));
     const row = await screen.findByRole("listitem", { name: "Fix parser" });
     fireEvent.click(within(row).getByText("Fix parser"));
 
-    expect(await screen.findByRole("tab", { name: /Agent: Fix parser/ })).toBeTruthy();
-    const panel = screen.getByRole("region", { name: "Panel" });
-    await within(panel).findByText("All done");
+    expect(await screen.findByRole("heading", { name: "Fix parser" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: /Agent: Fix parser/ })).toBeNull();
+    await screen.findByText("All done");
     expect(screen.getByText("lore/fix-parser", { selector: ".statusbar .mono" })).toBeTruthy();
 
+    fireEvent.keyDown(window, { key: "j", metaKey: true });
+    const panel = screen.getByRole("region", { name: "Panel" });
     fireEvent.click(within(panel).getByRole("tab", { name: /Changes/ }));
     fireEvent.click(within(panel).getByRole("button", { name: /a\.rs/ }));
     expect(readWorkspaceFile).toHaveBeenCalledWith("/lore/worktrees/fix-parser", "src/a.rs");
@@ -209,19 +219,20 @@ describe("Workbench", () => {
       task({ id: "t2", title: "Other repo", repo_path: "/work/other", state: "running" }),
     ]);
     render(<Workbench />);
-    fireEvent.click(screen.getByRole("button", { name: "Agents" }));
 
     await screen.findByRole("listitem", { name: "Fix parser" });
     expect(screen.queryByRole("listitem", { name: "Other repo" })).toBeNull();
     expect(screen.getByRole("button", { name: /1 agent running/ })).toBeTruthy();
+    await openFiles();
     expect(
       within(screen.getByLabelText("Explorer scope")).queryByText("Worktree: Other repo"),
     ).toBeNull();
 
-    // The toggle widens the scope and is remembered.
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
     fireEvent.click(screen.getByRole("button", { name: /All repositories/ }));
     expect(await screen.findByRole("listitem", { name: "Other repo" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /2 agents running/ })).toBeTruthy();
+    await openFiles();
     expect(within(screen.getByLabelText("Explorer scope")).getByText("Worktree: Other repo")).toBeTruthy();
     expect(window.localStorage.getItem(STORAGE_KEYS.allRepos)).toBe("true");
   });
@@ -235,7 +246,6 @@ describe("Workbench", () => {
       items: [{ task_id: "t1", title: "Fix parser", status: "merging", detail: null }],
     });
     render(<Workbench />);
-    fireEvent.click(screen.getByRole("button", { name: "Agents" }));
     fireEvent.click(within(await screen.findByRole("listitem", { name: "Fix parser" })).getByText("Fix parser"));
 
     expect(
@@ -243,6 +253,7 @@ describe("Workbench", () => {
     ).toBeTruthy();
     expect(getMergeQueue).toHaveBeenCalledWith("/work/repo");
     expect(screen.getByRole("button", { name: /Merge into/ }).matches(":disabled")).toBe(true);
+    fireEvent.keyDown(window, { key: "j", metaKey: true });
     const panelTabs = within(screen.getByRole("tablist", { name: "Panel views" }));
     expect(panelTabs.getByRole("tab", { name: /Merge Queue/ }).textContent).toBe("Merge Queue (running)");
   });
@@ -252,11 +263,11 @@ describe("Workbench", () => {
     vi.mocked(chooseRepositoryDirectory).mockResolvedValue("/work/repo/src");
     vi.mocked(openWorkspace).mockResolvedValue("/work/repo");
     render(<Workbench />);
-    const explorer = screen.getByRole("region", { name: "Explorer" });
-    fireEvent.click(within(explorer).getByRole("button", { name: "Open Folder…" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Open Folder…" })[0]);
     expect(await screen.findByRole("heading", { name: "repo" })).toBeTruthy();
     expect(openWorkspace).toHaveBeenCalledWith("/work/repo/src");
     expect(window.localStorage.getItem(STORAGE_KEYS.workspace)).toBe("/work/repo");
+    await openFiles();
     await screen.findByRole("treeitem", { name: "src" });
   });
 
@@ -275,8 +286,7 @@ describe("Workbench", () => {
 
   it("command palette opens with ⌘K, lists loaded files, and runs commands", async () => {
     render(<Workbench />);
-    await screen.findByRole("treeitem", { name: "README.md" });
-
+    await waitFor(() => expect(listWorkspaceDir).toHaveBeenCalled());
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     const input = await screen.findByRole("combobox", { name: "Search commands and files" });
     fireEvent.change(input, { target: { value: "readme" } });
@@ -293,6 +303,6 @@ describe("Workbench", () => {
     await act(async () => {
       fireEvent.keyDown(screen.getByRole("combobox", { name: "Search commands and files" }), { key: "Enter" });
     });
-    expect(screen.queryByRole("region", { name: "Panel" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Panel" })).toBeTruthy();
   });
 });

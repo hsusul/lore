@@ -1,7 +1,14 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import type { TaskAgent, TaskPermission } from "../../ipc";
+import type { TaskAgent, TaskEffort, TaskPermission } from "../../ipc";
+import {
+  EFFORTS,
+  effortLabel,
+  modelLabel,
+  modelsFor,
+  pickerLabel,
+} from "./agentOptions";
 import { ChevronIcon, TickIcon } from "./icons";
 import { AGENT_LABELS } from "./state";
 
@@ -17,9 +24,9 @@ export const PERMISSION_HINTS: Record<TaskPermission, string> = {
 
 const AGENTS: TaskAgent[] = ["claude_code", "codex"];
 const PERMISSIONS: TaskPermission[] = ["edits", "auto"];
-const MENU_WIDTH = 240;
+const MENU_WIDTH = 260;
 
-type Pane = "root" | "agent" | "permission";
+type Pane = "root" | "agent" | "permission" | "model" | "effort";
 
 type Props = {
   agent: TaskAgent;
@@ -33,6 +40,10 @@ type Props = {
   onPermissionChange?: (permission: TaskPermission) => void;
   autoHandoff?: boolean;
   onAutoHandoffChange?: (value: boolean) => void;
+  model?: string | null;
+  onModelChange?: (model: string | null) => void;
+  effort?: TaskEffort | null;
+  onEffortChange?: (effort: TaskEffort | null) => void;
 };
 
 /**
@@ -49,20 +60,22 @@ export default function AgentMenu({
   onPermissionChange,
   autoHandoff,
   onAutoHandoffChange,
+  model = null,
+  onModelChange,
+  effort = null,
+  onEffortChange,
 }: Props) {
   const full = onPermissionChange != null && onAutoHandoffChange != null;
   const [open, setOpen] = useState(false);
-  const [pane, setPane] = useState<Pane>(full ? "root" : "agent");
+  const [pane, setPane] = useState<Pane>("root");
   const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
 
   useEffect(() => {
-    if (!open) {
-      setPane(full ? "root" : "agent");
-    }
-  }, [open, full]);
+    if (!open) setPane("root");
+  }, [open]);
 
   useLayoutEffect(() => {
     if (!open || !rootRef.current) {
@@ -100,7 +113,7 @@ export default function AgentMenu({
     function onKey(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.stopPropagation();
-      if (full && pane !== "root") {
+      if (pane !== "root") {
         setPane("root");
         return;
       }
@@ -112,21 +125,32 @@ export default function AgentMenu({
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, full, pane]);
+  }, [open, pane]);
 
   function pickAgent(next: TaskAgent) {
     onAgentChange(next);
-    if (full) {
-      setPane("root");
-      return;
+    if (model && !modelsFor(next).some((item) => item.id === model)) {
+      onModelChange?.(null);
     }
-    setOpen(false);
+    setPane("root");
   }
 
   function pickPermission(next: TaskPermission) {
     onPermissionChange?.(next);
     setPane("root");
   }
+
+  function pickModel(next: string | null) {
+    onModelChange?.(next);
+    setPane("root");
+  }
+
+  function pickEffort(next: TaskEffort | null) {
+    onEffortChange?.(next);
+    setPane("root");
+  }
+
+  const shown = pickerLabel(AGENT_LABELS[agent], agent, model, effort);
 
   const menu =
     open && coords ? (
@@ -137,43 +161,54 @@ export default function AgentMenu({
         role="menu"
         style={{ top: coords.top, bottom: coords.bottom, left: coords.left }}
       >
-        {pane === "root" && full && (
+        {pane === "root" && (
           <>
+            {full && (
+              <div className="model-menu__group">
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={Boolean(autoHandoff)}
+                  aria-label="Auto-handoff on usage limit"
+                  className="model-menu__row"
+                  onClick={() => onAutoHandoffChange?.(!autoHandoff)}
+                >
+                  <span>Auto-handoff</span>
+                  <span className={`model-switch${autoHandoff ? " model-switch--on" : ""}`} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="model-menu__row"
+                  onClick={() => setPane("permission")}
+                >
+                  <span>Permission</span>
+                  <span className="model-menu__value">
+                    {PERMISSION_LABELS[permission ?? "edits"]}
+                    <ChevronIcon size={12} />
+                  </span>
+                </button>
+              </div>
+            )}
             <div className="model-menu__group">
-              <button
-                type="button"
-                role="menuitemcheckbox"
-                aria-checked={Boolean(autoHandoff)}
-                aria-label="Auto-handoff on usage limit"
-                className="model-menu__row"
-                onClick={() => onAutoHandoffChange?.(!autoHandoff)}
-              >
-                <span>Auto-handoff</span>
-                <span className={`model-switch${autoHandoff ? " model-switch--on" : ""}`} aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="model-menu__row"
-                onClick={() => setPane("permission")}
-              >
-                <span>Permission</span>
-                <span className="model-menu__value">
-                  {PERMISSION_LABELS[permission ?? "edits"]}
-                  <ChevronIcon size={12} />
-                </span>
-              </button>
-            </div>
-            <div className="model-menu__group">
-              <button
-                type="button"
-                role="menuitem"
-                className="model-menu__row"
-                onClick={() => setPane("agent")}
-              >
+              <button type="button" role="menuitem" className="model-menu__row" onClick={() => setPane("agent")}>
                 <span>Agent</span>
                 <span className="model-menu__value">
                   {AGENT_LABELS[agent]}
+                  <ChevronIcon size={12} />
+                </span>
+              </button>
+              <button type="button" role="menuitem" className="model-menu__row" onClick={() => setPane("model")}>
+                <span>Model</span>
+                <span className="model-menu__value">
+                  {modelLabel(agent, model)}
+                  <ChevronIcon size={12} />
+                </span>
+              </button>
+              <button type="button" role="menuitem" className="model-menu__row" onClick={() => setPane("effort")}>
+                <span>Effort</span>
+                <span className="model-menu__value">
+                  {effortLabel(effort)}
                   <ChevronIcon size={12} />
                 </span>
               </button>
@@ -220,6 +255,77 @@ export default function AgentMenu({
             ))}
           </div>
         )}
+        {pane === "model" && (
+          <div role="radiogroup" aria-label="Model">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!model}
+              className="model-menu__row"
+              onClick={() => pickModel(null)}
+            >
+              Default
+              {!model && (
+                <span className="model-menu__check">
+                  <TickIcon />
+                </span>
+              )}
+            </button>
+            {modelsFor(agent).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={model === item.id}
+                className="model-menu__row"
+                onClick={() => pickModel(item.id)}
+              >
+                {item.label}
+                {model === item.id && (
+                  <span className="model-menu__check">
+                    <TickIcon />
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+        {pane === "effort" && (
+          <div role="radiogroup" aria-label="Effort">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!effort}
+              className="model-menu__row"
+              onClick={() => pickEffort(null)}
+            >
+              Default
+              {!effort && (
+                <span className="model-menu__check">
+                  <TickIcon />
+                </span>
+              )}
+            </button>
+            {EFFORTS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={effort === item.id}
+                title={item.hint}
+                className="model-menu__row"
+                onClick={() => pickEffort(item.id)}
+              >
+                {item.label}
+                {effort === item.id && (
+                  <span className="model-menu__check">
+                    <TickIcon />
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     ) : null;
 
@@ -235,7 +341,7 @@ export default function AgentMenu({
         disabled={disabled}
         onClick={() => setOpen((value) => !value)}
       >
-        {AGENT_LABELS[agent]}
+        {shown}
         <ChevronIcon size={12} />
       </button>
       {menu ? createPortal(menu, document.body) : null}

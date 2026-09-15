@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 
-import type { ContinueTaskRequest, MergeResultDto, TaskAgent, TaskDto } from "../../ipc";
+import type { ContinueTaskRequest, MergeResultDto, TaskAgent, TaskDto, TaskEffort } from "../../ipc";
 import ActivityList from "./ActivityList";
 import AgentMenu from "./AgentMenu";
 import { StateBadge } from "./AgentsPanel";
@@ -75,6 +75,8 @@ export default function AgentView({
   const currentAgent = task?.agent;
   const [prompt, setPrompt] = useState("");
   const [nextAgent, setNextAgent] = useState<TaskAgent>(currentAgent ?? "claude_code");
+  const [nextModel, setNextModel] = useState<string | null>(task?.model ?? null);
+  const [nextEffort, setNextEffort] = useState<TaskEffort | null>(task?.effort ?? null);
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string | null>(null);
 
@@ -82,6 +84,10 @@ export default function AgentView({
   useEffect(() => {
     if (currentAgent) setNextAgent(currentAgent);
   }, [currentAgent]);
+  useEffect(() => {
+    setNextModel(task?.model ?? null);
+    setNextEffort(task?.effort ?? null);
+  }, [task?.model, task?.effort]);
 
   if (!task) {
     return <p className="wb-note wb-view-pad">This agent no longer exists.</p>;
@@ -160,6 +166,8 @@ export default function AgentView({
     try {
       const request: ContinueTaskRequest = { id: taskId, prompt: text };
       if (handoff) request.agent = nextAgent;
+      request.model = nextModel ?? "";
+      if (nextEffort) request.effort = nextEffort;
       await onContinue(request);
       setPrompt("");
     } catch (e) {
@@ -484,6 +492,10 @@ export default function AgentView({
                 label="Next agent"
                 agent={nextAgent}
                 onAgentChange={setNextAgent}
+                model={nextModel}
+                onModelChange={setNextModel}
+                effort={nextEffort}
+                onEffortChange={setNextEffort}
                 disabled={continuing}
                 placement="up"
               />

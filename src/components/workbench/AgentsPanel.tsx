@@ -6,20 +6,11 @@ import {
   type CreateTaskRequest,
   type TaskAgent,
   type TaskDto,
+  type TaskEffort,
   type TaskPermission,
 } from "../../ipc";
 import AgentMenu from "./AgentMenu";
-import {
-  ArrowUpIcon,
-  CommitIcon,
-  DiffIcon,
-  MergeIcon,
-  OverlapIcon,
-  RevealIcon,
-  StopIcon,
-  TrashIcon,
-  WarningIcon,
-} from "./icons";
+import { ArrowUpIcon, DiffIcon, RevealIcon, StopIcon, TrashIcon, WarningIcon } from "./icons";
 import { SidebarHeader } from "./Sidebar";
 import { AGENT_LABELS, baseName, errorText, parseClaims, stateLabel } from "./state";
 
@@ -134,6 +125,8 @@ function NewAgentForm({
   const [prompt, setPrompt] = useState("");
   const [agent, setAgent] = useState<TaskAgent>("claude_code");
   const [permission, setPermission] = useState<TaskPermission>("edits");
+  const [model, setModel] = useState<string | null>(null);
+  const [effort, setEffort] = useState<TaskEffort | null>(null);
   const [claimsText, setClaimsText] = useState("");
   const [autoHandoff, setAutoHandoff] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -158,6 +151,8 @@ function NewAgentForm({
       auto_handoff: autoHandoff,
     };
     if (claims.length > 0) request.claims = claims;
+    if (model) request.model = model;
+    if (effort) request.effort = effort;
     if (!request.title || !request.prompt) {
       setError("Title and prompt are required.");
       return;
@@ -251,6 +246,10 @@ function NewAgentForm({
               onPermissionChange={setPermission}
               autoHandoff={autoHandoff}
               onAutoHandoffChange={setAutoHandoff}
+              model={model}
+              onModelChange={setModel}
+              effort={effort}
+              onEffortChange={setEffort}
               disabled={disabled}
             />
             {workspace && (
@@ -311,79 +310,47 @@ const TaskRow = memo(function TaskRow({
   const fileCount = task.changed_files_total ?? task.changed_files.length;
   const uncommitted = task.uncommitted_count ?? 0;
   const overlapCount = task.overlaps?.length ?? 0;
+  const hint = [
+    task.branch,
+    `${task.commits_ahead} ${task.commits_ahead === 1 ? "commit" : "commits"} ahead · ${fileCount} ${fileCount === 1 ? "file" : "files"} changed`,
+    uncommitted > 0 && !task.merged_into
+      ? `${uncommitted} uncommitted ${uncommitted === 1 ? "change" : "changes"}`
+      : null,
+    overlapCount > 0
+      ? `Overlaps ${overlapCount} ${overlapCount === 1 ? "task" : "tasks"}: ${task.overlaps!.map((o) => o.title).join(", ")}`
+      : null,
+    task.merged_into ? `Merged into ${task.merged_into}` : null,
+    task.auto_handoff === false && !task.merged_into ? "manual handoff" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <li
-      className={`agent-row${selected ? " agent-row--selected" : ""}${task.state === "running" ? " agent-row--running" : ""}`}
+      className={`agent-row${selected ? " agent-row--selected" : ""}`}
       aria-label={task.title}
     >
       <button
         type="button"
         className="agent-row__main"
+        title={hint}
+        aria-label={task.title}
         aria-current={selected || undefined}
         onClick={() => onSelect(task.id)}
       >
         <span className="agent-row__head">
-          <AgentChip task={task} />
           <span className="agent-row__title">{task.title}</span>
-          {task.attention && (
-            <span className="row-flag row-flag--attention" title={task.attention} aria-label="Needs attention">
-              <WarningIcon />
-            </span>
-          )}
-          {uncommitted > 0 && !task.merged_into && (
-            <span
-              className="row-flag row-flag--uncommitted"
-              title={`${uncommitted} uncommitted ${uncommitted === 1 ? "change" : "changes"}`}
-              aria-label={`${uncommitted} uncommitted`}
-            >
-              <CommitIcon />
-              {uncommitted}
-            </span>
-          )}
-          {overlapCount > 0 && (
-            <span
-              className="row-flag row-flag--overlap"
-              title={`Touches the same files as ${task.overlaps!.map((o) => o.title).join(", ")}`}
-              aria-label={`Overlaps with ${overlapCount} ${overlapCount === 1 ? "task" : "tasks"}`}
-            >
-              <OverlapIcon />
-              {overlapCount}
-            </span>
-          )}
-          {task.auto_handoff === false && !task.merged_into && (
-            <span
-              className="row-flag row-flag--manual"
-              title="Auto-handoff is off: this task waits for you when the agent hits a usage limit."
-            >
-              manual handoff
-            </span>
-          )}
-          {task.merged_into && (
-            <span
-              className="row-flag row-flag--merged"
-              title={`Merged into ${task.merged_into}`}
-              aria-label={`Merged into ${task.merged_into}`}
-            >
-              <MergeIcon />
-            </span>
-          )}
-          <time className="agent-row__time" title={formatTime(task.created_at_ms)}>
-            {formatRelative(task.created_at_ms)}
-          </time>
         </span>
         <span className="agent-row__meta">
-          <StateBadge task={task} />
+          {task.merged_into ? (
+            <span className="state-badge state-badge--finished">
+              <span className="state-badge__dot" aria-hidden="true" />
+              Merged
+            </span>
+          ) : (
+            <StateBadge task={task} compact />
+          )}
           <span>{AGENT_LABELS[task.agent] ?? task.agent}</span>
-          <span className="mono agent-row__branch" title={task.worktree_path}>
-            {task.branch}
-          </span>
-          <span>
-            {task.commits_ahead} {task.commits_ahead === 1 ? "commit" : "commits"} ahead
-          </span>
-          <span>
-            {fileCount} {fileCount === 1 ? "file" : "files"} changed
-          </span>
         </span>
       </button>
       {error && (
@@ -411,71 +378,69 @@ const TaskRow = memo(function TaskRow({
           </button>
         </div>
       ) : (
-        <div className="agent-row__actions">
-          {task.state === "running" && (
+        <div className="agent-row__end">
+          {task.attention && (
+            <span className="row-flag row-flag--attention" title={task.attention} aria-label="Needs attention">
+              <WarningIcon />
+            </span>
+          )}
+          <time className="agent-row__time" title={formatTime(task.created_at_ms)}>
+            {formatRelative(task.created_at_ms)}
+          </time>
+          <div className="agent-row__actions">
+            {task.state === "running" && (
+              <button
+                type="button"
+                className="wb-icon-btn"
+                aria-label="Stop"
+                title="Stop"
+                disabled={busy}
+                onClick={() => void act(onStop)}
+              >
+                <StopIcon />
+              </button>
+            )}
             <button
               type="button"
               className="wb-icon-btn"
-              aria-label="Stop"
-              title="Stop"
-              disabled={busy}
-              onClick={() => void act(onStop)}
+              aria-label="Open diff"
+              title="Open diff"
+              onClick={() => onOpenDiff(task.id)}
             >
-              <StopIcon />
+              <DiffIcon />
             </button>
-          )}
-          <button
-            type="button"
-            className="wb-icon-btn"
-            aria-label="Open diff"
-            title="Open diff"
-            onClick={() => onOpenDiff(task.id)}
-          >
-            <DiffIcon />
-          </button>
-          <button
-            type="button"
-            className="wb-icon-btn"
-            aria-label="Reveal in Finder"
-            title="Reveal in Finder"
-            onClick={() => void act(onReveal)}
-          >
-            <RevealIcon />
-          </button>
-          <button
-            type="button"
-            className="wb-icon-btn wb-icon-btn--danger"
-            aria-label="Discard"
-            title="Discard"
-            disabled={busy}
-            onClick={() => setConfirming(true)}
-          >
-            <TrashIcon />
-          </button>
+            <button
+              type="button"
+              className="wb-icon-btn"
+              aria-label="Reveal in Finder"
+              title="Reveal in Finder"
+              onClick={() => void act(onReveal)}
+            >
+              <RevealIcon />
+            </button>
+            <button
+              type="button"
+              className="wb-icon-btn wb-icon-btn--danger"
+              aria-label="Discard"
+              title="Discard"
+              disabled={busy}
+              onClick={() => setConfirming(true)}
+            >
+              <TrashIcon />
+            </button>
+          </div>
         </div>
       )}
     </li>
   );
 });
 
-/** A per-agent monogram chip (decorative; the agent name is shown as text nearby). */
-export function AgentChip({ task, large = false }: { task: TaskDto; large?: boolean }) {
-  const running = task.state === "running";
-  return (
-    <span
-      className={`agent-chip agent-chip--${task.agent}${large ? " agent-chip--lg" : ""}${running ? " agent-chip--running" : ""}`}
-      aria-hidden="true"
-    >
-      {task.agent === "codex" ? "X" : "C"}
-    </span>
-  );
-}
-
-export function StateBadge({ task }: { task: TaskDto }) {
+/** A small status mark: a dot plus the state word, used on rows and the agent header. */
+export function StateBadge({ task, compact }: { task: TaskDto; compact?: boolean }) {
   return (
     <span className={`state-badge state-badge--${task.state}`}>
       <span className="state-badge__dot" aria-hidden="true" />
-      {stateLabel(task)}
+      {compact && task.state === "failed" ? "Failed" : stateLabel(task)}
     </span>
   );
 }
