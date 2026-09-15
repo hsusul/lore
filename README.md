@@ -7,9 +7,9 @@
 
 # Lore
 
-Lore is a local desktop app for running coding agents in parallel.
+Lore is a local desktop app for running Claude Code and Codex in parallel.
 
-Each task runs Claude Code or Codex in its own git worktree and branch, so agents never touch your checkout or each other. You watch their progress, continue a task or hand it to the other agent, commit, and merge the result back into your branch.
+Each task gets its own git worktree and branch, so agents never touch your checkout or each other. You watch live activity and diffs, continue a task or hand it to the other agent, then commit and merge when you are ready.
 
 > **Status: early and unreleased.** The orchestrator and workbench are built and tested against a fake agent. They have not yet been proven end to end with signed-in agents, and there is no signed build.
 
@@ -22,13 +22,14 @@ Lore creates a worktree on branch lore/<task>
         ↓
 claude -p / codex exec runs headless in that worktree
         ↓
-live activity, diff, commits, overlap warnings
+live activity, diff, overlap warnings, owns-paths
         ↓
-continue · hand off · commit · merge into your branch
+continue · hand off · commit · merge (or a merge queue)
 ```
 
 - Agents launch with their own permission settings. Lore never passes permission-bypass flags; Claude runs in `acceptEdits` by default (opt-in `auto` per task), Codex in its `workspace-write` sandbox.
-- Your checkout only changes when you confirm a merge. Lore refuses to merge into a dirty checkout and aborts on conflict.
+- You can pin a model and effort per task. Auto-handoff can move a run to the other agent when a usage limit hits.
+- Your checkout only changes when you confirm a merge. Lore refuses to merge into a dirty checkout and aborts on conflict. A merge queue can land several finished tasks in order.
 - Everything runs on your machine. Lore has no accounts, telemetry, or server; the agents talk to their own providers as they normally do.
 
 ## Development
@@ -63,7 +64,7 @@ crates/lorectl/            archive CLI (not used by the app)
 
 ## Scope
 
-Lore focuses on Claude Code and Codex. It supervises agents; it is not a code editor, and editing stays in your own editor. Coordination features (file claims, automatic handoff on usage limits, a shared decision log, a merge queue) are planned next.
+Lore supervises Claude Code and Codex. It is not a code editor; editing stays in your own editor. The workbench is an IDE-style shell for that job: agents and files in a sidebar, the selected run in the editor, diffs and a merge queue when you need them.
 
 ## License
 
