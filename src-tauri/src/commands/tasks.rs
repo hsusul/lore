@@ -186,7 +186,7 @@ pub async fn start_merge_queue(
     Ok(queue)
 }
 
-/// The latest merge queue for a repository, if one ran this session.
+/// The latest merge queue for a repository, including one restored after relaunch.
 #[tauri::command]
 pub async fn get_merge_queue(
     app: AppHandle,

@@ -22,6 +22,7 @@ import type { TaskDiffDto } from "../crates/lore-ipc/bindings/TaskDiffDto";
 import type { TaskDto } from "../crates/lore-ipc/bindings/TaskDto";
 import type { TaskOverlapDto } from "../crates/lore-ipc/bindings/TaskOverlapDto";
 import type { TaskPermission } from "../crates/lore-ipc/bindings/TaskPermission";
+import type { TaskEffort } from "../crates/lore-ipc/bindings/TaskEffort";
 import type { TaskState } from "../crates/lore-ipc/bindings/TaskState";
 import type { TasksChangedEvent } from "../crates/lore-ipc/bindings/TasksChangedEvent";
 
@@ -40,6 +41,7 @@ export type {
   TaskAgent,
   TaskDiffDto,
   TaskDto,
+  TaskEffort,
   TaskOverlapDto,
   TaskPermission,
   TaskState,

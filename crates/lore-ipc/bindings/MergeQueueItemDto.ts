@@ -6,6 +6,6 @@
 export type MergeQueueItemDto = { task_id: string, title: string, 
 /**
  * `pending` | `updating` | `testing` | `merging` | `merged` | `failed` |
- * `skipped` | `cancelled`.
+ * `skipped` | `cancelled` | `interrupted`.
  */
 status: string, detail: string | null, };

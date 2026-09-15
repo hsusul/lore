@@ -78,6 +78,8 @@ function sameTask(a: TaskDto, b: TaskDto): boolean {
     a.worktree_path === b.worktree_path &&
     a.agent === b.agent &&
     a.permission === b.permission &&
+    a.model === b.model &&
+    a.effort === b.effort &&
     a.runs === b.runs &&
     a.uncommitted_count === b.uncommitted_count &&
     a.attention === b.attention &&

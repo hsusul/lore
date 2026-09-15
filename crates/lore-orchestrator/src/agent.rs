@@ -1,7 +1,7 @@
 //! How each agent CLI is launched headless, and how its output is summarized.
 //!
-//! Launch flags were verified against `claude --help` (2.1.251) and
-//! `codex exec --help` (0.144.6) on 2026-09-12. Lore never passes a flag that
+//! Launch flags were verified against `claude --help` (2.1.270) and
+//! `codex exec --help` (0.154.0) on 2026-09-14. Lore never passes a flag that
 //! bypasses the agent's permission prompts or sandbox (ADR-0007).
 
 use std::fs::File;
@@ -9,7 +9,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lore_ipc::{ActivityDto, ActivityKind, TaskAgent, TaskPermission};
+use lore_ipc::{ActivityDto, ActivityKind, TaskAgent, TaskEffort, TaskPermission};
 
 /// Program used to launch each agent. Defaults to `claude` / `codex` on `PATH`;
 /// tests substitute a fake agent script.
@@ -29,7 +29,7 @@ impl Default for AgentPrograms {
 }
 
 /// How to start an agent run.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Launch<'a> {
     pub agent: TaskAgent,
     pub permission: TaskPermission,
@@ -37,6 +37,29 @@ pub struct Launch<'a> {
     pub prompt: &'a str,
     /// Resume this agent session instead of starting a new one (Claude only).
     pub resume_session: Option<&'a str>,
+    /// Claude `--model` / Codex `--model`. None uses the agent's default.
+    pub model: Option<&'a str>,
+    /// Claude `--effort` / Codex `model_reasoning_effort`.
+    pub effort: Option<TaskEffort>,
+}
+
+/// A model id Lore will pass as a CLI argument: letters, digits, `.`, `_`, `-`,
+/// no leading dash, so it cannot be read as a flag.
+pub fn parse_model(raw: Option<&str>) -> crate::Result<Option<String>> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if raw.len() > 80
+        || raw.starts_with('-')
+        || !raw
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(crate::Error::Invalid(format!(
+            "model must be a short alias or id such as opus, sonnet, fable, or gpt-5 (got {raw})"
+        )));
+    }
+    Ok(Some(raw.to_string()))
 }
 
 /// Build the headless command for one agent run.
@@ -68,6 +91,12 @@ pub fn command(programs: &AgentPrograms, launch: Launch<'_>) -> Command {
             if let Some(session) = launch.resume_session {
                 cmd.arg(format!("--resume={session}"));
             }
+            if let Some(model) = launch.model {
+                cmd.arg("--model").arg(model);
+            }
+            if let Some(effort) = launch.effort {
+                cmd.arg("--effort").arg(effort.as_claude());
+            }
             cmd.arg("--").arg(launch.prompt);
             cmd
         }
@@ -77,9 +106,15 @@ pub fn command(programs: &AgentPrograms, launch: Launch<'_>) -> Command {
             // `codex exec resume` (0.144.6) accepts neither --sandbox nor --cd, so
             // Codex continuations start a new session with a brief instead.
             cmd.args(["exec", "--json", "--sandbox", "workspace-write", "--cd"])
-                .arg(launch.worktree)
-                .arg("--")
-                .arg(launch.prompt);
+                .arg(launch.worktree);
+            if let Some(model) = launch.model {
+                cmd.arg("--model").arg(model);
+            }
+            if let Some(effort) = launch.effort {
+                cmd.arg("-c")
+                    .arg(format!("model_reasoning_effort=\"{}\"", effort.as_codex()));
+            }
+            cmd.arg("--").arg(launch.prompt);
             cmd
         }
     };
@@ -575,8 +610,10 @@ mod tests {
             worktree: Path::new("/w"),
             prompt: "-p looks like a flag",
             resume_session: Some("abc"),
+            model: None,
+            effort: None,
         };
-        let a = args(base);
+        let a = args(base.clone());
         let mode = a.iter().position(|x| x == "--permission-mode").unwrap();
         assert_eq!(a[mode + 1], "auto");
         assert!(a.iter().any(|x| x == "--resume=abc"));
@@ -691,6 +728,8 @@ mod tests {
                 worktree: Path::new("/tmp"),
                 prompt: "hi",
                 resume_session: None,
+                model: None,
+                effort: None,
             },
         );
         let args: Vec<_> = cmd
@@ -712,6 +751,8 @@ mod tests {
                 worktree: Path::new("/tmp"),
                 prompt: "hi",
                 resume_session: None,
+                model: None,
+                effort: None,
             },
         );
         let args: Vec<_> = cmd
@@ -722,5 +763,52 @@ mod tests {
             .iter()
             .any(|a| a.contains("dangerously") || a == "bypassPermissions"));
         assert_eq!(args.last().map(String::as_str), Some("hi"));
+    }
+
+    #[test]
+    fn model_and_effort_flags_are_passed_before_the_prompt() {
+        let claude = args(Launch {
+            agent: TaskAgent::ClaudeCode,
+            permission: TaskPermission::Edits,
+            worktree: Path::new("/w"),
+            prompt: "do it",
+            resume_session: None,
+            model: Some("opus"),
+            effort: Some(TaskEffort::High),
+        });
+        let model = claude.iter().position(|x| x == "--model").unwrap();
+        assert_eq!(claude[model + 1], "opus");
+        let effort = claude.iter().position(|x| x == "--effort").unwrap();
+        assert_eq!(claude[effort + 1], "high");
+        assert_eq!(&claude[claude.len() - 2..], ["--", "do it"]);
+
+        let codex = args(Launch {
+            agent: TaskAgent::Codex,
+            permission: TaskPermission::Edits,
+            worktree: Path::new("/w"),
+            prompt: "do it",
+            resume_session: None,
+            model: Some("gpt-6-astra"),
+            effort: Some(TaskEffort::Max),
+        });
+        let model = codex.iter().position(|x| x == "--model").unwrap();
+        assert_eq!(codex[model + 1], "gpt-6-astra");
+        let cfg = codex.iter().position(|x| x == "-c").unwrap();
+        assert_eq!(codex[cfg + 1], "model_reasoning_effort=\"high\"");
+        assert_eq!(&codex[codex.len() - 2..], ["--", "do it"]);
+    }
+
+    #[test]
+    fn parse_model_rejects_flag_like_values() {
+        assert_eq!(parse_model(None).unwrap(), None);
+        assert_eq!(parse_model(Some("  ")).unwrap(), None);
+        assert_eq!(parse_model(Some("opus")).unwrap().as_deref(), Some("opus"));
+        assert_eq!(
+            parse_model(Some("claude-fable-5")).unwrap().as_deref(),
+            Some("claude-fable-5")
+        );
+        assert!(parse_model(Some("--dangerously-skip-permissions")).is_err());
+        assert!(parse_model(Some("opus 5")).is_err());
+        assert!(parse_model(Some("../evil")).is_err());
     }
 }

@@ -3,7 +3,9 @@
 //! Every invocation disables hooks and terminal prompts so a repository's own
 //! config cannot run code or block on credentials while Lore manages worktrees.
 
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use crate::{Error, Result};
@@ -219,6 +221,119 @@ pub fn log_oneline(worktree: &Path, base: &str, max: usize) -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// Directory names produced by common test/tooling runs, never user source.
+fn is_generated_artifact_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "__pycache__"
+            | ".pytest_cache"
+            | ".mypy_cache"
+            | ".ruff_cache"
+            | ".hypothesis"
+            | ".tox"
+            | ".nox"
+            | "htmlcov"
+            | ".coverage"
+    )
+}
+
+/// File suffixes produced by interpreters and coverage tools.
+fn is_generated_artifact_file(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".pyc")
+        || lower.ends_with(".pyo")
+        || lower == ".coverage"
+        || lower.starts_with(".coverage.")
+}
+
+/// Whether a repository-relative porcelain path is a generated test artifact
+/// (Python bytecode caches, pytest/mypy/ruff caches, coverage files). Paths
+/// that escape the worktree with `..` or that are absolute are never treated
+/// as artifacts, so they cannot be deleted by artifact cleanup.
+pub fn is_generated_test_artifact(rel: &str) -> bool {
+    let path = Path::new(rel);
+    if path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
+    let mut saw_normal = false;
+    for component in path.components() {
+        let Component::Normal(name) = component else {
+            return false;
+        };
+        saw_normal = true;
+        let name = name.to_string_lossy();
+        if is_generated_artifact_dir(&name) {
+            return true;
+        }
+    }
+    saw_normal
+        && path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(is_generated_artifact_file)
+}
+
+fn path_is_inside(child: &Path, parent: &Path) -> bool {
+    child.starts_with(parent) && child != parent
+}
+
+/// Delete `rel` only if it resolves inside `worktree`. Never follows a symlink
+/// out of the worktree.
+fn remove_inside_worktree(worktree: &Path, rel: &str) -> Result<()> {
+    let rel_path = Path::new(rel);
+    if rel_path.is_absolute()
+        || rel_path
+            .components()
+            .any(|c| matches!(c, Component::ParentDir | Component::RootDir))
+    {
+        return Err(Error::Invalid(
+            "refusing to delete a path that is not repository-relative".into(),
+        ));
+    }
+    let full = worktree.join(rel_path);
+    if !full.exists() {
+        return Ok(());
+    }
+    let real_wt = fs::canonicalize(worktree)?;
+    let real = fs::canonicalize(&full)?;
+    if !path_is_inside(&real, &real_wt) {
+        return Err(Error::Invalid(
+            "refusing to delete a path outside the task worktree".into(),
+        ));
+    }
+    if real.is_dir() {
+        fs::remove_dir_all(&real)?;
+    } else {
+        fs::remove_file(&real)?;
+        let mut dir = rel_path.parent();
+        while let Some(parent) = dir {
+            let name = parent
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if !is_generated_artifact_dir(name) {
+                break;
+            }
+            let _ = fs::remove_dir(worktree.join(parent));
+            dir = parent.parent();
+        }
+    }
+    Ok(())
+}
+
+/// After a merge-queue test command, delete only newly appeared generated
+/// artifacts. Paths present in `before` (including untracked user files) are
+/// left untouched. This is not `git clean`.
+pub fn discard_new_test_artifacts(worktree: &Path, before: &HashSet<String>) -> Result<()> {
+    for path in uncommitted(worktree) {
+        if before.contains(&path) || !is_generated_test_artifact(&path) {
+            continue;
+        }
+        remove_inside_worktree(worktree, &path)?;
+    }
+    Ok(())
+}
+
 /// Paths with uncommitted changes (tracked or untracked).
 pub fn uncommitted(worktree: &Path) -> Vec<String> {
     let Ok(out) = run(
@@ -375,12 +490,26 @@ pub fn merge_into_worktree(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_porcelain_z;
+    use super::{is_generated_test_artifact, parse_porcelain_z};
 
     #[test]
     fn porcelain_handles_renames_and_non_ascii() {
         let out = "R  x\0\u{e9}\u{e9}.txt\0?? new.txt\0 M src/a.rs\0";
         assert_eq!(parse_porcelain_z(out), ["x", "new.txt", "src/a.rs"]);
         assert!(parse_porcelain_z("\u{e9}\0").is_empty());
+    }
+
+    #[test]
+    fn generated_artifacts_are_caches_not_source() {
+        assert!(is_generated_test_artifact(
+            "__pycache__/mod.cpython-312.pyc"
+        ));
+        assert!(is_generated_test_artifact("pkg/__pycache__/x.pyc"));
+        assert!(is_generated_test_artifact(".pytest_cache/v/cache"));
+        assert!(is_generated_test_artifact("mod.pyc"));
+        assert!(!is_generated_test_artifact("calc.py"));
+        assert!(!is_generated_test_artifact("notes.txt"));
+        assert!(!is_generated_test_artifact("../__pycache__/x.pyc"));
+        assert!(!is_generated_test_artifact("/tmp/__pycache__/x.pyc"));
     }
 }

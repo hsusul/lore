@@ -37,7 +37,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use lore_ipc::{
     ActivityDto, ActivityKind, ContinueTaskRequest, CreateTaskRequest, DecisionDto, MergeQueueDto,
     MergeQueueItemDto, MergeResultDto, RepoSettingsDto, TaskAgent, TaskDiffDto, TaskDto,
-    TaskOverlapDto, TaskPermission, TaskState,
+    TaskEffort, TaskOverlapDto, TaskPermission, TaskState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +63,9 @@ const STORE_FILE: &str = "tasks.json";
 const LOCK_FILE: &str = "lock";
 const DECISIONS_FILE: &str = "decisions.jsonl";
 const REPOS_FILE: &str = "repos.json";
+const QUEUES_FILE: &str = "queues.json";
+const QUEUE_CANCEL_WHY: &str = "Lore quit while this merge queue was running. Test processes were stopped. Remaining steps were not merged.";
+const QUEUE_INTERRUPT_WHY: &str = "Lore exited while this merge queue was running, so it was interrupted. Test processes were stopped. Remaining steps were not merged.";
 const MAX_TEST_COMMAND: usize = 2_000;
 /// How long a merge-queue test command may run before it is stopped.
 const DEFAULT_TEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -94,6 +97,11 @@ struct TaskRecord {
     pid: Option<u32>,
     #[serde(default)]
     permission: TaskPermission,
+    /// Model alias/id for `--model`, when the user picked one.
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<TaskEffort>,
     /// Runs in this worktree: the first launch plus each continuation.
     #[serde(default = "one")]
     runs: u32,
@@ -155,8 +163,9 @@ struct Inner {
     queues: HashMap<PathBuf, MergeQueueDto>,
     /// Repositories whose running queue was asked to stop.
     cancel_queues: HashSet<PathBuf>,
-    /// Process groups of merge-queue test commands that are running.
-    queue_tests: HashSet<u32>,
+    /// Process groups of merge-queue test commands that are running, keyed by
+    /// repository so a relaunch can stop an orphaned test.
+    queue_tests: HashMap<PathBuf, u32>,
     test_timeout: Duration,
     load_warning: Option<String>,
 }
@@ -251,6 +260,7 @@ impl Drop for QueueFinish<'_> {
                 }
             }
         }
+        let _ = self.orchestrator.save_queues(&inner);
     }
 }
 
@@ -327,6 +337,31 @@ impl Orchestrator {
                 changed = true;
             }
         }
+
+        let mut queue_warning = None;
+        let (mut queues, mut leftover_tests) = match load_queues_file(&root) {
+            Ok(loaded) => loaded,
+            Err(msg) => {
+                queue_warning = Some(msg);
+                (HashMap::new(), HashMap::new())
+            }
+        };
+        let mut queue_events = Vec::new();
+        for (repo, queue) in &mut queues {
+            if let Some(pgid) = leftover_tests.remove(repo) {
+                if process::group_alive(pgid) {
+                    process::stop_group(pgid, None);
+                }
+            }
+            if queue.running {
+                mark_queue_stopped(queue, "interrupted", QUEUE_INTERRUPT_WHY);
+                queue_events.push(queue.clone());
+            }
+        }
+        if load_warning.is_none() {
+            load_warning = queue_warning;
+        }
+
         let orchestrator = Self {
             root,
             inner: Mutex::new(Inner {
@@ -338,9 +373,9 @@ impl Orchestrator {
                 opened_roots: HashSet::new(),
                 merging_repos: HashSet::new(),
                 shutting_down: false,
-                queues: HashMap::new(),
+                queues,
                 cancel_queues: HashSet::new(),
-                queue_tests: HashSet::new(),
+                queue_tests: HashMap::new(),
                 test_timeout: DEFAULT_TEST_TIMEOUT,
                 load_warning,
             }),
@@ -349,6 +384,14 @@ impl Orchestrator {
         if changed {
             let inner = orchestrator.lock();
             orchestrator.save(&inner)?;
+        }
+        if !queue_events.is_empty() {
+            let inner = orchestrator.lock();
+            let _ = orchestrator.save_queues(&inner);
+            drop(inner);
+            for queue in &queue_events {
+                orchestrator.record_queue_event(queue, "queue_interrupted", QUEUE_INTERRUPT_WHY);
+            }
         }
         Ok(orchestrator)
     }
@@ -434,6 +477,7 @@ impl Orchestrator {
         }
 
         let claims = normalize_claims(req.claims.as_deref().unwrap_or(&[]))?;
+        let model = agent::parse_model(req.model.as_deref())?;
 
         // Git work, without the lock.
         let repo = git::toplevel(&requested).map_err(workspace::not_a_git_repository)?;
@@ -468,6 +512,8 @@ impl Orchestrator {
             exit_code: None,
             pid: None,
             permission: req.permission.unwrap_or_default(),
+            model,
+            effort: req.effort,
             runs: 1,
             merged_into: None,
             claims: claims.clone(),
@@ -569,7 +615,14 @@ impl Orchestrator {
 
         // Log parsing and git for the brief, without the lock.
         let new_agent = req.agent.unwrap_or(task.agent);
-        let session = (new_agent == task.agent && new_agent == TaskAgent::ClaudeCode)
+        let next_model = match &req.model {
+            Some(raw) => agent::parse_model(Some(raw))?,
+            None => task.model.clone(),
+        };
+        let next_effort = req.effort.or(task.effort);
+        let same_setup =
+            new_agent == task.agent && next_model == task.model && next_effort == task.effort;
+        let session = (same_setup && new_agent == TaskAgent::ClaudeCode)
             .then(|| agent::claude_session_id(&task.log_path))
             .flatten();
         let full_prompt = match session {
@@ -589,6 +642,8 @@ impl Orchestrator {
         let previous = inner.tasks[index].clone();
         let mut record = previous.clone();
         record.agent = new_agent;
+        record.model = next_model;
+        record.effort = next_effort;
         record.runs += 1;
         if !automatic {
             record.auto_handoffs = 0;
@@ -869,7 +924,7 @@ impl Orchestrator {
         self.lock().test_timeout = timeout;
     }
 
-    /// The latest merge queue for a repository, if one ran this session.
+    /// The latest merge queue for a repository, including one restored after relaunch.
     pub fn merge_queue(&self, repo_path: &str) -> Option<MergeQueueDto> {
         let top = workspace::repository_root(repo_path).ok()?;
         self.lock().queues.get(&top).cloned()
@@ -896,6 +951,7 @@ impl Orchestrator {
         let mut inner = self.lock();
         self.reap(&mut inner)?;
         let mut items = Vec::new();
+        let mut selected = Vec::new();
         let mut seen = HashSet::new();
         for id in task_ids {
             if !seen.insert(id.clone()) {
@@ -922,6 +978,10 @@ impl Orchestrator {
                 status: "pending".into(),
                 detail: None,
             });
+            selected.push(task.clone());
+        }
+        if let Some(msg) = overlapping_claim_error(&selected) {
+            return Err(Error::Invalid(msg));
         }
         if inner.queues.get(&top).is_some_and(|q| q.running) {
             return Err(Error::Invalid(
@@ -941,6 +1001,7 @@ impl Orchestrator {
             items,
         };
         inner.queues.insert(top, queue.clone());
+        self.save_queues(&inner)?;
         Ok(queue)
     }
 
@@ -1012,7 +1073,7 @@ impl Orchestrator {
 
         let mut inner = self.lock();
         inner.cancel_queues.remove(&top);
-        match inner.queues.get_mut(&top) {
+        let queue = match inner.queues.get_mut(&top) {
             Some(q) => {
                 q.running = false;
                 q.clone()
@@ -1023,7 +1084,9 @@ impl Orchestrator {
                 test_command,
                 items: Vec::new(),
             },
-        }
+        };
+        let _ = self.save_queues(&inner);
+        queue
     }
 
     /// Release a started queue whose runner could not be started.
@@ -1048,9 +1111,16 @@ impl Orchestrator {
             .get_mut(repo)
             .and_then(|q| q.items.get_mut(index))
         {
+            // Quit/relaunch already recorded a durable outcome; don't replace it
+            // with the test command's SIGTERM as a failure.
+            if matches!(item.status.as_str(), "cancelled" | "interrupted") {
+                let _ = self.save_queues(&inner);
+                return;
+            }
             item.status = status.to_string();
             item.detail = detail.map(|d| d.chars().take(2_000).collect());
         }
+        let _ = self.save_queues(&inner);
     }
 
     /// One queue step. Returns a human-readable reason on failure.
@@ -1114,9 +1184,12 @@ impl Orchestrator {
             Err(e) => return Err(format!("could not update from {into}: {e}")),
         }
 
+        let before_tests: HashSet<String> =
+            git::uncommitted(&task.worktree_path).into_iter().collect();
         if let Some(command) = test_command {
             self.set_queue_item(repo, index, "testing", Some(command));
             let log = self.root.join("logs").join(format!("{id}.test.log"));
+            let repo_key = repo.to_path_buf();
             let outcome = run_test_command(
                 &task.worktree_path,
                 command,
@@ -1126,15 +1199,27 @@ impl Orchestrator {
                 |pgid, running| {
                     let mut inner = self.lock();
                     if running {
-                        inner.queue_tests.insert(pgid);
+                        inner.queue_tests.insert(repo_key.clone(), pgid);
                     } else {
-                        inner.queue_tests.remove(&pgid);
+                        inner.queue_tests.remove(&repo_key);
                     }
+                    let _ = self.save_queues(&inner);
                 },
             );
+            let _ = git::discard_new_test_artifacts(&task.worktree_path, &before_tests);
             if let Err(reason) = outcome {
+                if self.queue_cancelled(repo) {
+                    return Err("cancelled".into());
+                }
                 self.record_decision(&task, "queue_failed", &format!("tests: {reason}"));
                 return Err(format!("tests failed: {reason}"));
+            }
+            let leftover = git::uncommitted(&task.worktree_path);
+            if !leftover.is_empty() {
+                return Err(format!(
+                    "the task has uncommitted changes after tests ({}); commit them first",
+                    leftover.join(", ")
+                ));
             }
         }
 
@@ -1164,14 +1249,33 @@ impl Orchestrator {
     /// Append one entry to the shared decision log. Best-effort: a task must
     /// never fail because its history could not be written.
     fn record_decision(&self, task: &TaskRecord, kind: &str, detail: &str) {
-        let entry = DecisionDto {
+        self.append_decision(DecisionDto {
             at_ms: now_ms(),
             task_id: task.id.clone(),
             task_title: task.title.clone(),
             repo_path: task.repo_path.display().to_string(),
             kind: kind.to_string(),
             detail: detail.chars().take(2_000).collect(),
-        };
+        });
+    }
+
+    fn record_queue_event(&self, queue: &MergeQueueDto, kind: &str, detail: &str) {
+        let (task_id, task_title) = queue
+            .items
+            .first()
+            .map(|item| (item.task_id.clone(), item.title.clone()))
+            .unwrap_or_else(|| (String::new(), "Merge queue".into()));
+        self.append_decision(DecisionDto {
+            at_ms: now_ms(),
+            task_id,
+            task_title,
+            repo_path: queue.repo_path.clone(),
+            kind: kind.to_string(),
+            detail: detail.chars().take(2_000).collect(),
+        });
+    }
+
+    fn append_decision(&self, entry: DecisionDto) {
         if let (Ok(mut file), Ok(line)) = (
             fs::OpenOptions::new()
                 .create(true)
@@ -1181,6 +1285,27 @@ impl Orchestrator {
         ) {
             let _ = writeln!(file, "{line}");
         }
+    }
+
+    fn save_queues(&self, inner: &Inner) -> Result<()> {
+        let mut map = HashMap::new();
+        for (repo, queue) in &inner.queues {
+            map.insert(
+                repo.display().to_string(),
+                PersistentQueue {
+                    queue: queue.clone(),
+                    test_pgid: inner.queue_tests.get(repo).copied(),
+                },
+            );
+        }
+        let tmp = self.root.join(format!("{QUEUES_FILE}.tmp"));
+        {
+            let file = File::create(&tmp)?;
+            serde_json::to_writer_pretty(&file, &map)?;
+            file.sync_all()?;
+        }
+        fs::rename(tmp, self.root.join(QUEUES_FILE))?;
+        Ok(())
     }
 
     /// The most recent decisions, newest first, optionally for one repository.
@@ -1260,6 +1385,8 @@ impl Orchestrator {
                     task.title
                 ),
                 agent: Some(other),
+                model: None,
+                effort: None,
             };
             if self.continue_task_inner(&request, true).is_ok() {
                 self.record_decision(
@@ -1401,10 +1528,19 @@ impl Orchestrator {
             .filter(|(_, q)| q.running)
             .map(|(repo, _)| repo.clone())
             .collect();
-        inner.cancel_queues.extend(running_queues);
-        for pgid in inner.queue_tests.drain() {
-            process::signal_group(pgid, "TERM");
+        inner.cancel_queues.extend(running_queues.iter().cloned());
+        let mut cancelled_queues = Vec::new();
+        for repo in &running_queues {
+            if let Some(queue) = inner.queues.get_mut(repo) {
+                mark_queue_stopped(queue, "cancelled", QUEUE_CANCEL_WHY);
+                cancelled_queues.push(queue.clone());
+            }
         }
+        let queue_pgids: Vec<u32> = inner.queue_tests.drain().map(|(_, pgid)| pgid).collect();
+        for pgid in &queue_pgids {
+            process::signal_group(*pgid, "TERM");
+        }
+        let _ = self.save_queues(&inner);
         let running: Vec<(Option<u32>, Option<Child>)> = inner
             .tasks
             .iter()
@@ -1426,6 +1562,9 @@ impl Orchestrator {
         }
         let _ = self.save(&inner);
         drop(inner);
+        for queue in &cancelled_queues {
+            self.record_queue_event(queue, "queue_cancelled", QUEUE_CANCEL_WHY);
+        }
         // Signal every group first, then wait once, so quitting with many
         // agents takes one grace period rather than one per agent.
         for (pid, _) in &running {
@@ -1436,9 +1575,10 @@ impl Orchestrator {
         let deadline = Instant::now() + LINGER_GRACE;
         let mut running = running;
         while Instant::now() < deadline
-            && running
+            && (running
                 .iter()
                 .any(|(pid, _)| pid.is_some_and(process::group_alive))
+                || queue_pgids.iter().copied().any(process::group_alive))
         {
             for (_, child) in &mut running {
                 if let Some(c) = child {
@@ -1456,6 +1596,11 @@ impl Orchestrator {
             if let Some(c) = child {
                 let _ = c.kill();
                 let _ = c.wait();
+            }
+        }
+        for pgid in queue_pgids {
+            if process::group_alive(pgid) {
+                process::signal_group(pgid, "KILL");
             }
         }
     }
@@ -1511,6 +1656,59 @@ impl Orchestrator {
         }
         fs::rename(tmp, self.root.join(STORE_FILE))?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistentQueue {
+    #[serde(flatten)]
+    queue: MergeQueueDto,
+    #[serde(default)]
+    test_pgid: Option<u32>,
+}
+
+type LoadedQueues = (HashMap<PathBuf, MergeQueueDto>, HashMap<PathBuf, u32>);
+
+fn load_queues_file(root: &Path) -> std::result::Result<LoadedQueues, String> {
+    let path = root.join(QUEUES_FILE);
+    match fs::read(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((HashMap::new(), HashMap::new())),
+        Err(e) => Err(format!("The merge queue list could not be read ({e}).")),
+        Ok(bytes) => match serde_json::from_slice::<HashMap<String, PersistentQueue>>(&bytes) {
+            Ok(map) => {
+                let mut queues = HashMap::new();
+                let mut tests = HashMap::new();
+                for (key, stored) in map {
+                    let repo = PathBuf::from(key);
+                    if let Some(pgid) = stored.test_pgid {
+                        tests.insert(repo.clone(), pgid);
+                    }
+                    queues.insert(repo, stored.queue);
+                }
+                Ok((queues, tests))
+            }
+            Err(e) => {
+                let aside = root.join(format!("{QUEUES_FILE}.corrupt-{}", now_ms()));
+                let _ = fs::rename(&path, &aside);
+                Err(format!(
+                    "The merge queue list could not be read ({e}) and was moved to {}.",
+                    aside.display()
+                ))
+            }
+        },
+    }
+}
+
+fn mark_queue_stopped(queue: &mut MergeQueueDto, status: &str, why: &str) {
+    queue.running = false;
+    for item in &mut queue.items {
+        if matches!(
+            item.status.as_str(),
+            "pending" | "updating" | "testing" | "merging"
+        ) {
+            item.status = status.to_string();
+            item.detail = Some(why.chars().take(2_000).collect());
+        }
     }
 }
 
@@ -1686,6 +1884,8 @@ fn spawn(
             worktree: &task.worktree_path,
             prompt,
             resume_session: resume,
+            model: task.model.as_deref(),
+            effort: task.effort,
         },
     )
     .process_group(0)
@@ -1728,6 +1928,8 @@ pub fn describe(snapshot: &TaskSnapshot) -> TaskDto {
         last_activity: agent::last_activity(&t.log_path)
             .map(|s| strip_worktree_prefix(&s, &t.worktree_path)),
         permission: Some(t.permission),
+        model: t.model.clone(),
+        effort: t.effort,
         runs: Some(i64::from(t.runs)),
         uncommitted_count: Some(if exists {
             i64::try_from(git::uncommitted(&t.worktree_path).len()).unwrap_or(i64::MAX)
@@ -1879,6 +2081,51 @@ fn claim_covers(claim: &str, file: &str) -> bool {
     }
 }
 
+/// Whether two declared claims name the same path or one contains the other.
+fn claims_overlap(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    claim_contains(a, b) || claim_contains(b, a)
+}
+
+fn claim_contains(outer: &str, inner: &str) -> bool {
+    match outer.strip_suffix('/') {
+        Some(dir) => inner == dir || inner.starts_with(&format!("{dir}/")),
+        None => false,
+    }
+}
+
+fn overlapping_claim_error(tasks: &[TaskRecord]) -> Option<String> {
+    let mut msgs = Vec::new();
+    for (i, a) in tasks.iter().enumerate() {
+        for b in tasks.iter().skip(i + 1) {
+            for ca in &a.claims {
+                for cb in &b.claims {
+                    if claims_overlap(ca, cb) {
+                        let shared = if ca == cb {
+                            format!("both claim {ca}")
+                        } else {
+                            format!("{ca} overlaps {cb}")
+                        };
+                        msgs.push(format!(
+                            "cannot queue \"{}\" and \"{}\": {shared}",
+                            a.title, b.title
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    msgs.sort();
+    msgs.dedup();
+    if msgs.is_empty() {
+        None
+    } else {
+        Some(msgs.join("; "))
+    }
+}
+
 /// What an agent is told about the other agents working in the same repository,
 /// prepended to its first prompt (the "shared brain", step 4).
 fn coordination_preamble(tasks: &[TaskRecord], task: &TaskRecord) -> String {
@@ -1905,6 +2152,7 @@ fn coordination_preamble(tasks: &[TaskRecord], task: &TaskRecord) -> String {
     if !task.claims.is_empty() {
         out.push_str(&format!("You own: {}\n", task.claims.join(", ")));
     }
+    let mut overlaps = Vec::new();
     for other in &others {
         let owns = if other.claims.is_empty() {
             "no declared files".to_string()
@@ -1917,10 +2165,28 @@ fn coordination_preamble(tasks: &[TaskRecord], task: &TaskRecord) -> String {
             agent_name(other.agent),
             state_word(other.state),
         ));
+        for mine in &task.claims {
+            for theirs in &other.claims {
+                if claims_overlap(mine, theirs) {
+                    overlaps.push(format!(
+                        "Your claim {mine} overlaps \"{}\"'s claim {theirs}.",
+                        other.title
+                    ));
+                }
+            }
+        }
+    }
+    if !overlaps.is_empty() {
+        overlaps.sort();
+        overlaps.dedup();
+        out.push('\n');
+        out.push_str(&overlaps.join(" "));
+        out.push_str(" Lore will refuse to merge both tasks until their claims are distinct.\n");
     }
     let claimed: Vec<&str> = others
         .iter()
         .flat_map(|o| o.claims.iter().map(String::as_str))
+        .filter(|theirs| !task.claims.iter().any(|mine| claims_overlap(mine, theirs)))
         .collect();
     if !claimed.is_empty() {
         out.push_str(&format!(
@@ -2151,5 +2417,15 @@ mod tests {
     fn ids_do_not_collide_in_a_burst() {
         let ids: std::collections::HashSet<_> = (0..1000).map(|_| new_id(1)).collect();
         assert_eq!(ids.len(), 1000);
+    }
+
+    #[test]
+    fn claims_overlap_files_and_folders() {
+        assert!(claims_overlap("calc.py", "calc.py"));
+        assert!(claims_overlap("src/", "src/auth.rs"));
+        assert!(claims_overlap("src/auth.rs", "src/"));
+        assert!(claims_overlap("src/", "src/auth/"));
+        assert!(!claims_overlap("calc.py", "greet.py"));
+        assert!(!claims_overlap("src/", "lib.rs"));
     }
 }

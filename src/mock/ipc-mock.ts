@@ -798,6 +798,8 @@ export function createTask(request: CreateTaskRequest): Promise<TaskDto> {
       created_at_ms: Date.now(),
       repo_path: request.repo_path,
       permission: request.permission ?? "edits",
+      model: request.model,
+      effort: request.effort,
       claims: request.claims,
       auto_handoff: request.auto_handoff ?? true,
     }),
@@ -855,6 +857,8 @@ export function continueTask(request: ContinueTaskRequest): Promise<TaskDto> {
   t.dto = {
     ...t.dto,
     agent,
+    model: request.model === undefined ? t.dto.model : request.model || undefined,
+    effort: request.effort ?? t.dto.effort,
     state: "running",
     exit_code: null,
     runs: (t.dto.runs ?? 1) + 1,

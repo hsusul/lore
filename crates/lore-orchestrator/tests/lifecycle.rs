@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use lore_ipc::{CreateTaskRequest, TaskAgent, TaskState};
+use lore_ipc::{CreateTaskRequest, TaskAgent, TaskEffort, TaskState};
 use lore_orchestrator::{AgentPrograms, Orchestrator};
 
 fn sh(dir: &Path, args: &[&str]) {
@@ -64,6 +64,8 @@ fn request(repo: &Path, title: &str) -> CreateTaskRequest {
         permission: None,
         claims: None,
         auto_handoff: Some(false),
+        model: None,
+        effort: None,
     }
 }
 
@@ -347,6 +349,39 @@ fn rejects_bad_input_and_non_repos() {
 }
 
 #[test]
+fn create_task_stores_model_and_effort_and_rejects_flag_like_models() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = recording_agent(tmp.path());
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let mut req = request(&repo, "opus work");
+    req.model = Some("opus".into());
+    req.effort = Some(TaskEffort::High);
+    let id = orch.create_task(&req).unwrap().id().to_string();
+    let done = wait_for(&orch, &id, TaskState::Finished);
+    assert_eq!(done.model.as_deref(), Some("opus"));
+    assert_eq!(done.effort, Some(TaskEffort::High));
+    let args = call_args(&root, 0);
+    assert!(
+        args.windows(2).any(|w| w == ["--model", "opus"]),
+        "{args:?}"
+    );
+    assert!(
+        args.windows(2).any(|w| w == ["--effort", "high"]),
+        "{args:?}"
+    );
+
+    let mut evil = request(&repo, "evil");
+    evil.model = Some("--dangerously-skip-permissions".into());
+    assert!(orch
+        .create_task(&evil)
+        .unwrap_err()
+        .to_string()
+        .contains("model"));
+}
+
+#[test]
 fn missing_agent_binary_fails_the_task_instead_of_erroring() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(tmp.path());
@@ -417,6 +452,8 @@ fn continue_resumes_claude_and_hands_off_to_codex_with_a_brief() {
         id: id.clone(),
         prompt: "also add docs".into(),
         agent: None,
+        model: None,
+        effort: None,
     };
     orch.continue_task(&cont).unwrap();
     let done = wait_for(&orch, &id, TaskState::Finished);
@@ -435,6 +472,8 @@ fn continue_resumes_claude_and_hands_off_to_codex_with_a_brief() {
         id: id.clone(),
         prompt: "finish the tests".into(),
         agent: Some(TaskAgent::Codex),
+        model: None,
+        effort: None,
     };
     orch.commit_task(&id, "wip").unwrap();
     orch.continue_task(&handoff).unwrap();
@@ -496,7 +535,9 @@ fn commit_and_merge_into_primary_checkout() {
         .continue_task(&lore_ipc::ContinueTaskRequest {
             id: id.clone(),
             prompt: "more".into(),
-            agent: None
+            agent: None,
+            model: None,
+            effort: None,
         })
         .is_err());
 }
@@ -741,6 +782,8 @@ fn continue_rolls_back_when_the_store_cannot_be_saved() {
         id: id.clone(),
         prompt: "more".into(),
         agent: None,
+        model: None,
+        effort: None,
     });
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     assert!(result.is_err());
@@ -875,6 +918,8 @@ fn decisions_are_recorded_and_reach_the_next_agent() {
         id: second.clone(),
         prompt: "keep going".into(),
         agent: Some(TaskAgent::Codex),
+        model: None,
+        effort: None,
     })
     .unwrap();
     wait_for(&orch, &second, TaskState::Finished);
@@ -1307,4 +1352,254 @@ fn shutdown_stops_a_running_queue_test() {
         "test command survived shutdown"
     );
     assert!(orch.task(&a).unwrap().merged_into.is_none());
+}
+
+#[test]
+fn merge_queue_ignores_bytecode_created_by_tests() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo x > \"f-$(basename \"$PWD\").txt\"");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let a = finished_committed_task(&orch, &repo, "py");
+    let repo_s = repo.display().to_string();
+    orch.set_repo_test_command(
+        &repo_s,
+        Some("mkdir -p __pycache__ && echo bytecode > __pycache__/mod.cpython-312.pyc"),
+    )
+    .unwrap();
+    orch.start_merge_queue(&repo_s, std::slice::from_ref(&a))
+        .unwrap();
+    let done = orch.run_merge_queue(&repo_s);
+    assert_eq!(done.items[0].status, "merged", "{:?}", done.items);
+    let wt = PathBuf::from(&orch.task(&a).unwrap().worktree_path);
+    assert!(!wt.join("__pycache__").exists());
+}
+
+#[test]
+fn merge_queue_keeps_preexisting_untracked_user_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo x > \"f-$(basename \"$PWD\").txt\"");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let a = finished_committed_task(&orch, &repo, "notes");
+    let wt = PathBuf::from(&orch.task(&a).unwrap().worktree_path);
+    fs::write(wt.join("user-notes.txt"), "keep me\n").unwrap();
+    let repo_s = repo.display().to_string();
+    orch.set_repo_test_command(
+        &repo_s,
+        Some("mkdir -p __pycache__; echo x > __pycache__/x.pyc"),
+    )
+    .unwrap();
+    orch.start_merge_queue(&repo_s, std::slice::from_ref(&a))
+        .unwrap();
+    let done = orch.run_merge_queue(&repo_s);
+    assert_eq!(done.items[0].status, "failed", "{:?}", done.items);
+    assert!(
+        done.items[0]
+            .detail
+            .clone()
+            .unwrap()
+            .contains("uncommitted"),
+        "{:?}",
+        done.items[0].detail
+    );
+    assert_eq!(
+        fs::read_to_string(wt.join("user-notes.txt")).unwrap(),
+        "keep me\n"
+    );
+}
+
+#[test]
+fn merge_queue_discards_new_artifacts_but_not_new_user_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo x > \"f-$(basename \"$PWD\").txt\"");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let a = finished_committed_task(&orch, &repo, "mix");
+    let repo_s = repo.display().to_string();
+    orch.set_repo_test_command(
+        &repo_s,
+        Some("mkdir -p __pycache__ && echo x > __pycache__/mod.pyc && echo leaked > user_note.txt"),
+    )
+    .unwrap();
+    orch.start_merge_queue(&repo_s, std::slice::from_ref(&a))
+        .unwrap();
+    let done = orch.run_merge_queue(&repo_s);
+    assert_eq!(done.items[0].status, "failed", "{:?}", done.items);
+    let detail = done.items[0].detail.clone().unwrap();
+    assert!(detail.contains("user_note.txt"), "{detail}");
+    assert!(!detail.contains("__pycache__"), "{detail}");
+    let wt = PathBuf::from(&orch.task(&a).unwrap().worktree_path);
+    assert_eq!(
+        fs::read_to_string(wt.join("user_note.txt")).unwrap(),
+        "leaked\n"
+    );
+    assert!(!wt.join("__pycache__").exists());
+}
+
+#[test]
+fn merge_queue_refuses_overlapping_claims_before_running() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo x > \"f-$(basename \"$PWD\").txt\"");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let mut first = request(&repo, "Add multiply");
+    first.claims = Some(vec!["calc.py".into()]);
+    let mut second = request(&repo, "Tweak calc");
+    second.claims = Some(vec!["calc.py".into()]);
+    let a = orch.create_task(&first).unwrap().id().to_string();
+    wait_for(&orch, &a, TaskState::Finished);
+    orch.commit_task(&a, "a").unwrap();
+    let b = orch.create_task(&second).unwrap().id().to_string();
+    wait_for(&orch, &b, TaskState::Finished);
+    orch.commit_task(&b, "b").unwrap();
+    let err = orch
+        .start_merge_queue(&repo.display().to_string(), &[a, b])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("cannot queue"), "{err}");
+    assert!(
+        err.contains("Add multiply") && err.contains("Tweak calc"),
+        "{err}"
+    );
+    assert!(err.contains("both claim calc.py"), "{err}");
+
+    let mut folder = request(&repo, "Folder owner");
+    folder.claims = Some(vec!["src/".into()]);
+    let mut nested = request(&repo, "File owner");
+    nested.claims = Some(vec!["src/auth.rs".into()]);
+    let c = orch.create_task(&folder).unwrap().id().to_string();
+    wait_for(&orch, &c, TaskState::Finished);
+    orch.commit_task(&c, "c").unwrap();
+    let d = orch.create_task(&nested).unwrap().id().to_string();
+    wait_for(&orch, &d, TaskState::Finished);
+    orch.commit_task(&d, "d").unwrap();
+    let err = orch
+        .start_merge_queue(&repo.display().to_string(), &[c, d])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("overlaps"), "{err}");
+}
+
+#[test]
+fn overlapping_claims_are_not_listed_as_do_not_edit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = recording_agent(tmp.path());
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let mut owner = request(&repo, "first calc");
+    owner.claims = Some(vec!["calc.py".into(), "README.md".into()]);
+    wait_for(
+        &orch,
+        orch.create_task(&owner).unwrap().id(),
+        TaskState::Finished,
+    );
+    let mut other = request(&repo, "second calc");
+    other.claims = Some(vec!["calc.py".into()]);
+    wait_for(
+        &orch,
+        orch.create_task(&other).unwrap().id(),
+        TaskState::Finished,
+    );
+    let prompt = call_args(&root, 1).join("\n");
+    assert!(prompt.contains("You own: calc.py"), "{prompt}");
+    assert!(
+        prompt.contains("overlaps \"first calc\"'s claim calc.py"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("Do not edit files owned by another agent (README.md)"),
+        "{prompt}"
+    );
+    assert!(
+        !prompt.contains("Do not edit files owned by another agent (calc.py"),
+        "{prompt}"
+    );
+}
+
+#[test]
+fn shutdown_persists_a_cancelled_queue_across_relaunch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo x > \"f-$(basename \"$PWD\").txt\"");
+    let root = tmp.path().join("orch");
+    let orch = std::sync::Arc::new(Orchestrator::open(&root, programs(&agent)).unwrap());
+    let a = finished_committed_task(&orch, &repo, "slow");
+    let repo_s = repo.display().to_string();
+    let marker = tmp.path().join("test.pid");
+    orch.set_repo_test_command(
+        &repo_s,
+        Some(&format!("echo $$ > '{}'; sleep 300", marker.display())),
+    )
+    .unwrap();
+    orch.start_merge_queue(&repo_s, std::slice::from_ref(&a))
+        .unwrap();
+    let runner = {
+        let orch = orch.clone();
+        let repo_s = repo_s.clone();
+        std::thread::spawn(move || orch.run_merge_queue(&repo_s))
+    };
+    assert!(wait_until(
+        || marker.exists() && !fs::read_to_string(&marker).unwrap().trim().is_empty()
+    ));
+    let pid = fs::read_to_string(&marker).unwrap().trim().to_string();
+    orch.shutdown();
+    let _ = runner.join().unwrap();
+    assert!(
+        wait_until(|| !pid_alive(&pid)),
+        "test command survived shutdown"
+    );
+    drop(orch);
+
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let queue = orch.merge_queue(&repo_s).expect("persisted queue");
+    assert!(!queue.running);
+    assert_eq!(queue.items[0].status, "cancelled");
+    assert!(
+        queue.items[0]
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("quit"),
+        "{:?}",
+        queue.items[0].detail
+    );
+    assert!(orch
+        .decisions(None, 20)
+        .iter()
+        .any(|d| d.kind == "queue_cancelled" && d.detail.contains("quit")));
+    assert!(!pid_alive(&pid));
+}
+
+#[test]
+fn unclean_exit_marks_a_running_queue_interrupted_on_relaunch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = fake_agent(tmp.path(), "echo x > \"f-$(basename \"$PWD\").txt\"");
+    let root = tmp.path().join("orch");
+    let a = {
+        let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+        let id = finished_committed_task(&orch, &repo, "left");
+        orch.start_merge_queue(&repo.display().to_string(), std::slice::from_ref(&id))
+            .unwrap();
+        id
+    };
+
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    let queue = orch
+        .merge_queue(&repo.display().to_string())
+        .expect("persisted queue");
+    assert!(!queue.running);
+    assert_eq!(queue.items[0].status, "interrupted");
+    assert_eq!(queue.items[0].task_id, a);
+    assert!(queue.items[0]
+        .detail
+        .as_deref()
+        .unwrap_or_default()
+        .contains("interrupted"));
+    assert!(orch
+        .decisions(None, 20)
+        .iter()
+        .any(|d| d.kind == "queue_interrupted"));
 }

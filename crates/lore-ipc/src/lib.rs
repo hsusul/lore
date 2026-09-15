@@ -444,6 +444,51 @@ pub struct CreateTaskRequest {
     #[serde(default)]
     #[ts(optional)]
     pub auto_handoff: Option<bool>,
+    /// Model alias or id (`opus`, `sonnet`, `fable`, `gpt-5`, …). Omit to use
+    /// the agent's own default. Validated before it is passed as a flag.
+    #[serde(default)]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// Reasoning / effort level. Omit to use the agent's own default.
+    #[serde(default)]
+    #[ts(optional)]
+    pub effort: Option<TaskEffort>,
+}
+
+/// How hard the model should try (Claude `--effort`, Codex `model_reasoning_effort`).
+/// Omit to use the agent's own default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TaskEffort {
+    Low,
+    Medium,
+    High,
+    /// Claude `xhigh`; Codex maps to `high`.
+    ExtraHigh,
+    Max,
+}
+
+impl TaskEffort {
+    /// Value passed to Claude `--effort`.
+    pub fn as_claude(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::ExtraHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+
+    /// Value passed to Codex `model_reasoning_effort`.
+    pub fn as_codex(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High | Self::ExtraHigh | Self::Max => "high",
+        }
+    }
 }
 
 /// How much an agent may do without asking (ADR-0007). Lore never bypasses
@@ -473,6 +518,14 @@ pub struct ContinueTaskRequest {
     #[serde(default)]
     #[ts(optional)]
     pub agent: Option<TaskAgent>,
+    /// Replace the stored model for this run. Omit to keep the task's model.
+    #[serde(default)]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// Replace the stored effort for this run. Omit to keep the task's effort.
+    #[serde(default)]
+    #[ts(optional)]
+    pub effort: Option<TaskEffort>,
 }
 
 /// Outcome of `merge_task`.
@@ -521,6 +574,13 @@ pub struct TaskDto {
     #[serde(default)]
     #[ts(optional)]
     pub permission: Option<TaskPermission>,
+    /// Model alias or id used for the latest run, when one was chosen.
+    #[serde(default)]
+    #[ts(optional)]
+    pub model: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub effort: Option<TaskEffort>,
     /// How many times an agent has run in this worktree (1 + continuations).
     #[serde(default)]
     #[ts(optional, type = "number")]
@@ -599,7 +659,7 @@ pub struct MergeQueueItemDto {
     pub task_id: String,
     pub title: String,
     /// `pending` | `updating` | `testing` | `merging` | `merged` | `failed` |
-    /// `skipped` | `cancelled`.
+    /// `skipped` | `cancelled` | `interrupted`.
     pub status: String,
     pub detail: Option<String>,
 }
