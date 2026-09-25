@@ -390,6 +390,7 @@ export default function Workbench() {
       onSelectTask={selectTask}
       pane={agentPane}
       onPaneChange={setAgentPane}
+      onOpenFile={openFile}
     />
   ) : null;
 

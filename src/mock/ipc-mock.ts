@@ -185,6 +185,14 @@ type MockTask = {
 
 const USER_BRANCH = "main";
 
+/** What the orchestrator writes to a task log before each run (RUN_MARKER lines). */
+function runStart(prompt: string, run = 1, agent?: TaskDto["agent"]): ActivityDto[] {
+  const lines: ActivityDto[] = [{ kind: "output", text: "--- Lore: opening prompt ---" }];
+  for (const line of prompt.split("\n")) lines.push({ kind: "output", text: line });
+  if (run > 1) lines.push({ kind: "output", text: `--- Lore: run ${run} (${agent === "codex" ? "Codex" : "Claude Code"}) ---` });
+  return lines;
+}
+
 const TICK_MS = 2200;
 
 const CLAUDE_SCRIPT: ActivityDto[] = [
@@ -616,6 +624,8 @@ function advance(t: MockTask) {
   }
 }
 
+for (const t of tasks) t.activity.unshift(...runStart(t.dto.prompt));
+
 function find(id: string): MockTask {
   const t = tasks.find((x) => x.dto.id === id);
   if (!t) throw new Error(`No task with id ${id}`);
@@ -803,7 +813,7 @@ export function createTask(request: CreateTaskRequest): Promise<TaskDto> {
       claims: request.claims,
       auto_handoff: request.auto_handoff ?? true,
     }),
-    activity: [{ kind: "message", text: `Starting on: ${request.prompt}` }],
+    activity: runStart(request.prompt),
     script: [
       { kind: "tool", text: request.agent === "codex" ? "shell: git status --short" : "Bash git status --short" },
       { kind: "output", text: "(clean)" },
@@ -842,10 +852,7 @@ export function continueTask(request: ContinueTaskRequest): Promise<TaskDto> {
   if (t.dto.merged_into) return Promise.reject(new Error("task is already merged"));
   const agent = request.agent ?? t.dto.agent;
   const handoff = agent !== t.dto.agent;
-  t.activity.push({
-    kind: "message",
-    text: handoff ? `Handed off to ${agent === "codex" ? "Codex" : "Claude Code"}: ${request.prompt}` : request.prompt,
-  });
+  t.activity.push(...runStart(request.prompt, (t.dto.runs ?? 1) + 1, agent));
   t.script = [
     { kind: "tool", text: agent === "codex" ? "shell: git diff --stat" : "Bash git diff --stat" },
     { kind: "message", text: "Picking up where the previous run left off." },

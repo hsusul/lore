@@ -33,6 +33,8 @@ type Props = {
   onSelectTask: (id: string) => void;
   /** A merge queue is running in this task's repository. */
   mergeQueueRunning?: boolean;
+  /** Open a file from the task's worktree (a read or edit named in the activity). */
+  onOpenFile?: (root: string, relPath: string) => void;
   /** Which view is in front; uncontrolled (starting on activity) when omitted. */
   pane?: AgentPane;
   onPaneChange?: (pane: AgentPane) => void;
@@ -75,6 +77,7 @@ export default function AgentView({
   mergeQueueRunning = false,
   pane: controlledPane,
   onPaneChange,
+  onOpenFile,
 }: Props) {
   const [localPane, setLocalPane] = useState<AgentPane>("activity");
   const pane = controlledPane ?? localPane;
@@ -603,7 +606,13 @@ export default function AgentView({
         className="agent-view__pane"
       >
         {pane === "activity" ? (
-          <ActivityList items={activity.items} error={activity.error} label={`Activity of ${task.title}`} />
+          <ActivityList
+            items={activity.items}
+            error={activity.error}
+            label={`Activity of ${task.title}`}
+            running={running}
+            onOpenFile={onOpenFile ? (rel) => onOpenFile(task.worktree_path, rel) : undefined}
+          />
         ) : (
           <DiffView
             taskId={taskId}

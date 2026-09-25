@@ -2679,12 +2679,295 @@ input.git-actions__input {
   opacity: 0.35;
 }
 
-/* Activity timeline: conversation blocks, not a git-log rail. */
+/* Activity timeline: runs of conversation blocks, not a git-log rail. */
+.activity-frame {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .activity {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 16px 20px 28px;
+}
+
+.activity__run {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  color: var(--wb-fg-faint);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.activity__run:first-child {
+  margin-top: 0;
+}
+
+.activity__run::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--wb-border);
+}
+
+.activity__prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--wb-accent);
+  border-radius: 0 var(--r) var(--r) 0;
+  background: var(--wb-accent-soft);
+}
+
+.activity__prompt-label {
+  color: var(--wb-accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.activity__prompt-text {
+  color: var(--wb-fg-strong);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.activity__tool-icon {
+  display: inline-flex;
+  margin-right: 6px;
+  color: var(--wb-fg-faint);
+  vertical-align: -2px;
+}
+
+.activity__tool-icon .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.activity__tool--edit .activity__tool-icon {
+  color: var(--wb-warn);
+}
+
+.activity__tool--shell .activity__tool-icon {
+  color: var(--wb-success);
+}
+
+.activity__tool-name {
+  color: var(--wb-fg-strong);
+  font-weight: 600;
+}
+
+.activity__tool-target {
+  color: var(--wb-fg);
+}
+
+.activity__tool-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--wb-border-strong);
+  text-underline-offset: 3px;
+}
+
+.activity__tool-link:hover {
+  color: var(--wb-accent);
+  text-decoration-color: currentColor;
+}
+
+.activity__output {
+  margin: 0;
+  font: inherit;
+  white-space: pre-wrap;
+}
+
+.activity__more {
+  display: block;
+  margin-bottom: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--wb-accent);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+}
+
+.activity__working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--wb-fg-muted);
+  font-size: var(--text-sm);
+}
+
+.activity__working-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.activity__working-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--wb-accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.activity__working-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.activity__working-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* A soft light sweeping across the word, the "thinking" idiom. */
+.activity__shimmer {
+  background: linear-gradient(90deg, var(--wb-fg-muted) 0%, var(--wb-fg-strong) 50%, var(--wb-fg-muted) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 2s linear infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.activity__latest {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: var(--r-pill);
+  background: var(--wb-widget-bg);
+  box-shadow: var(--wb-shadow);
+  color: var(--wb-fg-strong);
+  font-size: var(--text-sm);
+  transform: translateX(-50%);
+}
+
+.activity__latest:hover {
+  background: var(--wb-raised);
+}
+
+.activity__latest .icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Markdown in agent messages. */
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p,
+.md ul,
+.md ol,
+.md pre,
+.md blockquote,
+.md table {
+  margin: 0 0 8px;
+}
+
+.md ul,
+.md ol {
+  padding-left: 20px;
+}
+
+.md li {
+  white-space: normal;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  margin: 12px 0 6px;
+  color: var(--wb-fg-strong);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.md strong {
+  color: var(--wb-fg-strong);
+  font-weight: 600;
+}
+
+.md blockquote {
+  padding-left: 10px;
+  border-left: 2px solid var(--wb-border-strong);
+  color: var(--wb-fg-muted);
+}
+
+.md__code {
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  background: var(--wb-raised);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.md pre {
+  padding: 8px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--wb-border);
+  border-radius: var(--r);
+  background: var(--wb-sidebar-bg);
+}
+
+.md__block {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.md table {
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.md th,
+.md td {
+  padding: 3px 8px;
+  border: 1px solid var(--wb-border);
+  text-align: left;
+}
+
+.md__link {
+  color: var(--wb-accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(106, 166, 222, 0.4);
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+.md__img {
+  color: var(--wb-fg-muted);
 }
 
 .activity__list {
@@ -2711,6 +2994,11 @@ input.git-actions__input {
 
 .activity__item::before {
   display: none;
+}
+
+.activity__item--message,
+.activity__item--result {
+  white-space: normal;
 }
 
 .activity__item--message {
