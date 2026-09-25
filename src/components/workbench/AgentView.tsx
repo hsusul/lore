@@ -1,12 +1,12 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import type { ContinueTaskRequest, MergeResultDto, TaskAgent, TaskDto, TaskEffort } from "../../ipc";
 import ActivityList from "./ActivityList";
 import AgentMenu from "./AgentMenu";
-import { StateBadge } from "./badges";
+import { AgentChip, StateBadge } from "./badges";
+import DiffView from "./DiffView";
 import {
   CommitIcon,
-  DiffIcon,
   MergeIcon,
   OverlapIcon,
   RevealIcon,
@@ -26,7 +26,6 @@ type Props = {
   onStop: (id: string) => Promise<void>;
   onDiscard: (id: string) => Promise<void>;
   onReveal: (id: string) => Promise<void>;
-  onOpenDiff: (id: string) => void;
   onContinue: (request: ContinueTaskRequest) => Promise<void>;
   onCommit: (id: string, message: string, force?: boolean) => Promise<void>;
   onMerge: (id: string) => Promise<MergeResultDto>;
@@ -34,14 +33,34 @@ type Props = {
   onSelectTask: (id: string) => void;
   /** A merge queue is running in this task's repository. */
   mergeQueueRunning?: boolean;
+  /** Which view is in front; uncontrolled (starting on activity) when omitted. */
+  pane?: AgentPane;
+  onPaneChange?: (pane: AgentPane) => void;
 };
+
+export type AgentPane = "activity" | "changes";
+
+const PANES: { id: AgentPane; label: string }[] = [
+  { id: "activity", label: "Activity" },
+  { id: "changes", label: "Changes" },
+];
+
+/** The same brief the orchestrator's automatic handoff sends. */
+export function usageLimitHandoffPrompt(title: string): string {
+  return `The previous agent stopped because it hit its usage limit. Continue this task from where it left off: ${title}`;
+}
+
+const USAGE_LIMIT = /usage limit|hit your limit|quota exceeded/i;
 
 /** Short agent names for handoff labels. */
 const AGENT_SHORT: Record<TaskAgent, string> = { claude_code: "Claude", codex: "Codex" };
 
 type MergeOutcome = { kind: "result"; result: MergeResultDto } | { kind: "error"; message: string };
 
-/** Editor tab for one agent: status, git actions, activity timeline, and a composer to continue. */
+/**
+ * One agent: status, what needs you (with the action to take), git actions,
+ * then its activity or its changes, and a composer to continue or hand off.
+ */
 export default function AgentView({
   active = true,
   taskId,
@@ -49,13 +68,19 @@ export default function AgentView({
   onStop,
   onDiscard,
   onReveal,
-  onOpenDiff,
   onContinue,
   onCommit,
   onMerge,
   onSelectTask,
   mergeQueueRunning = false,
+  pane: controlledPane,
+  onPaneChange,
 }: Props) {
+  const [localPane, setLocalPane] = useState<AgentPane>("activity");
+  const pane = controlledPane ?? localPane;
+  const setPane = onPaneChange ?? setLocalPane;
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [handingOff, setHandingOff] = useState(false);
   const activity = useActivity(task && active ? taskId : null, task?.state === "running");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -106,6 +131,39 @@ export default function AgentView({
   // The queue owns the repository's merge slot and may be updating this branch.
   const queueLocked = mergeQueueRunning && !running && !merged;
   const handoff = nextAgent !== task.agent;
+
+  const otherAgent: TaskAgent = task.agent === "codex" ? "claude_code" : "codex";
+  const usageLimited = USAGE_LIMIT.test(task.attention ?? "");
+  const changedCount = task.changed_files_total ?? task.changed_files.length;
+
+  /** One click: the same handoff the orchestrator would have made automatically. */
+  async function handOff() {
+    setHandingOff(true);
+    setError(null);
+    try {
+      // The model belongs to the old agent; the new one starts on its default.
+      await onContinue({ id: taskId, prompt: usageLimitHandoffPrompt(task!.title), agent: otherAgent, model: "" });
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setHandingOff(false);
+    }
+  }
+
+  /** Put the composer in front, set to `agent`, for the user to write the brief. */
+  function brief(agent: TaskAgent) {
+    setNextAgent(agent);
+    setPane("activity");
+    composerRef.current?.focus();
+  }
+
+  function onTabsKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+    event.preventDefault();
+    const next = pane === "activity" ? "changes" : "activity";
+    setPane(next);
+    document.getElementById(`agent-pane-tab-${next}`)?.focus();
+  }
 
   async function act(action: (id: string) => Promise<void>) {
     setBusy(true);
@@ -183,6 +241,7 @@ export default function AgentView({
         <div className="agent-view__titleline">
           <h2 className="agent-view__title">{task.title}</h2>
           <StateBadge task={task} />
+          <AgentChip agent={task.agent} />
           {task.runs !== undefined && task.runs > 0 && <span className="agent-view__runs">Run {task.runs}</span>}
           {task.auto_handoff === false && (
             <span className="agent-view__runs" title="Auto-handoff is off: a usage limit waits for you.">
@@ -217,9 +276,6 @@ export default function AgentView({
                   <StopIcon /> Stop
                 </button>
               )}
-              <button type="button" className="wb-btn wb-btn--small" onClick={() => onOpenDiff(taskId)}>
-                <DiffIcon /> Diff
-              </button>
               <button type="button" className="wb-btn wb-btn--small" onClick={() => setConfirming(true)}>
                 <TrashIcon /> Discard
               </button>
@@ -236,9 +292,9 @@ export default function AgentView({
               ))}
             </ul>
           )}
-          <span className="mono">{task.branch}</span>
-          <span className="mono agent-view__worktree" title={task.worktree_path}>
-            {task.worktree_path}
+          <span className="mono" title={task.worktree_path}>
+            {task.branch}
+            {task.repo_branch && !task.merged_into && <span className="agent-view__target"> → {task.repo_branch}</span>}
           </span>
           <button
             type="button"
@@ -257,9 +313,73 @@ export default function AgentView({
         )}
 
         {task.attention && (
-          <div className="agent-callout agent-callout--attention" role="alert" aria-label="Needs attention">
+          <div className="agent-callout agent-callout--attention" aria-label="Needs attention" role="group">
             <WarningIcon />
-            <span>{task.attention}</span>
+            <div className="agent-callout__body">
+              <span role="alert">{task.attention}</span>
+              {canContinue && (
+                <div className="agent-callout__actions">
+                  {usageLimited && (
+                    <button
+                      type="button"
+                      className="wb-btn wb-btn--small wb-btn--primary"
+                      disabled={handingOff || queueLocked}
+                      onClick={() => void handOff()}
+                    >
+                      {handingOff ? "Handing off…" : `Hand off to ${AGENT_SHORT[otherAgent]}`}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="wb-btn wb-btn--small"
+                    disabled={queueLocked}
+                    onClick={() => brief(otherAgent)}
+                  >
+                    Brief {AGENT_SHORT[otherAgent]}…
+                  </button>
+                  {!usageLimited && (
+                    <button
+                      type="button"
+                      className="wb-btn wb-btn--small"
+                      disabled={queueLocked}
+                      onClick={() => brief(task.agent)}
+                    >
+                      Continue with {AGENT_SHORT[task.agent]}…
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!task.attention && task.state === "failed" && canContinue && (
+          <div className="agent-callout agent-callout--failed" aria-label="Run failed" role="group">
+            <WarningIcon />
+            <div className="agent-callout__body">
+              <span>
+                {task.exit_code !== null ? `The agent exited with code ${task.exit_code}.` : "The agent's run failed."}{" "}
+                Its last output is in the activity below.
+              </span>
+              <div className="agent-callout__actions">
+                <button
+                  type="button"
+                  className="wb-btn wb-btn--small"
+                  disabled={queueLocked}
+                  onClick={() => brief(task.agent)}
+                >
+                  Continue with {AGENT_SHORT[task.agent]}…
+                </button>
+                <button
+                  type="button"
+                  className="wb-btn wb-btn--small"
+                  disabled={queueLocked}
+                  onClick={() => brief(otherAgent)}
+                >
+                  Brief {AGENT_SHORT[otherAgent]}…
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -458,11 +578,46 @@ export default function AgentView({
           </div>
         )}
       </header>
-      <ActivityList items={activity.items} error={activity.error} label={`Activity of ${task.title}`} />
+      <div className="agent-view__tabs" role="tablist" aria-label="Agent views" onKeyDown={onTabsKeyDown}>
+        {PANES.map((p) => (
+          <button
+            key={p.id}
+            id={`agent-pane-tab-${p.id}`}
+            type="button"
+            role="tab"
+            aria-selected={pane === p.id}
+            aria-controls={`agent-pane-${p.id}`}
+            tabIndex={pane === p.id ? 0 : -1}
+            className={`agent-view__tab${pane === p.id ? " agent-view__tab--on" : ""}`}
+            onClick={() => setPane(p.id)}
+          >
+            {p.label}
+            {p.id === "changes" && changedCount > 0 && <span className="agent-view__count">{changedCount}</span>}
+          </button>
+        ))}
+      </div>
+      <div
+        id={`agent-pane-${pane}`}
+        role="tabpanel"
+        aria-labelledby={`agent-pane-tab-${pane}`}
+        className="agent-view__pane"
+      >
+        {pane === "activity" ? (
+          <ActivityList items={activity.items} error={activity.error} label={`Activity of ${task.title}`} />
+        ) : (
+          <DiffView
+            taskId={taskId}
+            title={task.title}
+            embedded
+            refreshKey={`${task.commits_ahead}|${task.uncommitted_count ?? 0}|${task.changed_files.join(",")}|${task.state}`}
+          />
+        )}
+      </div>
       {canContinue && (
         <form className="composer" aria-label="Continue task" onSubmit={(e) => void submitContinue(e)}>
           <div className="composer__box">
             <textarea
+              ref={composerRef}
               className="composer__input"
               aria-label="Follow-up prompt"
               rows={2}

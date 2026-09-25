@@ -1,6 +1,6 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
-import { CloseIcon, DiffIcon, FileIcon } from "./icons";
+import { CloseIcon, FileIcon } from "./icons";
 import { baseName, domId, shortcut, type Tab } from "./state";
 
 type Props = {
@@ -18,14 +18,12 @@ export function tabLabel(tab: Tab, taskTitle: (taskId: string) => string): strin
   switch (tab.kind) {
     case "file":
       return baseName(tab.relPath);
-    case "diff":
-      return `Diff: ${taskTitle(tab.taskId)}`;
     case "agent":
       return `Agent: ${taskTitle(tab.taskId)}`;
   }
 }
 
-/** Monitor labels for open files and diffs. The agent stage is not a tab. */
+/** Tabs for open files. The agent stage is not a tab. */
 export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onClose, renderTab, stage }: Props) {
   const tabRefs = useRef(new Map<string, HTMLDivElement>());
   const fileTabs = tabs.filter((t) => t.kind !== "agent");
@@ -85,7 +83,7 @@ export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onC
               }}
             >
               <span className={`tab__icon tab__icon--${tab.kind}`}>
-                {tab.kind === "file" ? <FileIcon /> : <DiffIcon />}
+                <FileIcon />
               </span>
               <span className="tab__label">{label}</span>
               {tab.kind === "file" && tab.scopeLabel && <span className="tab__scope">{tab.scopeLabel}</span>}

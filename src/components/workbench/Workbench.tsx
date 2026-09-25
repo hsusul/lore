@@ -13,10 +13,9 @@ import {
   type TaskDto,
 } from "../../ipc";
 import AgentsPanel from "./AgentsPanel";
-import AgentView from "./AgentView";
+import AgentView, { type AgentPane } from "./AgentView";
 import BottomPanel, { type PanelTab } from "./BottomPanel";
 import CommandPalette, { type PaletteItem } from "./CommandPalette";
-import DiffView from "./DiffView";
 import EditorTabs from "./EditorTabs";
 import FileView from "./FileView";
 import Home from "./Home";
@@ -30,7 +29,6 @@ import {
   SIDEBAR_MIN,
   STORAGE_KEYS,
   baseName,
-  diffTab,
   errorText,
   fileTab,
   initialTabs,
@@ -71,6 +69,7 @@ export default function Workbench() {
   const [allRepos, setAllRepos] = useState(() => readStored(STORAGE_KEYS.allRepos) === "true");
   const [scope, setScope] = useState("repo");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [agentPane, setAgentPane] = useState<AgentPane>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newAgentToken, setNewAgentToken] = useState(0);
   const [newAgentDraft, setNewAgentDraft] = useState<string | undefined>(undefined);
@@ -139,14 +138,21 @@ export default function Workbench() {
     dispatch({ type: "open", tab: fileTab(root, relPath, owner ? owner.title : null) });
   }, []);
 
+  const selectedRef = useRef(selectedTaskId);
+  selectedRef.current = selectedTaskId;
+
   const selectTask = useCallback((id: string) => {
+    // Another agent starts on its activity; re-selecting keeps the current view.
+    if (selectedRef.current !== id) setAgentPane("activity");
     setSelectedTaskId(id);
     dispatch({ type: "clearActive" });
   }, []);
 
+  /** The agent's Changes view, next to its commit and merge actions. */
   const openDiff = useCallback((id: string) => {
     setSelectedTaskId(id);
-    dispatch({ type: "open", tab: diffTab(id) });
+    setAgentPane("changes");
+    dispatch({ type: "clearActive" });
   }, []);
 
   const handleStop = useCallback(
@@ -292,8 +298,6 @@ export default function Workbench() {
     switch (tab.kind) {
       case "file":
         return <FileView root={tab.root} relPath={tab.relPath} />;
-      case "diff":
-        return <DiffView taskId={tab.taskId} title={taskTitle(tab.taskId)} />;
       case "agent": {
         const task = taskById.get(tab.taskId);
         return (
@@ -305,7 +309,6 @@ export default function Workbench() {
             onStop={handleStop}
             onDiscard={handleDiscard}
             onReveal={handleReveal}
-            onOpenDiff={openDiff}
             onContinue={handleContinue}
             onCommit={handleCommit}
             onMerge={handleMerge}
@@ -381,11 +384,12 @@ export default function Workbench() {
       onStop={handleStop}
       onDiscard={handleDiscard}
       onReveal={handleReveal}
-      onOpenDiff={openDiff}
       onContinue={handleContinue}
       onCommit={handleCommit}
       onMerge={handleMerge}
       onSelectTask={selectTask}
+      pane={agentPane}
+      onPaneChange={setAgentPane}
     />
   ) : null;
 

@@ -209,6 +209,21 @@ describe("Workbench", () => {
     expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
   });
 
+  it("opens a row's diff as the agent's Changes view, not a separate tab", async () => {
+    vi.mocked(listTasks).mockResolvedValue([task({ state: "finished", repo_path: "/work/repo" })]);
+    render(<Workbench />);
+    const row = await screen.findByRole("listitem", { name: "Fix parser" });
+    fireEvent.click(within(row).getByRole("button", { name: "Open diff" }));
+    expect(await screen.findByRole("heading", { name: "Fix parser" })).toBeTruthy();
+    const views = within(screen.getByRole("tablist", { name: "Agent views" }));
+    expect(views.getByRole("tab", { name: /Changes/ }).getAttribute("aria-selected")).toBe("true");
+    expect(tabNames()).toEqual([]);
+
+    // Selecting the agent again keeps the view; another agent starts on its activity.
+    fireEvent.click(within(row).getByText("Fix parser"));
+    expect(views.getByRole("tab", { name: /Changes/ }).getAttribute("aria-selected")).toBe("true");
+  });
+
   it("switches the sidebar between agents and files", async () => {
     render(<Workbench />);
     expect(screen.getByRole("region", { name: "Agents" })).toBeTruthy();
