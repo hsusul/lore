@@ -53,6 +53,7 @@ fn watch_tasks(app: AppHandle) {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let state = init_state(app.handle())?;
             app.manage(state);

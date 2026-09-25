@@ -27,7 +27,7 @@ export function groupTasks(tasks: TaskDto[]): BoardGroup[] {
     { id: "attention", title: "Needs you", tasks: [] },
     { id: "running", title: "Running", tasks: [] },
     { id: "ready", title: "Ready to merge", tasks: [] },
-    { id: "idle", title: "Stopped or unfinished", tasks: [] },
+    { id: "idle", title: "To review", tasks: [] },
     { id: "merged", title: "Merged", tasks: [] },
   ];
   const [attention, running, ready, idle, merged] = groups;

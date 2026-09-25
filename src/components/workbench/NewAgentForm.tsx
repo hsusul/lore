@@ -20,13 +20,15 @@ type Props = {
   focusToken: number;
   /** Text to start the prompt with (the palette's "New agent: …"); applied when focusToken changes. */
   draft?: string;
+  /** Called once a focus request (and its draft) has been applied. */
+  onFocusHandled?: () => void;
 };
 
 /**
  * Launch an agent in the open repository. The prompt comes first; the title is
  * optional and defaults to the prompt's first line.
  */
-export default function NewAgentForm({ workspace, onCreated, onOpenFolder, focusToken, draft }: Props) {
+export default function NewAgentForm({ workspace, onCreated, onOpenFolder, focusToken, draft, onFocusHandled }: Props) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [agent, setAgent] = useState<TaskAgent>("claude_code");
@@ -43,6 +45,7 @@ export default function NewAgentForm({ workspace, onCreated, onOpenFolder, focus
     if (focusToken <= 0) return;
     if (draft) setPrompt(draft);
     promptRef.current?.focus();
+    onFocusHandled?.();
     // Only a new focus request applies the draft, not later edits to it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusToken]);

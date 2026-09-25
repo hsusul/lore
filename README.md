@@ -29,6 +29,7 @@ continue · hand off · commit · merge (or a merge queue)
 
 - Agents launch with their own permission settings. Lore never passes permission-bypass flags; Claude runs in `acceptEdits` by default (opt-in `auto` per task), Codex in its `workspace-write` sandbox.
 - You can pin a model and effort per task. Auto-handoff can move a run to the other agent when a usage limit hits.
+- The overview groups every agent by what it needs from you. When Lore is in the background, an agent that finishes, fails, or needs you posts a local notification, and the dock badge counts the ones waiting on you.
 - Your checkout only changes when you confirm a merge. Lore refuses to merge into a dirty checkout and aborts on conflict. A merge queue can land several finished tasks in order.
 - Everything runs on your machine. Lore has no accounts, telemetry, or server; the agents talk to their own providers as they normally do.
 

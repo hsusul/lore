@@ -6,10 +6,18 @@ type Props = {
   attentionCount: number;
   selectedBranch: string | null;
   onShowAgents: () => void;
+  onShowOverview: () => void;
 };
 
 /** Thin bottom status bar. */
-export default function StatusBar({ workspace, runningCount, attentionCount, selectedBranch, onShowAgents }: Props) {
+export default function StatusBar({
+  workspace,
+  runningCount,
+  attentionCount,
+  selectedBranch,
+  onShowAgents,
+  onShowOverview,
+}: Props) {
   return (
     <footer className="statusbar">
       <span className="statusbar__item statusbar__path" title={workspace ?? undefined}>
@@ -26,10 +34,10 @@ export default function StatusBar({ workspace, runningCount, attentionCount, sel
         <button
           type="button"
           className="statusbar__item statusbar__btn statusbar__attention"
-          onClick={onShowAgents}
+          onClick={onShowOverview}
         >
           <WarningIcon />
-          {attentionCount} need{attentionCount === 1 ? "s" : ""} attention
+          {attentionCount} need{attentionCount === 1 ? "s" : ""} you
         </button>
       )}
       <button type="button" className="statusbar__item statusbar__btn" onClick={onShowAgents}>
