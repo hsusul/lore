@@ -64,6 +64,32 @@ export const ToolIcon = () => (
   </Icon>
 );
 
+/** Options: two sliders. */
+export const SlidersIcon = () => (
+  <Icon size={14}>
+    <path d="M2.75 5h6.5M12.25 5h1M2.75 11h1M6.75 11h6.5" />
+    <circle cx="10.75" cy="5" r="1.5" />
+    <circle cx="5.25" cy="11" r="1.5" />
+  </Icon>
+);
+
+/** More actions: three dots. */
+export const MoreIcon = () => (
+  <Icon>
+    <circle cx="3.75" cy="8" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="12.25" cy="8" r="0.9" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
+/** Review: a split pane with a diff mark. */
+export const ReviewIcon = () => (
+  <Icon>
+    <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="1.75" />
+    <path d="M8.5 2.75v10.5M10.5 6.25v2.5M9.25 7.5h2.5M9.5 10.5h2" />
+  </Icon>
+);
+
 export const RefreshIcon = () => (
   <Icon>
     <path d="M12.75 7.25A4.75 4.75 0 0 0 4.1 5" />

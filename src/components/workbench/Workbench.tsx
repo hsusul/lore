@@ -23,6 +23,7 @@ import Home from "./Home";
 import { Mark, PanelIcon, SearchIcon, SidebarIcon } from "./icons";
 import Sash from "./Sash";
 import { ExplorerPanel } from "./Sidebar";
+import SidebarNav from "./SidebarNav";
 import { needsUser } from "./board";
 import {
   AGENT_LABELS,
@@ -544,7 +545,9 @@ export default function Workbench() {
           onClick={() => setPaletteOpen(true)}
         >
           <SearchIcon />
-          <span className="wb-titlebar__search-label">{workspace ? baseName(workspace) : "Search"}</span>
+          <span className="wb-titlebar__search-label">
+            {workspace ? `Search ${baseName(workspace)}` : "Search"}
+          </span>
           <kbd>{shortcut("K")}</kbd>
         </button>
         <div className="wb-titlebar__right">
@@ -568,9 +571,6 @@ export default function Workbench() {
           >
             <PanelIcon />
           </button>
-          <button type="button" className="wb-btn wb-btn--small" onClick={() => void openFolder()}>
-            Open folder…
-          </button>
         </div>
       </header>
       {workspaceError && (
@@ -586,6 +586,14 @@ export default function Workbench() {
         {sidebarOpen && (
           <>
             <aside className="wb-sidebar" style={{ width: sidebarWidth }} aria-label="Sidebar">
+              <SidebarNav
+                workspace={workspace}
+                onOpenFolder={() => void openFolder()}
+                onNewAgent={() => newAgent()}
+                onShowOverview={showOverview}
+                overviewActive={selectedTaskId === null && activeKey === null}
+                attentionCount={attentionCount}
+              />
               {sidebarView === "agents" ? (
                 <AgentsPanel
                   workspace={workspace}
@@ -596,9 +604,6 @@ export default function Workbench() {
                   listError={listError}
                   loadWarning={loadWarning}
                   selectedTaskId={selectedTaskId}
-                  overviewActive={selectedTaskId === null && activeKey === null}
-                  onShowOverview={showOverview}
-                  onNewAgent={() => newAgent()}
                   onSelect={selectTask}
                   onStop={handleStop}
                   onDiscard={handleDiscard}
@@ -716,9 +721,9 @@ function TitlebarLights() {
 
 /** Sonner's colours from the workbench tokens. */
 const TOAST_THEME = {
-  "--normal-bg": "var(--wb-widget-bg)",
-  "--normal-border": "var(--wb-border-strong)",
-  "--normal-text": "var(--wb-fg-strong)",
+  "--normal-bg": "var(--bg-overlay)",
+  "--normal-border": "var(--line-strong)",
+  "--normal-text": "var(--text-1)",
   "--border-radius": "var(--r-lg)",
   fontFamily: "var(--font-ui)",
 } as CSSProperties;

@@ -32,6 +32,17 @@ function chooseAgent(name: "Claude Code" | "Codex") {
   expect(screen.getByRole("menuitem", { name: /^Agent\b/ }).textContent).toContain(name);
 }
 
+/** Title and owned paths sit behind Options; open it on first use. */
+function titleField() {
+  if (!screen.queryByLabelText("Title")) fireEvent.click(screen.getByRole("button", { name: "Options" }));
+  return screen.getByLabelText("Title");
+}
+
+function ownsField() {
+  if (!screen.queryByLabelText("Owns (files or folders)")) fireEvent.click(screen.getByRole("button", { name: "Options" }));
+  return screen.getByLabelText("Owns (files or folders)");
+}
+
 function openPermission() {
   fireEvent.click(screen.getByLabelText("Agent"));
   fireEvent.click(screen.getByRole("menuitem", { name: /^Permission\b/ }));
@@ -64,7 +75,7 @@ describe("NewAgentForm", () => {
     vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
     const props = renderForm();
 
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: " Fix parser " } });
+    fireEvent.change(titleField(), { target: { value: " Fix parser " } });
     chooseAgent("Codex");
     const prompt = screen.getByLabelText("Prompt");
     fireEvent.change(prompt, { target: { value: "fix it" } });
@@ -105,7 +116,7 @@ describe("NewAgentForm", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /^Effort\b/ }));
     fireEvent.click(screen.getByRole("radio", { name: "High" }));
     expect(screen.getByRole("menuitem", { name: /^Effort\b/ }).textContent).toContain("High");
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
+    fireEvent.change(titleField(), { target: { value: "T" } });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));
     await waitFor(() =>
@@ -127,7 +138,7 @@ describe("NewAgentForm", () => {
   it("shows backend errors inline", async () => {
     vi.mocked(createTask).mockRejectedValue("not a git repository: /repo");
     renderForm();
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
+    fireEvent.change(titleField(), { target: { value: "T" } });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));
     expect((await screen.findByRole("alert")).textContent).toBe("not a git repository: /repo");
@@ -137,16 +148,16 @@ describe("NewAgentForm", () => {
   it("parses claims into chips and sends them with auto-handoff", async () => {
     vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
     renderForm();
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
+    fireEvent.change(titleField(), { target: { value: "T" } });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
-    fireEvent.change(screen.getByLabelText("Owns (files or folders)"), {
+    fireEvent.change(ownsField(), {
       target: { value: " src/parser/ , docs/SCHEMA.md\n./src/parser/ \n" },
     });
 
     // Comma- and newline-separated, trimmed, deduplicated, shown as chips.
     const chips = within(screen.getByRole("list", { name: "Owned paths" })).getAllByRole("listitem");
     expect(chips.map((li) => li.textContent)).toEqual(["src/parser/", "docs/SCHEMA.md"]);
-    expect(screen.getByText(/Other agents are told not to touch these/)).toBeTruthy();
+    expect(screen.getByText(/Other agents are told not to touch owned paths/)).toBeTruthy();
 
     fireEvent.click(screen.getByLabelText("Agent"));
     const autoHandoff = screen.getByLabelText("Auto-handoff on usage limit");
@@ -165,9 +176,9 @@ describe("NewAgentForm", () => {
   it("omits claims entirely when the field is empty", async () => {
     vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
     renderForm();
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
+    fireEvent.change(titleField(), { target: { value: "T" } });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
-    fireEvent.change(screen.getByLabelText("Owns (files or folders)"), { target: { value: " , \n " } });
+    fireEvent.change(ownsField(), { target: { value: " , \n " } });
     expect(screen.queryByRole("list", { name: "Owned paths" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));
     await waitFor(() => expect(createTask).toHaveBeenCalled());
@@ -179,7 +190,7 @@ describe("NewAgentForm", () => {
     vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
     renderForm();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Make checkout retry on 503\nwith backoff" } });
-    expect(screen.getByLabelText("Title").getAttribute("placeholder")).toBe("Title: Make checkout retry on 503");
+    expect(titleField().getAttribute("placeholder")).toBe("Make checkout retry on 503");
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));
     await waitFor(() =>
       expect(createTask).toHaveBeenCalledWith(

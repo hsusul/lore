@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { parseUnifiedDiff, type DiffFile } from "../../diff";
 import { taskDiff, type TaskDiffDto } from "../../ipc";
-import { RefreshIcon } from "./icons";
+import { CloseIcon, RefreshIcon } from "./icons";
 import { errorText } from "./state";
 
 const STATUS_LETTER: Record<DiffFile["status"], string> = {
@@ -19,10 +19,12 @@ type Props = {
   embedded?: boolean;
   /** Changes when the task's files or commits move, to reload without a click. */
   refreshKey?: string;
+  /** Close the review panel this diff sits in. */
+  onClose?: () => void;
 };
 
 /** A task's worktree diff against its base commit. */
-export default function DiffView({ taskId, title, embedded = false, refreshKey }: Props) {
+export default function DiffView({ taskId, title, embedded = false, refreshKey, onClose }: Props) {
   const [diff, setDiff] = useState<TaskDiffDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -58,7 +60,13 @@ export default function DiffView({ taskId, title, embedded = false, refreshKey }
   return (
     <div className={`diff-view${embedded ? " diff-view--embedded" : ""}`}>
       <header className="diff-view__header">
-        <h2 className={embedded ? "visually-hidden" : "diff-view__title"}>Changes in {title}</h2>
+        {embedded ? (
+          <h2 className="diff-view__label">
+            Changes<span className="visually-hidden"> in {title}</span>
+          </h2>
+        ) : (
+          <h2 className="diff-view__title">Changes in {title}</h2>
+        )}
         {diff && (
           <span className="diff-view__stats">
             {files.length} {files.length === 1 ? "file" : "files"}
@@ -67,9 +75,21 @@ export default function DiffView({ taskId, title, embedded = false, refreshKey }
           </span>
         )}
         <span className="agent-view__spacer" />
-        <button type="button" className="wb-btn wb-btn--small" disabled={loading} onClick={() => void load()}>
-          <RefreshIcon /> Refresh
+        <button
+          type="button"
+          className="wb-icon-btn"
+          aria-label="Refresh"
+          title="Refresh"
+          disabled={loading}
+          onClick={() => void load()}
+        >
+          <RefreshIcon />
         </button>
+        {onClose && (
+          <button type="button" className="wb-icon-btn" aria-label="Close review" title="Close review" onClick={onClose}>
+            <CloseIcon />
+          </button>
+        )}
       </header>
       <div className="diff-view__body">
         {error && (

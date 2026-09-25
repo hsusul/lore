@@ -9,7 +9,7 @@ import {
   type TaskPermission,
 } from "../../ipc";
 import AgentMenu from "./AgentMenu";
-import { ArrowUpIcon } from "./icons";
+import { ArrowUpIcon, BranchIcon, FolderIcon, SlidersIcon } from "./icons";
 import { baseName, deriveTitle, errorText, parseClaims, shortcut } from "./state";
 
 type Props = {
@@ -22,13 +22,23 @@ type Props = {
   draft?: string;
   /** Called once a focus request (and its draft) has been applied. */
   onFocusHandled?: () => void;
+  /** The branch agents start from, shown for context. */
+  baseBranch?: string;
 };
 
 /**
  * Launch an agent in the open repository. The prompt comes first; the title is
  * optional and defaults to the prompt's first line.
  */
-export default function NewAgentForm({ workspace, onCreated, onOpenFolder, focusToken, draft, onFocusHandled }: Props) {
+export default function NewAgentForm({
+  workspace,
+  onCreated,
+  onOpenFolder,
+  focusToken,
+  draft,
+  onFocusHandled,
+  baseBranch,
+}: Props) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [agent, setAgent] = useState<TaskAgent>("claude_code");
@@ -39,6 +49,7 @@ export default function NewAgentForm({ workspace, onCreated, onOpenFolder, focus
   const [autoHandoff, setAutoHandoff] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [options, setOptions] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -105,7 +116,7 @@ export default function NewAgentForm({ workspace, onCreated, onOpenFolder, focus
             className="composer__input new-agent__prompt"
             aria-label="Prompt"
             rows={3}
-            placeholder="What should an agent do? It gets its own worktree and branch."
+            placeholder="Describe a task. The agent gets its own worktree and branch."
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
@@ -115,31 +126,36 @@ export default function NewAgentForm({ workspace, onCreated, onOpenFolder, focus
               }
             }}
           />
-          <div className="new-agent__meta">
-            <input
-              className="new-agent__name"
-              type="text"
-              aria-label="Title"
-              placeholder={autoTitle ? `Title: ${autoTitle}` : "Title (optional)"}
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-            <details className="new-agent__more">
-              <summary>Owns paths{claims.length > 0 ? ` (${claims.length})` : ""}</summary>
-              <textarea
-                rows={2}
-                className="new-agent__claims"
-                aria-label="Owns (files or folders)"
-                placeholder="e.g. calc.py, greet.py"
-                value={claimsText}
-                onChange={(e) => setClaimsText(e.target.value)}
-              />
+          {options && (
+            <div className="new-agent__options">
+              <label className="new-agent__field">
+                <span>Title</span>
+                <input
+                  className="new-agent__name"
+                  type="text"
+                  aria-label="Title"
+                  placeholder={autoTitle || "From the prompt's first line"}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                />
+              </label>
+              <label className="new-agent__field">
+                <span>Owns</span>
+                <textarea
+                  rows={1}
+                  className="new-agent__claims"
+                  aria-label="Owns (files or folders)"
+                  placeholder="e.g. src/parser/, docs/SCHEMA.md"
+                  value={claimsText}
+                  onChange={(e) => setClaimsText(e.target.value)}
+                />
+              </label>
               <p className="new-agent__hint">
-                Other agents are told not to touch these. A commit that changes another agent&rsquo;s files needs
-                confirmation. End a folder with <span className="mono">/</span>; separate with commas or new lines.
+                Other agents are told not to touch owned paths, and a commit that changes another agent&rsquo;s files
+                needs confirmation. End a folder with <span className="mono">/</span>.
               </p>
-            </details>
-          </div>
+            </div>
+          )}
           {claims.length > 0 && (
             <ul className="claim-chips" aria-label="Owned paths">
               {claims.map((claim) => (
@@ -169,14 +185,28 @@ export default function NewAgentForm({ workspace, onCreated, onOpenFolder, focus
               onEffortChange={setEffort}
               disabled={disabled}
             />
+            <button
+              type="button"
+              className={`composer__tool${options || claims.length > 0 || title ? " composer__tool--on" : ""}`}
+              aria-expanded={options}
+              onClick={() => setOptions((v) => !v)}
+            >
+              <SlidersIcon />
+              Options
+            </button>
+            <span className="composer__spacer" />
             {workspace && (
-              <span className="new-agent__repo" title={workspace}>
+              <span className="composer__context" title={workspace}>
+                <FolderIcon />
                 {baseName(workspace)}
+                {baseBranch && (
+                  <>
+                    <BranchIcon />
+                    {baseBranch}
+                  </>
+                )}
               </span>
             )}
-            <span className="composer__keys" aria-hidden="true">
-              {shortcut("↵")}
-            </span>
             <button
               type="submit"
               className="composer__send"

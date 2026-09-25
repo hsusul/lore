@@ -1,15 +1,23 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 
 import { formatRelative, formatTime } from "../../format";
 import type { TaskDto } from "../../ipc";
-import { AgentChip, StateBadge } from "./badges";
+import { AgentChip, StatusIcon, taskStatus } from "./badges";
 import { groupTasks, type BoardGroup } from "./board";
-import { Mark, MergeIcon, WarningIcon } from "./icons";
+import { Mark, MergeIcon } from "./icons";
 import NewAgentForm from "./NewAgentForm";
 import { baseName, shortcut } from "./state";
 
-/** How many merged tasks the board shows before collapsing the rest into a count. */
-const MERGED_SHOWN = 4;
+type Filter = "all" | BoardGroup["id"];
+
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "attention", label: "Needs you" },
+  { id: "running", label: "Running" },
+  { id: "ready", label: "Ready to merge" },
+  { id: "idle", label: "To review" },
+  { id: "merged", label: "Merged" },
+];
 
 type Props = {
   workspace: string | null;
@@ -26,8 +34,8 @@ type Props = {
 };
 
 /**
- * The overview stage, shown when no agent or file is open: launch an agent and
- * see every agent at a glance, grouped by what it needs from you.
+ * The overview stage, shown when no agent or file is open: a composer to start
+ * an agent, and every agent in one list, what needs you first.
  */
 export default function Home({
   workspace,
@@ -40,24 +48,24 @@ export default function Home({
   draft,
   onFocusHandled,
 }: Props) {
+  const [filter, setFilter] = useState<Filter>("all");
   const groups = groupTasks(tasks ?? []);
-  const count = (id: BoardGroup["id"]) => groups.find((g) => g.id === id)?.tasks.length ?? 0;
-  const summary = [
-    count("running") > 0 ? `${count("running")} running` : null,
-    count("attention") > 0 ? `${count("attention")} need${count("attention") === 1 ? "s" : ""} you` : null,
-    count("ready") > 0 ? `${count("ready")} ready to merge` : null,
-  ].filter(Boolean);
+  const inGroup = (id: BoardGroup["id"]) => groups.find((g) => g.id === id)?.tasks ?? [];
+  const shown = filter === "all" ? groups.flatMap((g) => g.tasks) : inGroup(filter);
+  // Empty filters stay out of the way, except the one in use.
+  const filters = FILTERS.filter((f) => f.id === "all" || f.id === filter || inGroup(f.id as BoardGroup["id"]).length > 0);
   const branch = (tasks ?? []).find((t) => t.repo_path === workspace && t.repo_branch)?.repo_branch;
+  const listId = useId();
 
   return (
     <div className="home" role="region" aria-label="Overview">
       <div className="home__inner">
         {workspace ? (
           <header className="home__header">
-            <h2 className="home__title">{baseName(workspace)}</h2>
-            <p className="home__summary">
-              {branch && <span className="mono">{branch}</span>}
-              {summary.length > 0 ? summary.map((part) => <span key={part}>{part}</span>) : <span>No agents running</span>}
+            <h2 className="home__title">What should an agent work on?</h2>
+            <p className="home__lede">
+              Each agent runs in its own worktree of <span className="home__repo">{baseName(workspace)}</span>, so your
+              checkout stays untouched until you merge.
             </p>
           </header>
         ) : (
@@ -71,6 +79,9 @@ export default function Home({
               <button type="button" className="wb-btn wb-btn--primary" onClick={onOpenFolder}>
                 Open folder…
               </button>
+              <span className="home__keys">
+                <kbd>{shortcut("K")}</kbd> Search <kbd>{shortcut("N")}</kbd> New agent
+              </span>
             </div>
           </header>
         )}
@@ -83,6 +94,7 @@ export default function Home({
             focusToken={focusToken}
             draft={draft}
             onFocusHandled={onFocusHandled}
+            baseBranch={branch}
           />
         )}
 
@@ -91,101 +103,86 @@ export default function Home({
             Loading agents…
           </p>
         ) : groups.length === 0 ? (
-          workspace && (
-            <p className="home__empty">
-              No agents yet. Describe a task above and press <kbd>{shortcut("↵")}</kbd> to launch one.
-            </p>
-          )
+          workspace && <p className="home__empty">No agents yet. Describe a task above to launch the first one.</p>
         ) : (
-          groups.map((group) => (
-            <section key={group.id} className={`board board--${group.id}`} aria-label={group.title}>
-              <h3 className="board__title">
-                {group.title}
-                <span className="board__count">{group.tasks.length}</span>
-                {group.id === "ready" && (
-                  <button type="button" className="wb-btn wb-btn--small board__action" onClick={onOpenMergeQueue}>
-                    <MergeIcon /> Merge queue…
-                  </button>
-                )}
-              </h3>
-              {group.id === "merged" ? (
-                <ul className="board__merged">
-                  {group.tasks.slice(0, MERGED_SHOWN).map((task) => (
-                    <li key={task.id}>
-                      <button type="button" className="board__merged-row" onClick={() => onSelect(task.id)}>
-                        <span className="board__merged-title">{task.title}</span>
-                        <AgentChip agent={task.agent} />
-                        <span className="board__time">{formatRelative(task.created_at_ms)}</span>
-                      </button>
-                    </li>
-                  ))}
-                  {group.tasks.length > MERGED_SHOWN && (
-                    <li className="board__more">and {group.tasks.length - MERGED_SHOWN} more</li>
-                  )}
-                </ul>
-              ) : (
-                <ul className="board__grid">
-                  {group.tasks.map((task) => (
-                    <li key={task.id}>
-                      <TaskCard task={task} onSelect={onSelect} />
-                    </li>
-                  ))}
-                </ul>
+          <section className="tasks" aria-label="Agents">
+            <div className="tasks__bar">
+              <div className="tasks__filters" role="tablist" aria-label="Filter agents">
+                {filters.map((f) => {
+                  const count = f.id === "all" ? (tasks ?? []).length : inGroup(f.id as BoardGroup["id"]).length;
+                  return (
+                    <button
+                      key={f.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={filter === f.id}
+                      aria-controls={listId}
+                      className={`tasks__filter${filter === f.id ? " tasks__filter--on" : ""}`}
+                      onClick={() => setFilter(f.id)}
+                    >
+                      {f.label}
+                      <span className={`tasks__count${f.id === "attention" ? " tasks__count--attention" : ""}`}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {inGroup("ready").length > 0 && (
+                <button type="button" className="wb-btn wb-btn--small wb-btn--ghost" onClick={onOpenMergeQueue}>
+                  <MergeIcon /> Merge queue
+                </button>
               )}
-            </section>
-          ))
+            </div>
+            <ul
+              className="tasks__list"
+              id={listId}
+              role="tabpanel"
+              aria-label={FILTERS.find((f) => f.id === filter)!.label}
+            >
+              {shown.map((task) => (
+                <li key={task.id}>
+                  <TaskRow task={task} onSelect={onSelect} />
+                </li>
+              ))}
+              {shown.length === 0 && <li className="tasks__none">Nothing here.</li>}
+            </ul>
+          </section>
         )}
       </div>
     </div>
   );
 }
 
-function TaskCard({ task, onSelect }: { task: TaskDto; onSelect: (id: string) => void }) {
+function TaskRow({ task, onSelect }: { task: TaskDto; onSelect: (id: string) => void }) {
+  const status = taskStatus(task);
   const files = task.changed_files_total ?? task.changed_files.length;
-  const uncommitted = task.uncommitted_count ?? 0;
-  const stats = [
-    files > 0 ? `${files} ${files === 1 ? "file" : "files"}` : null,
-    task.commits_ahead > 0 ? `${task.commits_ahead} ${task.commits_ahead === 1 ? "commit" : "commits"}` : null,
-    uncommitted > 0 ? `${uncommitted} uncommitted` : null,
-  ].filter(Boolean);
-  const problem =
-    task.attention ??
-    ((task.claim_conflicts?.length ?? 0) > 0 ? "Changed files another agent owns" : null);
+  const detail = task.merged_into
+    ? `Merged into ${task.merged_into}`
+    : (task.attention ??
+      ((task.claim_conflicts?.length ?? 0) > 0 ? "Changed files another agent owns" : task.last_activity));
   const id = useId();
   return (
-    // Named by its title; the state, agent, and latest line are its description.
+    // Named by its title; what it is doing and where it stands describe it.
     <button
       type="button"
-      className={`card card--${task.state}${problem ? " card--attention" : ""}`}
+      className={`task-row task-row--${status}`}
       aria-label={task.title}
-      aria-describedby={`${id}-meta ${id}-detail`}
+      aria-describedby={`${id}-detail ${id}-meta`}
       onClick={() => onSelect(task.id)}
     >
-      <span className="card__top">
+      <StatusIcon status={status} />
+      <span className="task-row__title">{task.title}</span>
+      <span className="task-row__detail" id={`${id}-detail`}>
+        {detail}
+      </span>
+      <span className="task-row__meta" id={`${id}-meta`}>
         <AgentChip agent={task.agent} />
-        <time className="card__time" title={formatTime(task.created_at_ms)}>
-          {formatRelative(task.created_at_ms)}
-        </time>
+        {files > 0 && <span>{`${files} ${files === 1 ? "file" : "files"}`}</span>}
       </span>
-      <span className="card__title">{task.title}</span>
-      {problem ? (
-        <span className="card__problem" id={`${id}-detail`}>
-          <WarningIcon />
-          {problem}
-        </span>
-      ) : (
-        task.last_activity && (
-          <span className="card__activity" id={`${id}-detail`}>
-            {task.last_activity}
-          </span>
-        )
-      )}
-      <span className="card__meta" id={`${id}-meta`}>
-        <StateBadge task={task} compact />
-        {stats.map((s) => (
-          <span key={s}>{s}</span>
-        ))}
-      </span>
+      <time className="task-row__time" title={formatTime(task.created_at_ms)}>
+        {formatRelative(task.created_at_ms)}
+      </time>
     </button>
   );
 }
