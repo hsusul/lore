@@ -224,6 +224,35 @@ describe("Workbench", () => {
     expect(views.getByRole("tab", { name: /Changes/ }).getAttribute("aria-selected")).toBe("true");
   });
 
+  it("finds agents in the palette and launches a new agent from typed text", async () => {
+    vi.mocked(listTasks).mockResolvedValue([task({ state: "finished", repo_path: "/work/repo" })]);
+    render(<Workbench />);
+    await screen.findByRole("listitem", { name: "Fix parser" });
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search agents, commands, and files" });
+    fireEvent.change(input, { target: { value: "fix pars" } });
+    expect(screen.getAllByRole("option")[0].textContent).toContain("Fix parser");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByRole("heading", { name: "Fix parser" })).toBeTruthy();
+
+    // With an agent selected, its actions are commands.
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "show changes" } });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    const views = within(screen.getByRole("tablist", { name: "Agent views" }));
+    expect(views.getByRole("tab", { name: /Changes/ }).getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "Add a dark mode toggle" } });
+    const options = screen.getAllByRole("option");
+    fireEvent.click(options[options.length - 1]);
+    expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
+    const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    expect(prompt.value).toBe("Add a dark mode toggle");
+    expect(document.activeElement).toBe(prompt);
+  });
+
   it("switches the sidebar between agents and files", async () => {
     render(<Workbench />);
     expect(screen.getByRole("region", { name: "Agents" })).toBeTruthy();
@@ -340,20 +369,20 @@ describe("Workbench", () => {
     render(<Workbench />);
     await waitFor(() => expect(listWorkspaceDir).toHaveBeenCalled());
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    const input = await screen.findByRole("combobox", { name: "Search commands and files" });
+    const input = await screen.findByRole("combobox", { name: "Search agents, commands, and files" });
     fireEvent.change(input, { target: { value: "readme" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await screen.findByRole("tab", { name: /README\.md/ })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
-    expect(await screen.findByRole("combobox", { name: "Search commands and files" })).toBeTruthy();
-    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search commands and files" }), { key: "Escape" });
+    expect(await screen.findByRole("combobox", { name: "Search agents, commands, and files" })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search agents, commands, and files" }), { key: "Escape" });
 
     fireEvent.keyDown(window, { key: "p", metaKey: true });
-    fireEvent.change(await screen.findByRole("combobox", { name: "Search commands and files" }), { target: { value: "toggle panel" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: "Search agents, commands, and files" }), { target: { value: "toggle panel" } });
     await act(async () => {
-      fireEvent.keyDown(screen.getByRole("combobox", { name: "Search commands and files" }), { key: "Enter" });
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Search agents, commands, and files" }), { key: "Enter" });
     });
     expect(screen.getByRole("region", { name: "Panel" })).toBeTruthy();
   });
