@@ -13,11 +13,10 @@ function renderForm(overrides: Partial<Parameters<typeof NewAgentForm>[0]> = {})
     workspace: "/repo",
     onCreated: vi.fn(),
     onOpenFolder: vi.fn(),
-    focusToken: 0,
     ...overrides,
   };
-  const view = render(<NewAgentForm {...props} />);
-  return { ...props, rerender: (next: Partial<typeof props>) => view.rerender(<NewAgentForm {...props} {...next} />) };
+  render(<NewAgentForm {...props} />);
+  return props;
 }
 
 function chooseAgent(name: "Claude Code" | "Codex") {
@@ -206,11 +205,11 @@ describe("NewAgentForm", () => {
     expect(createTask).not.toHaveBeenCalled();
   });
 
-  it("focuses the prompt and applies a draft when asked", () => {
-    const view = renderForm();
-    view.rerender({ focusToken: 1, draft: "Add a dark mode toggle" });
+  it("starts from a draft with the caret at its end when asked to focus", () => {
+    renderForm({ autoFocus: true, initialPrompt: "Add a dark mode toggle" });
     const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
     expect(document.activeElement).toBe(prompt);
     expect(prompt.value).toBe("Add a dark mode toggle");
+    expect(prompt.selectionStart).toBe("Add a dark mode toggle".length);
   });
 });

@@ -9,21 +9,17 @@ import {
   type TaskPermission,
 } from "../../ipc";
 import AgentMenu from "./AgentMenu";
-import { ArrowUpIcon, BranchIcon, FolderIcon, SlidersIcon } from "./icons";
-import { baseName, deriveTitle, errorText, parseClaims, shortcut } from "./state";
+import { SlidersIcon } from "./icons";
+import { deriveTitle, errorText, parseClaims, shortcut } from "./state";
 
 type Props = {
   workspace: string | null;
   onCreated: (task: TaskDto) => void;
   onOpenFolder: () => void;
-  /** Changes whenever something asks to focus the composer (⌘N, New agent). */
-  focusToken: number;
-  /** Text to start the prompt with (the palette's "New agent: …"); applied when focusToken changes. */
-  draft?: string;
-  /** Called once a focus request (and its draft) has been applied. */
-  onFocusHandled?: () => void;
-  /** The branch agents start from, shown for context. */
-  baseBranch?: string;
+  /** Text to start the prompt with (the palette's "New agent: …"). */
+  initialPrompt?: string;
+  /** Focus the prompt when the form appears, caret at the end. */
+  autoFocus?: boolean;
 };
 
 /**
@@ -34,13 +30,11 @@ export default function NewAgentForm({
   workspace,
   onCreated,
   onOpenFolder,
-  focusToken,
-  draft,
-  onFocusHandled,
-  baseBranch,
+  initialPrompt = "",
+  autoFocus = false,
 }: Props) {
   const [title, setTitle] = useState("");
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(initialPrompt);
   const [agent, setAgent] = useState<TaskAgent>("claude_code");
   const [permission, setPermission] = useState<TaskPermission>("edits");
   const [model, setModel] = useState<string | null>(null);
@@ -53,13 +47,11 @@ export default function NewAgentForm({
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (focusToken <= 0) return;
-    if (draft) setPrompt(draft);
-    promptRef.current?.focus();
-    onFocusHandled?.();
-    // Only a new focus request applies the draft, not later edits to it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusToken]);
+    const el = promptRef.current;
+    if (!autoFocus || !el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [autoFocus]);
 
   const claims = parseClaims(claimsText);
   const autoTitle = deriveTitle(prompt);
@@ -195,26 +187,15 @@ export default function NewAgentForm({
               Options
             </button>
             <span className="composer__spacer" />
-            {workspace && (
-              <span className="composer__context" title={workspace}>
-                <FolderIcon />
-                {baseName(workspace)}
-                {baseBranch && (
-                  <>
-                    <BranchIcon />
-                    {baseBranch}
-                  </>
-                )}
-              </span>
-            )}
             <button
               type="submit"
-              className="composer__send"
+              className="wb-btn wb-btn--primary new-agent__launch"
               disabled={busy}
               title={`Launch (${shortcut("Enter")})`}
               aria-label={busy ? "Launching…" : "Launch"}
             >
-              <ArrowUpIcon />
+              {busy ? "Launching…" : "Launch"}
+              <kbd>{shortcut("↵")}</kbd>
             </button>
           </div>
         </div>
