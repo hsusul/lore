@@ -1049,7 +1049,7 @@ textarea.new-agent__claims {
 .model-menu {
   position: fixed;
   z-index: 40;
-  min-width: 260px;
+  width: 260px;
   padding: 6px;
   border: 1px solid var(--wb-border-strong);
   border-radius: var(--r);
@@ -1104,6 +1104,48 @@ textarea.new-agent__claims {
 
 .model-menu__check {
   display: inline-flex;
+}
+
+.model-menu__row--hinted {
+  height: auto;
+  min-height: 32px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.model-menu__option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.model-menu__hint {
+  color: var(--wb-fg-faint);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.model-menu__back {
+  justify-content: flex-start;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--wb-fg-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  box-shadow: 0 1px 0 var(--wb-border);
+  border-radius: var(--r) var(--r) 0 0;
+}
+
+.model-menu__back-icon {
+  display: inline-flex;
+  transform: rotate(180deg);
+}
+
+.model-menu__back-icon .icon {
+  width: 12px;
+  height: 12px;
 }
 
 .model-switch {
