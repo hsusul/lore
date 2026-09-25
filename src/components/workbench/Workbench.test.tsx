@@ -189,7 +189,7 @@ describe("Workbench", () => {
     expect(screen.queryByRole("complementary", { name: "Sidebar" })).toBeNull();
   });
 
-  it("⌘N returns to the overview with the composer focused; ⌘1–9 open agents in sidebar order", async () => {
+  it("⌘N opens New agent over the current view, not the overview; ⌘1–9 open agents in sidebar order", async () => {
     vi.mocked(listTasks).mockResolvedValue([
       task({ repo_path: "/work/repo" }),
       task({ id: "t2", title: "Second", repo_path: "/work/repo" }),
@@ -202,13 +202,26 @@ describe("Workbench", () => {
     expect(screen.queryByRole("region", { name: "Overview" })).toBeNull();
 
     fireEvent.keyDown(window, { key: "n", metaKey: true });
-    expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
-    expect(document.activeElement).toBe(screen.getByLabelText("Prompt"));
+    const dialog = screen.getByRole("dialog", { name: "New agent" });
+    expect(document.activeElement).toBe(within(dialog).getByLabelText("Prompt"));
+    // The agent stays on screen behind the dialog; New agent and Overview are different places.
+    expect(screen.getByRole("heading", { name: "Second" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Overview" })).toBeNull();
+    // Shortcuts wait while the dialog is open.
+    fireEvent.keyDown(window, { key: "1", metaKey: true });
+    expect(screen.getByRole("heading", { name: "Second" })).toBeTruthy();
+    fireEvent.keyDown(within(dialog).getByLabelText("Prompt"), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
 
     fireEvent.keyDown(window, { key: "1", ctrlKey: true });
     expect(await screen.findByRole("heading", { name: "Fix parser" })).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Overview" })[0]);
     expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // The sidebar's New agent opens the same dialog.
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Workspace" })).getByRole("button", { name: /New agent/ }));
+    expect(screen.getByRole("dialog", { name: "New agent" })).toBeTruthy();
   });
 
   it("opens a row's diff as the agent's Changes view, not a separate tab", async () => {
@@ -248,19 +261,16 @@ describe("Workbench", () => {
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "Add a dark mode toggle" } });
     const options = screen.getAllByRole("option");
     fireEvent.click(options[options.length - 1]);
-    expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
-    const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    const dialog = screen.getByRole("dialog", { name: "New agent" });
+    const prompt = within(dialog).getByLabelText("Prompt") as HTMLTextAreaElement;
     expect(prompt.value).toBe("Add a dark mode toggle");
     expect(document.activeElement).toBe(prompt);
 
-    // The request is used once: coming back to the overview later neither
-    // replays the draft nor steals focus.
-    fireEvent.keyDown(window, { key: "1", metaKey: true });
-    await screen.findByRole("heading", { name: "Fix parser" });
-    fireEvent.click(screen.getAllByRole("button", { name: "Overview" })[0]);
-    const again = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
-    expect(again.value).toBe("");
-    expect(document.activeElement).not.toBe(again);
+    // The draft belongs to that request: closing and opening New agent again starts empty.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.keyDown(window, { key: "n", metaKey: true });
+    expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("");
   });
 
   it("toasts when another agent finishes while Lore is in front, but not for the agent on screen", async () => {

@@ -4,8 +4,7 @@ import { formatRelative, formatTime } from "../../format";
 import type { TaskDto } from "../../ipc";
 import { AgentChip, StatusIcon, taskStatus } from "./badges";
 import { groupTasks, type BoardGroup } from "./board";
-import { Mark, MergeIcon } from "./icons";
-import NewAgentForm from "./NewAgentForm";
+import { Mark, MergeIcon, PlusIcon } from "./icons";
 import { baseName, shortcut } from "./state";
 
 type Filter = "all" | BoardGroup["id"];
@@ -24,29 +23,22 @@ type Props = {
   /** The tasks in scope (the open repository, or every repository). */
   tasks: TaskDto[] | null;
   onSelect: (id: string) => void;
-  onCreated: (task: TaskDto) => void;
+  onNewAgent: () => void;
   onOpenFolder: () => void;
   onOpenMergeQueue: () => void;
-  /** Changes whenever something asks to focus the composer. */
-  focusToken: number;
-  draft?: string;
-  onFocusHandled?: () => void;
 };
 
 /**
- * The overview stage, shown when no agent or file is open: a composer to start
- * an agent, and every agent in one list, what needs you first.
+ * The overview stage, shown when no agent or file is open: where every agent
+ * stands, what needs you first. Starting an agent is the New agent dialog's job.
  */
 export default function Home({
   workspace,
   tasks,
   onSelect,
-  onCreated,
+  onNewAgent,
   onOpenFolder,
   onOpenMergeQueue,
-  focusToken,
-  draft,
-  onFocusHandled,
 }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const groups = groupTasks(tasks ?? []);
@@ -56,17 +48,30 @@ export default function Home({
   const filters = FILTERS.filter((f) => f.id === "all" || f.id === filter || inGroup(f.id as BoardGroup["id"]).length > 0);
   const branch = (tasks ?? []).find((t) => t.repo_path === workspace && t.repo_branch)?.repo_branch;
   const listId = useId();
+  const count = (id: BoardGroup["id"]) => inGroup(id).length;
+  const summary = [
+    branch ?? null,
+    count("running") > 0 ? `${count("running")} running` : null,
+    count("attention") > 0 ? `${count("attention")} need${count("attention") === 1 ? "s" : ""} you` : null,
+    count("ready") > 0 ? `${count("ready")} ready to merge` : null,
+  ].filter((part): part is string => part !== null);
 
   return (
     <div className="home" role="region" aria-label="Overview">
       <div className="home__inner">
         {workspace ? (
-          <header className="home__header">
-            <h2 className="home__title">What should an agent work on?</h2>
-            <p className="home__lede">
-              Each agent runs in its own worktree of <span className="home__repo">{baseName(workspace)}</span>, so your
-              checkout stays untouched until you merge.
-            </p>
+          <header className="home__head">
+            <div className="home__heading">
+              <h2 className="home__name">{baseName(workspace)}</h2>
+              <p className="home__summary">
+                {summary.length > 0 ? summary.map((part) => <span key={part}>{part}</span>) : <span>No agents yet</span>}
+              </p>
+            </div>
+            <button type="button" className="wb-btn wb-btn--primary" onClick={onNewAgent}>
+              <PlusIcon />
+              New agent
+              <kbd>{shortcut("N")}</kbd>
+            </button>
           </header>
         ) : (
           <header className="home__header home__header--welcome">
@@ -86,30 +91,27 @@ export default function Home({
           </header>
         )}
 
-        {workspace && (
-          <NewAgentForm
-            workspace={workspace}
-            onCreated={onCreated}
-            onOpenFolder={onOpenFolder}
-            focusToken={focusToken}
-            draft={draft}
-            onFocusHandled={onFocusHandled}
-            baseBranch={branch}
-          />
-        )}
-
         {tasks === null ? (
           <p className="wb-note" role="status">
             Loading agents…
           </p>
         ) : groups.length === 0 ? (
-          workspace && <p className="home__empty">No agents yet. Describe a task above to launch the first one.</p>
+          workspace && (
+            <div className="home__empty">
+              <p className="home__empty-title">No agents yet</p>
+              <p>Each agent gets its own worktree and branch, so your checkout stays untouched until you merge.</p>
+              <button type="button" className="wb-btn" onClick={onNewAgent}>
+                <PlusIcon />
+                New agent
+              </button>
+            </div>
+          )
         ) : (
           <section className="tasks" aria-label="Agents">
             <div className="tasks__bar">
               <div className="tasks__filters" role="tablist" aria-label="Filter agents">
                 {filters.map((f) => {
-                  const count = f.id === "all" ? (tasks ?? []).length : inGroup(f.id as BoardGroup["id"]).length;
+                  const n = f.id === "all" ? (tasks ?? []).length : inGroup(f.id as BoardGroup["id"]).length;
                   return (
                     <button
                       key={f.id}
@@ -122,7 +124,7 @@ export default function Home({
                     >
                       {f.label}
                       <span className={`tasks__count${f.id === "attention" ? " tasks__count--attention" : ""}`}>
-                        {count}
+                        {n}
                       </span>
                     </button>
                   );

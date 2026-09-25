@@ -20,6 +20,7 @@ import CommandPalette, { type PaletteItem } from "./CommandPalette";
 import EditorTabs from "./EditorTabs";
 import FileView from "./FileView";
 import Home from "./Home";
+import NewAgentDialog from "./NewAgentDialog";
 import { Mark, PanelIcon, SearchIcon, SidebarIcon } from "./icons";
 import Sash from "./Sash";
 import { ExplorerPanel } from "./Sidebar";
@@ -77,10 +78,10 @@ export default function Workbench() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [agentPane, setAgentPane] = useState<AgentPane>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [newAgentToken, setNewAgentToken] = useState(0);
-  const [newAgentDraft, setNewAgentDraft] = useState<string | undefined>(undefined);
-  /** A ⌘N / "New agent" request the composer has not applied yet. */
-  const [composerPending, setComposerPending] = useState(false);
+  /** The New agent dialog: closed, or open with an optional starting prompt. */
+  const [newAgentDialog, setNewAgentDialog] = useState<{ draft?: string } | null>(null);
+  const dialogOpenRef = useRef(false);
+  dialogOpenRef.current = newAgentDialog !== null;
 
   useEffect(() => {
     const stored = readStored(STORAGE_KEYS.workspace);
@@ -219,6 +220,7 @@ export default function Workbench() {
 
   const handleCreated = useCallback(
     (task: TaskDto) => {
+      setNewAgentDialog(null);
       void refresh();
       selectTask(task.id);
     },
@@ -242,15 +244,23 @@ export default function Workbench() {
     dispatch({ type: "clearActive" });
   }, []);
 
-  /** The overview with its composer focused, optionally starting from `draft`. */
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+
+  /**
+   * Open the New agent dialog over whatever is on screen, optionally starting
+   * from `draft`. Without an open folder there is nowhere to launch, so it asks
+   * for one instead.
+   */
   const newAgent = useCallback(
     (draft?: string) => {
-      showOverview();
-      setNewAgentDraft(draft);
-      setComposerPending(true);
-      setNewAgentToken((n) => n + 1);
+      if (!workspaceRef.current) {
+        void openFolder();
+        return;
+      }
+      setNewAgentDialog({ draft });
     },
-    [showOverview],
+    [openFolder],
   );
 
   // Tell the user when an agent finishes, fails, needs them, or lands: a toast
@@ -299,6 +309,8 @@ export default function Workbench() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      // The New agent dialog is modal: shortcuts wait until it closes.
+      if (dialogOpenRef.current) return;
       switch (e.key.toLowerCase()) {
         case "k":
         case "p":
@@ -516,12 +528,9 @@ export default function Workbench() {
       workspace={workspace}
       tasks={visibleTasks}
       onSelect={selectTask}
-      onCreated={handleCreated}
+      onNewAgent={() => newAgent()}
       onOpenFolder={() => void openFolder()}
       onOpenMergeQueue={openMergeQueue}
-      focusToken={composerPending ? newAgentToken : 0}
-      draft={newAgentDraft}
-      onFocusHandled={() => setComposerPending(false)}
     />
   );
 
@@ -692,6 +701,17 @@ export default function Workbench() {
         visibleToasts={4}
         style={TOAST_THEME}
       />
+
+      {newAgentDialog && workspace && (
+        <NewAgentDialog
+          workspace={workspace}
+          baseBranch={(tasks ?? []).find((t) => t.repo_path === workspace && t.repo_branch)?.repo_branch}
+          draft={newAgentDialog.draft}
+          onClose={() => setNewAgentDialog(null)}
+          onCreated={handleCreated}
+          onOpenFolder={() => void openFolder()}
+        />
+      )}
 
       {paletteOpen && (
         <CommandPalette

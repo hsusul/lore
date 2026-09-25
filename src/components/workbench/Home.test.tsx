@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../ipc", () => ({ createTask: vi.fn() }));
@@ -21,10 +21,9 @@ function renderHome(overrides: Partial<Parameters<typeof Home>[0]> = {}) {
     workspace: "/work/acme",
     tasks: BOARD,
     onSelect: vi.fn(),
-    onCreated: vi.fn(),
+    onNewAgent: vi.fn(),
     onOpenFolder: vi.fn(),
     onOpenMergeQueue: vi.fn(),
-    focusToken: 0,
     ...overrides,
   };
   render(<Home {...props} />);
@@ -52,7 +51,12 @@ describe("groupTasks", () => {
 describe("Home", () => {
   it("lists every agent, what needs you first, and opens one on click", () => {
     const props = renderHome();
-    expect(screen.getByRole("heading", { name: "What should an agent work on?" })).toBeTruthy();
+    // A dashboard, not a composer: the repository and where its agents stand.
+    expect(screen.getByRole("heading", { name: "acme" })).toBeTruthy();
+    expect(screen.queryByRole("form", { name: "New agent" })).toBeNull();
+    expect(screen.getByText("1 running")).toBeTruthy();
+    expect(screen.getByText("2 need you")).toBeTruthy();
+    expect(screen.getByText("1 ready to merge")).toBeTruthy();
     const list = screen.getByRole("tabpanel", { name: "All" });
     const rows = within(list).getAllByRole("button");
     expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual([
@@ -93,24 +97,29 @@ describe("Home", () => {
     expect(props.onOpenMergeQueue).toHaveBeenCalled();
   });
 
-  it("offers the composer with a folder open, and Open folder without one", () => {
+  it("starts agents through New agent, with an empty state that says how, and asks for a folder first", () => {
     const { unmount } = render(
       <Home
         workspace="/work/acme"
         tasks={[]}
         onSelect={vi.fn()}
-        onCreated={vi.fn()}
+        onNewAgent={vi.fn()}
         onOpenFolder={vi.fn()}
         onOpenMergeQueue={vi.fn()}
-        focusToken={0}
       />,
     );
-    expect(screen.getByRole("form", { name: "New agent" })).toBeTruthy();
-    expect(screen.getByText(/No agents yet/)).toBeTruthy();
+    expect(screen.getAllByText("No agents yet").length).toBeGreaterThan(0);
+    // The header button and the empty state's button both open the dialog.
+    expect(screen.getAllByRole("button", { name: /New agent/ })).toHaveLength(2);
     unmount();
 
+    const withAgents = renderHome();
+    fireEvent.click(screen.getByRole("button", { name: /New agent/ }));
+    expect(withAgents.onNewAgent).toHaveBeenCalled();
+    cleanup();
+
     const props = renderHome({ workspace: null, tasks: [] });
-    expect(screen.queryByRole("form", { name: "New agent" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /New agent/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Open folder…" }));
     expect(props.onOpenFolder).toHaveBeenCalled();
   });
