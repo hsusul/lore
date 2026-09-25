@@ -65,10 +65,10 @@ describe("BottomPanel History", () => {
     const log = await screen.findByRole("list", { name: "Decision log" });
     const rows = within(log).getAllByRole("listitem");
     expect(rows).toHaveLength(2);
-    expect(rows[0].textContent).toContain("auto handoff");
+    expect(rows[0].textContent).toContain("Auto handoff");
     expect(rows[0].textContent).toContain("Fix parser");
     expect(rows[0].textContent).toContain("Usage limit reached; handed off to Codex.");
-    expect(rows[1].textContent).toContain("created");
+    expect(rows[1].textContent).toContain("Created");
     expect(listDecisions).toHaveBeenCalledWith("/repo", expect.any(Number));
 
     vi.mocked(listDecisions).mockResolvedValue([decision({ kind: "merged", detail: "Merged into main." })]);
@@ -88,10 +88,10 @@ describe("BottomPanel History", () => {
     const { props } = renderPanel("changes");
     const tabs = screen.getByRole("tablist", { name: "Panel views" });
     expect(within(tabs).getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "Agent Output",
+      "Agent output",
       "Changes2",
       "History",
-      "Merge Queue",
+      "Merge queue",
     ]);
     fireEvent.keyDown(tabs, { key: "ArrowRight" });
     expect(props.onTabChange).toHaveBeenCalledWith("history");

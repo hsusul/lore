@@ -1,74 +1,86 @@
 /* Lore workbench. Cursor/Zed-like IDE chrome: flush panes, quiet neutrals, one accent. */
 
 :root {
-  --wb-frame-bg: #181818;
-  --wb-sidebar-bg: #141414;
-  --wb-panel-bg: #141414;
-  --wb-editor-bg: #1e1e1e;
-  --wb-tabs-bg: #181818;
-  --wb-widget-bg: #252525;
-  --wb-input-bg: #1e1e1e;
-  --wb-raised: #2a2a2a;
-  --wb-hover: rgba(255, 255, 255, 0.04);
-  --wb-active-row: rgba(91, 155, 213, 0.14);
-  --wb-selection: rgba(91, 155, 213, 0.22);
-  --wb-border: #2b2b2b;
-  --wb-border-strong: #3c3c3c;
-  --wb-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  /* Neutrals are faintly cool, not VS Code's pure greys, so Lore reads as its own tool. */
+  --wb-frame-bg: #151619;
+  --wb-sidebar-bg: #111215;
+  --wb-panel-bg: #111215;
+  --wb-editor-bg: #18191d;
+  --wb-tabs-bg: #151619;
+  --wb-widget-bg: #202127;
+  --wb-input-bg: #18191d;
+  --wb-raised: #292a31;
+  --wb-hover: rgba(255, 255, 255, 0.045);
+  --wb-active-row: rgba(106, 166, 222, 0.14);
+  --wb-selection: rgba(106, 166, 222, 0.22);
+  --wb-border: #25262c;
+  --wb-border-strong: #34363e;
+  --wb-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   --wb-inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --wb-paper: #cccccc;
+  --wb-paper: #ffffff;
 
-  --wb-fg: #cccccc;
-  --wb-fg-strong: #e8e8e8;
-  --wb-fg-muted: #8b8b8b;
-  --wb-fg-faint: #6e6e6e;
-  --wb-gutter-fg: #5a5a5a;
+  /* Text steps all clear WCAG AA (4.5:1) on every surface they sit on. */
+  --wb-fg: #c8cad0;
+  --wb-fg-strong: #eceef2;
+  --wb-fg-muted: #9a9ea8;
+  --wb-fg-faint: #858a95;
+  --wb-gutter-fg: #5d616c;
 
-  --wb-accent: #5b9bd5;
-  --wb-accent-strong: #4a8ac4;
-  --wb-accent-hover: #7eb0e0;
-  --wb-accent-fg: #0e1a24;
-  --wb-accent-soft: rgba(91, 155, 213, 0.16);
-  --wb-focus: #5b9bd5;
+  /* The brand blue from the mark. */
+  --wb-accent: #6aa6de;
+  --wb-accent-strong: #4f8fcb;
+  --wb-accent-hover: #86b8e6;
+  --wb-accent-fg: #0c1622;
+  --wb-accent-soft: rgba(106, 166, 222, 0.16);
+  --wb-focus: #6aa6de;
 
-  --wb-amber: #dcdcaa;
-  --wb-amber-soft: rgba(220, 220, 170, 0.12);
-  --agent-claude: #9cdcfe;
-  --agent-claude-soft: rgba(156, 220, 254, 0.12);
-  --agent-codex: #5b9bd5;
-  --agent-codex-soft: rgba(91, 155, 213, 0.12);
-  --wb-success: #89d185;
-  --wb-success-soft: rgba(137, 209, 133, 0.12);
-  --wb-success-line: rgba(137, 209, 133, 0.45);
-  --wb-warn: #dcdcaa;
-  --wb-warn-border: rgba(220, 220, 170, 0.35);
-  --wb-danger: #f14c4c;
-  --wb-danger-strong: #d54646;
-  --wb-danger-hover: #ff6b6b;
-  --wb-danger-bg: rgba(241, 76, 76, 0.12);
-  --wb-danger-border: rgba(241, 76, 76, 0.4);
-  --wb-danger-line: rgba(241, 76, 76, 0.5);
-  --wb-info: #9cdcfe;
-  --wb-notice-bg: rgba(220, 220, 170, 0.1);
+  /* One hue per agent, kept clear of the accent and the status colours. */
+  --agent-claude: #e39a6f;
+  --agent-claude-soft: rgba(227, 154, 111, 0.14);
+  --agent-codex: #58c4b2;
+  --agent-codex-soft: rgba(88, 196, 178, 0.14);
 
-  --diff-add-bg: rgba(137, 209, 133, 0.12);
-  --diff-add-fg: #89d185;
-  --diff-del-bg: rgba(241, 76, 76, 0.12);
-  --diff-del-fg: #f14c4c;
-  --diff-hunk-bg: rgba(156, 220, 254, 0.08);
+  /* Status: green done, amber waiting on you, red broken. */
+  --wb-success: #7ccf8e;
+  --wb-success-soft: rgba(124, 207, 142, 0.12);
+  --wb-success-line: rgba(124, 207, 142, 0.45);
+  --wb-warn: #e6b450;
+  --wb-warn-soft: rgba(230, 180, 80, 0.12);
+  --wb-warn-border: rgba(230, 180, 80, 0.4);
+  --wb-amber: #e6b450;
+  --wb-amber-soft: rgba(230, 180, 80, 0.12);
+  --wb-danger: #f07070;
+  --wb-danger-strong: #bf4545;
+  --wb-danger-hover: #d05252;
+  --wb-danger-bg: rgba(240, 112, 112, 0.12);
+  --wb-danger-border: rgba(240, 112, 112, 0.4);
+  --wb-danger-line: rgba(240, 112, 112, 0.5);
+  --wb-info: #8cc4f0;
+  --wb-notice-bg: rgba(230, 180, 80, 0.08);
 
-  --tok-comment: #6a9955;
-  --tok-string: #ce9178;
-  --tok-keyword: #569cd6;
-  --tok-number: #b5cea8;
+  --diff-add-bg: rgba(124, 207, 142, 0.11);
+  --diff-add-fg: #7ccf8e;
+  --diff-del-bg: rgba(240, 112, 112, 0.11);
+  --diff-del-fg: #f07070;
+  --diff-hunk-bg: rgba(106, 166, 222, 0.08);
+
+  --tok-comment: #737987;
+  --tok-string: #d9a878;
+  --tok-keyword: #7fb0e3;
+  --tok-number: #c3a3e6;
 
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "SF Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 20px;
   /* Panes stay square (radius 0 in layout). Controls share one 6px radius. */
   --r-sm: 4px;
   --r: 6px;
   --r-lg: 8px;
-  --r-xl: 8px;
+  --r-xl: 10px;
   --r-pill: 999px;
   --gap: 0;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -387,10 +399,8 @@ kbd {
   gap: 8px;
   margin: 16px 0 8px;
   color: var(--wb-fg-muted);
-  font-size: 10.5px;
+  font-size: var(--text-xs);
   font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
 }
 
 .wb-subhead::after {
@@ -590,33 +600,35 @@ kbd {
   box-shadow: inset -1px 0 0 var(--wb-border);
 }
 
+/* Segmented Agents / Files switch, sitting in the view's header row. */
 .wb-sidebar__switch {
   flex: none;
   display: flex;
-  gap: 0;
-  padding: 6px 8px 0;
-  box-shadow: inset 0 -1px 0 var(--wb-border);
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r);
+  background: var(--wb-frame-bg);
+  box-shadow: inset 0 0 0 1px var(--wb-border);
 }
 
 .wb-sidebar__tab {
-  height: 28px;
+  height: 22px;
   padding: 0 10px;
   border: 0;
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--wb-fg-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 500;
 }
 
 .wb-sidebar__tab:hover {
-  color: var(--wb-fg);
+  color: var(--wb-fg-strong);
 }
 
 .wb-sidebar__tab--on {
-  background: var(--wb-sidebar-bg);
+  background: var(--wb-raised);
   color: var(--wb-fg-strong);
-  box-shadow: inset 0 -1px 0 var(--wb-editor-bg), 0 1px 0 var(--wb-sidebar-bg);
 }
 
 .wb-sidebar .wb-view {
@@ -636,78 +648,6 @@ kbd {
   display: flex;
   min-height: 0;
   background: var(--wb-editor-bg);
-}
-
-/* ── Activity bar ──────────────────────────────────────────────────────── */
-
-.activitybar {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  width: 44px;
-  padding-top: 6px;
-  background: var(--wb-frame-bg);
-  box-shadow: inset -1px 0 0 var(--wb-border);
-}
-
-.activitybar__btn {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 36px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--wb-fg-faint);
-  transition: color 120ms var(--ease);
-}
-
-.activitybar__btn .icon {
-  position: relative;
-  z-index: 1;
-  width: 20px;
-  height: 20px;
-}
-
-.activitybar__btn:hover {
-  background: transparent;
-  color: var(--wb-fg-strong);
-}
-
-.activitybar__btn--active {
-  background: transparent;
-  color: var(--wb-accent);
-}
-
-.activitybar__btn--active::before {
-  content: "";
-  position: absolute;
-  inset: 4px 8px;
-  border-radius: var(--r);
-  background: var(--wb-accent-soft);
-}
-
-.activitybar__badge {
-  position: absolute;
-  z-index: 1;
-  right: 6px;
-  bottom: 4px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border: 2px solid var(--wb-frame-bg);
-  border-radius: var(--r);
-  box-sizing: content-box;
-  background: var(--wb-accent-strong);
-  color: var(--wb-accent-fg);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 14px;
-  text-align: center;
 }
 
 /* ── Sidebar ───────────────────────────────────────────────────────────── */
@@ -732,23 +672,24 @@ kbd {
   flex: none;
   display: flex;
   align-items: center;
-  height: 35px;
-  padding: 0 8px 0 12px;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px 0 10px;
 }
 
 .wb-sidebar__title {
   flex: 1;
   margin: 0;
   color: var(--wb-fg-strong);
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
 }
 
 .wb-sidebar__tools {
   display: flex;
+  align-items: center;
   gap: 2px;
+  margin-left: auto;
 }
 
 .wb-scope {
@@ -1210,8 +1151,12 @@ textarea.new-agent__claims {
   transition: background-color 120ms var(--ease), color 120ms var(--ease);
 }
 
-.scope-toggle:hover {
+.scope-toggle:hover:not(:disabled) {
   color: var(--wb-fg-strong);
+}
+
+.scope-toggle:disabled {
+  opacity: 0.5;
 }
 
 .scope-toggle--on {
@@ -1244,7 +1189,7 @@ textarea.new-agent__claims {
 }
 
 .row-flag--attention {
-  color: var(--wb-danger);
+  color: var(--wb-warn);
 }
 
 .agents {
@@ -1429,6 +1374,44 @@ textarea.new-agent__claims {
 
 .state-badge--interrupted .state-badge__dot {
   background: var(--wb-warn);
+}
+
+.state-badge--merged {
+  color: var(--wb-success);
+}
+
+.state-badge--merged .state-badge__dot {
+  background: var(--wb-success);
+}
+
+.state-badge--running .state-badge__dot {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* Agent identity: a coloured dot and name, one hue per agent. */
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--wb-fg-muted);
+  white-space: nowrap;
+}
+
+.agent-chip__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--wb-fg-faint);
+}
+
+.agent-chip--claude_code .agent-chip__dot {
+  background: var(--agent-claude);
+}
+
+.agent-chip--codex .agent-chip__dot {
+  background: var(--agent-codex);
 }
 
 @keyframes pulse {
@@ -2033,31 +2016,12 @@ textarea.new-agent__claims {
   font-variant-numeric: tabular-nums;
 }
 
-.merged-badge {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 18px;
-  padding: 0 7px 0 6px;
-  border-radius: var(--r);
-  background: var(--wb-success-soft);
-  color: var(--wb-success);
-  font-size: 10.5px;
-  font-weight: 500;
-}
-
-.merged-badge .icon {
-  width: 12px;
-  height: 12px;
-}
-
 /* Attention and overlap callouts under the agent header. */
 .agent-callout {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin: 10px 0 0 40px;
+  margin: 10px 0 0;
   padding: 7px 10px;
   border: 1px solid;
   border-radius: var(--r);
@@ -2072,12 +2036,12 @@ textarea.new-agent__claims {
 }
 
 .agent-callout--attention {
-  border-color: var(--wb-danger-border);
-  background: var(--wb-danger-bg);
+  border-color: var(--wb-warn-border);
+  background: var(--wb-warn-soft);
 }
 
 .agent-callout--attention > .icon {
-  color: var(--wb-danger);
+  color: var(--wb-warn);
 }
 
 .agent-callout--overlap {
@@ -2127,7 +2091,7 @@ textarea.new-agent__claims {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin: 10px 0 0 40px;
+  margin: 10px 0 0;
 }
 
 .git-actions__row {
@@ -2162,7 +2126,7 @@ input.git-actions__input {
 
 /* Why commit, merge, and continue are disabled while a merge queue runs. */
 .wb-note.queue-lock {
-  margin: 10px 0 0 40px;
+  margin: 10px 0 0;
   color: var(--wb-warn);
 }
 
@@ -2449,10 +2413,8 @@ input.git-actions__input {
   border-radius: 0;
   background: transparent;
   color: var(--wb-fg-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .panel__tab:hover {
@@ -2463,7 +2425,7 @@ input.git-actions__input {
 .panel__tab--active {
   background: transparent;
   color: var(--wb-fg-strong);
-  box-shadow: inset 0 -1px 0 var(--wb-fg-strong);
+  box-shadow: inset 0 -2px 0 var(--wb-accent);
 }
 
 .panel__count {
@@ -2571,11 +2533,9 @@ input.git-actions__input {
   border-radius: var(--r);
   background: var(--wb-active-row);
   color: var(--wb-fg-muted);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  font-size: var(--text-xs);
+  font-weight: 500;
   text-align: center;
-  text-transform: uppercase;
 }
 
 .decisions__kind--committed,
@@ -2984,7 +2944,7 @@ input.git-actions__input {
 
 .statusbar__attention,
 .statusbar__attention .icon {
-  color: var(--wb-danger);
+  color: var(--wb-warn);
 }
 
 .pulse-dot {

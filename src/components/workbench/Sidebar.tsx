@@ -5,10 +5,23 @@ import ExplorerTree from "./ExplorerTree";
 import { RefreshIcon } from "./icons";
 import type { DirCache } from "./useDirCache";
 
-export function SidebarHeader({ title, children }: { title: string; children?: ReactNode }) {
+/**
+ * A sidebar view's header row. In the workbench the Agents / Files switch takes
+ * the title's place (one header, not two); the title stays for screen readers.
+ */
+export function SidebarHeader({
+  title,
+  switcher,
+  children,
+}: {
+  title: string;
+  switcher?: ReactNode;
+  children?: ReactNode;
+}) {
   return (
     <div className="wb-sidebar__header">
-      <h2 className="wb-sidebar__title">{title}</h2>
+      {switcher ?? null}
+      <h2 className={switcher ? "visually-hidden" : "wb-sidebar__title"}>{title}</h2>
       <div className="wb-sidebar__tools">{children}</div>
     </div>
   );
@@ -25,6 +38,8 @@ type ExplorerPanelProps = {
   onOpenFile: (root: string, relPath: string) => void;
   onOpenFolder: () => void;
   activeFile: { root: string; relPath: string } | null;
+  /** The Agents / Files switch, shown in place of the title. */
+  switcher?: ReactNode;
 };
 
 /** The Explorer sidebar view: a scope selector and the lazy file tree. */
@@ -38,6 +53,7 @@ export function ExplorerPanel({
   onOpenFile,
   onOpenFolder,
   activeFile,
+  switcher,
 }: ExplorerPanelProps) {
   const [expandedByRoot, setExpandedByRoot] = useState<Record<string, Set<string>>>({});
   const expanded = (root && expandedByRoot[root]) || EMPTY;
@@ -63,7 +79,7 @@ export function ExplorerPanel({
 
   return (
     <section className="wb-view" aria-label="Explorer">
-      <SidebarHeader title="Explorer">
+      <SidebarHeader title="Explorer" switcher={switcher}>
         <button
           type="button"
           className="wb-icon-btn"
@@ -105,7 +121,7 @@ export function ExplorerPanel({
             <p>{workspace ? "This worktree is not available." : "You have not yet opened a folder."}</p>
             {!workspace && (
               <button type="button" className="wb-btn wb-btn--primary" onClick={onOpenFolder}>
-                Open Folder…
+                Open folder…
               </button>
             )}
           </div>

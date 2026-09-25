@@ -5,7 +5,7 @@ import CommandPalette, { filterItems, fuzzyScore, type PaletteItem } from "./Com
 
 function items(): PaletteItem[] {
   return [
-    { id: "a", group: "Command", label: "Open Folder…", run: vi.fn() },
+    { id: "a", group: "Command", label: "Open folder…", run: vi.fn() },
     { id: "b", group: "Command", label: "Toggle Panel", run: vi.fn() },
     { id: "c", group: "File", label: "main.ts", detail: "src/main.ts · repo", run: vi.fn() },
   ];

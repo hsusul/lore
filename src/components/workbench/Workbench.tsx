@@ -20,7 +20,6 @@ import DiffView from "./DiffView";
 import EditorTabs from "./EditorTabs";
 import FileView from "./FileView";
 import { Mark, PanelIcon, SearchIcon, SidebarIcon } from "./icons";
-import type { SidebarView } from "./ActivityBar";
 import Sash from "./Sash";
 import { ExplorerPanel } from "./Sidebar";
 import {
@@ -36,8 +35,10 @@ import {
   initialTabs,
   readStored,
   readStoredNumber,
+  shortcut,
   tabsReducer,
   writeStored,
+  type SidebarView,
   type Tab,
 } from "./state";
 import StatusBar from "./StatusBar";
@@ -57,9 +58,11 @@ export default function Workbench() {
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     readStoredNumber(STORAGE_KEYS.sidebarWidth, 260, SIDEBAR_MIN, SIDEBAR_MAX),
   );
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarView, setSidebarView] = useState<SidebarView>("agents");
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() => readStored(STORAGE_KEYS.sidebarOpen) !== "false");
+  const [sidebarView, setSidebarView] = useState<SidebarView>(() =>
+    readStored(STORAGE_KEYS.sidebarView) === "explorer" ? "explorer" : "agents",
+  );
+  const [panelOpen, setPanelOpen] = useState(() => readStored(STORAGE_KEYS.panelOpen) === "true");
   const [panelHeight, setPanelHeight] = useState(() =>
     readStoredNumber(STORAGE_KEYS.panelHeight, 280, PANEL_MIN, PANEL_MAX),
   );
@@ -91,6 +94,8 @@ export default function Workbench() {
   useEffect(() => writeStored(STORAGE_KEYS.sidebarWidth, String(sidebarWidth)), [sidebarWidth]);
   useEffect(() => writeStored(STORAGE_KEYS.panelHeight, String(panelHeight)), [panelHeight]);
   useEffect(() => writeStored(STORAGE_KEYS.panelOpen, String(panelOpen)), [panelOpen]);
+  useEffect(() => writeStored(STORAGE_KEYS.sidebarOpen, String(sidebarOpen)), [sidebarOpen]);
+  useEffect(() => writeStored(STORAGE_KEYS.sidebarView, sidebarView), [sidebarView]);
   useEffect(() => writeStored(STORAGE_KEYS.allRepos, String(allRepos)), [allRepos]);
 
   const taskById = useMemo(() => new Map((tasks ?? []).map((t) => [t.id, t])), [tasks]);
@@ -282,22 +287,28 @@ export default function Workbench() {
 
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const commands: PaletteItem[] = [
-      { id: "cmd:open-folder", group: "Command", label: "Open Folder…", run: () => void openFolder() },
-      { id: "cmd:new-agent", group: "Command", label: "New Agent", run: newAgent },
-      { id: "cmd:toggle-sidebar", group: "Command", label: "Toggle Sidebar", hint: "⌘B", run: toggleSidebar },
-      { id: "cmd:show-files", group: "Command", label: "Show Files", run: showFiles },
-      { id: "cmd:show-agents", group: "Command", label: "Show Agents", run: showAgents },
-      { id: "cmd:toggle-panel", group: "Command", label: "Toggle Panel", hint: "⌘J", run: togglePanel },
+      { id: "cmd:open-folder", group: "Command", label: "Open folder…", run: () => void openFolder() },
+      { id: "cmd:new-agent", group: "Command", label: "New agent", run: newAgent },
+      { id: "cmd:toggle-sidebar", group: "Command", label: "Toggle sidebar", hint: shortcut("B"), run: toggleSidebar },
+      { id: "cmd:show-files", group: "Command", label: "Show files", run: showFiles },
+      { id: "cmd:show-agents", group: "Command", label: "Show agents", run: showAgents },
+      { id: "cmd:toggle-panel", group: "Command", label: "Toggle panel", hint: shortcut("J"), run: togglePanel },
       {
         id: "cmd:merge-queue",
         group: "Command",
-        label: "Merge Queue",
+        label: "Merge queue",
         run: () => {
           setPanelOpen(true);
           setPanelTab("queue");
         },
       },
-      { id: "cmd:close-tab", group: "Command", label: "Close Tab", hint: "⌘W", run: () => dispatch({ type: "closeActive" }) },
+      {
+        id: "cmd:close-tab",
+        group: "Command",
+        label: "Close tab",
+        hint: shortcut("W"),
+        run: () => dispatch({ type: "closeActive" }),
+      },
     ];
     if (!paletteOpen) return commands;
     const titleByRoot = new Map((tasks ?? []).map((t) => [t.worktree_path, t.title]));
@@ -337,6 +348,29 @@ export default function Workbench() {
     />
   ) : null;
 
+  const sidebarSwitch = (
+    <div className="wb-sidebar__switch" role="tablist" aria-label="Sidebar views">
+      <button
+        type="button"
+        role="tab"
+        className={`wb-sidebar__tab${sidebarView === "agents" ? " wb-sidebar__tab--on" : ""}`}
+        aria-selected={sidebarView === "agents"}
+        onClick={showAgents}
+      >
+        Agents
+      </button>
+      <button
+        type="button"
+        role="tab"
+        className={`wb-sidebar__tab${sidebarView === "explorer" ? " wb-sidebar__tab--on" : ""}`}
+        aria-selected={sidebarView === "explorer"}
+        onClick={showFiles}
+      >
+        Files
+      </button>
+    </div>
+  );
+
   const welcome = (
     <div className="welcome" role="region" aria-label="Welcome">
       <Mark />
@@ -344,7 +378,7 @@ export default function Workbench() {
       <p>Run coding agents in parallel, each in its own git worktree and branch. Your checkout is not touched.</p>
       <div className="welcome__actions">
         <button type="button" className="wb-btn wb-btn--primary" onClick={() => void openFolder()}>
-          Open Folder…
+          Open folder…
         </button>
         <button type="button" className="wb-btn" onClick={newAgent} disabled={!workspace}>
           New agent
@@ -354,25 +388,25 @@ export default function Workbench() {
         <div>
           <dt>Command palette</dt>
           <dd>
-            <kbd>⌘K</kbd>
+            <kbd>{shortcut("K")}</kbd>
           </dd>
         </div>
         <div>
           <dt>Toggle sidebar</dt>
           <dd>
-            <kbd>⌘B</kbd>
+            <kbd>{shortcut("B")}</kbd>
           </dd>
         </div>
         <div>
           <dt>Toggle panel</dt>
           <dd>
-            <kbd>⌘J</kbd>
+            <kbd>{shortcut("J")}</kbd>
           </dd>
         </div>
         <div>
           <dt>Close tab</dt>
           <dd>
-            <kbd>⌘W</kbd>
+            <kbd>{shortcut("W")}</kbd>
           </dd>
         </div>
       </dl>
@@ -393,12 +427,12 @@ export default function Workbench() {
           type="button"
           className="wb-titlebar__search"
           aria-label="Search"
-          title="Search (⌘K)"
+          title={`Search (${shortcut("K")})`}
           onClick={() => setPaletteOpen(true)}
         >
           <SearchIcon />
           <span className="wb-titlebar__search-label">{workspace ? baseName(workspace) : "Search"}</span>
-          <kbd>⌘K</kbd>
+          <kbd>{shortcut("K")}</kbd>
         </button>
         <div className="wb-titlebar__right">
           <button
@@ -406,7 +440,7 @@ export default function Workbench() {
             className={`wb-icon-btn${sidebarOpen ? " wb-icon-btn--on" : ""}`}
             aria-label="Toggle sidebar"
             aria-pressed={sidebarOpen}
-            title="Toggle sidebar (⌘B)"
+            title={`Toggle sidebar (${shortcut("B")})`}
             onClick={toggleSidebar}
           >
             <SidebarIcon />
@@ -416,13 +450,13 @@ export default function Workbench() {
             className={`wb-icon-btn${panelOpen ? " wb-icon-btn--on" : ""}`}
             aria-label="Toggle panel"
             aria-pressed={panelOpen}
-            title="Toggle panel (⌘J)"
+            title={`Toggle panel (${shortcut("J")})`}
             onClick={togglePanel}
           >
             <PanelIcon />
           </button>
           <button type="button" className="wb-btn wb-btn--small" onClick={() => void openFolder()}>
-            Open Folder…
+            Open folder…
           </button>
         </div>
       </header>
@@ -439,26 +473,6 @@ export default function Workbench() {
         {sidebarOpen && (
           <>
             <aside className="wb-sidebar" style={{ width: sidebarWidth }} aria-label="Sidebar">
-              <div className="wb-sidebar__switch" role="tablist" aria-label="Sidebar views">
-                <button
-                  type="button"
-                  role="tab"
-                  className={`wb-sidebar__tab${sidebarView === "agents" ? " wb-sidebar__tab--on" : ""}`}
-                  aria-selected={sidebarView === "agents"}
-                  onClick={showAgents}
-                >
-                  Agents
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  className={`wb-sidebar__tab${sidebarView === "explorer" ? " wb-sidebar__tab--on" : ""}`}
-                  aria-selected={sidebarView === "explorer"}
-                  onClick={showFiles}
-                >
-                  Files
-                </button>
-              </div>
               {sidebarView === "agents" ? (
                 <AgentsPanel
                   workspace={workspace}
@@ -477,6 +491,7 @@ export default function Workbench() {
                   onCreated={handleCreated}
                   onOpenFolder={() => void openFolder()}
                   focusToken={newAgentToken}
+                  switcher={sidebarSwitch}
                 />
               ) : (
                 <ExplorerPanel
@@ -489,6 +504,7 @@ export default function Workbench() {
                   onOpenFile={openFile}
                   onOpenFolder={() => void openFolder()}
                   activeFile={activeFile}
+                  switcher={sidebarSwitch}
                 />
               )}
             </aside>

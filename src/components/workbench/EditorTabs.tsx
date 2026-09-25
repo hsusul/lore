@@ -1,7 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import { CloseIcon, DiffIcon, FileIcon } from "./icons";
-import { baseName, domId, type Tab } from "./state";
+import { baseName, domId, shortcut, type Tab } from "./state";
 
 type Props = {
   tabs: Tab[];
@@ -94,7 +94,7 @@ export default function EditorTabs({ tabs, activeKey, taskTitle, onActivate, onC
                 className="tab__close"
                 tabIndex={-1}
                 aria-label={`Close ${label}`}
-                title="Close (⌘W)"
+                title={`Close (${shortcut("W")})`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onClose(tab.key);

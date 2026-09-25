@@ -5,16 +5,17 @@ import type { TaskDto } from "../../ipc";
 import ActivityList from "./ActivityList";
 import { CloseIcon, FileIcon } from "./icons";
 import MergeQueueView from "./MergeQueueView";
+import { shortcut } from "./state";
 import type { MergeQueuesHandle } from "./useMergeQueue";
 import { useActivity, useDecisions } from "./useTasks";
 
 export type PanelTab = "output" | "changes" | "history" | "queue";
 
 const TABS: { id: PanelTab; label: string }[] = [
-  { id: "output", label: "Agent Output" },
+  { id: "output", label: "Agent output" },
   { id: "changes", label: "Changes" },
   { id: "history", label: "History" },
-  { id: "queue", label: "Merge Queue" },
+  { id: "queue", label: "Merge queue" },
 ];
 
 type Props = {
@@ -85,17 +86,15 @@ export default function BottomPanel({
             </button>
           ))}
         </div>
-        {tab === "queue" ? (
-          // The queue is about the repository, not the selected agent.
-          <span className="panel__context" />
-        ) : (
-          task && <span className="panel__context">{task.title}</span>
-        )}
+        {/* History and the queue are about the repository, not the selected agent. */}
+        <span className="panel__context">
+          {(tab === "output" || tab === "changes") && task ? task.title : ""}
+        </span>
         <button
           type="button"
           className="wb-icon-btn"
           aria-label="Close panel"
-          title="Close panel (⌘J)"
+          title={`Close panel (${shortcut("J")})`}
           onClick={onClose}
         >
           <CloseIcon />
@@ -183,7 +182,7 @@ function DecisionLog({
             {formatRelative(decision.at_ms)}
           </time>
           <span className={`decisions__kind decisions__kind--${decision.kind}`}>
-            {decision.kind.replace(/_/g, " ")}
+            {sentence(decision.kind)}
           </span>
           <span className="decisions__title">{decision.task_title}</span>
           <span className="decisions__detail">{decision.detail}</span>
@@ -191,4 +190,10 @@ function DecisionLog({
       ))}
     </ul>
   );
+}
+
+/** "auto_handoff" → "Auto handoff". */
+function sentence(kind: string): string {
+  const words = kind.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }

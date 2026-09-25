@@ -159,7 +159,7 @@ describe("AgentsPanel", () => {
   it("disables the form with a hint when no workspace is open", () => {
     const props = renderPanel({ workspace: null, tasks: [] });
     expect(screen.getByRole("button", { name: "Launch" }).matches(":disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Open Folder…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open folder…" }));
     expect(props.onOpenFolder).toHaveBeenCalled();
   });
 

@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type { ContinueTaskRequest, MergeResultDto, TaskAgent, TaskDto, TaskEffort } from "../../ipc";
 import ActivityList from "./ActivityList";
 import AgentMenu from "./AgentMenu";
-import { StateBadge } from "./AgentsPanel";
+import { StateBadge } from "./badges";
 import {
   CommitIcon,
   DiffIcon,
@@ -15,7 +15,7 @@ import {
   WarningIcon,
   ArrowUpIcon,
 } from "./icons";
-import { errorText, isOwnershipError } from "./state";
+import { errorText, isOwnershipError, shortcut } from "./state";
 import { useActivity } from "./useTasks";
 
 type Props = {
@@ -183,11 +183,6 @@ export default function AgentView({
         <div className="agent-view__titleline">
           <h2 className="agent-view__title">{task.title}</h2>
           <StateBadge task={task} />
-          {task.merged_into && (
-            <span className="merged-badge">
-              <MergeIcon /> Merged into {task.merged_into}
-            </span>
-          )}
           {task.runs !== undefined && task.runs > 0 && <span className="agent-view__runs">Run {task.runs}</span>}
           {task.auto_handoff === false && (
             <span className="agent-view__runs" title="Auto-handoff is off: a usage limit waits for you.">
@@ -471,7 +466,7 @@ export default function AgentView({
               className="composer__input"
               aria-label="Follow-up prompt"
               rows={2}
-              placeholder={handoff ? `Brief ${AGENT_SHORT[nextAgent]} on what to do next…` : "Plan, search, @ for context"}
+              placeholder={handoff ? `Brief ${AGENT_SHORT[nextAgent]} on what to do next…` : "Tell the agent what to do next…"}
               value={prompt}
               disabled={continuing}
               onChange={(e) => setPrompt(e.target.value)}
@@ -510,7 +505,7 @@ export default function AgentView({
                 type="submit"
                 className="composer__send"
                 disabled={continuing || queueLocked}
-                title="⌘Enter"
+                title={`Send (${shortcut("Enter")})`}
                 aria-label={continuing ? "Sending…" : handoff ? `Hand off to ${AGENT_SHORT[nextAgent]}` : "Continue"}
               >
                 <ArrowUpIcon />
