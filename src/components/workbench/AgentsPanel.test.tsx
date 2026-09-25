@@ -37,8 +37,9 @@ describe("AgentsPanel", () => {
       ],
     });
     const running = screen.getByRole("listitem", { name: "Fix parser" });
-    expect(within(running).getByText("Running")).toBeTruthy();
-    expect(within(running).getByText("Claude Code")).toBeTruthy();
+    expect(within(running).getByRole("img", { name: "Running" })).toBeTruthy();
+    // A running row says what the agent is doing right now.
+    expect(within(running).getByText("Editing src/a.rs")).toBeTruthy();
     expect(within(running).queryByText("lore/fix-parser")).toBeNull();
     expect(within(running).getByRole("button", { name: "Fix parser" }).getAttribute("title")).toContain(
       "lore/fix-parser",
@@ -46,9 +47,8 @@ describe("AgentsPanel", () => {
     expect(within(running).getByRole("button", { name: "Stop" })).toBeTruthy();
 
     const failed = screen.getByRole("listitem", { name: "Add docs" });
-    expect(within(failed).getByText("Failed")).toBeTruthy();
-    expect(within(failed).queryByText("Failed (exit 1)")).toBeNull();
-    expect(within(failed).getByText("Codex")).toBeTruthy();
+    expect(within(failed).getByRole("img", { name: "Failed" })).toBeTruthy();
+    expect(within(failed).getByText("Codex · No changes")).toBeTruthy();
     expect(within(failed).queryByRole("button", { name: "Stop" })).toBeNull();
   });
 
@@ -65,7 +65,8 @@ describe("AgentsPanel", () => {
       ],
     });
     const first = screen.getByRole("listitem", { name: "Fix parser" });
-    expect(within(first).getByLabelText("Needs attention").getAttribute("title")).toBe("Usage limit reached");
+    expect(within(first).getByRole("img", { name: "Running" })).toBeTruthy();
+    expect(within(first).getByText("Usage limit reached")).toBeTruthy();
     expect(within(first).queryByLabelText(/Overlaps/)).toBeNull();
     expect(within(first).queryByLabelText(/uncommitted/)).toBeNull();
     expect(within(first).getByRole("button", { name: "Fix parser" }).getAttribute("title")).toMatch(
@@ -73,8 +74,8 @@ describe("AgentsPanel", () => {
     );
 
     const merged = screen.getByRole("listitem", { name: "Merged one" });
-    expect(within(merged).getByText("Merged")).toBeTruthy();
-    expect(within(merged).queryByLabelText("Needs attention")).toBeNull();
+    expect(within(merged).getByRole("img", { name: "Merged" })).toBeTruthy();
+    expect(within(merged).getByText("Merged into main")).toBeTruthy();
     expect(within(merged).queryByLabelText(/uncommitted/)).toBeNull();
     expect(within(merged).getByRole("button", { name: "Merged one" }).getAttribute("title")).toContain(
       "Merged into main",
@@ -138,35 +139,22 @@ describe("AgentsPanel", () => {
     expect(screen.getByRole("alert").textContent).toBe("tasks.json is corrupt");
   });
 
-  it("previews the latest activity, or what needs the user, under each row", () => {
+  it("says what each agent is doing, what it needs, or where it stands", () => {
     renderPanel({
       tasks: [
         task({ last_activity: "Editing src/a.rs" }),
         task({ id: "t2", title: "Limited", state: "failed", attention: "Usage limit reached", last_activity: "npm test" }),
         task({ id: "t3", title: "Landed", state: "finished", merged_into: "main", last_activity: "Done" }),
+        task({ id: "t4", title: "Idle", state: "finished", last_activity: "Done" }),
       ],
     });
     expect(within(screen.getByRole("listitem", { name: "Fix parser" })).getByText("Editing src/a.rs")).toBeTruthy();
     const limited = screen.getByRole("listitem", { name: "Limited" });
-    expect(within(limited).getByText("Usage limit reached", { selector: ".agent-row__preview" })).toBeTruthy();
+    expect(within(limited).getByRole("img", { name: "Needs you" })).toBeTruthy();
+    expect(within(limited).getByText("Usage limit reached")).toBeTruthy();
     expect(within(limited).queryByText("npm test")).toBeNull();
-    expect(within(screen.getByRole("listitem", { name: "Landed" })).queryByText("Done")).toBeNull();
-    expect(within(screen.getByRole("listitem", { name: "Fix parser" })).getByText("2 files")).toBeTruthy();
-  });
-
-  it("offers the overview and a new agent, with counts of what is running and needs you", () => {
-    const props = renderPanel({
-      overviewActive: true,
-      tasks: [task({}), task({ id: "t2", title: "Stuck", state: "failed", exit_code: 1 })],
-    });
-    const overview = screen.getByRole("button", { name: /Overview/ });
-    expect(overview.getAttribute("aria-current")).toBe("true");
-    expect(within(overview).getByTitle("Running").textContent).toBe("1");
-    expect(within(overview).getByTitle("Need you").textContent).toBe("1");
-    fireEvent.click(overview);
-    expect(props.onShowOverview).toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "New agent" }));
-    expect(props.onNewAgent).toHaveBeenCalled();
+    expect(within(screen.getByRole("listitem", { name: "Landed" })).getByText("Merged into main")).toBeTruthy();
+    expect(within(screen.getByRole("listitem", { name: "Idle" })).getByText("Claude Code · 2 files")).toBeTruthy();
   });
 
   it("is one tab stop, moved with the arrow keys", () => {

@@ -2,11 +2,10 @@ import { memo, useEffect, useRef, useState, type KeyboardEvent, type ReactNode }
 
 import { formatRelative, formatTime } from "../../format";
 import type { TaskDto } from "../../ipc";
-import { AgentChip, StateBadge } from "./badges";
-import { needsUser } from "./board";
-import { DiffIcon, OverviewIcon, PlusIcon, RevealIcon, StopIcon, TrashIcon, WarningIcon } from "./icons";
+import { StatusIcon, taskStatus } from "./badges";
+import { DiffIcon, RevealIcon, StopIcon, TrashIcon } from "./icons";
 import { SidebarHeader } from "./Sidebar";
-import { errorText, shortcut } from "./state";
+import { AGENT_LABELS, errorText, shortcut } from "./state";
 
 export type TaskActions = {
   onSelect: (id: string) => void;
@@ -22,10 +21,6 @@ type Props = TaskActions & {
   listError: string | null;
   loadWarning: string | null;
   selectedTaskId: string | null;
-  /** The overview is on stage (no agent or file open). */
-  overviewActive: boolean;
-  onShowOverview: () => void;
-  onNewAgent: () => void;
   /** Show tasks from every repository, not only the open workspace. */
   allRepos: boolean;
   onAllReposChange: (all: boolean) => void;
@@ -35,15 +30,13 @@ type Props = TaskActions & {
   switcher?: ReactNode;
 };
 
-/** The Agents sidebar view: the overview entry and every task, live. */
+/** The Agents sidebar view: every task, live. */
 export default function AgentsPanel(props: Props) {
   const { tasks, listError, loadWarning, selectedTaskId, hiddenCount } = props;
   // With no folder open there is nothing to filter by, so every repository shows.
   const allRepos = props.allRepos || !props.workspace;
   const listRef = useRef<HTMLUListElement>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
-  const attention = (tasks ?? []).filter(needsUser).length;
-  const running = (tasks ?? []).filter((t) => t.state === "running").length;
 
   // One tab stop for the list (roving tabindex): the focused, selected, or first row.
   const tabStop =
@@ -85,16 +78,6 @@ export default function AgentsPanel(props: Props) {
           All repositories
           {!allRepos && hiddenCount > 0 && <span className="scope-toggle__count">{hiddenCount}</span>}
         </button>
-        <button
-          type="button"
-          className="wb-icon-btn"
-          aria-label="New agent"
-          title={`New agent (${shortcut("N")})`}
-          disabled={!props.workspace}
-          onClick={props.onNewAgent}
-        >
-          <PlusIcon />
-        </button>
       </SidebarHeader>
       <div className="wb-view__body">
         {loadWarning && (
@@ -102,25 +85,6 @@ export default function AgentsPanel(props: Props) {
             {loadWarning}
           </p>
         )}
-        <button
-          type="button"
-          className={`overview-row${props.overviewActive ? " overview-row--on" : ""}`}
-          aria-current={props.overviewActive || undefined}
-          onClick={props.onShowOverview}
-        >
-          <OverviewIcon />
-          <span className="overview-row__label">Overview</span>
-          {attention > 0 && (
-            <span className="overview-row__count overview-row__count--attention" title="Need you">
-              {attention}
-            </span>
-          )}
-          {running > 0 && (
-            <span className="overview-row__count" title="Running">
-              {running}
-            </span>
-          )}
-        </button>
         <div className="agents-pane">
           {listError && (
             <p className="wb-note wb-note--error" role="alert">
@@ -209,6 +173,7 @@ const TaskRow = memo(function TaskRow({
   const uncommitted = task.uncommitted_count ?? 0;
   const overlapCount = task.overlaps?.length ?? 0;
   const merged = Boolean(task.merged_into);
+  const status = taskStatus(task);
   const hint = [
     task.branch,
     `${task.commits_ahead} ${task.commits_ahead === 1 ? "commit" : "commits"} ahead · ${fileCount} ${fileCount === 1 ? "file" : "files"} changed`,
@@ -222,12 +187,16 @@ const TaskRow = memo(function TaskRow({
   ]
     .filter(Boolean)
     .join(" · ");
-  const stats = !merged && fileCount > 0 ? `${fileCount} ${fileCount === 1 ? "file" : "files"}` : null;
-  const preview = merged ? null : (task.attention ?? task.last_activity);
+  // One quiet line: what needs you, what it is doing, or where it stands.
+  const files = fileCount > 0 ? `${fileCount} ${fileCount === 1 ? "file" : "files"}` : "No changes";
+  const sub = merged
+    ? `Merged into ${task.merged_into}`
+    : (task.attention ??
+      (task.state === "running" && task.last_activity ? task.last_activity : `${AGENT_LABELS[task.agent]} · ${files}`));
 
   return (
     <li
-      className={`agent-row${selected ? " agent-row--selected" : ""}${task.attention ? " agent-row--attention" : ""}`}
+      className={`agent-row${selected ? " agent-row--selected" : ""}`}
       aria-label={task.title}
     >
       <button
@@ -240,27 +209,16 @@ const TaskRow = memo(function TaskRow({
         onFocus={() => onFocusRow(task.id)}
         onClick={() => onSelect(task.id)}
       >
-        <span className="agent-row__head">
-          <span className="agent-row__title">{task.title}</span>
-          {task.attention && (
-            <span className="row-flag row-flag--attention" title={task.attention} aria-label="Needs attention">
-              <WarningIcon />
-            </span>
-          )}
-          <time className="agent-row__time" title={formatTime(task.created_at_ms)}>
-            {formatRelative(task.created_at_ms)}
-          </time>
-        </span>
-        <span className="agent-row__meta">
-          <StateBadge task={task} compact />
-          <AgentChip agent={task.agent} />
-          {stats && <span className="agent-row__stats">{stats}</span>}
-        </span>
-        {preview && (
-          <span className={`agent-row__preview${task.attention ? " agent-row__preview--attention" : ""}`}>
-            {preview}
+        <StatusIcon status={status} />
+        <span className="agent-row__body">
+          <span className="agent-row__head">
+            <span className="agent-row__title">{task.title}</span>
+            <time className="agent-row__time" title={formatTime(task.created_at_ms)}>
+              {formatRelative(task.created_at_ms)}
+            </time>
           </span>
-        )}
+          <span className={`agent-row__sub${task.attention && !merged ? " agent-row__sub--attention" : ""}`}>{sub}</span>
+        </span>
       </button>
       {!confirming && (
         // Pointer shortcuts; the keyboard reaches the same actions in the agent view and ⌘K.

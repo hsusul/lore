@@ -306,22 +306,24 @@ describe("AgentView", () => {
     expect(document.activeElement).toBe(screen.getByLabelText("Follow-up prompt"));
   });
 
-  it("shows the task's changes in a tab beside its activity, next to commit and merge", async () => {
+  it("opens the task's changes in a review panel beside the conversation", async () => {
     vi.mocked(taskDiff).mockResolvedValue({
       text: "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+new\n",
       truncated: false,
     });
     renderView({ commits_ahead: 1, uncommitted_count: 0 });
-    const tabs = screen.getByRole("tablist", { name: "Agent views" });
-    const changes = within(tabs).getByRole("tab", { name: /Changes/ });
-    expect(changes.textContent).toBe("Changes2");
-    fireEvent.click(changes);
-    expect(changes.getAttribute("aria-selected")).toBe("true");
-    await screen.findByRole("region", { name: "src/a.rs" });
+    expect(screen.queryByRole("complementary", { name: "Changes" })).toBeNull();
+    const toggle = screen.getByRole("button", { name: /Review/ });
+    expect(toggle.textContent?.trim()).toBe("Review2");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    const review = screen.getByRole("complementary", { name: "Changes" });
+    await within(review).findByRole("region", { name: "src/a.rs" });
     expect(taskDiff).toHaveBeenCalledWith("t1");
-    // Git actions stay in the header while reviewing.
+    // The conversation and the merge action stay alongside the diff.
+    expect(screen.getByRole("region", { name: "Conversation" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Merge into checked-out branch" })).toBeTruthy();
-    fireEvent.keyDown(changes, { key: "ArrowLeft" });
-    expect(within(tabs).getByRole("tab", { name: "Activity" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(within(review).getByRole("button", { name: "Close review" }));
+    expect(screen.queryByRole("complementary", { name: "Changes" })).toBeNull();
   });
 });

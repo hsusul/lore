@@ -50,29 +50,46 @@ describe("groupTasks", () => {
 });
 
 describe("Home", () => {
-  it("summarises the repository and shows each group as cards that open the agent", () => {
+  it("lists every agent, what needs you first, and opens one on click", () => {
     const props = renderHome();
-    expect(screen.getByRole("heading", { name: "acme" })).toBeTruthy();
-    expect(screen.getByText("1 running")).toBeTruthy();
-    expect(screen.getByText("2 need you")).toBeTruthy();
-    expect(screen.getByText("1 ready to merge")).toBeTruthy();
-
-    const needs = screen.getByRole("region", { name: "Needs you" });
-    const limited = within(needs).getByRole("button", { name: "Limited" });
+    expect(screen.getByRole("heading", { name: "What should an agent work on?" })).toBeTruthy();
+    const list = screen.getByRole("tabpanel", { name: "All" });
+    const rows = within(list).getAllByRole("button");
+    expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual([
+      "Limited",
+      "Crashed",
+      "Running one",
+      "Ready one",
+      "Dirty one",
+      "Landed",
+    ]);
+    const limited = within(list).getByRole("button", { name: "Limited" });
+    expect(within(limited).getByRole("img", { name: "Needs you" })).toBeTruthy();
     expect(within(limited).getByText("Usage limit reached")).toBeTruthy();
     fireEvent.click(limited);
     expect(props.onSelect).toHaveBeenCalledWith("limit");
 
-    const running = within(screen.getByRole("region", { name: "Running" })).getByRole("button", { name: "Running one" });
+    const running = within(list).getByRole("button", { name: "Running one" });
     expect(within(running).getByText("Editing src/a.rs")).toBeTruthy();
     expect(within(running).getByText("2 files")).toBeTruthy();
     expect(within(running).getByText("Claude Code")).toBeTruthy();
   });
 
-  it("links the ready group to the merge queue", () => {
+  it("filters by what the agents need, with counts, and links ready work to the merge queue", () => {
     const props = renderHome();
-    const ready = screen.getByRole("region", { name: "Ready to merge" });
-    fireEvent.click(within(ready).getByRole("button", { name: /Merge queue/ }));
+    const filters = screen.getByRole("tablist", { name: "Filter agents" });
+    expect(within(filters).getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "All6",
+      "Needs you2",
+      "Running1",
+      "Ready to merge1",
+      "To review1",
+      "Merged1",
+    ]);
+    fireEvent.click(within(filters).getByRole("tab", { name: /Needs you/ }));
+    const list = screen.getByRole("tabpanel", { name: "Needs you" });
+    expect(within(list).getAllByRole("button").map((r) => r.getAttribute("aria-label"))).toEqual(["Limited", "Crashed"]);
+    fireEvent.click(screen.getByRole("button", { name: /Merge queue/ }));
     expect(props.onOpenMergeQueue).toHaveBeenCalled();
   });
 

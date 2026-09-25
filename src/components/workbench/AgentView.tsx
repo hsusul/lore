@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import type { ContinueTaskRequest, MergeResultDto, TaskAgent, TaskDto, TaskEffort } from "../../ipc";
 import ActivityList from "./ActivityList";
@@ -6,14 +6,15 @@ import AgentMenu from "./AgentMenu";
 import { AgentChip, StateBadge } from "./badges";
 import DiffView from "./DiffView";
 import {
+  ArrowUpIcon,
   CommitIcon,
   MergeIcon,
   OverlapIcon,
   RevealIcon,
+  ReviewIcon,
   StopIcon,
   TrashIcon,
   WarningIcon,
-  ArrowUpIcon,
 } from "./icons";
 import { errorText, isOwnershipError, shortcut } from "./state";
 import { useActivity } from "./useTasks";
@@ -35,17 +36,12 @@ type Props = {
   mergeQueueRunning?: boolean;
   /** Open a file from the task's worktree (a read or edit named in the activity). */
   onOpenFile?: (root: string, relPath: string) => void;
-  /** Which view is in front; uncontrolled (starting on activity) when omitted. */
+  /** "changes" opens the review panel beside the conversation; uncontrolled when omitted. */
   pane?: AgentPane;
   onPaneChange?: (pane: AgentPane) => void;
 };
 
 export type AgentPane = "activity" | "changes";
-
-const PANES: { id: AgentPane; label: string }[] = [
-  { id: "activity", label: "Activity" },
-  { id: "changes", label: "Changes" },
-];
 
 /** The same brief the orchestrator's automatic handoff sends. */
 export function usageLimitHandoffPrompt(title: string): string {
@@ -60,8 +56,9 @@ const AGENT_SHORT: Record<TaskAgent, string> = { claude_code: "Claude", codex: "
 type MergeOutcome = { kind: "result"; result: MergeResultDto } | { kind: "error"; message: string };
 
 /**
- * One agent: status, what needs you (with the action to take), git actions,
- * then its activity or its changes, and a composer to continue or hand off.
+ * One agent, laid out like a review tool: a header with its state and actions,
+ * the commit / merge bar, the conversation with what needs you above the
+ * composer, and the diff in a review panel on the right.
  */
 export default function AgentView({
   active = true,
@@ -161,20 +158,13 @@ export default function AgentView({
     }
   }
 
-  /** Put the composer in front, set to `agent`, for the user to write the brief. */
+  /** Set the composer to `agent` and focus it, for the user to write the brief. */
   function brief(agent: TaskAgent) {
     setNextAgent(agent);
-    setPane("activity");
     composerRef.current?.focus();
   }
 
-  function onTabsKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
-    event.preventDefault();
-    const next = pane === "activity" ? "changes" : "activity";
-    setPane(next);
-    document.getElementById(`agent-pane-tab-${next}`)?.focus();
-  }
+  const reviewOpen = pane === "changes";
 
   async function act(action: (id: string) => Promise<void>) {
     setBusy(true);
@@ -246,133 +236,35 @@ export default function AgentView({
     }
   }
 
-  return (
-    <div className="agent-view">
-      <header className="agent-view__header">
-        <div className="agent-view__titleline">
-          <h2 className="agent-view__title">{task.title}</h2>
-          <StateBadge task={task} />
-          <AgentChip agent={task.agent} />
-          {task.runs !== undefined && task.runs > 0 && <span className="agent-view__runs">Run {task.runs}</span>}
-          {task.auto_handoff === false && (
-            <span className="agent-view__runs" title="Auto-handoff is off: a usage limit waits for you.">
-              manual handoff
-            </span>
-          )}
-          <span className="agent-view__spacer" />
-          {confirming ? (
-            <>
-              <span className="agent-view__confirm">Delete this worktree and branch?</span>
-              <button
-                type="button"
-                className="wb-btn wb-btn--danger wb-btn--small"
-                disabled={busy}
-                onClick={() => void act(onDiscard)}
-              >
-                Confirm discard
-              </button>
-              <button type="button" className="wb-btn wb-btn--small" onClick={() => setConfirming(false)}>
-                Cancel
-              </button>
-            </>
-          ) : (
-            <>
-              {running && (
+  const notices = (
+    <>
+      {task.attention && (
+        <div className="notice notice--attention" aria-label="Needs attention" role="group">
+          <WarningIcon />
+          <span className="notice__text" role="alert">
+            {task.attention}
+          </span>
+          {canContinue && (
+            <span className="notice__actions">
+              {usageLimited && (
                 <button
                   type="button"
-                  className="wb-btn wb-btn--small"
-                  disabled={busy}
-                  onClick={() => void act(onStop)}
+                  className="wb-btn wb-btn--small wb-btn--primary"
+                  disabled={handingOff || queueLocked}
+                  onClick={() => void handOff()}
                 >
-                  <StopIcon /> Stop
+                  {handingOff ? "Handing off…" : `Hand off to ${AGENT_SHORT[otherAgent]}`}
                 </button>
               )}
-              <button type="button" className="wb-btn wb-btn--small" onClick={() => setConfirming(true)}>
-                <TrashIcon /> Discard
+              <button
+                type="button"
+                className="wb-btn wb-btn--small"
+                disabled={queueLocked}
+                onClick={() => brief(otherAgent)}
+              >
+                Brief {AGENT_SHORT[otherAgent]}…
               </button>
-            </>
-          )}
-        </div>
-        <div className="agent-view__meta">
-          {claims.length > 0 && (
-            <ul className="claim-chips" aria-label="Owned paths">
-              {claims.map((claim) => (
-                <li key={claim} className="claim-chip mono" title="Other agents are told not to touch this">
-                  {claim}
-                </li>
-              ))}
-            </ul>
-          )}
-          <span className="mono" title={task.worktree_path}>
-            {task.branch}
-            {task.repo_branch && !task.merged_into && <span className="agent-view__target"> → {task.repo_branch}</span>}
-          </span>
-          <button
-            type="button"
-            className="wb-icon-btn"
-            aria-label="Reveal in Finder"
-            title="Reveal in Finder"
-            onClick={() => void act(onReveal)}
-          >
-            <RevealIcon />
-          </button>
-        </div>
-        {error && (
-          <p className="wb-note wb-note--error" role="alert">
-            {error}
-          </p>
-        )}
-
-        {task.attention && (
-          <div className="agent-callout agent-callout--attention" aria-label="Needs attention" role="group">
-            <WarningIcon />
-            <div className="agent-callout__body">
-              <span role="alert">{task.attention}</span>
-              {canContinue && (
-                <div className="agent-callout__actions">
-                  {usageLimited && (
-                    <button
-                      type="button"
-                      className="wb-btn wb-btn--small wb-btn--primary"
-                      disabled={handingOff || queueLocked}
-                      onClick={() => void handOff()}
-                    >
-                      {handingOff ? "Handing off…" : `Hand off to ${AGENT_SHORT[otherAgent]}`}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="wb-btn wb-btn--small"
-                    disabled={queueLocked}
-                    onClick={() => brief(otherAgent)}
-                  >
-                    Brief {AGENT_SHORT[otherAgent]}…
-                  </button>
-                  {!usageLimited && (
-                    <button
-                      type="button"
-                      className="wb-btn wb-btn--small"
-                      disabled={queueLocked}
-                      onClick={() => brief(task.agent)}
-                    >
-                      Continue with {AGENT_SHORT[task.agent]}…
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {!task.attention && task.state === "failed" && canContinue && (
-          <div className="agent-callout agent-callout--failed" aria-label="Run failed" role="group">
-            <WarningIcon />
-            <div className="agent-callout__body">
-              <span>
-                {task.exit_code !== null ? `The agent exited with code ${task.exit_code}.` : "The agent's run failed."}{" "}
-                Its last output is in the activity below.
-              </span>
-              <div className="agent-callout__actions">
+              {!usageLimited && (
                 <button
                   type="button"
                   className="wb-btn wb-btn--small"
@@ -381,239 +273,328 @@ export default function AgentView({
                 >
                   Continue with {AGENT_SHORT[task.agent]}…
                 </button>
+              )}
+            </span>
+          )}
+        </div>
+      )}
+
+      {!task.attention && task.state === "failed" && canContinue && (
+        <div className="notice notice--failed" aria-label="Run failed" role="group">
+          <WarningIcon />
+          <span className="notice__text">
+            {task.exit_code !== null ? `The agent exited with code ${task.exit_code}.` : "The agent's run failed."}{" "}
+            Its last output is above.
+          </span>
+          <span className="notice__actions">
+            <button
+              type="button"
+              className="wb-btn wb-btn--small"
+              disabled={queueLocked}
+              onClick={() => brief(task.agent)}
+            >
+              Continue with {AGENT_SHORT[task.agent]}…
+            </button>
+            <button
+              type="button"
+              className="wb-btn wb-btn--small"
+              disabled={queueLocked}
+              onClick={() => brief(otherAgent)}
+            >
+              Brief {AGENT_SHORT[otherAgent]}…
+            </button>
+          </span>
+        </div>
+      )}
+
+      {claimConflicts.length > 0 && (
+        <div className="notice notice--claim" role="alert" aria-label="Claim conflicts">
+          <WarningIcon />
+          <div className="notice__text">
+            This task changed files another agent owns. Committing them needs confirmation.
+            <ul className="overlap-list">
+              {claimConflicts.map((conflict) => (
+                <li key={conflict.task_id}>
+                  <span>
+                    Changed files owned by{" "}
+                    <button type="button" className="wb-link" onClick={() => onSelectTask(conflict.task_id)}>
+                      {conflict.title}
+                    </button>
+                    :
+                  </span>
+                  <span className="overlap-list__files mono">{conflict.files.join(", ")}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {overlaps.length > 0 && (
+        <div className="notice notice--overlap" role="region" aria-label="Overlapping tasks">
+          <OverlapIcon />
+          <div className="notice__text">
+            {overlaps.length === 1 ? "Another unmerged task changes" : "Other unmerged tasks change"} the same files.
+            Merging both may conflict.
+            <ul className="overlap-list">
+              {overlaps.map((overlap) => (
+                <li key={overlap.task_id}>
+                  <button type="button" className="wb-link" onClick={() => onSelectTask(overlap.task_id)}>
+                    {overlap.title}
+                  </button>
+                  <span className="overlap-list__files mono">{overlap.files.join(", ")}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {queueLocked && (
+        <p className="notice notice--muted queue-lock" role="status">
+          Commit, merge, and continue are paused while this repository&rsquo;s merge queue runs.
+        </p>
+      )}
+    </>
+  );
+
+  return (
+    <div className="agent-view">
+      <header className="agent-bar">
+        <div className="agent-bar__line">
+          <h2 className="agent-bar__title">{task.title}</h2>
+          <div className="agent-bar__actions">
+            {confirming ? (
+              <>
+                <span className="agent-bar__confirm">Delete this worktree and branch?</span>
+                <button
+                  type="button"
+                  className="wb-btn wb-btn--danger wb-btn--small"
+                  disabled={busy}
+                  onClick={() => void act(onDiscard)}
+                >
+                  Confirm discard
+                </button>
+                <button type="button" className="wb-btn wb-btn--small" onClick={() => setConfirming(false)}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                {running && (
+                  <button
+                    type="button"
+                    className="wb-btn wb-btn--small"
+                    disabled={busy}
+                    onClick={() => void act(onStop)}
+                  >
+                    <StopIcon /> Stop
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="wb-icon-btn"
+                  aria-label="Reveal in Finder"
+                  title="Reveal in Finder"
+                  onClick={() => void act(onReveal)}
+                >
+                  <RevealIcon />
+                </button>
+                <button
+                  type="button"
+                  className="wb-icon-btn wb-icon-btn--danger"
+                  aria-label="Discard"
+                  title="Discard worktree and branch"
+                  onClick={() => setConfirming(true)}
+                >
+                  <TrashIcon />
+                </button>
+                <button
+                  type="button"
+                  className={`wb-btn wb-btn--small review-toggle${reviewOpen ? " review-toggle--on" : ""}`}
+                  aria-pressed={reviewOpen}
+                  title={reviewOpen ? "Hide changes" : "Review changes"}
+                  onClick={() => setPane(reviewOpen ? "activity" : "changes")}
+                >
+                  <ReviewIcon /> Review
+                  {changedCount > 0 && <span className="review-toggle__count">{changedCount}</span>}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="agent-bar__meta">
+          <StateBadge task={task} />
+          <AgentChip agent={task.agent} />
+          {task.runs !== undefined && task.runs > 1 && <span>Run {task.runs}</span>}
+          {task.auto_handoff === false && (
+            <span title="Auto-handoff is off: a usage limit waits for you.">Manual handoff</span>
+          )}
+          <span className="mono agent-bar__branch" title={task.worktree_path}>
+            {task.branch}
+            {task.repo_branch && !task.merged_into && <span className="agent-bar__target"> → {task.repo_branch}</span>}
+          </span>
+          {claims.length > 0 && (
+            <span className="agent-bar__claims" title={`Owns ${claims.join(", ")}. Other agents are told not to touch these.`}>
+              <ul className="claim-chips" aria-label="Owned paths">
+                {claims.map((claim) => (
+                  <li key={claim} className="claim-chip mono">
+                    {claim}
+                  </li>
+                ))}
+              </ul>
+            </span>
+          )}
+        </div>
+        {error && (
+          <p className="wb-note wb-note--error" role="alert">
+            {error}
+          </p>
+        )}
+      </header>
+
+      {(canCommit || canMerge || mergeOutcome || commitError) && (
+        <div className="git-bar">
+          {canCommit && (
+            <form
+              className="git-bar__row"
+              aria-label="Commit changes"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void commit();
+              }}
+            >
+              <span className="git-bar__label">
+                <CommitIcon /> {uncommitted} uncommitted {uncommitted === 1 ? "change" : "changes"}
+              </span>
+              <input
+                type="text"
+                className="git-bar__input"
+                aria-label="Commit message"
+                placeholder={task.title}
+                value={commitMessage}
+                disabled={committing}
+                onChange={(e) => setCommitMessage(e.target.value)}
+              />
+              <button type="submit" className="wb-btn wb-btn--small wb-btn--primary" disabled={committing || queueLocked}>
+                {committing ? "Committing…" : "Commit"}
+              </button>
+            </form>
+          )}
+          {commitError && (
+            <p className="wb-note wb-note--error" role="alert">
+              {commitError}
+            </p>
+          )}
+          {commitBlocked &&
+            (confirmingForce ? (
+              <div className="git-bar__row">
+                <span className="git-bar__label">Commit these files even though another agent owns them?</span>
+                <button
+                  type="button"
+                  className="wb-btn wb-btn--small wb-btn--danger"
+                  disabled={committing || queueLocked}
+                  onClick={() => void commit(true)}
+                >
+                  {committing ? "Committing…" : "Confirm commit"}
+                </button>
+                <button
+                  type="button"
+                  className="wb-btn wb-btn--small"
+                  disabled={committing}
+                  onClick={() => setConfirmingForce(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="git-bar__row">
                 <button
                   type="button"
                   className="wb-btn wb-btn--small"
                   disabled={queueLocked}
-                  onClick={() => brief(otherAgent)}
+                  onClick={() => setConfirmingForce(true)}
                 >
-                  Brief {AGENT_SHORT[otherAgent]}…
+                  Commit anyway
                 </button>
               </div>
-            </div>
-          </div>
-        )}
-
-        {claimConflicts.length > 0 && (
-          <div className="agent-callout agent-callout--claim" role="alert" aria-label="Claim conflicts">
-            <WarningIcon />
-            <div className="agent-callout__body">
-              <span>
-                This task changed files another agent owns. Committing them needs confirmation.
-              </span>
-              <ul className="overlap-list">
-                {claimConflicts.map((conflict) => (
-                  <li key={conflict.task_id}>
-                    <span>
-                      Changed files owned by{" "}
-                      <button type="button" className="wb-link" onClick={() => onSelectTask(conflict.task_id)}>
-                        {conflict.title}
-                      </button>
-                      :
-                    </span>
-                    <span className="overlap-list__files mono">{conflict.files.join(", ")}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
-
-        {overlaps.length > 0 && (
-          <div className="agent-callout agent-callout--overlap" role="region" aria-label="Overlapping tasks">
-            <OverlapIcon />
-            <div className="agent-callout__body">
-              <span>
-                {overlaps.length === 1 ? "Another unmerged task changes" : "Other unmerged tasks change"} the same
-                files. Merging both may conflict.
-              </span>
-              <ul className="overlap-list">
-                {overlaps.map((overlap) => (
-                  <li key={overlap.task_id}>
-                    <button type="button" className="wb-link" onClick={() => onSelectTask(overlap.task_id)}>
-                      {overlap.title}
-                    </button>
-                    <span className="overlap-list__files mono">{overlap.files.join(", ")}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
-
-        {queueLocked && (
-          <p className="wb-note queue-lock" role="status">
-            Commit, merge, and continue are paused while this repository&rsquo;s merge queue runs.
-          </p>
-        )}
-
-        {(canCommit || canMerge || mergeOutcome) && (
-          <div className="git-actions">
-            {canCommit && (
-              <form
-                className="git-actions__row"
-                aria-label="Commit changes"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void commit();
-                }}
-              >
-                <span className="git-actions__label">
-                  <CommitIcon /> {uncommitted} uncommitted {uncommitted === 1 ? "change" : "changes"}
-                </span>
-                <input
-                  type="text"
-                  className="wb-select git-actions__input"
-                  aria-label="Commit message"
-                  placeholder={task.title}
-                  value={commitMessage}
-                  disabled={committing}
-                  onChange={(e) => setCommitMessage(e.target.value)}
-                />
-                <button type="submit" className="wb-btn" disabled={committing || queueLocked}>
-                  {committing ? "Committing…" : "Commit"}
-                </button>
-              </form>
-            )}
-            {commitError && (
-              <p className="wb-note wb-note--error" role="alert">
-                {commitError}
-              </p>
-            )}
-            {commitBlocked &&
-              (confirmingForce ? (
-                <div className="git-actions__row">
-                  <span className="git-actions__label">
-                    Commit these files even though another agent owns them?
+            ))}
+          {canMerge && (
+            <div className="git-bar__row">
+              {confirmingMerge ? (
+                <>
+                  <span className="git-bar__label">
+                    Merge <span className="mono">{task.branch}</span> into{" "}
+                    {task.repo_branch ? <span className="mono">{task.repo_branch}</span> : "your checked-out branch"}?
                   </span>
                   <button
                     type="button"
-                    className="wb-btn wb-btn--danger"
-                    disabled={committing || queueLocked}
-                    onClick={() => void commit(true)}
+                    className="wb-btn wb-btn--small wb-btn--primary"
+                    disabled={merging || queueLocked}
+                    onClick={() => void merge()}
                   >
-                    {committing ? "Committing…" : "Confirm commit"}
+                    {merging ? "Merging…" : "Confirm merge"}
                   </button>
                   <button
                     type="button"
-                    className="wb-btn"
-                    disabled={committing}
-                    onClick={() => setConfirmingForce(false)}
+                    className="wb-btn wb-btn--small"
+                    disabled={merging}
+                    onClick={() => setConfirmingMerge(false)}
                   >
                     Cancel
                   </button>
-                </div>
+                </>
               ) : (
-                <div className="git-actions__row">
+                <>
+                  <span className="git-bar__label">
+                    <MergeIcon /> {task.commits_ahead} {task.commits_ahead === 1 ? "commit" : "commits"} ready
+                  </span>
                   <button
                     type="button"
-                    className="wb-btn"
+                    className="wb-btn wb-btn--small wb-btn--primary"
                     disabled={queueLocked}
-                    onClick={() => setConfirmingForce(true)}
+                    onClick={() => {
+                      setMergeOutcome(null);
+                      setConfirmingMerge(true);
+                    }}
                   >
-                    Commit anyway
+                    {task.repo_branch ? `Merge into ${task.repo_branch}` : "Merge into checked-out branch"}
                   </button>
-                </div>
-              ))}
-            {canMerge && (
-              <div className="git-actions__row">
-                {confirmingMerge ? (
-                  <>
-                    <span className="git-actions__label">
-                      Merge <span className="mono">{task.branch}</span> into{" "}
-                      {task.repo_branch ? <span className="mono">{task.repo_branch}</span> : "your checked-out branch"}?
-                    </span>
-                    <button
-                      type="button"
-                      className="wb-btn wb-btn--primary"
-                      disabled={merging || queueLocked}
-                      onClick={() => void merge()}
-                    >
-                      {merging ? "Merging…" : "Confirm merge"}
-                    </button>
-                    <button
-                      type="button"
-                      className="wb-btn"
-                      disabled={merging}
-                      onClick={() => setConfirmingMerge(false)}
-                    >
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span className="git-actions__label">
-                      <MergeIcon /> {task.commits_ahead} {task.commits_ahead === 1 ? "commit" : "commits"} ready
-                    </span>
-                    <button
-                      type="button"
-                      className="wb-btn"
-                      disabled={queueLocked}
-                      onClick={() => {
-                        setMergeOutcome(null);
-                        setConfirmingMerge(true);
-                      }}
-                    >
-                      {task.repo_branch ? `Merge into ${task.repo_branch}` : "Merge into checked-out branch"}
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-            {mergeOutcome?.kind === "error" && (
-              <p className="wb-note wb-note--error" role="alert">
-                {mergeOutcome.message}
+                </>
+              )}
+            </div>
+          )}
+          {mergeOutcome?.kind === "error" && (
+            <p className="wb-note wb-note--error" role="alert">
+              {mergeOutcome.message}
+            </p>
+          )}
+          {mergeOutcome?.kind === "result" && mergeOutcome.result.merged && (
+            <p className="merge-note merge-note--ok" role="status">
+              {mergeOutcome.result.message}
+            </p>
+          )}
+          {mergeOutcome?.kind === "result" && !mergeOutcome.result.merged && (
+            <div className="merge-note merge-note--conflict" role="alert">
+              <p>
+                Merge into <span className="mono">{mergeOutcome.result.into_branch}</span> hit conflicts and was aborted.
+                Nothing was changed in your checkout.
               </p>
-            )}
-            {mergeOutcome?.kind === "result" && mergeOutcome.result.merged && (
-              <p className="merge-note merge-note--ok" role="status">
-                {mergeOutcome.result.message}
-              </p>
-            )}
-            {mergeOutcome?.kind === "result" && !mergeOutcome.result.merged && (
-              <div className="merge-note merge-note--conflict" role="alert">
-                <p>
-                  Merge into <span className="mono">{mergeOutcome.result.into_branch}</span> hit conflicts and was
-                  aborted. Nothing was changed in your checkout.
-                </p>
-                {mergeOutcome.result.message && <p className="merge-note__detail">{mergeOutcome.result.message}</p>}
-                <ul aria-label="Conflicting files">
-                  {mergeOutcome.result.conflicts.map((file) => (
-                    <li key={file} className="mono">
-                      {file}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-      </header>
-      <div className="agent-view__tabs" role="tablist" aria-label="Agent views" onKeyDown={onTabsKeyDown}>
-        {PANES.map((p) => (
-          <button
-            key={p.id}
-            id={`agent-pane-tab-${p.id}`}
-            type="button"
-            role="tab"
-            aria-selected={pane === p.id}
-            aria-controls={`agent-pane-${p.id}`}
-            tabIndex={pane === p.id ? 0 : -1}
-            className={`agent-view__tab${pane === p.id ? " agent-view__tab--on" : ""}`}
-            onClick={() => setPane(p.id)}
-          >
-            {p.label}
-            {p.id === "changes" && changedCount > 0 && <span className="agent-view__count">{changedCount}</span>}
-          </button>
-        ))}
-      </div>
-      <div
-        id={`agent-pane-${pane}`}
-        role="tabpanel"
-        aria-labelledby={`agent-pane-tab-${pane}`}
-        className="agent-view__pane"
-      >
-        {pane === "activity" ? (
+              {mergeOutcome.result.message && <p className="merge-note__detail">{mergeOutcome.result.message}</p>}
+              <ul aria-label="Conflicting files">
+                {mergeOutcome.result.conflicts.map((file) => (
+                  <li key={file} className="mono">
+                    {file}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={`agent-split${reviewOpen ? " agent-split--review" : ""}`}>
+        <section className="thread" aria-label="Conversation">
           <ActivityList
             key={taskId}
             items={activity.items}
@@ -622,71 +603,79 @@ export default function AgentView({
             running={running}
             onOpenFile={onOpenFile ? openFromWorktree : undefined}
           />
-        ) : (
-          <DiffView
-            taskId={taskId}
-            title={task.title}
-            embedded
-            refreshKey={`${task.commits_ahead}|${task.uncommitted_count ?? 0}|${task.changed_files.join(",")}|${task.state}`}
-          />
+          <div className="thread__dock">
+            {notices}
+            {canContinue && (
+              <form className="composer" aria-label="Continue task" onSubmit={(e) => void submitContinue(e)}>
+                <div className="composer__box">
+                  <textarea
+                    ref={composerRef}
+                    className="composer__input"
+                    aria-label="Follow-up prompt"
+                    rows={2}
+                    placeholder={
+                      handoff ? `Brief ${AGENT_SHORT[nextAgent]} on what to do next…` : "Tell the agent what to do next…"
+                    }
+                    value={prompt}
+                    disabled={continuing}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        e.currentTarget.form?.requestSubmit();
+                      }
+                    }}
+                  />
+                  {continueError && (
+                    <p className="wb-note wb-note--error" role="alert">
+                      {continueError}
+                    </p>
+                  )}
+                  <div className="composer__bar">
+                    <AgentMenu
+                      label="Next agent"
+                      agent={nextAgent}
+                      onAgentChange={setNextAgent}
+                      model={nextModel}
+                      onModelChange={setNextModel}
+                      effort={nextEffort}
+                      onEffortChange={setNextEffort}
+                      disabled={continuing}
+                      placement="up"
+                    />
+                    {(queueLocked || handoff) && (
+                      <span className="composer__hint">
+                        {queueLocked ? "Paused while the merge queue runs" : "Lore passes a context brief to the new agent."}
+                      </span>
+                    )}
+                    <span className="composer__spacer" />
+                    <button
+                      type="submit"
+                      className="composer__send"
+                      disabled={continuing || queueLocked}
+                      title={`Send (${shortcut("Enter")})`}
+                      aria-label={continuing ? "Sending…" : handoff ? `Hand off to ${AGENT_SHORT[nextAgent]}` : "Continue"}
+                    >
+                      <ArrowUpIcon />
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+          </div>
+        </section>
+        {reviewOpen && (
+          <aside className="review" aria-label="Changes">
+            <DiffView
+              taskId={taskId}
+              title={task.title}
+              embedded
+              onClose={() => setPane("activity")}
+              refreshKey={`${task.commits_ahead}|${task.uncommitted_count ?? 0}|${task.changed_files.join(",")}|${task.state}`}
+            />
+          </aside>
         )}
       </div>
-      {canContinue && (
-        <form className="composer" aria-label="Continue task" onSubmit={(e) => void submitContinue(e)}>
-          <div className="composer__box">
-            <textarea
-              ref={composerRef}
-              className="composer__input"
-              aria-label="Follow-up prompt"
-              rows={2}
-              placeholder={handoff ? `Brief ${AGENT_SHORT[nextAgent]} on what to do next…` : "Tell the agent what to do next…"}
-              value={prompt}
-              disabled={continuing}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  e.currentTarget.form?.requestSubmit();
-                }
-              }}
-            />
-            {continueError && (
-              <p className="wb-note wb-note--error" role="alert">
-                {continueError}
-              </p>
-            )}
-            <div className="composer__bar">
-              <AgentMenu
-                label="Next agent"
-                agent={nextAgent}
-                onAgentChange={setNextAgent}
-                model={nextModel}
-                onModelChange={setNextModel}
-                effort={nextEffort}
-                onEffortChange={setNextEffort}
-                disabled={continuing}
-                placement="up"
-              />
-              {(queueLocked || handoff) && (
-                <span className="composer__hint">
-                  {queueLocked
-                    ? "Paused while the merge queue runs"
-                    : "Lore passes a context brief to the new agent."}
-                </span>
-              )}
-              <button
-                type="submit"
-                className="composer__send"
-                disabled={continuing || queueLocked}
-                title={`Send (${shortcut("Enter")})`}
-                aria-label={continuing ? "Sending…" : handoff ? `Hand off to ${AGENT_SHORT[nextAgent]}` : "Continue"}
-              >
-                <ArrowUpIcon />
-              </button>
-            </div>
-          </div>
-        </form>
-      )}
     </div>
   );
 }

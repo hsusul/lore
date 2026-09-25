@@ -134,8 +134,8 @@ function EntryView({
     case "prompt":
       return (
         <li className="activity__prompt">
-          <span className="activity__prompt-label">Prompt</span>
-          <span className="activity__prompt-text">{entry.text}</span>
+          <span className="visually-hidden">Prompt: </span>
+          <span className="activity__bubble">{entry.text}</span>
         </li>
       );
     case "tool":

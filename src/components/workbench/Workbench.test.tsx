@@ -207,7 +207,7 @@ describe("Workbench", () => {
 
     fireEvent.keyDown(window, { key: "1", ctrlKey: true });
     expect(await screen.findByRole("heading", { name: "Fix parser" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Overview", current: false }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Overview" })[0]);
     expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
   });
 
@@ -217,13 +217,13 @@ describe("Workbench", () => {
     const row = await screen.findByRole("listitem", { name: "Fix parser" });
     fireEvent.click(within(row).getByRole("button", { name: "Open diff" }));
     expect(await screen.findByRole("heading", { name: "Fix parser" })).toBeTruthy();
-    const views = within(screen.getByRole("tablist", { name: "Agent views" }));
-    expect(views.getByRole("tab", { name: /Changes/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: /Review/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("complementary", { name: "Changes" })).toBeTruthy();
     expect(tabNames()).toEqual([]);
 
-    // Selecting the agent again keeps the view; another agent starts on its activity.
+    // Selecting the agent again keeps the review open.
     fireEvent.click(within(row).getByText("Fix parser"));
-    expect(views.getByRole("tab", { name: /Changes/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("complementary", { name: "Changes" })).toBeTruthy();
   });
 
   it("finds agents in the palette and launches a new agent from typed text", async () => {
@@ -242,8 +242,7 @@ describe("Workbench", () => {
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "show changes" } });
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
-    const views = within(screen.getByRole("tablist", { name: "Agent views" }));
-    expect(views.getByRole("tab", { name: /Changes/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("complementary", { name: "Changes" })).toBeTruthy();
 
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "Add a dark mode toggle" } });
