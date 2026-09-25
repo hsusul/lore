@@ -4,10 +4,13 @@ export type PaletteItem = {
   id: string;
   label: string;
   detail?: string;
-  group: "Command" | "File";
+  group: "Command" | "Agent" | "File";
   hint?: string;
   run: () => void;
 };
+
+/** With no query: commands, then agents, then files. */
+const GROUP_ORDER: PaletteItem["group"][] = ["Command", "Agent", "File"];
 
 const MAX_RESULTS = 100;
 
@@ -36,7 +39,7 @@ export function fuzzyScore(query: string, text: string): number | null {
 
 export function filterItems(items: PaletteItem[], query: string): PaletteItem[] {
   if (!query.trim()) {
-    return items.filter((i) => i.group === "Command").concat(items.filter((i) => i.group === "File")).slice(0, MAX_RESULTS);
+    return GROUP_ORDER.flatMap((group) => items.filter((i) => i.group === group)).slice(0, MAX_RESULTS);
   }
   return items
     .map((item) => {
@@ -51,10 +54,15 @@ export function filterItems(items: PaletteItem[], query: string): PaletteItem[] 
     .map((x) => x.item);
 }
 
-type Props = { items: PaletteItem[]; onClose: () => void };
+type Props = {
+  items: PaletteItem[];
+  onClose: () => void;
+  /** Launch an agent from what was typed; offered last whenever there is a query. */
+  onNewAgent?: (prompt: string) => void;
+};
 
-/** ⌘K / ⌘P quick switcher over commands and files already loaded in the explorer. */
-export default function CommandPalette({ items, onClose }: Props) {
+/** ⌘K / ⌘P quick switcher over commands, agents, and files already loaded in the explorer. */
+export default function CommandPalette({ items, onClose, onNewAgent }: Props) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -68,7 +76,18 @@ export default function CommandPalette({ items, onClose }: Props) {
     };
   }, []);
 
-  const results = useMemo(() => filterItems(items, query), [items, query]);
+  const results = useMemo(() => {
+    const found = filterItems(items, query);
+    const text = query.trim();
+    if (!text || !onNewAgent) return found;
+    return found.concat({
+      id: "new-agent-from-query",
+      group: "Command",
+      label: `New agent: ${text}`,
+      hint: "launch",
+      run: () => onNewAgent(text),
+    });
+  }, [items, query, onNewAgent]);
   const current = Math.min(active, Math.max(results.length - 1, 0));
 
   useEffect(() => {
@@ -100,8 +119,8 @@ export default function CommandPalette({ items, onClose }: Props) {
           aria-controls="palette-list"
           aria-autocomplete="list"
           aria-activedescendant={results.length ? `palette-opt-${current}` : undefined}
-          aria-label="Search commands and files"
-          placeholder="Search files and commands"
+          aria-label="Search agents, commands, and files"
+          placeholder="Search agents, commands, and files, or describe a new task"
           value={query}
           spellCheck={false}
           onChange={(e) => {
@@ -122,11 +141,14 @@ export default function CommandPalette({ items, onClose }: Props) {
               e.preventDefault();
               e.stopPropagation();
               onClose();
+            } else if (e.key === "Tab") {
+              // A modal: focus stays in the search field.
+              e.preventDefault();
             }
           }}
         />
         <ul id="palette-list" ref={listRef} className="palette__list" role="listbox" aria-label="Results">
-          {results.length === 0 && <li className="palette__empty">No matching commands or files</li>}
+          {results.length === 0 && <li className="palette__empty">No matching agents, commands, or files</li>}
           {results.map((item, i) => (
             <li
               key={item.id}
@@ -140,7 +162,7 @@ export default function CommandPalette({ items, onClose }: Props) {
             >
               <span className="palette__label">{item.label}</span>
               {item.detail && <span className="palette__detail">{item.detail}</span>}
-              <span className="palette__hint">{item.hint ?? (item.group === "File" ? "file" : "")}</span>
+              <span className="palette__hint">{item.hint ?? (item.group === "Command" ? "" : item.group.toLowerCase())}</span>
             </li>
           ))}
         </ul>

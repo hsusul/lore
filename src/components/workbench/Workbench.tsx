@@ -22,7 +22,9 @@ import Home from "./Home";
 import { Mark, PanelIcon, SearchIcon, SidebarIcon } from "./icons";
 import Sash from "./Sash";
 import { ExplorerPanel } from "./Sidebar";
+import { needsUser } from "./board";
 import {
+  AGENT_LABELS,
   PANEL_MAX,
   PANEL_MIN,
   SIDEBAR_MAX,
@@ -35,6 +37,7 @@ import {
   readStored,
   readStoredNumber,
   shortcut,
+  stateLabel,
   tabsReducer,
   writeStored,
   type SidebarView,
@@ -341,6 +344,49 @@ export default function Workbench() {
       },
     ];
     if (!paletteOpen) return commands;
+    const chosen = selectedTaskId ? taskById.get(selectedTaskId) : undefined;
+    if (chosen) {
+      const reportError = (e: unknown) => setWorkspaceError(errorText(e));
+      commands.push(
+        {
+          id: "cmd:agent-changes",
+          group: "Command",
+          label: `Show changes: ${chosen.title}`,
+          run: () => openDiff(chosen.id),
+        },
+        {
+          id: "cmd:agent-activity",
+          group: "Command",
+          label: `Show activity: ${chosen.title}`,
+          run: () => {
+            selectTask(chosen.id);
+            setAgentPane("activity");
+          },
+        },
+        {
+          id: "cmd:agent-reveal",
+          group: "Command",
+          label: `Reveal worktree: ${chosen.title}`,
+          run: () => void handleReveal(chosen.id).catch(reportError),
+        },
+      );
+      if (chosen.state === "running") {
+        commands.push({
+          id: "cmd:agent-stop",
+          group: "Command",
+          label: `Stop agent: ${chosen.title}`,
+          run: () => void handleStop(chosen.id).catch(reportError),
+        });
+      }
+    }
+    const agents: PaletteItem[] = (visibleTasks ?? []).map((t, i) => ({
+      id: `agent:${t.id}`,
+      group: "Agent",
+      label: t.title,
+      detail: `${t.merged_into ? "Merged" : stateLabel(t)} · ${AGENT_LABELS[t.agent]} · ${t.branch}`,
+      hint: needsUser(t) ? "needs you" : i < 9 ? shortcut(String(i + 1)) : "agent",
+      run: () => selectTask(t.id),
+    }));
     const titleByRoot = new Map((tasks ?? []).map((t) => [t.worktree_path, t.title]));
     const files: PaletteItem[] = [];
     for (const [key, entries] of Object.entries(dirs.entries)) {
@@ -358,11 +404,18 @@ export default function Workbench() {
         });
       }
     }
-    return commands.concat(files);
+    return commands.concat(agents, files);
   }, [
     paletteOpen,
     dirs.entries,
     tasks,
+    visibleTasks,
+    taskById,
+    selectedTaskId,
+    selectTask,
+    openDiff,
+    handleStop,
+    handleReveal,
     workspace,
     openFolder,
     newAgent,
@@ -585,7 +638,13 @@ export default function Workbench() {
         onShowAgents={showAgents}
       />
 
-      {paletteOpen && <CommandPalette items={paletteItems} onClose={() => setPaletteOpen(false)} />}
+      {paletteOpen && (
+        <CommandPalette
+          items={paletteItems}
+          onClose={() => setPaletteOpen(false)}
+          onNewAgent={workspace ? (prompt) => newAgent(prompt) : undefined}
+        />
+      )}
     </div>
   );
 }

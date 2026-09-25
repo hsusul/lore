@@ -8,6 +8,7 @@ function items(): PaletteItem[] {
     { id: "a", group: "Command", label: "Open folder…", run: vi.fn() },
     { id: "b", group: "Command", label: "Toggle Panel", run: vi.fn() },
     { id: "c", group: "File", label: "main.ts", detail: "src/main.ts · repo", run: vi.fn() },
+    { id: "d", group: "Agent", label: "Fix parser", detail: "Running · Claude Code · lore/fix-parser", run: vi.fn() },
   ];
 }
 
@@ -20,7 +21,9 @@ describe("fuzzyScore", () => {
 
   it("filters by label or detail", () => {
     expect(filterItems(items(), "src/m").map((i) => i.id)).toEqual(["c"]);
-    expect(filterItems(items(), "").map((i) => i.id)).toEqual(["a", "b", "c"]);
+    // With no query: commands, then agents, then files.
+    expect(filterItems(items(), "").map((i) => i.id)).toEqual(["a", "b", "d", "c"]);
+    expect(filterItems(items(), "parser").map((i) => i.id)).toEqual(["d"]);
   });
 });
 
@@ -55,5 +58,27 @@ describe("CommandPalette", () => {
     unmount();
     expect(document.activeElement).toBe(opener);
     opener.remove();
+  });
+
+  it("offers a new agent from whatever was typed, after the matches", () => {
+    const onNewAgent = vi.fn();
+    const onClose = vi.fn();
+    render(<CommandPalette items={items()} onClose={onClose} onNewAgent={onNewAgent} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "add dark mode" } });
+    const options = screen.getAllByRole("option");
+    expect(options[options.length - 1].textContent).toContain("New agent: add dark mode");
+    fireEvent.keyDown(input, { key: "End" });
+    fireEvent.click(options[options.length - 1]);
+    expect(onClose).toHaveBeenCalled();
+    expect(onNewAgent).toHaveBeenCalledWith("add dark mode");
+  });
+
+  it("keeps focus in the search field on Tab", () => {
+    render(<CommandPalette items={items()} onClose={vi.fn()} />);
+    const input = screen.getByRole("combobox");
+    const tab = fireEvent.keyDown(input, { key: "Tab" });
+    expect(tab).toBe(false);
+    expect(document.activeElement).toBe(input);
   });
 });
