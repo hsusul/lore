@@ -78,7 +78,7 @@ async function openFileFromTree(name: string) {
 describe("Workbench", () => {
   it("restores the workspace and lazily loads folders in the explorer", async () => {
     render(<Workbench />);
-    expect(await screen.findByRole("heading", { name: "repo" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "repo" })).toBeTruthy();
     await openFiles();
     await screen.findByRole("treeitem", { name: "src" });
     expect(listWorkspaceDir).toHaveBeenCalledTimes(1);
@@ -119,7 +119,7 @@ describe("Workbench", () => {
 
   it("opens files in tabs, activates, and closes with ×, middle-click, and ⌘W", async () => {
     render(<Workbench />);
-    expect(screen.getByRole("region", { name: "Welcome" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
 
     await openFileFromTree("README.md");
     const panel = await within(screen.getByRole("main", { name: "Editor" })).findByRole("tabpanel");
@@ -155,7 +155,7 @@ describe("Workbench", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close util.ts" }));
     expect(tabNames()).toEqual([]);
-    expect(screen.getByRole("region", { name: "Welcome" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
   });
 
   it("toggles the bottom panel with ⌘J and its close button", async () => {
@@ -185,6 +185,28 @@ describe("Workbench", () => {
 
     render(<Workbench />);
     expect(screen.queryByRole("complementary", { name: "Sidebar" })).toBeNull();
+  });
+
+  it("⌘N returns to the overview with the composer focused; ⌘1–9 open agents in sidebar order", async () => {
+    vi.mocked(listTasks).mockResolvedValue([
+      task({ repo_path: "/work/repo" }),
+      task({ id: "t2", title: "Second", repo_path: "/work/repo" }),
+    ]);
+    render(<Workbench />);
+    await screen.findByRole("listitem", { name: "Second" });
+
+    fireEvent.keyDown(window, { key: "2", metaKey: true });
+    expect(await screen.findByRole("heading", { name: "Second" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Overview" })).toBeNull();
+
+    fireEvent.keyDown(window, { key: "n", metaKey: true });
+    expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByLabelText("Prompt"));
+
+    fireEvent.keyDown(window, { key: "1", ctrlKey: true });
+    expect(await screen.findByRole("heading", { name: "Fix parser" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Overview", current: false }));
+    expect(screen.getByRole("region", { name: "Overview" })).toBeTruthy();
   });
 
   it("switches the sidebar between agents and files", async () => {
@@ -279,7 +301,7 @@ describe("Workbench", () => {
     vi.mocked(openWorkspace).mockResolvedValue("/work/repo");
     render(<Workbench />);
     fireEvent.click(screen.getAllByRole("button", { name: "Open folder…" })[0]);
-    expect(await screen.findByRole("heading", { name: "repo" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "repo" })).toBeTruthy();
     expect(openWorkspace).toHaveBeenCalledWith("/work/repo/src");
     expect(window.localStorage.getItem(STORAGE_KEYS.workspace)).toBe("/work/repo");
     await openFiles();

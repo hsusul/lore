@@ -19,6 +19,7 @@ import CommandPalette, { type PaletteItem } from "./CommandPalette";
 import DiffView from "./DiffView";
 import EditorTabs from "./EditorTabs";
 import FileView from "./FileView";
+import Home from "./Home";
 import { Mark, PanelIcon, SearchIcon, SidebarIcon } from "./icons";
 import Sash from "./Sash";
 import { ExplorerPanel } from "./Sidebar";
@@ -72,6 +73,7 @@ export default function Workbench() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newAgentToken, setNewAgentToken] = useState(0);
+  const [newAgentDraft, setNewAgentDraft] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     const stored = readStored(STORAGE_KEYS.workspace);
@@ -220,10 +222,29 @@ export default function Workbench() {
     setSidebarView("explorer");
   }, []);
 
-  const newAgent = useCallback(() => {
-    showAgents();
-    setNewAgentToken((n) => n + 1);
-  }, [showAgents]);
+  /** Back to the overview: no agent selected and no file or diff in front. */
+  const showOverview = useCallback(() => {
+    setSelectedTaskId(null);
+    dispatch({ type: "clearActive" });
+  }, []);
+
+  /** The overview with its composer focused, optionally starting from `draft`. */
+  const newAgent = useCallback(
+    (draft?: string) => {
+      showOverview();
+      setNewAgentDraft(draft);
+      setNewAgentToken((n) => n + 1);
+    },
+    [showOverview],
+  );
+
+  const openMergeQueue = useCallback(() => {
+    setPanelOpen(true);
+    setPanelTab("queue");
+  }, []);
+
+  const visibleTasksRef = useRef(visibleTasks);
+  visibleTasksRef.current = visibleTasks;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -246,11 +267,24 @@ export default function Workbench() {
           e.preventDefault();
           toggleSidebar();
           break;
+        case "n":
+          e.preventDefault();
+          newAgent();
+          break;
+        default: {
+          // ⌘1–⌘9 open the agents in sidebar order.
+          const n = Number(e.key);
+          const target = Number.isInteger(n) && n >= 1 ? visibleTasksRef.current?.[n - 1] : undefined;
+          if (target) {
+            e.preventDefault();
+            selectTask(target.id);
+          }
+        }
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleSidebar, togglePanel]);
+  }, [toggleSidebar, togglePanel, newAgent, selectTask]);
 
   const taskTitle = useCallback((id: string) => taskById.get(id)?.title ?? "Discarded agent", [taskById]);
 
@@ -288,20 +322,13 @@ export default function Workbench() {
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const commands: PaletteItem[] = [
       { id: "cmd:open-folder", group: "Command", label: "Open folder…", run: () => void openFolder() },
-      { id: "cmd:new-agent", group: "Command", label: "New agent", run: newAgent },
+      { id: "cmd:new-agent", group: "Command", label: "New agent", hint: shortcut("N"), run: () => newAgent() },
+      { id: "cmd:overview", group: "Command", label: "Go to overview", run: showOverview },
       { id: "cmd:toggle-sidebar", group: "Command", label: "Toggle sidebar", hint: shortcut("B"), run: toggleSidebar },
       { id: "cmd:show-files", group: "Command", label: "Show files", run: showFiles },
       { id: "cmd:show-agents", group: "Command", label: "Show agents", run: showAgents },
       { id: "cmd:toggle-panel", group: "Command", label: "Toggle panel", hint: shortcut("J"), run: togglePanel },
-      {
-        id: "cmd:merge-queue",
-        group: "Command",
-        label: "Merge queue",
-        run: () => {
-          setPanelOpen(true);
-          setPanelTab("queue");
-        },
-      },
+      { id: "cmd:merge-queue", group: "Command", label: "Merge queue", run: openMergeQueue },
       {
         id: "cmd:close-tab",
         group: "Command",
@@ -329,7 +356,21 @@ export default function Workbench() {
       }
     }
     return commands.concat(files);
-  }, [paletteOpen, dirs.entries, tasks, workspace, openFolder, newAgent, toggleSidebar, showFiles, showAgents, togglePanel, openFile]);
+  }, [
+    paletteOpen,
+    dirs.entries,
+    tasks,
+    workspace,
+    openFolder,
+    newAgent,
+    showOverview,
+    openMergeQueue,
+    toggleSidebar,
+    showFiles,
+    showAgents,
+    togglePanel,
+    openFile,
+  ]);
 
   const agentStage = selectedTaskId ? (
     <AgentView
@@ -371,46 +412,17 @@ export default function Workbench() {
     </div>
   );
 
-  const welcome = (
-    <div className="welcome" role="region" aria-label="Welcome">
-      <Mark />
-      <h2>Lore</h2>
-      <p>Run coding agents in parallel, each in its own git worktree and branch. Your checkout is not touched.</p>
-      <div className="welcome__actions">
-        <button type="button" className="wb-btn wb-btn--primary" onClick={() => void openFolder()}>
-          Open folder…
-        </button>
-        <button type="button" className="wb-btn" onClick={newAgent} disabled={!workspace}>
-          New agent
-        </button>
-      </div>
-      <dl className="welcome__keys">
-        <div>
-          <dt>Command palette</dt>
-          <dd>
-            <kbd>{shortcut("K")}</kbd>
-          </dd>
-        </div>
-        <div>
-          <dt>Toggle sidebar</dt>
-          <dd>
-            <kbd>{shortcut("B")}</kbd>
-          </dd>
-        </div>
-        <div>
-          <dt>Toggle panel</dt>
-          <dd>
-            <kbd>{shortcut("J")}</kbd>
-          </dd>
-        </div>
-        <div>
-          <dt>Close tab</dt>
-          <dd>
-            <kbd>{shortcut("W")}</kbd>
-          </dd>
-        </div>
-      </dl>
-    </div>
+  const home = (
+    <Home
+      workspace={workspace}
+      tasks={visibleTasks}
+      onSelect={selectTask}
+      onCreated={handleCreated}
+      onOpenFolder={() => void openFolder()}
+      onOpenMergeQueue={openMergeQueue}
+      focusToken={newAgentToken}
+      draft={newAgentDraft}
+    />
   );
 
   return (
@@ -418,7 +430,9 @@ export default function Workbench() {
       <header className="wb-titlebar">
         <div className="wb-titlebar__left">
           <TitlebarLights />
-          <Mark />
+          <button type="button" className="wb-titlebar__home" aria-label="Overview" title="Overview" onClick={showOverview}>
+            <Mark />
+          </button>
           <h1 className="wb-titlebar__workspace visually-hidden" title={workspace ?? undefined}>
             {workspace ? baseName(workspace) : "No folder open"}
           </h1>
@@ -483,14 +497,14 @@ export default function Workbench() {
                   listError={listError}
                   loadWarning={loadWarning}
                   selectedTaskId={selectedTaskId}
+                  overviewActive={selectedTaskId === null && activeKey === null}
+                  onShowOverview={showOverview}
+                  onNewAgent={() => newAgent()}
                   onSelect={selectTask}
                   onStop={handleStop}
                   onDiscard={handleDiscard}
                   onReveal={handleReveal}
                   onOpenDiff={openDiff}
-                  onCreated={handleCreated}
-                  onOpenFolder={() => void openFolder()}
-                  focusToken={newAgentToken}
                   switcher={sidebarSwitch}
                 />
               ) : (
@@ -528,7 +542,7 @@ export default function Workbench() {
               onActivate={(key) => dispatch({ type: "activate", key })}
               onClose={(key) => dispatch({ type: "close", key })}
               renderTab={renderTab}
-              stage={agentStage ?? welcome}
+              stage={agentStage ?? home}
             />
           </main>
           {panelOpen && (
