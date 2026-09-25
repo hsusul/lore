@@ -3,18 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../ipc", () => ({
   taskActivity: vi.fn(() => Promise.resolve([])),
+  taskDiff: vi.fn(() => Promise.resolve({ text: "", truncated: false })),
   onTasksChanged: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-import { taskActivity, type ContinueTaskRequest, type MergeResultDto, type TaskDto } from "../../ipc";
-import AgentView from "./AgentView";
+import { taskActivity, taskDiff, type ContinueTaskRequest, type MergeResultDto, type TaskDto } from "../../ipc";
+import AgentView, { usageLimitHandoffPrompt } from "./AgentView";
 import { task } from "./testTask";
 
 const handlers = () => ({
   onStop: vi.fn(() => Promise.resolve()),
   onDiscard: vi.fn(() => Promise.resolve()),
   onReveal: vi.fn(() => Promise.resolve()),
-  onOpenDiff: vi.fn(),
   onContinue: vi.fn<(request: ContinueTaskRequest) => Promise<void>>(() => Promise.resolve()),
   onCommit: vi.fn<(id: string, message: string, force?: boolean) => Promise<void>>(() => Promise.resolve()),
   onMerge: vi.fn<(id: string) => Promise<MergeResultDto>>(() =>
@@ -48,8 +48,9 @@ describe("AgentView", () => {
     expect(screen.getByRole("heading", { name: "Fix parser" })).toBeTruthy();
     expect(screen.getByText("Finished")).toBeTruthy();
     expect(screen.getByText("Run 3")).toBeTruthy();
-    expect(screen.getByText("lore/fix-parser")).toBeTruthy();
-    expect(screen.getByText("/lore/worktrees/fix-parser")).toBeTruthy();
+    // The branch carries the worktree path as its tooltip; Reveal opens it.
+    expect(screen.getByText("lore/fix-parser").getAttribute("title")).toBe("/lore/worktrees/fix-parser");
+    expect(screen.queryByText("/lore/worktrees/fix-parser")).toBeNull();
 
     const list = await screen.findByRole("list", { name: "Activity of Fix parser" });
     const items = Array.from(list.querySelectorAll("li"));
@@ -80,9 +81,8 @@ describe("AgentView", () => {
       attention: "Usage limit reached for Claude Code.",
       overlaps: [{ task_id: "t2", title: "Cart copy", files: ["src/a.rs", "src/c.rs"] }],
     });
-    expect(screen.getByRole("alert", { name: "Needs attention" }).textContent).toBe(
-      "Usage limit reached for Claude Code.",
-    );
+    const attention = screen.getByRole("group", { name: "Needs attention" });
+    expect(within(attention).getByRole("alert").textContent).toBe("Usage limit reached for Claude Code.");
     const overlap = screen.getByRole("region", { name: "Overlapping tasks" });
     expect(within(overlap).getByText("src/a.rs, src/c.rs")).toBeTruthy();
     fireEvent.click(within(overlap).getByRole("button", { name: "Cart copy" }));
@@ -269,5 +269,57 @@ describe("AgentView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Merge into checked-out branch" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm merge" }));
     expect((await screen.findByRole("alert")).textContent).toBe("your checkout has uncommitted changes");
+  });
+
+  it("hands off a usage-limited task in one click, with the orchestrator's own brief", async () => {
+    const h = renderView({ state: "failed", attention: "Usage limit reached for Claude Code.", model: "opus" });
+    const attention = screen.getByRole("group", { name: "Needs attention" });
+    fireEvent.click(within(attention).getByRole("button", { name: "Hand off to Codex" }));
+    await waitFor(() =>
+      expect(h.onContinue).toHaveBeenCalledWith({
+        id: "t1",
+        prompt: usageLimitHandoffPrompt("Fix parser"),
+        agent: "codex",
+        model: "",
+      }),
+    );
+  });
+
+  it("briefs the other agent from a callout by setting up the composer", () => {
+    renderView({ state: "failed", attention: "Not logged in to Claude Code." });
+    const attention = screen.getByRole("group", { name: "Needs attention" });
+    // Only a usage limit gets the one-click handoff.
+    expect(within(attention).queryByRole("button", { name: /^Hand off/ })).toBeNull();
+    fireEvent.click(within(attention).getByRole("button", { name: "Brief Codex…" }));
+    expect(screen.getByLabelText("Next agent").textContent).toContain("Codex");
+    expect(document.activeElement).toBe(screen.getByLabelText("Follow-up prompt"));
+    expect(screen.getByRole("button", { name: "Hand off to Codex" })).toBeTruthy();
+  });
+
+  it("explains a failed run and offers to continue it", () => {
+    renderView({ state: "failed", exit_code: 2 });
+    const failed = screen.getByRole("group", { name: "Run failed" });
+    expect(failed.textContent).toContain("exited with code 2");
+    fireEvent.click(within(failed).getByRole("button", { name: "Continue with Claude…" }));
+    expect(document.activeElement).toBe(screen.getByLabelText("Follow-up prompt"));
+  });
+
+  it("shows the task's changes in a tab beside its activity, next to commit and merge", async () => {
+    vi.mocked(taskDiff).mockResolvedValue({
+      text: "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+new\n",
+      truncated: false,
+    });
+    renderView({ commits_ahead: 1, uncommitted_count: 0 });
+    const tabs = screen.getByRole("tablist", { name: "Agent views" });
+    const changes = within(tabs).getByRole("tab", { name: /Changes/ });
+    expect(changes.textContent).toBe("Changes2");
+    fireEvent.click(changes);
+    expect(changes.getAttribute("aria-selected")).toBe("true");
+    await screen.findByRole("region", { name: "src/a.rs" });
+    expect(taskDiff).toHaveBeenCalledWith("t1");
+    // Git actions stay in the header while reviewing.
+    expect(screen.getByRole("button", { name: "Merge into checked-out branch" })).toBeTruthy();
+    fireEvent.keyDown(changes, { key: "ArrowLeft" });
+    expect(within(tabs).getByRole("tab", { name: "Activity" }).getAttribute("aria-selected")).toBe("true");
   });
 });

@@ -12,8 +12,17 @@ const STATUS_LETTER: Record<DiffFile["status"], string> = {
   renamed: "R",
 };
 
-/** Editor tab showing a task's worktree diff against its base commit. */
-export default function DiffView({ taskId, title }: { taskId: string; title: string }) {
+type Props = {
+  taskId: string;
+  title: string;
+  /** Inside the agent view: no page title, since the agent header already names the task. */
+  embedded?: boolean;
+  /** Changes when the task's files or commits move, to reload without a click. */
+  refreshKey?: string;
+};
+
+/** A task's worktree diff against its base commit. */
+export default function DiffView({ taskId, title, embedded = false, refreshKey }: Props) {
   const [diff, setDiff] = useState<TaskDiffDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -40,16 +49,16 @@ export default function DiffView({ taskId, title }: { taskId: string; title: str
     return () => {
       alive.current = false;
     };
-  }, [load]);
+  }, [load, refreshKey]);
 
   const files = useMemo(() => (diff ? parseUnifiedDiff(diff.text) : []), [diff]);
   const additions = files.reduce((n, f) => n + f.additions, 0);
   const deletions = files.reduce((n, f) => n + f.deletions, 0);
 
   return (
-    <div className="diff-view">
+    <div className={`diff-view${embedded ? " diff-view--embedded" : ""}`}>
       <header className="diff-view__header">
-        <h2 className="diff-view__title">Changes in {title}</h2>
+        <h2 className={embedded ? "visually-hidden" : "diff-view__title"}>Changes in {title}</h2>
         {diff && (
           <span className="diff-view__stats">
             {files.length} {files.length === 1 ? "file" : "files"}
@@ -58,7 +67,7 @@ export default function DiffView({ taskId, title }: { taskId: string; title: str
           </span>
         )}
         <span className="agent-view__spacer" />
-        <button type="button" className="wb-btn" disabled={loading} onClick={() => void load()}>
+        <button type="button" className="wb-btn wb-btn--small" disabled={loading} onClick={() => void load()}>
           <RefreshIcon /> Refresh
         </button>
       </header>
@@ -79,7 +88,7 @@ export default function DiffView({ taskId, title }: { taskId: string; title: str
           </p>
         )}
         {diff && files.length === 0 && <p className="wb-note">No changes.</p>}
-        {files.length > 0 && (
+        {files.length > 1 && (
           <ul className="diff-view__files" aria-label="Changed files">
             {files.map((file, i) => (
               <li key={`${file.path}-${i}`}>
