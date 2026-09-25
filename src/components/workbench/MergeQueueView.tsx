@@ -328,8 +328,11 @@ function RepoMergeQueue({ repoPath, tasks, entry, onStart, onCancel, onDismiss }
                 disabled={count === 0 || running}
                 onClick={() => void openConfirm()}
               >
-                Merge {count} in order
+                {count === 0 ? "Merge in order" : `Merge ${count} in order`}
               </button>
+              {count === 0 && !running && ordered.length > 0 && (
+                <span className="merge-queue__hint">Select the tasks to merge.</span>
+              )}
               {running && <span className="merge-queue__hint">A queue is running for this repository.</span>}
             </div>
           )}

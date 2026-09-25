@@ -172,6 +172,21 @@ describe("Workbench", () => {
     expect(screen.queryByRole("region", { name: "Panel" })).toBeNull();
   });
 
+  it("restores the panel, sidebar view, and sidebar visibility from the last session", async () => {
+    window.localStorage.setItem(STORAGE_KEYS.panelOpen, "true");
+    window.localStorage.setItem(STORAGE_KEYS.sidebarView, "explorer");
+    const { unmount } = render(<Workbench />);
+    expect(screen.getByRole("region", { name: "Panel" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Explorer" })).toBeTruthy();
+    await screen.findByRole("treeitem", { name: "src" });
+    fireEvent.keyDown(window, { key: "b", metaKey: true });
+    expect(window.localStorage.getItem(STORAGE_KEYS.sidebarOpen)).toBe("false");
+    unmount();
+
+    render(<Workbench />);
+    expect(screen.queryByRole("complementary", { name: "Sidebar" })).toBeNull();
+  });
+
   it("switches the sidebar between agents and files", async () => {
     render(<Workbench />);
     expect(screen.getByRole("region", { name: "Agents" })).toBeTruthy();
@@ -255,7 +270,7 @@ describe("Workbench", () => {
     expect(screen.getByRole("button", { name: /Merge into/ }).matches(":disabled")).toBe(true);
     fireEvent.keyDown(window, { key: "j", metaKey: true });
     const panelTabs = within(screen.getByRole("tablist", { name: "Panel views" }));
-    expect(panelTabs.getByRole("tab", { name: /Merge Queue/ }).textContent).toBe("Merge Queue (running)");
+    expect(panelTabs.getByRole("tab", { name: /Merge queue/ }).textContent).toBe("Merge queue (running)");
   });
 
   it("opens a folder through the native picker and resolves the repo top-level", async () => {
@@ -263,7 +278,7 @@ describe("Workbench", () => {
     vi.mocked(chooseRepositoryDirectory).mockResolvedValue("/work/repo/src");
     vi.mocked(openWorkspace).mockResolvedValue("/work/repo");
     render(<Workbench />);
-    fireEvent.click(screen.getAllByRole("button", { name: "Open Folder…" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Open folder…" })[0]);
     expect(await screen.findByRole("heading", { name: "repo" })).toBeTruthy();
     expect(openWorkspace).toHaveBeenCalledWith("/work/repo/src");
     expect(window.localStorage.getItem(STORAGE_KEYS.workspace)).toBe("/work/repo");
@@ -276,7 +291,7 @@ describe("Workbench", () => {
     vi.mocked(chooseRepositoryDirectory).mockResolvedValue("/tmp/not-a-repo");
     vi.mocked(openWorkspace).mockRejectedValue("That folder isn't inside a git repository");
     render(<Workbench />);
-    fireEvent.click(screen.getAllByRole("button", { name: "Open Folder…" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Open folder…" })[0]);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("That folder isn't inside a git repository");
     expect(alert.className).toContain("wb-banner");

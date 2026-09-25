@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type FormEvent } from "react";
+import { memo, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { formatRelative, formatTime } from "../../format";
 import {
@@ -12,7 +12,8 @@ import {
 import AgentMenu from "./AgentMenu";
 import { ArrowUpIcon, DiffIcon, RevealIcon, StopIcon, TrashIcon, WarningIcon } from "./icons";
 import { SidebarHeader } from "./Sidebar";
-import { AGENT_LABELS, baseName, errorText, parseClaims, stateLabel } from "./state";
+import { AgentChip, StateBadge } from "./badges";
+import { baseName, errorText, parseClaims, shortcut } from "./state";
 
 export type TaskActions = {
   onSelect: (id: string) => void;
@@ -37,24 +38,31 @@ type Props = TaskActions & {
   onAllReposChange: (all: boolean) => void;
   /** Tasks hidden by the repository scope, for the toggle's label. */
   hiddenCount: number;
+  /** The Agents / Files switch, shown in place of the title. */
+  switcher?: ReactNode;
 };
 
 /** The Agents sidebar view: launch an agent in the workspace and watch every task. */
 export default function AgentsPanel(props: Props) {
-  const { tasks, listError, loadWarning, selectedTaskId, allRepos, hiddenCount } = props;
+  const { tasks, listError, loadWarning, selectedTaskId, hiddenCount } = props;
+  // With no folder open there is nothing to filter by, so every repository shows.
+  const allRepos = props.allRepos || !props.workspace;
   return (
     <section className="wb-view wb-view--agents" aria-label="Agents">
-      <SidebarHeader title="Agents">
+      <SidebarHeader title="Agents" switcher={props.switcher}>
         <button
           type="button"
           className={`scope-toggle${allRepos ? " scope-toggle--on" : ""}`}
           aria-pressed={allRepos}
+          disabled={!props.workspace}
           title={
-            allRepos
-              ? "Showing tasks from every repository"
-              : "Showing only tasks in the open repository"
+            !props.workspace
+              ? "Open a folder to show only its tasks"
+              : allRepos
+                ? "Showing tasks from every repository"
+                : "Showing only tasks in the open repository"
           }
-          onClick={() => props.onAllReposChange(!allRepos)}
+          onClick={() => props.onAllReposChange(!props.allRepos)}
         >
           All repositories
           {!allRepos && hiddenCount > 0 && <span className="scope-toggle__count">{hiddenCount}</span>}
@@ -179,7 +187,7 @@ function NewAgentForm({
         <p className="wb-note">
           Open a folder to launch agents in it.{" "}
           <button type="button" className="wb-link" onClick={onOpenFolder}>
-            Open Folder…
+            Open folder…
           </button>
         </p>
       )}
@@ -261,7 +269,7 @@ function NewAgentForm({
               type="submit"
               className="composer__send"
               disabled={busy}
-              title="Launch (⌘Enter)"
+              title={`Launch (${shortcut("Enter")})`}
               aria-label={busy ? "Launching…" : "Launch"}
             >
               <ArrowUpIcon />
@@ -342,15 +350,8 @@ const TaskRow = memo(function TaskRow({
           <span className="agent-row__title">{task.title}</span>
         </span>
         <span className="agent-row__meta">
-          {task.merged_into ? (
-            <span className="state-badge state-badge--finished">
-              <span className="state-badge__dot" aria-hidden="true" />
-              Merged
-            </span>
-          ) : (
-            <StateBadge task={task} compact />
-          )}
-          <span>{AGENT_LABELS[task.agent] ?? task.agent}</span>
+          <StateBadge task={task} compact />
+          <AgentChip agent={task.agent} />
         </span>
       </button>
       {error && (
@@ -434,13 +435,3 @@ const TaskRow = memo(function TaskRow({
     </li>
   );
 });
-
-/** A small status mark: a dot plus the state word, used on rows and the agent header. */
-export function StateBadge({ task, compact }: { task: TaskDto; compact?: boolean }) {
-  return (
-    <span className={`state-badge state-badge--${task.state}`}>
-      <span className="state-badge__dot" aria-hidden="true" />
-      {compact && task.state === "failed" ? "Failed" : stateLabel(task)}
-    </span>
-  );
-}
