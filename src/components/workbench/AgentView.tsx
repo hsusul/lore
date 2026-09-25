@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import type { ContinueTaskRequest, MergeResultDto, TaskAgent, TaskDto, TaskEffort } from "../../ipc";
 import ActivityList from "./ActivityList";
@@ -84,6 +84,14 @@ export default function AgentView({
   const setPane = onPaneChange ?? setLocalPane;
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [handingOff, setHandingOff] = useState(false);
+  const worktree = task?.worktree_path;
+  // Stable per worktree, so memoized timeline entries do not re-render on every poll.
+  const openFromWorktree = useCallback(
+    (relPath: string) => {
+      if (worktree && onOpenFile) onOpenFile(worktree, relPath);
+    },
+    [worktree, onOpenFile],
+  );
   const activity = useActivity(task && active ? taskId : null, task?.state === "running");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -607,11 +615,12 @@ export default function AgentView({
       >
         {pane === "activity" ? (
           <ActivityList
+            key={taskId}
             items={activity.items}
             error={activity.error}
             label={`Activity of ${task.title}`}
             running={running}
-            onOpenFile={onOpenFile ? (rel) => onOpenFile(task.worktree_path, rel) : undefined}
+            onOpenFile={onOpenFile ? openFromWorktree : undefined}
           />
         ) : (
           <DiffView

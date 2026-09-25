@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 vi.mock("../../ipc", () => ({
   chooseRepositoryDirectory: vi.fn(),
@@ -24,6 +24,8 @@ import {
   chooseRepositoryDirectory,
   discardTask,
   getMergeQueue,
+  getTask,
+  onTasksChanged,
   listTasks,
   listWorkspaceDir,
   openWorkspace,
@@ -251,6 +253,45 @@ describe("Workbench", () => {
     const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
     expect(prompt.value).toBe("Add a dark mode toggle");
     expect(document.activeElement).toBe(prompt);
+
+    // The request is used once: coming back to the overview later neither
+    // replays the draft nor steals focus.
+    fireEvent.keyDown(window, { key: "1", metaKey: true });
+    await screen.findByRole("heading", { name: "Fix parser" });
+    fireEvent.click(screen.getAllByRole("button", { name: "Overview" })[0]);
+    const again = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    expect(again.value).toBe("");
+    expect(document.activeElement).not.toBe(again);
+  });
+
+  it("toasts when another agent finishes while Lore is in front, but not for the agent on screen", async () => {
+    const subscribers: ((ids: string[]) => void)[] = [];
+    vi.mocked(onTasksChanged).mockImplementation((cb) => {
+      subscribers.push(cb);
+      return Promise.resolve(() => {});
+    });
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    onTestFinished(() => focus.mockRestore());
+    vi.mocked(listTasks).mockResolvedValue([
+      task({ repo_path: "/work/repo" }),
+      task({ id: "t2", title: "Second", repo_path: "/work/repo" }),
+    ]);
+    render(<Workbench />);
+    fireEvent.click(within(await screen.findByRole("listitem", { name: "Second" })).getByText("Second"));
+
+    vi.mocked(getTask).mockImplementation((id) =>
+      Promise.resolve(
+        id === "t1"
+          ? task({ state: "finished", repo_path: "/work/repo", last_activity: "Parser fixed" })
+          : task({ id: "t2", title: "Second", state: "finished", repo_path: "/work/repo" }),
+      ),
+    );
+    await act(async () => subscribers.forEach((cb) => cb(["t1", "t2"])));
+    const toastEl = (await screen.findByText("Fix parser finished")).closest("[data-sonner-toast]") as HTMLElement;
+    expect(within(toastEl).getByText("Parser fixed")).toBeTruthy();
+    expect(screen.queryByText("Second finished")).toBeNull();
+    fireEvent.click(within(toastEl).getByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("heading", { name: "Fix parser" })).toBeTruthy();
   });
 
   it("switches the sidebar between agents and files", async () => {

@@ -113,8 +113,8 @@ export default function ActivityList({ items, error, compact = false, label, run
   );
 }
 
-/** One timeline entry. Memoized: a live feed re-renders often, and old entries never change. */
-const Entry = memo(function Entry({
+/** One timeline entry. */
+function EntryView({
   entry,
   onOpenFile,
 }: {
@@ -173,7 +173,19 @@ const Entry = memo(function Entry({
         </li>
       );
   }
-});
+}
+
+type EntryProps = Parameters<typeof EntryView>[0];
+
+/**
+ * The timeline is rebuilt on every poll, so entries compare by content: old ones
+ * re-render (and re-parse their Markdown) only when they change.
+ */
+const Entry = memo(
+  EntryView,
+  (a: EntryProps, b: EntryProps) =>
+    a.onOpenFile === b.onOpenFile && (a.entry === b.entry || JSON.stringify(a.entry) === JSON.stringify(b.entry)),
+);
 
 function ToolGlyph({ family }: { family: ToolCall["family"] }) {
   const glyph: Record<ToolCall["family"], ReactNode> = {

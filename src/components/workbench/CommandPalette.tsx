@@ -84,7 +84,7 @@ export default function CommandPalette({ items, onClose, onNewAgent }: Props) {
       id: "new-agent-from-query",
       group: "Command",
       label: `New agent: ${text}`,
-      hint: "launch",
+      hint: "compose",
       run: () => onNewAgent(text),
     });
   }, [items, query, onNewAgent]);

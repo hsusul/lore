@@ -1,7 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal core permissions plus user-initiated folder selection. No updater, filesystem API, shell, or network plugins.",
+  "description": "Minimal core permissions plus user-initiated folder selection, local notifications when an agent needs the user, and the dock badge count. No updater, filesystem API, shell, or network plugins.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-badge-count",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify"
+  ]
 }

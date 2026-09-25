@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
+import { Toaster, toast } from "sonner";
 
 import {
   chooseRepositoryDirectory,
@@ -45,6 +46,7 @@ import {
 } from "./state";
 import StatusBar from "./StatusBar";
 import { dirKey, useDirCache } from "./useDirCache";
+import { appInFront, eventHeadline, notify, setAttentionBadge, taskEvents } from "./notify";
 import { useMergeQueues } from "./useMergeQueue";
 import { useTasks } from "./useTasks";
 
@@ -76,6 +78,8 @@ export default function Workbench() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [newAgentToken, setNewAgentToken] = useState(0);
   const [newAgentDraft, setNewAgentDraft] = useState<string | undefined>(undefined);
+  /** A ⌘N / "New agent" request the composer has not applied yet. */
+  const [composerPending, setComposerPending] = useState(false);
 
   useEffect(() => {
     const stored = readStored(STORAGE_KEYS.workspace);
@@ -110,7 +114,7 @@ export default function Workbench() {
   }, [tasks, allRepos, workspace]);
   const hiddenCount = (tasks?.length ?? 0) - (visibleTasks?.length ?? 0);
   const runningCount = (visibleTasks ?? []).filter((t) => t.state === "running").length;
-  const attentionCount = (visibleTasks ?? []).filter((t) => t.attention).length;
+  const attentionCount = (visibleTasks ?? []).filter(needsUser).length;
   const selectedTask = selectedTaskId ? taskById.get(selectedTaskId) : undefined;
   const scopeTask = scope === "repo" ? undefined : taskById.get(scope);
   const scopeRoot = scope === "repo" ? workspace : (scopeTask?.worktree_path ?? null);
@@ -242,10 +246,46 @@ export default function Workbench() {
     (draft?: string) => {
       showOverview();
       setNewAgentDraft(draft);
+      setComposerPending(true);
       setNewAgentToken((n) => n + 1);
     },
     [showOverview],
   );
+
+  // Tell the user when an agent finishes, fails, needs them, or lands: a toast
+  // while Lore is in front (except for the agent already on screen), an OS
+  // notification while it is not.
+  const previousTasks = useRef<TaskDto[] | null>(null);
+  useEffect(() => {
+    const events = taskEvents(previousTasks.current, tasks);
+    if (tasks !== null) previousTasks.current = tasks;
+    const front = appInFront();
+    for (const event of events) {
+      const headline = eventHeadline(event);
+      if (!front) {
+        void notify(headline, event.message);
+        continue;
+      }
+      if (event.id === selectedRef.current) continue;
+      const show =
+        event.kind === "failed"
+          ? toast.error
+          : event.kind === "attention"
+            ? toast.warning
+            : event.kind === "handoff"
+              ? toast.info
+              : toast.success;
+      show(headline, {
+        id: `${event.id}:${event.kind}`,
+        description: event.message,
+        action: { label: "Open", onClick: () => selectTask(event.id) },
+      });
+    }
+  }, [tasks, selectTask]);
+
+  // The dock badge counts every repository's agents that need the user.
+  const needYou = useMemo(() => (tasks ?? []).filter(needsUser).length, [tasks]);
+  useEffect(() => setAttentionBadge(needYou), [needYou]);
 
   const openMergeQueue = useCallback(() => {
     setPanelOpen(true);
@@ -478,8 +518,9 @@ export default function Workbench() {
       onCreated={handleCreated}
       onOpenFolder={() => void openFolder()}
       onOpenMergeQueue={openMergeQueue}
-      focusToken={newAgentToken}
+      focusToken={composerPending ? newAgentToken : 0}
       draft={newAgentDraft}
+      onFocusHandled={() => setComposerPending(false)}
     />
   );
 
@@ -636,6 +677,15 @@ export default function Workbench() {
         attentionCount={attentionCount}
         selectedBranch={selectedTask?.branch ?? null}
         onShowAgents={showAgents}
+        onShowOverview={showOverview}
+      />
+
+      <Toaster
+        theme="dark"
+        position="bottom-right"
+        offset={{ bottom: 34, right: 12 }}
+        visibleToasts={4}
+        style={TOAST_THEME}
       />
 
       {paletteOpen && (
@@ -663,3 +713,12 @@ function TitlebarLights() {
     </span>
   );
 }
+
+/** Sonner's colours from the workbench tokens. */
+const TOAST_THEME = {
+  "--normal-bg": "var(--wb-widget-bg)",
+  "--normal-border": "var(--wb-border-strong)",
+  "--normal-text": "var(--wb-fg-strong)",
+  "--border-radius": "var(--r-lg)",
+  fontFamily: "var(--font-ui)",
+} as CSSProperties;

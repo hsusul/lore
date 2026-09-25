@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 import { formatRelative, formatTime } from "../../format";
 import type { TaskDto } from "../../ipc";
 import { AgentChip, StateBadge } from "./badges";
@@ -20,6 +22,7 @@ type Props = {
   /** Changes whenever something asks to focus the composer. */
   focusToken: number;
   draft?: string;
+  onFocusHandled?: () => void;
 };
 
 /**
@@ -35,6 +38,7 @@ export default function Home({
   onOpenMergeQueue,
   focusToken,
   draft,
+  onFocusHandled,
 }: Props) {
   const groups = groupTasks(tasks ?? []);
   const count = (id: BoardGroup["id"]) => groups.find((g) => g.id === id)?.tasks.length ?? 0;
@@ -78,6 +82,7 @@ export default function Home({
             onOpenFolder={onOpenFolder}
             focusToken={focusToken}
             draft={draft}
+            onFocusHandled={onFocusHandled}
           />
         )}
 
@@ -146,11 +151,14 @@ function TaskCard({ task, onSelect }: { task: TaskDto; onSelect: (id: string) =>
   const problem =
     task.attention ??
     ((task.claim_conflicts?.length ?? 0) > 0 ? "Changed files another agent owns" : null);
+  const id = useId();
   return (
+    // Named by its title; the state, agent, and latest line are its description.
     <button
       type="button"
       className={`card card--${task.state}${problem ? " card--attention" : ""}`}
       aria-label={task.title}
+      aria-describedby={`${id}-meta ${id}-detail`}
       onClick={() => onSelect(task.id)}
     >
       <span className="card__top">
@@ -161,14 +169,18 @@ function TaskCard({ task, onSelect }: { task: TaskDto; onSelect: (id: string) =>
       </span>
       <span className="card__title">{task.title}</span>
       {problem ? (
-        <span className="card__problem">
+        <span className="card__problem" id={`${id}-detail`}>
           <WarningIcon />
           {problem}
         </span>
       ) : (
-        task.last_activity && <span className="card__activity">{task.last_activity}</span>
+        task.last_activity && (
+          <span className="card__activity" id={`${id}-detail`}>
+            {task.last_activity}
+          </span>
+        )
       )}
-      <span className="card__meta">
+      <span className="card__meta" id={`${id}-meta`}>
         <StateBadge task={task} compact />
         {stats.map((s) => (
           <span key={s}>{s}</span>
