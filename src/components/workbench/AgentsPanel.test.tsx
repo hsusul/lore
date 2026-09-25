@@ -37,7 +37,9 @@ function chooseAgent(name: "Claude Code" | "Codex") {
   fireEvent.click(screen.getByRole("menuitemradio", { name }));
   // The picker returns to the root pane; the chosen agent is shown, menu stays open.
   expect(screen.queryByRole("menuitemradio", { name })).toBeNull();
-  expect(screen.getByRole("menuitem", { name: /^Permission\b/ })).toBeTruthy();
+  // Permission modes are Claude's; Codex runs in its own sandbox, so the row goes away.
+  if (name === "Claude Code") expect(screen.getByRole("menuitem", { name: /^Permission\b/ })).toBeTruthy();
+  else expect(screen.queryByRole("menuitem", { name: /^Permission\b/ })).toBeNull();
   expect(screen.getByRole("menuitem", { name: /^Agent\b/ }).textContent).toContain(name);
 }
 
