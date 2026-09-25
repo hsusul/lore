@@ -1,19 +1,12 @@
-import { memo, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { formatRelative, formatTime } from "../../format";
-import {
-  createTask,
-  type CreateTaskRequest,
-  type TaskAgent,
-  type TaskDto,
-  type TaskEffort,
-  type TaskPermission,
-} from "../../ipc";
-import AgentMenu from "./AgentMenu";
-import { ArrowUpIcon, DiffIcon, RevealIcon, StopIcon, TrashIcon, WarningIcon } from "./icons";
-import { SidebarHeader } from "./Sidebar";
+import type { TaskDto } from "../../ipc";
 import { AgentChip, StateBadge } from "./badges";
-import { baseName, errorText, parseClaims, shortcut } from "./state";
+import { needsUser } from "./board";
+import { DiffIcon, OverviewIcon, PlusIcon, RevealIcon, StopIcon, TrashIcon, WarningIcon } from "./icons";
+import { SidebarHeader } from "./Sidebar";
+import { errorText, shortcut } from "./state";
 
 export type TaskActions = {
   onSelect: (id: string) => void;
@@ -29,10 +22,10 @@ type Props = TaskActions & {
   listError: string | null;
   loadWarning: string | null;
   selectedTaskId: string | null;
-  onCreated: (task: TaskDto) => void;
-  onOpenFolder: () => void;
-  /** Changes whenever something asks to focus the new-agent form. */
-  focusToken: number;
+  /** The overview is on stage (no agent or file open). */
+  overviewActive: boolean;
+  onShowOverview: () => void;
+  onNewAgent: () => void;
   /** Show tasks from every repository, not only the open workspace. */
   allRepos: boolean;
   onAllReposChange: (all: boolean) => void;
@@ -42,11 +35,36 @@ type Props = TaskActions & {
   switcher?: ReactNode;
 };
 
-/** The Agents sidebar view: launch an agent in the workspace and watch every task. */
+/** The Agents sidebar view: the overview entry and every task, live. */
 export default function AgentsPanel(props: Props) {
   const { tasks, listError, loadWarning, selectedTaskId, hiddenCount } = props;
   // With no folder open there is nothing to filter by, so every repository shows.
   const allRepos = props.allRepos || !props.workspace;
+  const listRef = useRef<HTMLUListElement>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const attention = (tasks ?? []).filter(needsUser).length;
+  const running = (tasks ?? []).filter((t) => t.state === "running").length;
+
+  // One tab stop for the list (roving tabindex): the focused, selected, or first row.
+  const tabStop =
+    (tasks ?? []).find((t) => t.id === focusId)?.id ??
+    (tasks ?? []).find((t) => t.id === selectedTaskId)?.id ??
+    tasks?.[0]?.id;
+
+  function onListKeyDown(event: KeyboardEvent<HTMLUListElement>) {
+    const rows = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>(".agent-row__main") ?? []);
+    const index = rows.indexOf(document.activeElement as HTMLButtonElement);
+    if (index < 0) return;
+    let next: HTMLButtonElement | undefined;
+    if (event.key === "ArrowDown") next = rows[Math.min(index + 1, rows.length - 1)];
+    else if (event.key === "ArrowUp") next = rows[Math.max(index - 1, 0)];
+    else if (event.key === "Home") next = rows[0];
+    else if (event.key === "End") next = rows[rows.length - 1];
+    else return;
+    event.preventDefault();
+    next?.focus();
+  }
+
   return (
     <section className="wb-view wb-view--agents" aria-label="Agents">
       <SidebarHeader title="Agents" switcher={props.switcher}>
@@ -67,6 +85,16 @@ export default function AgentsPanel(props: Props) {
           All repositories
           {!allRepos && hiddenCount > 0 && <span className="scope-toggle__count">{hiddenCount}</span>}
         </button>
+        <button
+          type="button"
+          className="wb-icon-btn"
+          aria-label="New agent"
+          title={`New agent (${shortcut("N")})`}
+          disabled={!props.workspace}
+          onClick={props.onNewAgent}
+        >
+          <PlusIcon />
+        </button>
       </SidebarHeader>
       <div className="wb-view__body">
         {loadWarning && (
@@ -74,12 +102,25 @@ export default function AgentsPanel(props: Props) {
             {loadWarning}
           </p>
         )}
-        <NewAgentForm
-          workspace={props.workspace}
-          onCreated={props.onCreated}
-          onOpenFolder={props.onOpenFolder}
-          focusToken={props.focusToken}
-        />
+        <button
+          type="button"
+          className={`overview-row${props.overviewActive ? " overview-row--on" : ""}`}
+          aria-current={props.overviewActive || undefined}
+          onClick={props.onShowOverview}
+        >
+          <OverviewIcon />
+          <span className="overview-row__label">Overview</span>
+          {attention > 0 && (
+            <span className="overview-row__count overview-row__count--attention" title="Need you">
+              {attention}
+            </span>
+          )}
+          {running > 0 && (
+            <span className="overview-row__count" title="Running">
+              {running}
+            </span>
+          )}
+        </button>
         <div className="agents-pane">
           {listError && (
             <p className="wb-note wb-note--error" role="alert">
@@ -97,12 +138,15 @@ export default function AgentsPanel(props: Props) {
                 : "No agents yet."}
             </p>
           ) : (
-            <ul className="agents" aria-label="Tasks">
-              {tasks.map((task) => (
+            <ul className="agents" aria-label="Tasks" ref={listRef} onKeyDown={onListKeyDown}>
+              {tasks.map((task, i) => (
                 <TaskRow
                   key={task.id}
                   task={task}
+                  index={i}
                   selected={task.id === selectedTaskId}
+                  tabStop={task.id === tabStop}
+                  onFocusRow={setFocusId}
                   onSelect={props.onSelect}
                   onStop={props.onStop}
                   onDiscard={props.onDiscard}
@@ -118,174 +162,20 @@ export default function AgentsPanel(props: Props) {
   );
 }
 
-function NewAgentForm({
-  workspace,
-  onCreated,
-  onOpenFolder,
-  focusToken,
-}: {
-  workspace: string | null;
-  onCreated: (task: TaskDto) => void;
-  onOpenFolder: () => void;
-  focusToken: number;
-}) {
-  const [title, setTitle] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [agent, setAgent] = useState<TaskAgent>("claude_code");
-  const [permission, setPermission] = useState<TaskPermission>("edits");
-  const [model, setModel] = useState<string | null>(null);
-  const [effort, setEffort] = useState<TaskEffort | null>(null);
-  const [claimsText, setClaimsText] = useState("");
-  const [autoHandoff, setAutoHandoff] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const titleRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (focusToken > 0) titleRef.current?.focus();
-  }, [focusToken]);
-
-  const claims = parseClaims(claimsText);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!workspace) return;
-    const request: CreateTaskRequest = {
-      repo_path: workspace,
-      title: title.trim(),
-      prompt: prompt.trim(),
-      agent,
-      permission,
-      auto_handoff: autoHandoff,
-    };
-    if (claims.length > 0) request.claims = claims;
-    if (model) request.model = model;
-    if (effort) request.effort = effort;
-    if (!request.title || !request.prompt) {
-      setError("Title and prompt are required.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const task = await createTask(request);
-      setTitle("");
-      setPrompt("");
-      setClaimsText("");
-      onCreated(task);
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const disabled = !workspace;
-  return (
-    <form className="new-agent" aria-label="New agent" onSubmit={(e) => void submit(e)}>
-      {disabled && (
-        <p className="wb-note">
-          Open a folder to launch agents in it.{" "}
-          <button type="button" className="wb-link" onClick={onOpenFolder}>
-            Open folder…
-          </button>
-        </p>
-      )}
-      <fieldset disabled={disabled} className="new-agent__fields">
-        <div className="composer__box">
-          <input
-            ref={titleRef}
-            className="new-agent__name"
-            type="text"
-            aria-label="Title"
-            placeholder="Title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-          <textarea
-            className="composer__input"
-            aria-label="Prompt"
-            rows={3}
-            placeholder="What should the agent do?"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                e.currentTarget.form?.requestSubmit();
-              }
-            }}
-          />
-          <details className="new-agent__more">
-            <summary>Owns paths</summary>
-            <textarea
-              rows={2}
-              className="new-agent__claims"
-              aria-label="Owns (files or folders)"
-              placeholder="e.g. calc.py, greet.py"
-              value={claimsText}
-              onChange={(e) => setClaimsText(e.target.value)}
-            />
-            <p className="new-agent__hint">
-              Other agents are told not to touch these. A commit that changes another agent&rsquo;s files needs
-              confirmation. End a folder with <span className="mono">/</span>; separate with commas or new lines.
-            </p>
-          </details>
-          {claims.length > 0 && (
-            <ul className="claim-chips" aria-label="Owned paths">
-              {claims.map((claim) => (
-                <li key={claim} className="claim-chip mono">
-                  {claim}
-                </li>
-              ))}
-            </ul>
-          )}
-          {error && (
-            <p className="wb-note wb-note--error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="composer__bar">
-            <AgentMenu
-              label="Agent"
-              agent={agent}
-              onAgentChange={setAgent}
-              permission={permission}
-              onPermissionChange={setPermission}
-              autoHandoff={autoHandoff}
-              onAutoHandoffChange={setAutoHandoff}
-              model={model}
-              onModelChange={setModel}
-              effort={effort}
-              onEffortChange={setEffort}
-              disabled={disabled}
-            />
-            {workspace && (
-              <span className="new-agent__repo" title={workspace}>
-                {baseName(workspace)}
-              </span>
-            )}
-            <button
-              type="submit"
-              className="composer__send"
-              disabled={busy}
-              title={`Launch (${shortcut("Enter")})`}
-              aria-label={busy ? "Launching…" : "Launch"}
-            >
-              <ArrowUpIcon />
-            </button>
-          </div>
-        </div>
-      </fieldset>
-    </form>
-  );
-}
-
-type RowProps = TaskActions & { task: TaskDto; selected: boolean };
+type RowProps = TaskActions & {
+  task: TaskDto;
+  index: number;
+  selected: boolean;
+  tabStop: boolean;
+  onFocusRow: (id: string) => void;
+};
 
 const TaskRow = memo(function TaskRow({
   task,
+  index,
   selected,
+  tabStop,
+  onFocusRow,
   onSelect,
   onStop,
   onDiscard,
@@ -318,24 +208,26 @@ const TaskRow = memo(function TaskRow({
   const fileCount = task.changed_files_total ?? task.changed_files.length;
   const uncommitted = task.uncommitted_count ?? 0;
   const overlapCount = task.overlaps?.length ?? 0;
+  const merged = Boolean(task.merged_into);
   const hint = [
     task.branch,
     `${task.commits_ahead} ${task.commits_ahead === 1 ? "commit" : "commits"} ahead · ${fileCount} ${fileCount === 1 ? "file" : "files"} changed`,
-    uncommitted > 0 && !task.merged_into
-      ? `${uncommitted} uncommitted ${uncommitted === 1 ? "change" : "changes"}`
-      : null,
+    uncommitted > 0 && !merged ? `${uncommitted} uncommitted ${uncommitted === 1 ? "change" : "changes"}` : null,
     overlapCount > 0
       ? `Overlaps ${overlapCount} ${overlapCount === 1 ? "task" : "tasks"}: ${task.overlaps!.map((o) => o.title).join(", ")}`
       : null,
     task.merged_into ? `Merged into ${task.merged_into}` : null,
-    task.auto_handoff === false && !task.merged_into ? "manual handoff" : null,
+    task.auto_handoff === false && !merged ? "manual handoff" : null,
+    index < 9 ? `${shortcut(String(index + 1))} to open` : null,
   ]
     .filter(Boolean)
     .join(" · ");
+  const stats = !merged && fileCount > 0 ? `${fileCount} ${fileCount === 1 ? "file" : "files"}` : null;
+  const preview = merged ? null : (task.attention ?? task.last_activity);
 
   return (
     <li
-      className={`agent-row${selected ? " agent-row--selected" : ""}`}
+      className={`agent-row${selected ? " agent-row--selected" : ""}${task.attention ? " agent-row--attention" : ""}`}
       aria-label={task.title}
     >
       <button
@@ -344,22 +236,87 @@ const TaskRow = memo(function TaskRow({
         title={hint}
         aria-label={task.title}
         aria-current={selected || undefined}
+        tabIndex={tabStop ? 0 : -1}
+        onFocus={() => onFocusRow(task.id)}
         onClick={() => onSelect(task.id)}
       >
         <span className="agent-row__head">
           <span className="agent-row__title">{task.title}</span>
+          {task.attention && (
+            <span className="row-flag row-flag--attention" title={task.attention} aria-label="Needs attention">
+              <WarningIcon />
+            </span>
+          )}
+          <time className="agent-row__time" title={formatTime(task.created_at_ms)}>
+            {formatRelative(task.created_at_ms)}
+          </time>
         </span>
         <span className="agent-row__meta">
           <StateBadge task={task} compact />
           <AgentChip agent={task.agent} />
+          {stats && <span className="agent-row__stats">{stats}</span>}
         </span>
+        {preview && (
+          <span className={`agent-row__preview${task.attention ? " agent-row__preview--attention" : ""}`}>
+            {preview}
+          </span>
+        )}
       </button>
+      {!confirming && (
+        // Pointer shortcuts; the keyboard reaches the same actions in the agent view and ⌘K.
+        <div className="agent-row__actions">
+          {task.state === "running" && (
+            <button
+              type="button"
+              className="wb-icon-btn"
+              tabIndex={-1}
+              aria-label="Stop"
+              title="Stop"
+              disabled={busy}
+              onClick={() => void act(onStop)}
+            >
+              <StopIcon />
+            </button>
+          )}
+          <button
+            type="button"
+            className="wb-icon-btn"
+            tabIndex={-1}
+            aria-label="Open diff"
+            title="Open diff"
+            onClick={() => onOpenDiff(task.id)}
+          >
+            <DiffIcon />
+          </button>
+          <button
+            type="button"
+            className="wb-icon-btn"
+            tabIndex={-1}
+            aria-label="Reveal in Finder"
+            title="Reveal in Finder"
+            onClick={() => void act(onReveal)}
+          >
+            <RevealIcon />
+          </button>
+          <button
+            type="button"
+            className="wb-icon-btn wb-icon-btn--danger"
+            tabIndex={-1}
+            aria-label="Discard"
+            title="Discard"
+            disabled={busy}
+            onClick={() => setConfirming(true)}
+          >
+            <TrashIcon />
+          </button>
+        </div>
+      )}
       {error && (
         <p className="wb-note wb-note--error" role="alert">
           {error}
         </p>
       )}
-      {confirming ? (
+      {confirming && (
         <div className="agent-row__confirm">
           <span>Delete this worktree and branch?</span>
           <button
@@ -377,59 +334,6 @@ const TaskRow = memo(function TaskRow({
           <button type="button" className="wb-btn" onClick={() => setConfirming(false)}>
             Cancel
           </button>
-        </div>
-      ) : (
-        <div className="agent-row__end">
-          {task.attention && (
-            <span className="row-flag row-flag--attention" title={task.attention} aria-label="Needs attention">
-              <WarningIcon />
-            </span>
-          )}
-          <time className="agent-row__time" title={formatTime(task.created_at_ms)}>
-            {formatRelative(task.created_at_ms)}
-          </time>
-          <div className="agent-row__actions">
-            {task.state === "running" && (
-              <button
-                type="button"
-                className="wb-icon-btn"
-                aria-label="Stop"
-                title="Stop"
-                disabled={busy}
-                onClick={() => void act(onStop)}
-              >
-                <StopIcon />
-              </button>
-            )}
-            <button
-              type="button"
-              className="wb-icon-btn"
-              aria-label="Open diff"
-              title="Open diff"
-              onClick={() => onOpenDiff(task.id)}
-            >
-              <DiffIcon />
-            </button>
-            <button
-              type="button"
-              className="wb-icon-btn"
-              aria-label="Reveal in Finder"
-              title="Reveal in Finder"
-              onClick={() => void act(onReveal)}
-            >
-              <RevealIcon />
-            </button>
-            <button
-              type="button"
-              className="wb-icon-btn wb-icon-btn--danger"
-              aria-label="Discard"
-              title="Discard"
-              disabled={busy}
-              onClick={() => setConfirming(true)}
-            >
-              <TrashIcon />
-            </button>
-          </div>
         </div>
       )}
     </li>

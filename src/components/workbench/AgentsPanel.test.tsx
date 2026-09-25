@@ -1,9 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../ipc", () => ({ createTask: vi.fn() }));
-
-import { createTask } from "../../ipc";
 import AgentsPanel from "./AgentsPanel";
 import { task } from "./testTask";
 
@@ -14,14 +11,14 @@ function renderPanel(overrides: Partial<Parameters<typeof AgentsPanel>[0]> = {})
     listError: null,
     loadWarning: null,
     selectedTaskId: null,
+    overviewActive: true,
+    onShowOverview: vi.fn(),
+    onNewAgent: vi.fn(),
     onSelect: vi.fn(),
     onStop: vi.fn(() => Promise.resolve()),
     onDiscard: vi.fn(() => Promise.resolve()),
     onReveal: vi.fn(() => Promise.resolve()),
     onOpenDiff: vi.fn(),
-    onCreated: vi.fn(),
-    onOpenFolder: vi.fn(),
-    focusToken: 0,
     allRepos: false,
     onAllReposChange: vi.fn(),
     hiddenCount: 0,
@@ -30,27 +27,6 @@ function renderPanel(overrides: Partial<Parameters<typeof AgentsPanel>[0]> = {})
   render(<AgentsPanel {...props} />);
   return props;
 }
-
-function chooseAgent(name: "Claude Code" | "Codex") {
-  fireEvent.click(screen.getByLabelText("Agent"));
-  fireEvent.click(screen.getByRole("menuitem", { name: /^Agent\b/ }));
-  fireEvent.click(screen.getByRole("menuitemradio", { name }));
-  // The picker returns to the root pane; the chosen agent is shown, menu stays open.
-  expect(screen.queryByRole("menuitemradio", { name })).toBeNull();
-  // Permission modes are Claude's; Codex runs in its own sandbox, so the row goes away.
-  if (name === "Claude Code") expect(screen.getByRole("menuitem", { name: /^Permission\b/ })).toBeTruthy();
-  else expect(screen.queryByRole("menuitem", { name: /^Permission\b/ })).toBeNull();
-  expect(screen.getByRole("menuitem", { name: /^Agent\b/ }).textContent).toContain(name);
-}
-
-function openPermission() {
-  fireEvent.click(screen.getByLabelText("Agent"));
-  fireEvent.click(screen.getByRole("menuitem", { name: /^Permission\b/ }));
-}
-
-beforeEach(() => {
-  vi.mocked(createTask).mockReset();
-});
 
 describe("AgentsPanel", () => {
   it("renders tasks with state text and agent", () => {
@@ -76,61 +52,8 @@ describe("AgentsPanel", () => {
     expect(within(failed).queryByRole("button", { name: "Stop" })).toBeNull();
   });
 
-  it("launches with the workspace root as the repository (⌘Enter submits)", async () => {
-    vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
-    const props = renderPanel({ tasks: [] });
 
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: " Fix parser " } });
-    chooseAgent("Codex");
-    const prompt = screen.getByLabelText("Prompt");
-    fireEvent.change(prompt, { target: { value: "fix it" } });
-    fireEvent.keyDown(prompt, { key: "Enter", metaKey: true });
-
-    await waitFor(() =>
-      expect(createTask).toHaveBeenCalledWith({
-        repo_path: "/repo",
-        title: "Fix parser",
-        prompt: "fix it",
-        agent: "codex",
-        permission: "edits",
-        auto_handoff: true,
-      }),
-    );
-    await waitFor(() => expect(props.onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: "new" })));
-  });
-
-  it("sends the chosen permission, defaulting to Edits", async () => {
-    vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
-    renderPanel({ tasks: [] });
-    openPermission();
-    const group = screen.getByRole("radiogroup", { name: "Permission" });
-    const edits = within(group).getByRole("radio", { name: "Edits" });
-    const auto = within(group).getByRole("radio", { name: "Auto" });
-    expect(edits.getAttribute("aria-checked")).toBe("true");
-    expect(edits.getAttribute("title")).toBe("Claude may edit files but not run shell commands.");
-    expect(auto.getAttribute("title")).toMatch(/safety classifier/);
-
-    fireEvent.click(auto);
-    // The picker returns to the root pane; Auto is the shown permission.
-    expect(screen.queryByRole("radiogroup", { name: "Permission" })).toBeNull();
-    expect(screen.getByRole("menuitem", { name: /^Permission\b/ }).textContent).toContain("Auto");
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Model\b/ }));
-    fireEvent.click(screen.getByRole("radio", { name: "Opus" }));
-    expect(screen.getByRole("menuitem", { name: /^Model\b/ }).textContent).toContain("Opus");
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Effort\b/ }));
-    fireEvent.click(screen.getByRole("radio", { name: "High" }));
-    expect(screen.getByRole("menuitem", { name: /^Effort\b/ }).textContent).toContain("High");
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
-    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
-    await waitFor(() =>
-      expect(createTask).toHaveBeenCalledWith(
-        expect.objectContaining({ permission: "auto", model: "opus", effort: "high" }),
-      ),
-    );
-  });
-
-  it("keeps row chrome to title, state, agent, and attention", () => {
+  it("keeps branch and counts in the tooltip, and shows attention on the row", () => {
     renderPanel({
       tasks: [
         task({
@@ -158,21 +81,6 @@ describe("AgentsPanel", () => {
     );
   });
 
-  it("disables the form with a hint when no workspace is open", () => {
-    const props = renderPanel({ workspace: null, tasks: [] });
-    expect(screen.getByRole("button", { name: "Launch" }).matches(":disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Open folder…" }));
-    expect(props.onOpenFolder).toHaveBeenCalled();
-  });
-
-  it("shows backend errors inline", async () => {
-    vi.mocked(createTask).mockRejectedValue("not a git repository: /repo");
-    renderPanel({ tasks: [] });
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
-    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("not a git repository: /repo");
-  });
 
   it("selects, stops, opens the diff, and reveals from a row", async () => {
     const props = renderPanel();
@@ -187,6 +95,7 @@ describe("AgentsPanel", () => {
     await waitFor(() => expect(props.onStop).toHaveBeenCalledWith("t1"));
   });
 
+
   it("requires an inline confirmation before discarding", async () => {
     const props = renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
@@ -199,44 +108,6 @@ describe("AgentsPanel", () => {
     await waitFor(() => expect(props.onDiscard).toHaveBeenCalledWith("t1"));
   });
 
-  it("parses claims into chips and sends them with auto-handoff", async () => {
-    vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
-    renderPanel({ tasks: [] });
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
-    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
-    fireEvent.change(screen.getByLabelText("Owns (files or folders)"), {
-      target: { value: " src/parser/ , docs/SCHEMA.md\n./src/parser/ \n" },
-    });
-
-    // Comma- and newline-separated, trimmed, deduplicated, shown as chips.
-    const chips = within(screen.getByRole("list", { name: "Owned paths" })).getAllByRole("listitem");
-    expect(chips.map((li) => li.textContent)).toEqual(["src/parser/", "docs/SCHEMA.md"]);
-    expect(screen.getByText(/Other agents are told not to touch these/)).toBeTruthy();
-
-    fireEvent.click(screen.getByLabelText("Agent"));
-    const autoHandoff = screen.getByLabelText("Auto-handoff on usage limit");
-    expect(autoHandoff.getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(autoHandoff);
-
-    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
-    await waitFor(() =>
-      expect(createTask).toHaveBeenCalledWith(
-        expect.objectContaining({ claims: ["src/parser/", "docs/SCHEMA.md"], auto_handoff: false }),
-      ),
-    );
-  });
-
-  it("omits claims entirely when the field is empty", async () => {
-    vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
-    renderPanel({ tasks: [] });
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
-    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "P" } });
-    fireEvent.change(screen.getByLabelText("Owns (files or folders)"), { target: { value: " , \n " } });
-    expect(screen.queryByRole("list", { name: "Owned paths" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
-    await waitFor(() => expect(createTask).toHaveBeenCalled());
-    expect(vi.mocked(createTask).mock.calls[0][0]).not.toHaveProperty("claims");
-  });
 
   it("toggles the repository scope and counts what it hides", () => {
     const props = renderPanel({ tasks: [], hiddenCount: 3 });
@@ -247,6 +118,7 @@ describe("AgentsPanel", () => {
     fireEvent.click(toggle);
     expect(props.onAllReposChange).toHaveBeenCalledWith(true);
   });
+
 
   it("keeps manual handoff off the row and in the tooltip", () => {
     renderPanel({
@@ -260,8 +132,61 @@ describe("AgentsPanel", () => {
     expect(within(screen.getByRole("listitem", { name: "Auto one" })).queryByText("manual handoff")).toBeNull();
   });
 
+
   it("shows the task load warning", () => {
     renderPanel({ loadWarning: "tasks.json is corrupt" });
     expect(screen.getByRole("alert").textContent).toBe("tasks.json is corrupt");
+  });
+
+  it("previews the latest activity, or what needs the user, under each row", () => {
+    renderPanel({
+      tasks: [
+        task({ last_activity: "Editing src/a.rs" }),
+        task({ id: "t2", title: "Limited", state: "failed", attention: "Usage limit reached", last_activity: "npm test" }),
+        task({ id: "t3", title: "Landed", state: "finished", merged_into: "main", last_activity: "Done" }),
+      ],
+    });
+    expect(within(screen.getByRole("listitem", { name: "Fix parser" })).getByText("Editing src/a.rs")).toBeTruthy();
+    const limited = screen.getByRole("listitem", { name: "Limited" });
+    expect(within(limited).getByText("Usage limit reached", { selector: ".agent-row__preview" })).toBeTruthy();
+    expect(within(limited).queryByText("npm test")).toBeNull();
+    expect(within(screen.getByRole("listitem", { name: "Landed" })).queryByText("Done")).toBeNull();
+    expect(within(screen.getByRole("listitem", { name: "Fix parser" })).getByText("2 files")).toBeTruthy();
+  });
+
+  it("offers the overview and a new agent, with counts of what is running and needs you", () => {
+    const props = renderPanel({
+      overviewActive: true,
+      tasks: [task({}), task({ id: "t2", title: "Stuck", state: "failed", exit_code: 1 })],
+    });
+    const overview = screen.getByRole("button", { name: /Overview/ });
+    expect(overview.getAttribute("aria-current")).toBe("true");
+    expect(within(overview).getByTitle("Running").textContent).toBe("1");
+    expect(within(overview).getByTitle("Need you").textContent).toBe("1");
+    fireEvent.click(overview);
+    expect(props.onShowOverview).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "New agent" }));
+    expect(props.onNewAgent).toHaveBeenCalled();
+  });
+
+  it("is one tab stop, moved with the arrow keys", () => {
+    renderPanel({
+      selectedTaskId: "t2",
+      tasks: [task({}), task({ id: "t2", title: "Second" }), task({ id: "t3", title: "Third" })],
+    });
+    const main = (name: string) => screen.getByRole("button", { name });
+    expect(main("Fix parser").tabIndex).toBe(-1);
+    expect(main("Second").tabIndex).toBe(0);
+    // Row shortcuts stay out of the tab order; the agent view and ⌘K have them.
+    expect(within(screen.getByRole("listitem", { name: "Second" })).getByRole("button", { name: "Open diff" }).tabIndex).toBe(-1);
+
+    main("Second").focus();
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(main("Third"));
+    expect(main("Third").tabIndex).toBe(0);
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(document.activeElement).toBe(main("Fix parser"));
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(main("Fix parser"));
   });
 });

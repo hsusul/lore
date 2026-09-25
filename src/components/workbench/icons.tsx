@@ -1,6 +1,5 @@
 // Line icons on a 16px grid (1.5px stroke, round caps), inline so there is no
-// dependency. Activity-bar glyphs are filled Codicon silhouettes so the strip
-// matches Cursor/VS Code.
+// dependency.
 
 import type { ReactNode } from "react";
 
@@ -24,46 +23,14 @@ function Icon({ children, size = 16 }: { children: ReactNode; size?: number }) {
   );
 }
 
-/** Filled glyphs for the activity bar (VS Code Codicons, MIT). */
-function FilledIcon({
-  children,
-  size = 24,
-  viewBox = "0 0 16 16",
-}: {
-  children: ReactNode;
-  size?: number;
-  viewBox?: string;
-}) {
-  return (
-    <svg
-      className="icon"
-      width={size}
-      height={size}
-      viewBox={viewBox}
-      fill="currentColor"
-      aria-hidden="true"
-      focusable="false"
-    >
-      {children}
-    </svg>
-  );
-}
-
-/** Explorer: two overlapping documents. */
-export const FilesIcon = ({ size = 24 }: { size?: number }) => (
-  <FilledIcon size={size} viewBox="0 0 24 24">
-    <path d="M17.5 0h-9L7 1.5V6H2.5L1 7.5v15.07L2.5 24h12.07L16 22.57V18h4.7l1.3-1.43V4.5L17.5 0zm0 2.12l2.38 2.38H17.5V2.12zm-3 20.38h-12v-15H7v9.07L8.5 18h6v4.5zm6-6h-12v-15H16V6h4.5v10.5z" />
-  </FilledIcon>
-);
-
-/** Agents: two conversation bubbles. */
-export const AgentsIcon = ({ size = 24 }: { size?: number }) => (
-  <FilledIcon size={size}>
-    <path
-      fillRule="evenodd"
-      d="M4 11.29l1-1v1.42l-1.15 1.14L3 12.5V10H1.5L1 9.5v-8l.5-.5h12l.5.5V6h-1V2H2v7h1.5l.5.5v1.79zM10.29 13l1.86 1.85.85-.35V13h1.5l.5-.5v-5l-.5-.5h-8l-.5.5v5l.5.5h3.79zm.21-1H7V8h7v4h-1.5l-.5.5v.79l-1.15-1.14-.35-.15z"
-    />
-  </FilledIcon>
+/** Overview: a 2×2 board of cards. */
+export const OverviewIcon = () => (
+  <Icon>
+    <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
+    <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
+    <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
+    <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
+  </Icon>
 );
 
 export const RefreshIcon = () => (
