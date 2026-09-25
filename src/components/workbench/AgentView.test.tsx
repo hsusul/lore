@@ -54,7 +54,8 @@ describe("AgentView", () => {
 
     const list = await screen.findByRole("list", { name: "Activity of Fix parser" });
     const items = Array.from(list.querySelectorAll("li"));
-    expect(items.map((li) => li.className.replace("activity__item activity__item--", ""))).toEqual([
+    const kindOf = (li: Element) => [...li.classList].find((c) => c.startsWith("activity__item--"))?.slice(16);
+    expect(items.map(kindOf)).toEqual([
       "message",
       "tool",
       "output",
@@ -252,7 +253,8 @@ describe("AgentView", () => {
 
   it("does not show the queue reason for a running task, or when no queue runs", async () => {
     const view = render(<AgentView taskId="t1" task={task({ state: "running" })} mergeQueueRunning {...handlers()} />);
-    await screen.findByText("No activity yet.");
+    // A running agent with nothing logged yet shows that it is working, not "No activity".
+    await screen.findByText("Working…");
     expect(screen.queryByText(/paused while this repository/)).toBeNull();
     view.unmount();
     renderView({ repo_branch: "main" });

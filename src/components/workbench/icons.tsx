@@ -33,6 +33,37 @@ export const OverviewIcon = () => (
   </Icon>
 );
 
+/** Edit: a pencil. */
+export const PencilIcon = () => (
+  <Icon size={14}>
+    <path d="M10.75 2.75l2.5 2.5-7.5 7.5H3.25v-2.5l7.5-7.5z" />
+    <path d="M9.25 4.25l2.5 2.5" />
+  </Icon>
+);
+
+/** Shell: a prompt chevron and cursor. */
+export const TerminalIcon = () => (
+  <Icon size={14}>
+    <path d="M3.25 4.75L6.5 8l-3.25 3.25" />
+    <path d="M8.25 11.75h4.5" />
+  </Icon>
+);
+
+/** Web: a globe. */
+export const GlobeIcon = () => (
+  <Icon size={14}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M2.25 8h11.5M8 2.25c1.6 1.6 2.4 3.5 2.4 5.75S9.6 12.15 8 13.75C6.4 12.15 5.6 10.25 5.6 8S6.4 3.85 8 2.25z" />
+  </Icon>
+);
+
+/** Any other tool: a small wrench. */
+export const ToolIcon = () => (
+  <Icon size={14}>
+    <path d="M10.5 2.5a3 3 0 00-2.9 3.9L2.75 11.25a1.25 1.25 0 001.77 1.77L9.37 8.2A3 3 0 0013.25 5.3l-1.7 1.7-1.8-.75-.75-1.8 1.7-1.7a3 3 0 00-.2-.25z" />
+  </Icon>
+);
+
 export const RefreshIcon = () => (
   <Icon>
     <path d="M12.75 7.25A4.75 4.75 0 0 0 4.1 5" />
