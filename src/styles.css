@@ -65,6 +65,16 @@
   --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
+  /* Colors the two looks set differently. */
+  --selection: rgba(106, 166, 222, 0.3);
+  --line-hover: #3a3a41;
+  --line-focus: #45454d;
+  --btn-primary-ink: #111113;
+  --btn-primary-hover: #ffffff;
+  --row-hover-solid: #19191b;
+  --row-active-solid: #1f1f22;
+  --diff-hunk-bg: rgba(106, 166, 222, 0.06);
+
   color-scheme: dark;
   background: var(--bg-side);
   color: var(--text-1);
@@ -73,6 +83,65 @@
   font-feature-settings: "cv11", "ss03";
   line-height: 1.5;
   font-variant-ligatures: none;
+}
+
+/*
+ * The Ember look: warm neutrals, the work surface on an inset sheet, and one
+ * hot color. Ember means an agent needs you; cream marks live work and focus.
+ * Classic keeps the tokens above while the two looks are compared.
+ */
+:root[data-theme="ember"] {
+  --bg-app: #161311;
+  --bg-side: #100e0c;
+  --bg-raised: #1f1b17;
+  --bg-overlay: #25201b;
+  --bg-hover: rgba(255, 232, 210, 0.05);
+  --bg-active: rgba(255, 232, 210, 0.085);
+  --line: rgba(255, 225, 200, 0.08);
+  --line-strong: rgba(255, 225, 200, 0.14);
+  --line-hover: rgba(255, 225, 200, 0.22);
+  --line-focus: rgba(255, 225, 200, 0.28);
+
+  /* Every text step clears WCAG AA (4.5:1) on the panel and raised surfaces. */
+  --text-1: #f2ece5;
+  --text-2: #c2b7ab;
+  --text-3: #9a8f83;
+  --text-4: #62594f;
+
+  --accent: #e9dccb;
+  --accent-soft: rgba(233, 220, 203, 0.12);
+  --focus: rgba(233, 220, 203, 0.5);
+  --selection: rgba(233, 220, 203, 0.22);
+
+  --green: #7fd39c;
+  --amber: #ff8a3d;
+  --red: #ff6b5b;
+  --purple: #b9a2f0;
+  --amber-soft: rgba(255, 138, 61, 0.08);
+  --red-soft: rgba(255, 107, 91, 0.09);
+  --amber-line: rgba(255, 138, 61, 0.34);
+  --red-line: rgba(255, 107, 91, 0.3);
+  --status-ink: #17130f;
+
+  --diff-add-bg: rgba(127, 211, 156, 0.07);
+  --diff-add-gutter: rgba(127, 211, 156, 0.12);
+  --diff-del-bg: rgba(255, 107, 91, 0.07);
+  --diff-del-gutter: rgba(255, 107, 91, 0.12);
+  --diff-hunk-bg: rgba(233, 220, 203, 0.05);
+  --tok-comment: #7f766a;
+
+  --btn-primary-ink: #17130f;
+  --btn-primary-hover: #ffffff;
+  --row-hover-solid: #1c1916;
+  --row-active-solid: #24201d;
+
+  --font-ui: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "SF Mono", ui-monospace, Menlo, monospace;
+  --r: 7px;
+  --r-lg: 12px;
+  --shadow-pop: 0 18px 44px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 225, 200, 0.06);
+
+  font-feature-settings: normal;
 }
 
 * {
@@ -109,7 +178,7 @@ body.is-resizing-horizontal {
 }
 
 ::selection {
-  background: rgba(106, 166, 222, 0.3);
+  background: var(--selection);
 }
 
 ::-webkit-scrollbar {
@@ -215,7 +284,7 @@ kbd {
 
 .wb-btn:hover:not(:disabled) {
   background: var(--bg-overlay);
-  border-color: #3a3a41;
+  border-color: var(--line-hover);
 }
 
 .wb-btn:disabled {
@@ -231,7 +300,7 @@ kbd {
 .wb-btn--primary {
   border-color: transparent;
   background: var(--text-1);
-  color: #111113;
+  color: var(--btn-primary-ink);
 }
 
 .wb-btn--primary .icon {
@@ -240,7 +309,7 @@ kbd {
 
 .wb-btn--primary:hover:not(:disabled) {
   border-color: transparent;
-  background: #ffffff;
+  background: var(--btn-primary-hover);
 }
 
 .wb-btn--ghost {
@@ -914,14 +983,14 @@ kbd {
   right: 4px;
   display: flex;
   padding-left: 16px;
-  background: linear-gradient(to right, transparent, #19191b 14px);
+  background: linear-gradient(to right, transparent, var(--row-hover-solid) 14px);
   opacity: 0;
   pointer-events: none;
   transition: opacity 80ms var(--ease);
 }
 
 .agent-row--selected .agent-row__actions {
-  background: linear-gradient(to right, transparent, #1f1f22 14px);
+  background: linear-gradient(to right, transparent, var(--row-active-solid) 14px);
 }
 
 .agent-row:hover .agent-row__actions {
@@ -1644,7 +1713,7 @@ body.is-resizing-horizontal .sash--horizontal::before {
 }
 
 .composer__box:focus-within {
-  border-color: #45454d;
+  border-color: var(--line-focus);
   box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.03);
 }
 
@@ -1740,7 +1809,7 @@ body.is-resizing-horizontal .sash--horizontal::before {
   border: 0;
   border-radius: 50%;
   background: var(--text-1);
-  color: #111113;
+  color: var(--btn-primary-ink);
   transition: background-color 120ms var(--ease), opacity 120ms var(--ease), transform 80ms var(--ease);
 }
 
@@ -1750,7 +1819,7 @@ body.is-resizing-horizontal .sash--horizontal::before {
 }
 
 .composer__send:hover:not(:disabled) {
-  background: #ffffff;
+  background: var(--btn-primary-hover);
 }
 
 .composer__send:active:not(:disabled) {
@@ -2034,7 +2103,7 @@ textarea.new-agent__claims::placeholder {
 
 .model-switch--on::after {
   left: 14px;
-  background: #111113;
+  background: var(--btn-primary-ink);
 }
 
 /* ── Agent view ────────────────────────────────────────────────────────── */
@@ -2131,7 +2200,7 @@ textarea.new-agent__claims::placeholder {
 
 .review-toggle--on {
   background: var(--bg-active);
-  border-color: #3a3a41;
+  border-color: var(--line-hover);
 }
 
 .review-toggle__count {
@@ -2553,7 +2622,7 @@ textarea.new-agent__claims::placeholder {
 }
 
 .diff-line--hunk {
-  background: rgba(106, 166, 222, 0.06);
+  background: var(--diff-hunk-bg);
 }
 
 .diff-line--hunk .diff-line__text,
@@ -3609,6 +3678,63 @@ textarea.new-agent__claims::placeholder {
   color: var(--text-3);
 }
 
+/* ── Ember look ────────────────────────────────────────────────────────── */
+
+/* The work surface floats as a sheet on the window ground. */
+:root[data-theme="ember"] .wb-center {
+  margin: 0 8px 8px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 225, 200, 0.035),
+    0 24px 48px -28px rgba(0, 0, 0, 0.85);
+}
+
+:root[data-theme="ember"] .wb-main > .wb-center:first-child {
+  margin-left: 8px;
+}
+
+/* Running is Lore's mark: two rings orbiting in opposite directions. */
+.status-icon .status-icon__rings {
+  display: none;
+}
+
+:root[data-theme="ember"] .status-icon--running svg:first-child {
+  display: none;
+}
+
+:root[data-theme="ember"] .status-icon--running .status-icon__rings {
+  display: block;
+  animation: none;
+}
+
+.status-icon__ring--outer {
+  transform-origin: 90px 48px;
+  animation: spin 2.2s linear infinite;
+}
+
+.status-icon__ring--inner {
+  transform-origin: 64px 48px;
+  animation: spin 1.4s linear infinite reverse;
+}
+
+/* Ember glows only where an agent needs you. */
+:root[data-theme="ember"] .status-icon--attention svg {
+  filter: drop-shadow(0 0 4px rgba(255, 138, 61, 0.55));
+}
+
+:root[data-theme="ember"] .notice--attention {
+  box-shadow: 0 16px 34px -24px rgba(255, 120, 40, 0.7);
+}
+
+/* No bottom bar: the counts sit at the foot of the sidebar. */
+.statusbar--sidebar {
+  flex-wrap: wrap;
+  height: auto;
+  padding: 8px 0 10px;
+  background: transparent;
+}
+
 /* ── Error boundary (main.tsx) ─────────────────────────────────────────── */
 
 .error-boundary {
@@ -3660,7 +3786,7 @@ textarea.new-agent__claims::placeholder {
 .btn--primary {
   border-color: transparent;
   background: var(--text-1);
-  color: #111113;
+  color: var(--btn-primary-ink);
 }
 
 @media (prefers-reduced-motion: reduce) {

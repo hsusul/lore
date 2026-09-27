@@ -45,6 +45,7 @@ import {
   writeStored,
   type SidebarView,
   type Tab,
+  type Theme,
 } from "./state";
 import StatusBar from "./StatusBar";
 import { dirKey, useDirCache } from "./useDirCache";
@@ -74,6 +75,7 @@ export default function Workbench() {
   );
   const [panelTab, setPanelTab] = useState<PanelTab>("output");
   const [allRepos, setAllRepos] = useState(() => readStored(STORAGE_KEYS.allRepos) === "true");
+  const [theme, setTheme] = useState<Theme>(() => (readStored(STORAGE_KEYS.theme) === "classic" ? "classic" : "ember"));
   const [scope, setScope] = useState("repo");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [agentPane, setAgentPane] = useState<AgentPane>("activity");
@@ -107,6 +109,12 @@ export default function Workbench() {
   useEffect(() => writeStored(STORAGE_KEYS.sidebarOpen, String(sidebarOpen)), [sidebarOpen]);
   useEffect(() => writeStored(STORAGE_KEYS.sidebarView, sidebarView), [sidebarView]);
   useEffect(() => writeStored(STORAGE_KEYS.allRepos, String(allRepos)), [allRepos]);
+  // The look is a root attribute so the stylesheet's tokens reach portaled menus and toasts too.
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    writeStored(STORAGE_KEYS.theme, theme);
+  }, [theme]);
+  const ember = theme === "ember";
 
   const taskById = useMemo(() => new Map((tasks ?? []).map((t) => [t.id, t])), [tasks]);
   const visibleTasks = useMemo(() => {
@@ -389,6 +397,12 @@ export default function Workbench() {
       { id: "cmd:toggle-panel", group: "Command", label: "Toggle panel", hint: shortcut("J"), run: togglePanel },
       { id: "cmd:merge-queue", group: "Command", label: "Merge queue", run: openMergeQueue },
       {
+        id: "cmd:theme",
+        group: "Command",
+        label: ember ? "Use the classic look" : "Use the Ember look",
+        run: () => setTheme(ember ? "classic" : "ember"),
+      },
+      {
         id: "cmd:close-tab",
         group: "Command",
         label: "Close tab",
@@ -479,6 +493,7 @@ export default function Workbench() {
     showAgents,
     togglePanel,
     openFile,
+    ember,
   ]);
 
   const agentStage = selectedTaskId ? (
@@ -533,6 +548,14 @@ export default function Workbench() {
       onOpenMergeQueue={openMergeQueue}
     />
   );
+  const statusProps = {
+    workspace,
+    runningCount,
+    attentionCount,
+    selectedBranch: selectedTask?.branch ?? null,
+    onShowAgents: showAgents,
+    onShowOverview: showOverview,
+  };
 
   return (
     <div className="wb">
@@ -634,6 +657,7 @@ export default function Workbench() {
                   switcher={sidebarSwitch}
                 />
               )}
+              {ember && <StatusBar {...statusProps} placement="sidebar" />}
             </aside>
             <Sash
               orientation="vertical"
@@ -685,19 +709,12 @@ export default function Workbench() {
         </div>
       </div>
 
-      <StatusBar
-        workspace={workspace}
-        runningCount={runningCount}
-        attentionCount={attentionCount}
-        selectedBranch={selectedTask?.branch ?? null}
-        onShowAgents={showAgents}
-        onShowOverview={showOverview}
-      />
+      {!ember && <StatusBar {...statusProps} />}
 
       <Toaster
         theme="dark"
         position="bottom-right"
-        offset={{ bottom: 34, right: 12 }}
+        offset={ember ? { bottom: 20, right: 20 } : { bottom: 34, right: 12 }}
         visibleToasts={4}
         style={TOAST_THEME}
       />

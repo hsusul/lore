@@ -72,7 +72,24 @@ export function StatusIcon({ status, decorative = false }: { status: Status; dec
           </g>
         )}
       </svg>
+      {status === "running" && <LoreRings />}
     </span>
+  );
+}
+
+/**
+ * The Ember look's running indicator: Lore's mark, its two rings orbiting in
+ * opposite directions. The stylesheet shows it in place of the spinner.
+ */
+function LoreRings() {
+  return (
+    <svg className="status-icon__rings" viewBox="0 0 140 96" width="18" height="12" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="currentColor" strokeWidth="11" strokeLinecap="round">
+        <circle className="status-icon__ring status-icon__ring--outer" cx="90" cy="48" r="30" strokeDasharray="128 60.5" />
+        <circle className="status-icon__ring status-icon__ring--inner" cx="64" cy="48" r="20" strokeDasharray="84 41.7" />
+      </g>
+      <circle cx="28" cy="48" r="9" fill="currentColor" />
+    </svg>
   );
 }
 

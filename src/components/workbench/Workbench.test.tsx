@@ -327,7 +327,8 @@ describe("Workbench", () => {
     expect(await screen.findByRole("heading", { name: "Fix parser" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: /Agent: Fix parser/ })).toBeNull();
     await screen.findByText("All done");
-    expect(screen.getByText("lore/fix-parser", { selector: ".statusbar .mono" })).toBeTruthy();
+    // The Ember look has no bottom bar; the branch is in the agent's header.
+    expect(screen.getByText("lore/fix-parser", { selector: ".agent-bar__branch" })).toBeTruthy();
 
     fireEvent.keyDown(window, { key: "j", metaKey: true });
     const panel = screen.getByRole("region", { name: "Panel" });
@@ -436,4 +437,5 @@ describe("Workbench", () => {
     });
     expect(screen.getByRole("region", { name: "Panel" })).toBeTruthy();
   });
+
 });
