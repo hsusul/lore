@@ -64,15 +64,6 @@ export const ToolIcon = () => (
   </Icon>
 );
 
-/** Options: two sliders. */
-export const SlidersIcon = () => (
-  <Icon size={14}>
-    <path d="M2.75 5h6.5M12.25 5h1M2.75 11h1M6.75 11h6.5" />
-    <circle cx="10.75" cy="5" r="1.5" />
-    <circle cx="5.25" cy="11" r="1.5" />
-  </Icon>
-);
-
 /** More actions: three dots. */
 export const MoreIcon = () => (
   <Icon>

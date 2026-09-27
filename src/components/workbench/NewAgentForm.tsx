@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
 
 import {
   createTask,
@@ -9,7 +9,6 @@ import {
   type TaskPermission,
 } from "../../ipc";
 import AgentMenu from "./AgentMenu";
-import { SlidersIcon } from "./icons";
 import { deriveTitle, errorText, parseClaims } from "./state";
 
 type Props = {
@@ -46,7 +45,6 @@ export default function NewAgentForm({
   const [autoHandoff, setAutoHandoff] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [options, setOptions] = useState(false);
   const [split, setSplit] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
@@ -148,36 +146,6 @@ export default function NewAgentForm({
               }
             }}
           />
-          {options && (
-            <div className="new-agent__options">
-              <label className="new-agent__field">
-                <span>Title</span>
-                <input
-                  className="new-agent__name"
-                  type="text"
-                  aria-label="Title"
-                  placeholder={autoTitle || "From the prompt's first line"}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                />
-              </label>
-              <label className="new-agent__field">
-                <span>Owns</span>
-                <textarea
-                  rows={1}
-                  className="new-agent__claims"
-                  aria-label="Owns (files or folders)"
-                  placeholder="e.g. src/parser/, docs/SCHEMA.md"
-                  value={claimsText}
-                  onChange={(e) => setClaimsText(e.target.value)}
-                />
-              </label>
-              <p className="new-agent__hint">
-                Other agents are told not to touch owned paths, and a commit that changes another agent&rsquo;s files
-                needs confirmation. End a folder with <span className="mono">/</span>.
-              </p>
-            </div>
-          )}
           {claims.length > 0 && (
             <ul className="claim-chips" aria-label="Owned paths">
               {claims.map((claim) => (
@@ -207,15 +175,26 @@ export default function NewAgentForm({
               onEffortChange={setEffort}
               disabled={disabled}
             />
-            <button
-              type="button"
-              className={`composer__tool${options || claims.length > 0 || title ? " composer__tool--on" : ""}`}
-              aria-expanded={options}
-              onClick={() => setOptions((v) => !v)}
-            >
-              <SlidersIcon />
-              Options
-            </button>
+            <ChipField
+              label="Title"
+              inputLabel="Title"
+              value={title}
+              onChange={setTitle}
+              placeholder={autoTitle || "From the prompt's first line"}
+              hint="Optional. Defaults to the prompt's first line."
+              onDone={() => promptRef.current?.focus()}
+            />
+            <ChipField
+              label="Owns"
+              inputLabel="Owns (files or folders)"
+              value={claimsText}
+              onChange={setClaimsText}
+              placeholder="src/parser/, docs/SCHEMA.md"
+              summary={claims.length === 0 ? "" : claims.length === 1 ? claims[0] : `${claims.length} paths`}
+              multiline
+              hint="Other agents are told not to touch owned paths, and a commit that changes another agent's files needs confirmation. End a folder with /."
+              onDone={() => promptRef.current?.focus()}
+            />
             {allowSplit && (
               <button
                 type="button"
@@ -242,5 +221,88 @@ export default function NewAgentForm({
         </div>
       </fieldset>
     </form>
+  );
+}
+
+/**
+ * An optional setting as a quiet chip in the composer bar, edited in place:
+ * click to type, and Enter, Escape, or leaving the field turns it back into a
+ * chip that shows the value.
+ */
+function ChipField({
+  label,
+  inputLabel,
+  value,
+  onChange,
+  placeholder,
+  summary,
+  hint,
+  onDone,
+  multiline = false,
+}: {
+  label: string;
+  /** The input's accessible name. */
+  inputLabel: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  /** The value as the chip shows it; defaults to the trimmed value. */
+  summary?: string;
+  /** What the setting does: the chip's tooltip and the input's description. */
+  hint: string;
+  /** Editing ended from the keyboard; the form puts focus back in the prompt. */
+  onDone: () => void;
+  /** Keep pasted lines (a one-row textarea; Shift+Enter adds a line). */
+  multiline?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const hintId = useId();
+  const fieldProps = {
+    className: "chip-field__input",
+    "aria-label": inputLabel,
+    "aria-describedby": hintId,
+    placeholder,
+    spellCheck: false,
+    value,
+    onChange: (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onChange(e.target.value),
+    onBlur: () => setEditing(false),
+    onKeyDown: (e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      const finish = (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) || e.key === "Escape";
+      if (!finish) return;
+      // Done with the field, not the form: Enter does not launch, Escape does not close a dialog.
+      e.preventDefault();
+      e.stopPropagation();
+      setEditing(false);
+      onDone();
+    },
+  };
+  if (editing) {
+    return (
+      <span className="chip-field">
+        <span className="chip-field__label" aria-hidden="true">
+          {label}
+        </span>
+        {multiline ? (
+          <textarea autoFocus rows={1} {...fieldProps} />
+        ) : (
+          <input autoFocus type="text" {...fieldProps} />
+        )}
+        <span id={hintId} className="visually-hidden">
+          {hint}
+        </span>
+      </span>
+    );
+  }
+  const shown = summary ?? value.trim();
+  return (
+    <button
+      type="button"
+      className={`composer__tool${shown ? " composer__tool--on" : ""}`}
+      title={hint}
+      onClick={() => setEditing(true)}
+    >
+      {label}
+      {shown && <span className="chip-field__value">{shown}</span>}
+    </button>
   );
 }

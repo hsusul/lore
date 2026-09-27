@@ -31,14 +31,14 @@ function chooseAgent(name: "Claude Code" | "Codex") {
   expect(screen.getByRole("menuitem", { name: /^Agent\b/ }).textContent).toContain(name);
 }
 
-/** Title and owned paths sit behind Options; open it on first use. */
+/** Title and owned paths are chips in the composer bar; click one to type in it. */
 function titleField() {
-  if (!screen.queryByLabelText("Title")) fireEvent.click(screen.getByRole("button", { name: "Options" }));
+  if (!screen.queryByLabelText("Title")) fireEvent.click(screen.getByRole("button", { name: /^Title/ }));
   return screen.getByLabelText("Title");
 }
 
 function ownsField() {
-  if (!screen.queryByLabelText("Owns (files or folders)")) fireEvent.click(screen.getByRole("button", { name: "Options" }));
+  if (!screen.queryByLabelText("Owns (files or folders)")) fireEvent.click(screen.getByRole("button", { name: /^Owns/ }));
   return screen.getByLabelText("Owns (files or folders)");
 }
 
@@ -265,5 +265,20 @@ describe("NewAgentForm", () => {
     expect(createTask).not.toHaveBeenCalled();
     fireEvent.keyDown(prompt, { key: "Enter" });
     await waitFor(() => expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ prompt: "fix it" })));
+  });
+
+  it("edits Title and Owns in place as chips, then shows what was set", () => {
+    renderForm();
+    fireEvent.change(titleField(), { target: { value: "Fix parser" } });
+    // Enter finishes the field without launching, and the prompt gets focus back.
+    fireEvent.keyDown(screen.getByLabelText("Title"), { key: "Enter" });
+    expect(screen.queryByLabelText("Title")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByLabelText("Prompt"));
+    expect(screen.getByRole("button", { name: "Title Fix parser" })).toBeTruthy();
+
+    fireEvent.change(ownsField(), { target: { value: "src/parser/, docs/SCHEMA.md" } });
+    fireEvent.keyDown(screen.getByLabelText("Owns (files or folders)"), { key: "Escape" });
+    expect(screen.getByRole("button", { name: "Owns 2 paths" })).toBeTruthy();
+    expect(createTask).not.toHaveBeenCalled();
   });
 });
