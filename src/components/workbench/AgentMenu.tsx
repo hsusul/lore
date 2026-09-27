@@ -5,9 +5,11 @@ import type { TaskAgent, TaskEffort, TaskPermission } from "../../ipc";
 import {
   EFFORTS,
   effortLabel,
+  isModelId,
   modelLabel,
   modelsFor,
   pickerLabel,
+  type ModelOption,
 } from "./agentOptions";
 import { ChevronIcon, TickIcon } from "./icons";
 import { AGENT_LABELS } from "./state";
@@ -27,12 +29,13 @@ const PERMISSIONS: TaskPermission[] = ["edits", "auto"];
 const MENU_WIDTH = 260;
 const ITEMS = '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="radio"]';
 
-type Pane = "root" | "agent" | "permission" | "model" | "effort";
+type Pane = "root" | "agent" | "permission" | "model" | "custom" | "effort";
 
 const PANE_TITLES: Record<Exclude<Pane, "root">, string> = {
   agent: "Agent",
   permission: "Permission",
   model: "Model",
+  custom: "Other model",
   effort: "Effort",
 };
 
@@ -82,7 +85,9 @@ export default function AgentMenu({
   const showPermission = full && agent === "claude_code";
   const [open, setOpen] = useState(false);
   const [pane, setPane] = useState<Pane>("root");
-  const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
+  const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number; maxHeight: number } | null>(
+    null,
+  );
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -103,10 +108,11 @@ export default function AgentMenu({
     function place() {
       const rect = anchor.getBoundingClientRect();
       const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - MENU_WIDTH - 8));
+      // A long pane (every model) scrolls inside the room between the trigger and the window edge.
       if (placement === "up") {
-        setCoords({ left, bottom: window.innerHeight - rect.top + 6 });
+        setCoords({ left, bottom: window.innerHeight - rect.top + 6, maxHeight: rect.top - 14 });
       } else {
-        setCoords({ left, top: rect.bottom + 6 });
+        setCoords({ left, top: rect.bottom + 6, maxHeight: window.innerHeight - rect.bottom - 14 });
       }
     }
     place();
@@ -125,6 +131,7 @@ export default function AgentMenu({
     const back = returnTo.current;
     returnTo.current = null;
     const target =
+      menuRef.current.querySelector<HTMLElement>("input") ||
       (back && menuRef.current.querySelector<HTMLElement>(`[data-pane="${back}"]`)) ||
       menuRef.current.querySelector<HTMLElement>('[aria-checked="true"]:not([role="menuitemcheckbox"])') ||
       menuRef.current.querySelector<HTMLElement>(ITEMS);
@@ -138,7 +145,8 @@ export default function AgentMenu({
 
   function back() {
     returnTo.current = pane;
-    setPane("root");
+    // Other model is opened from the model list, so it goes back there.
+    setPane(pane === "custom" ? "model" : "root");
   }
 
   useEffect(() => {
@@ -168,6 +176,8 @@ export default function AgentMenu({
   }, [open, pane]);
 
   function onMenuKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    // In a text field the arrows and Home/End edit text; Escape still goes back.
+    if (event.target instanceof HTMLInputElement && event.key !== "Tab") return;
     const rows = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>(ITEMS) ?? []).filter(
       (row) => !row.disabled,
     );
@@ -220,7 +230,8 @@ export default function AgentMenu({
 
   function pickModel(next: string | null) {
     onModelChange?.(next);
-    back();
+    returnTo.current = "model";
+    setPane("root");
   }
 
   function pickEffort(next: TaskEffort | null) {
@@ -229,6 +240,8 @@ export default function AgentMenu({
   }
 
   const triggerText = pickerLabel(AGENT_LABELS[agent], agent, model, effort);
+  /** A model typed in under Other model rather than picked from the list. */
+  const customModel = model && !modelsFor(agent).some((item) => item.id === model) ? model : null;
 
   const menu = shown ? (
     <div
@@ -237,7 +250,7 @@ export default function AgentMenu({
       className="model-menu"
       role="menu"
       aria-label={pane === "root" ? `${label} settings` : PANE_TITLES[pane]}
-      style={{ top: coords.top, bottom: coords.bottom, left: coords.left }}
+      style={{ top: coords.top, bottom: coords.bottom, left: coords.left, maxHeight: coords.maxHeight }}
       onKeyDown={onMenuKeyDown}
     >
       {pane === "root" && (
@@ -303,16 +316,31 @@ export default function AgentMenu({
         </div>
       )}
       {pane === "model" && (
-        <div role="radiogroup" aria-label="Model">
-          <OptionRow role="radio" checked={!model} onPick={() => pickModel(null)}>
-            Default
-          </OptionRow>
-          {modelsFor(agent).map((item) => (
-            <OptionRow key={item.id} role="radio" checked={model === item.id} onPick={() => pickModel(item.id)}>
-              {item.label}
+        <>
+          <div role="radiogroup" aria-label="Model">
+            <OptionRow role="radio" checked={!model} onPick={() => pickModel(null)}>
+              Default
             </OptionRow>
-          ))}
-        </div>
+            {modelGroups(modelsFor(agent)).map(([group, items]) => (
+              <div key={group ?? "models"} role="group" aria-label={group}>
+                {group && (
+                  <div className="model-menu__heading" aria-hidden="true">
+                    {group}
+                  </div>
+                )}
+                {items.map((item) => (
+                  <OptionRow key={item.id} role="radio" checked={model === item.id} onPick={() => pickModel(item.id)}>
+                    {item.label}
+                  </OptionRow>
+                ))}
+              </div>
+            ))}
+          </div>
+          <PaneRow pane="custom" value={customModel ?? ""} onOpen={setPane} />
+        </>
+      )}
+      {pane === "custom" && (
+        <CustomModel agent={agent} initial={customModel ?? ""} onApply={(id) => pickModel(id)} />
       )}
       {pane === "effort" && (
         <div role="radiogroup" aria-label="Effort">
@@ -416,5 +444,55 @@ function OptionRow({
         </span>
       )}
     </button>
+  );
+}
+
+/** Consecutive models under the same family heading, in list order. */
+function modelGroups(models: ModelOption[]): [string | undefined, ModelOption[]][] {
+  const groups: [string | undefined, ModelOption[]][] = [];
+  for (const item of models) {
+    const last = groups[groups.length - 1];
+    if (last && last[0] === item.group) last[1].push(item);
+    else groups.push([item.group, [item]]);
+  }
+  return groups;
+}
+
+/** Other model: any id the agent's CLI accepts, for models newer than Lore's list. */
+function CustomModel({ agent, initial, onApply }: { agent: TaskAgent; initial: string; onApply: (id: string) => void }) {
+  const [value, setValue] = useState(initial);
+  const [invalid, setInvalid] = useState(false);
+  const hintId = useId();
+  return (
+    <div className="model-menu__custom">
+      <input
+        className="model-menu__input"
+        type="text"
+        aria-label="Model id"
+        aria-describedby={hintId}
+        aria-invalid={invalid || undefined}
+        placeholder={agent === "codex" ? "gpt-5.6-sol" : "claude-opus-5-5"}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setInvalid(false);
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+          e.preventDefault();
+          const id = value.trim();
+          if (isModelId(id)) onApply(id);
+          else setInvalid(true);
+        }}
+      />
+      <p id={hintId} className={`model-menu__hint${invalid ? " model-menu__hint--error" : ""}`}>
+        {invalid
+          ? "Use letters, digits, dots, dashes, and underscores."
+          : `Any model id ${AGENT_LABELS[agent]} accepts. Enter to use it.`}
+      </p>
+    </div>
   );
 }
