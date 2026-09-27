@@ -90,12 +90,15 @@ describe("AgentView", () => {
     expect(h.onSelectTask).toHaveBeenCalledWith("t2");
   });
 
-  it("continues with the same agent, or hands off when another agent is chosen (⌘Enter submits)", async () => {
+  it("continues with the same agent, or hands off when another agent is chosen (Enter sends)", async () => {
     const h = renderView({});
     const input = screen.getByLabelText("Follow-up prompt");
     expect(screen.getByLabelText("Next agent").textContent).toContain("Claude Code");
     fireEvent.change(input, { target: { value: " add tests " } });
-    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    // Shift+Enter is a new line, not a send.
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(h.onContinue).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(h.onContinue).toHaveBeenCalledWith({ id: "t1", prompt: "add tests", model: "" }));
     await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(""));
 

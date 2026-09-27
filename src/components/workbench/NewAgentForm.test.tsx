@@ -255,4 +255,15 @@ describe("NewAgentForm", () => {
     renderForm();
     expect(screen.queryByRole("button", { name: "One per line" })).toBeNull();
   });
+
+  it("launches on Enter and adds a line on Shift+Enter", async () => {
+    vi.mocked(createTask).mockResolvedValue(task({ id: "new" }));
+    renderForm();
+    const prompt = screen.getByLabelText("Prompt");
+    fireEvent.change(prompt, { target: { value: "fix it" } });
+    fireEvent.keyDown(prompt, { key: "Enter", shiftKey: true });
+    expect(createTask).not.toHaveBeenCalled();
+    fireEvent.keyDown(prompt, { key: "Enter" });
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ prompt: "fix it" })));
+  });
 });

@@ -10,7 +10,7 @@ import {
 } from "../../ipc";
 import AgentMenu from "./AgentMenu";
 import { SlidersIcon } from "./icons";
-import { deriveTitle, errorText, parseClaims, shortcut } from "./state";
+import { deriveTitle, errorText, parseClaims } from "./state";
 
 type Props = {
   workspace: string | null;
@@ -141,7 +141,8 @@ export default function NewAgentForm({
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              // Enter launches; Shift+Enter is a new line. Not while an input method is composing.
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 e.currentTarget.form?.requestSubmit();
               }
@@ -231,11 +232,11 @@ export default function NewAgentForm({
               type="submit"
               className="wb-btn wb-btn--primary new-agent__launch"
               disabled={busy}
-              title={`Launch (${shortcut("Enter")})`}
+              title="Launch (Enter; Shift+Enter for a new line)"
               aria-label={busy ? "Launching…" : launchLabel}
             >
               {busy ? "Launching…" : launchLabel}
-              <kbd>{shortcut("↵")}</kbd>
+              <kbd>↵</kbd>
             </button>
           </div>
         </div>

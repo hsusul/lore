@@ -16,7 +16,7 @@ import {
   TrashIcon,
   WarningIcon,
 } from "./icons";
-import { errorText, isOwnershipError, shortcut } from "./state";
+import { errorText, isOwnershipError } from "./state";
 import { useActivity } from "./useTasks";
 
 type Props = {
@@ -620,7 +620,8 @@ export default function AgentView({
                     disabled={continuing}
                     onChange={(e) => setPrompt(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      // Enter sends; Shift+Enter is a new line. Not while an input method is composing.
+                      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                         e.preventDefault();
                         e.currentTarget.form?.requestSubmit();
                       }
@@ -653,7 +654,7 @@ export default function AgentView({
                       type="submit"
                       className="composer__send"
                       disabled={continuing || queueLocked}
-                      title={`Send (${shortcut("Enter")})`}
+                      title="Send (Enter; Shift+Enter for a new line)"
                       aria-label={continuing ? "Sending…" : handoff ? `Hand off to ${AGENT_SHORT[nextAgent]}` : "Continue"}
                     >
                       <ArrowUpIcon />
