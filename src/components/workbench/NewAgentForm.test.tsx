@@ -212,4 +212,47 @@ describe("NewAgentForm", () => {
     expect(prompt.value).toBe("Add a dark mode toggle");
     expect(prompt.selectionStart).toBe("Add a dark mode toggle".length);
   });
+
+  it("launches one agent per line when One per line is on, each titled from its line", async () => {
+    vi.mocked(createTask).mockImplementation((request) => Promise.resolve(task({ id: request.title })));
+    const props = renderForm({ allowSplit: true });
+    const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    fireEvent.change(prompt, { target: { value: "Add a currency switcher\n\n  Show a toast when retries give up  \n" } });
+    // Off by default: several lines are still one task.
+    expect(screen.getByRole("button", { name: "Launch" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "One per line" }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch 2 agents" }));
+
+    await waitFor(() => expect(props.onCreated).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(createTask).mock.calls.map(([request]) => [request.title, request.prompt])).toEqual([
+      ["Add a currency switcher", "Add a currency switcher"],
+      ["Show a toast when retries give up", "Show a toast when retries give up"],
+    ]);
+    expect(prompt.value).toBe("");
+  });
+
+  it("keeps the lines it did not launch when one fails, and keeps a title or owned paths to one agent", async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(task({ id: "a" })).mockRejectedValueOnce("usage limit");
+    const props = renderForm({ allowSplit: true });
+    fireEvent.click(screen.getByRole("button", { name: "One per line" }));
+    const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    fireEvent.change(prompt, { target: { value: "first\nsecond\nthird" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch 3 agents" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe("Launched 1 of 3. usage limit");
+    expect(props.onCreated).toHaveBeenCalledTimes(1);
+    expect(prompt.value).toBe("second\nthird");
+
+    fireEvent.change(ownsField(), { target: { value: "src/" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch 2 agents" }));
+    expect(screen.getByRole("alert").textContent).toBe(
+      "A title and owned paths belong to one agent. Turn off One per line to use them.",
+    );
+    expect(createTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers One per line only where asked, not in the New agent dialog", () => {
+    renderForm();
+    expect(screen.queryByRole("button", { name: "One per line" })).toBeNull();
+  });
 });

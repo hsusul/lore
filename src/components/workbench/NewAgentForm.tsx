@@ -20,6 +20,8 @@ type Props = {
   initialPrompt?: string;
   /** Focus the prompt when the form appears, caret at the end. */
   autoFocus?: boolean;
+  /** Offer One per line: each non-empty line of the prompt launches its own agent. */
+  allowSplit?: boolean;
 };
 
 /**
@@ -32,6 +34,7 @@ export default function NewAgentForm({
   onOpenFolder,
   initialPrompt = "",
   autoFocus = false,
+  allowSplit = false,
 }: Props) {
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState(initialPrompt);
@@ -44,6 +47,7 @@ export default function NewAgentForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [options, setOptions] = useState(false);
+  const [split, setSplit] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -55,42 +59,63 @@ export default function NewAgentForm({
 
   const claims = parseClaims(claimsText);
   const autoTitle = deriveTitle(prompt);
+  const lines = prompt
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  // With One per line on, every line is its own task; otherwise the prompt is one.
+  const prompts = allowSplit && split && lines.length > 1 ? lines : [prompt.trim()];
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!workspace) return;
-    const request: CreateTaskRequest = {
-      repo_path: workspace,
-      title: title.trim() || autoTitle,
-      prompt: prompt.trim(),
-      agent,
-      permission,
-      auto_handoff: autoHandoff,
-    };
-    if (claims.length > 0) request.claims = claims;
-    if (model) request.model = model;
-    if (effort) request.effort = effort;
-    if (!request.prompt) {
+    if (!prompts[0]) {
       setError("Describe what the agent should do.");
       promptRef.current?.focus();
       return;
     }
+    if (prompts.length > 1 && (title.trim() || claims.length > 0)) {
+      setError("A title and owned paths belong to one agent. Turn off One per line to use them.");
+      return;
+    }
+    const requestFor = (text: string): CreateTaskRequest => {
+      const request: CreateTaskRequest = {
+        repo_path: workspace,
+        title: prompts.length > 1 ? deriveTitle(text) : title.trim() || autoTitle,
+        prompt: text,
+        agent,
+        permission,
+        auto_handoff: autoHandoff,
+      };
+      if (claims.length > 0) request.claims = claims;
+      if (model) request.model = model;
+      if (effort) request.effort = effort;
+      return request;
+    };
     setBusy(true);
     setError(null);
+    // One at a time, so a failure leaves the lines it did not launch in the box.
+    const created: TaskDto[] = [];
     try {
-      const task = await createTask(request);
+      for (const text of prompts) created.push(await createTask(requestFor(text)));
       setTitle("");
       setPrompt("");
       setClaimsText("");
-      onCreated(task);
     } catch (e) {
-      setError(errorText(e));
+      if (created.length > 0) {
+        setPrompt(prompts.slice(created.length).join("\n"));
+        setError(`Launched ${created.length} of ${prompts.length}. ${errorText(e)}`);
+      } else {
+        setError(errorText(e));
+      }
     } finally {
       setBusy(false);
     }
+    for (const task of created) onCreated(task);
   }
 
   const disabled = !workspace;
+  const launchLabel = prompts.length > 1 ? `Launch ${prompts.length} agents` : "Launch";
   return (
     <form className="new-agent" aria-label="New agent" onSubmit={(e) => void submit(e)}>
       {disabled && (
@@ -108,7 +133,11 @@ export default function NewAgentForm({
             className="composer__input new-agent__prompt"
             aria-label="Prompt"
             rows={3}
-            placeholder="Describe a task. The agent gets its own worktree and branch."
+            placeholder={
+              split
+                ? "One task per line. Each gets its own agent, worktree and branch."
+                : "Describe a task. The agent gets its own worktree and branch."
+            }
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
@@ -186,15 +215,26 @@ export default function NewAgentForm({
               <SlidersIcon />
               Options
             </button>
+            {allowSplit && (
+              <button
+                type="button"
+                className={`composer__tool${split ? " composer__tool--on" : ""}`}
+                aria-pressed={split}
+                title="Launch one agent for each line"
+                onClick={() => setSplit((v) => !v)}
+              >
+                One per line
+              </button>
+            )}
             <span className="composer__spacer" />
             <button
               type="submit"
               className="wb-btn wb-btn--primary new-agent__launch"
               disabled={busy}
               title={`Launch (${shortcut("Enter")})`}
-              aria-label={busy ? "Launching…" : "Launch"}
+              aria-label={busy ? "Launching…" : launchLabel}
             >
-              {busy ? "Launching…" : "Launch"}
+              {busy ? "Launching…" : launchLabel}
               <kbd>{shortcut("↵")}</kbd>
             </button>
           </div>
