@@ -438,4 +438,33 @@ describe("Workbench", () => {
     expect(screen.getByRole("region", { name: "Panel" })).toBeTruthy();
   });
 
+  it("opens on the Ember board, with the List view and the classic look one step away and remembered", async () => {
+    vi.mocked(listTasks).mockResolvedValue([task({ repo_path: "/work/repo" })]);
+    render(<Workbench />);
+    expect(document.documentElement.dataset.theme).toBe("ember");
+    // The board replaces the welcome screen once the workspace opens.
+    const running = await screen.findByRole("region", { name: "Running" });
+    expect(await within(running).findByRole("button", { name: "Fix parser" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Overview" }).contains(running)).toBe(true);
+    // No bottom bar: the counts sit at the foot of the sidebar, and the path is not shown.
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
+    expect(within(sidebar).getByRole("button", { name: /1 agent running/ })).toBeTruthy();
+    expect(screen.queryByText("/work/repo")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    expect(screen.getByRole("tablist", { name: "Filter agents" })).toBeTruthy();
+    expect(window.localStorage.getItem(STORAGE_KEYS.homeView)).toBe("list");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search agents, commands, and files" });
+    fireEvent.change(input, { target: { value: "classic look" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(document.documentElement.dataset.theme).toBe("classic");
+    expect(window.localStorage.getItem(STORAGE_KEYS.theme)).toBe("classic");
+    // Classic is the previous design: the list without a layout switch, and the bottom status bar.
+    expect(screen.queryByRole("button", { name: "Board" })).toBeNull();
+    expect(screen.getByText("/work/repo")).toBeTruthy();
+  });
 });

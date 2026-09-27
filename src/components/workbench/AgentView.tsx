@@ -48,10 +48,10 @@ export function usageLimitHandoffPrompt(title: string): string {
   return `The previous agent stopped because it hit its usage limit. Continue this task from where it left off: ${title}`;
 }
 
-const USAGE_LIMIT = /usage limit|hit your limit|quota exceeded/i;
+export const USAGE_LIMIT = /usage limit|hit your limit|quota exceeded/i;
 
 /** Short agent names for handoff labels. */
-const AGENT_SHORT: Record<TaskAgent, string> = { claude_code: "Claude", codex: "Codex" };
+export const AGENT_SHORT: Record<TaskAgent, string> = { claude_code: "Claude", codex: "Codex" };
 
 type MergeOutcome = { kind: "result"; result: MergeResultDto } | { kind: "error"; message: string };
 

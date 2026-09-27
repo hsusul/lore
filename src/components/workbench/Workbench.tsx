@@ -14,6 +14,7 @@ import {
   type TaskDto,
 } from "../../ipc";
 import AgentsPanel from "./AgentsPanel";
+import BoardView, { ViewSwitch } from "./BoardView";
 import AgentView, { type AgentPane } from "./AgentView";
 import BottomPanel, { type PanelTab } from "./BottomPanel";
 import CommandPalette, { type PaletteItem } from "./CommandPalette";
@@ -43,6 +44,7 @@ import {
   stateLabel,
   tabsReducer,
   writeStored,
+  type HomeView,
   type SidebarView,
   type Tab,
   type Theme,
@@ -76,6 +78,9 @@ export default function Workbench() {
   const [panelTab, setPanelTab] = useState<PanelTab>("output");
   const [allRepos, setAllRepos] = useState(() => readStored(STORAGE_KEYS.allRepos) === "true");
   const [theme, setTheme] = useState<Theme>(() => (readStored(STORAGE_KEYS.theme) === "classic" ? "classic" : "ember"));
+  const [homeView, setHomeView] = useState<HomeView>(() =>
+    readStored(STORAGE_KEYS.homeView) === "list" ? "list" : "board",
+  );
   const [scope, setScope] = useState("repo");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [agentPane, setAgentPane] = useState<AgentPane>("activity");
@@ -109,6 +114,7 @@ export default function Workbench() {
   useEffect(() => writeStored(STORAGE_KEYS.sidebarOpen, String(sidebarOpen)), [sidebarOpen]);
   useEffect(() => writeStored(STORAGE_KEYS.sidebarView, sidebarView), [sidebarView]);
   useEffect(() => writeStored(STORAGE_KEYS.allRepos, String(allRepos)), [allRepos]);
+  useEffect(() => writeStored(STORAGE_KEYS.homeView, homeView), [homeView]);
   // The look is a root attribute so the stylesheet's tokens reach portaled menus and toasts too.
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -538,16 +544,33 @@ export default function Workbench() {
     </div>
   );
 
-  const home = (
-    <Home
-      workspace={workspace}
-      tasks={visibleTasks}
-      onSelect={selectTask}
-      onNewAgent={() => newAgent()}
-      onOpenFolder={() => void openFolder()}
-      onOpenMergeQueue={openMergeQueue}
-    />
-  );
+  // Ember opens on the board; its List view and the classic look keep the list.
+  const viewSwitch = ember && workspace ? <ViewSwitch view={homeView} onChange={setHomeView} /> : undefined;
+  const home =
+    ember && workspace && homeView === "board" ? (
+      <BoardView
+        workspace={workspace}
+        tasks={visibleTasks}
+        onSelect={selectTask}
+        onOpenDiff={openDiff}
+        onContinue={handleContinue}
+        onOpenMergeQueue={openMergeQueue}
+        onOpenFolder={() => void openFolder()}
+        onCreated={() => void refresh()}
+        queueRunning={mergeQueues.isRunning}
+        switcher={viewSwitch}
+      />
+    ) : (
+      <Home
+        workspace={workspace}
+        tasks={visibleTasks}
+        onSelect={selectTask}
+        onNewAgent={() => newAgent()}
+        onOpenFolder={() => void openFolder()}
+        onOpenMergeQueue={openMergeQueue}
+        switcher={viewSwitch}
+      />
+    );
   const statusProps = {
     workspace,
     runningCount,

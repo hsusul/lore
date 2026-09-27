@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 
 import { formatRelative, formatTime } from "../../format";
 import type { TaskDto } from "../../ipc";
@@ -26,6 +26,8 @@ type Props = {
   onNewAgent: () => void;
   onOpenFolder: () => void;
   onOpenMergeQueue: () => void;
+  /** The Board / List switch, shown beside New agent in the Ember look. */
+  switcher?: ReactNode;
 };
 
 /**
@@ -39,6 +41,7 @@ export default function Home({
   onNewAgent,
   onOpenFolder,
   onOpenMergeQueue,
+  switcher,
 }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const groups = groupTasks(tasks ?? []);
@@ -67,11 +70,14 @@ export default function Home({
                 {summary.length > 0 ? summary.map((part) => <span key={part}>{part}</span>) : <span>No agents yet</span>}
               </p>
             </div>
-            <button type="button" className="wb-btn wb-btn--primary" onClick={onNewAgent}>
-              <PlusIcon />
-              New agent
-              <kbd>{shortcut("N")}</kbd>
-            </button>
+            <div className="home__head-actions">
+              {switcher}
+              <button type="button" className="wb-btn wb-btn--primary" onClick={onNewAgent}>
+                <PlusIcon />
+                New agent
+                <kbd>{shortcut("N")}</kbd>
+              </button>
+            </div>
           </header>
         ) : (
           <header className="home__header home__header--welcome">

@@ -1694,6 +1694,283 @@ body.is-resizing-horizontal .sash--horizontal::before {
   text-align: right;
 }
 
+/* ── Board ─────────────────────────────────────────────────────────────── */
+/* The Ember overview: agents in columns by what they need from you. */
+
+.board {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 20px 18px;
+}
+
+.board__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.board__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.board__name {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board__branch {
+  color: var(--text-3);
+}
+
+.board__summary {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--text-sm);
+}
+
+/* The dialog's composer is borderless; on the board it is a raised box. */
+.board__composer .new-agent .composer__box,
+.board__composer .new-agent .composer__box:focus-within {
+  gap: 6px;
+  padding: 10px 10px 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
+  box-shadow: 0 14px 30px -18px rgba(0, 0, 0, 0.85);
+}
+
+.board__composer .new-agent .composer__box:focus-within {
+  border-color: var(--line-focus);
+}
+
+.board__composer .new-agent__prompt {
+  min-height: 44px;
+  font-size: var(--text-md);
+}
+
+.board__composer .new-agent .composer__bar {
+  margin-left: -6px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.board__cols {
+  flex: 1 0 auto;
+  display: grid;
+  gap: 10px;
+  min-height: 260px;
+  overflow-x: auto;
+}
+
+.board-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: var(--r-lg);
+  background: var(--bg-hover);
+}
+
+/* What needs you is the only warm light on the board. */
+.board-col--hot {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--amber) 13%, transparent),
+    color-mix(in srgb, var(--amber) 3%, transparent) 48%,
+    color-mix(in srgb, var(--amber) 1.5%, transparent)
+  );
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 17%, transparent);
+}
+
+.board-col__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 2px 4px;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.board-col--hot .board-col__title {
+  color: color-mix(in srgb, var(--amber) 65%, var(--text-1));
+}
+
+.board-col__count {
+  margin-left: auto;
+  color: var(--text-3);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-col__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-col__empty {
+  margin: 0;
+  padding: 8px 6px;
+  color: var(--text-3);
+  font-size: var(--text-sm);
+}
+
+.board-col__foot {
+  width: 100%;
+  margin-top: auto;
+}
+
+.board-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-raised);
+  transition: border-color 120ms var(--ease);
+}
+
+.board-card:hover {
+  border-color: var(--line-strong);
+}
+
+.board-card--attention,
+.board-card--attention:hover {
+  border-color: var(--amber-line);
+  box-shadow: 0 16px 34px -20px color-mix(in srgb, var(--amber) 60%, transparent);
+}
+
+.board-card--merged {
+  opacity: 0.62;
+}
+
+.board-card__main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.board-card__title {
+  color: var(--text-1);
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.board-card__why {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.board-card__warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--amber);
+  font-size: var(--text-sm);
+}
+
+.board-card__warn .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.board-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.board-card__meta .mono {
+  color: var(--text-2);
+}
+
+.board-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+.board-card__actions .wb-btn {
+  height: 26px;
+  padding: 0 10px;
+  font-size: var(--text-sm);
+}
+
+.board-card--attention .board-card__actions .wb-btn--primary {
+  background: var(--amber);
+  color: var(--status-ink);
+}
+
+.board-card > .wb-note {
+  margin: 0 12px 12px;
+}
+
+/* Board / List. */
+.view-switch {
+  flex: none;
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--r);
+  background: var(--bg-hover);
+}
+
+.view-switch__btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--r) - 2px);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--text-sm);
+}
+
+.view-switch__btn:hover {
+  color: var(--text-1);
+}
+
+.view-switch__btn[aria-pressed="true"] {
+  background: var(--bg-raised);
+  color: var(--text-1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.home__head-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* ── Composer (new agent and follow-ups) ──────────────────────────────── */
 
 .composer {
