@@ -41,7 +41,8 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "Run coding agents in parallel, each in its own git worktree",
+    "shortDescription": "A local, private archive of your Claude Code and Codex sessions",
+    "longDescription": "Lore keeps a local archive of your Claude Code and Codex sessions, linked to the git repositories they worked in. Search and read them in the app. Everything stays on your machine.",
     "macOS": {
       "minimumSystemVersion": "10.15"
     }
