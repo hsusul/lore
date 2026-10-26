@@ -83,6 +83,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "file_content_identity",
         sql: include_str!("../../migrations/0013_file_content_identity.sql"),
     },
+    Migration {
+        version: 14,
+        name: "ingest_resume",
+        sql: include_str!("../../migrations/0014_ingest_resume.sql"),
+    },
 ];
 
 /// How many migrations exist. Tests assert against this rather than a literal

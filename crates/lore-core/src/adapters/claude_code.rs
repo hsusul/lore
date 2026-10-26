@@ -12,13 +12,18 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::common::{bounded, epoch_ms, fallback_title, json_field, sanitize_path, str_field};
+use super::common::{
+    bounded, epoch_ms, finish_parse, json_field, resume_session, sanitize_path, str_field,
+    ParseEnd, ParseRun,
+};
 use super::{
-    AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
+    AgentAdapter, AgentId, AgentMetadata, ArchivedSession, Capabilities, Detection, DiscoveryRoots,
+    NothingArchived, SessionRef,
 };
 use crate::model::{
-    EventKind, FileChangeKind, FileEventSource, ParsedFileEvent, ParsedMessage, ParsedPart,
-    ParsedSegment, ParsedSession, ParsedToolCall, PartKind, Role, Tokens,
+    EventKind, FileChangeKind, FileEventSource, ParseCheckpoint, ParsedAppend, ParsedFileEvent,
+    ParsedMessage, ParsedPart, ParsedSegment, ParsedSession, ParsedToolCall, ParsedToolResult,
+    PartKind, Role, Tokens,
 };
 
 const AGENT_ID: AgentId = AgentId("claude-code");
@@ -53,89 +58,109 @@ impl ClaudeCodeAdapter {
     /// Parse already-read file content. Separated for deterministic testing.
     #[must_use]
     pub fn parse_str(&self, content: &str, fallback_dedupe: &str) -> ParsedSession {
-        let mut session = ParsedSession::new(fallback_dedupe);
-        // Per-message context (cwd, branch) used to build segments afterward.
-        let mut contexts: Vec<(Option<String>, Option<String>)> = Vec::new();
-        let mut offset: i64 = 0;
-        let mut seq: i64 = 0;
-        // native_call_id -> index into session.tool_calls, for result pairing.
-        let mut id_map: HashMap<String, usize> = HashMap::new();
-
-        for line in content.split_inclusive('\n') {
-            let line_start = offset;
-            offset += line.len() as i64;
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let Ok(obj) = serde_json::from_str::<Value>(trimmed) else {
-                session.note_partial("unparseable line (possibly truncated)");
-                continue;
-            };
-            let event_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
-
-            // Session-level metadata.
-            if session.native_session_id.is_none() {
-                session.native_session_id = str_field(&obj, "sessionId");
-            }
-            if session.agent_version.is_none() {
-                session.agent_version = str_field(&obj, "version");
-            }
-
-            match event_type {
-                "custom-title" => {
-                    session.title = str_field(&obj, "customTitle").or(session.title.take());
-                    continue;
-                }
-                "ai-title" => {
-                    if session.title.is_none() {
-                        session.title = str_field(&obj, "aiTitle");
-                    }
-                    continue;
-                }
-                // Internal bookkeeping events carry no conversation content.
-                "queue-operation" | "last-prompt" => continue,
-                "user" | "assistant" | "system" | "attachment" | "summary" | "mode" | "pr-link" => {
-                }
-                other => {
-                    session.note_partial(format!("unhandled event type: {}", bounded(other)));
-                    continue;
-                }
-            }
-
-            let msg = build_message(&obj, event_type, seq, line_start, &mut session);
-            extract_tool_calls(&obj, seq, &mut session, &mut id_map);
-            contexts.push((str_field(&obj, "cwd"), str_field(&obj, "gitBranch")));
-            if let Some(ts) = msg.ts {
-                session.started_at = Some(session.started_at.map_or(ts, |s| s.min(ts)));
-                session.ended_at = Some(session.ended_at.map_or(ts, |e| e.max(ts)));
-            }
-            if session.primary_model.is_none() {
-                session.primary_model = msg.model.clone();
-            }
-            session.messages.push(msg);
-            seq += 1;
-        }
-
-        assign_segments(&mut session, &contexts);
-        super::common::resolve_file_event_segments(&mut session);
-        if session.title.is_none() {
-            session.title = fallback_title(&session.messages);
-            session.title_is_synthetic = session.title.is_some();
-        }
-        session
+        self.parse_checkpointed(content, fallback_dedupe).0
     }
+}
+
+/// Parse `content` as the lines that follow `from`.
+fn parse_from(
+    from: &ParseCheckpoint,
+    content: &str,
+    fallback_dedupe: &str,
+    archived: &dyn ArchivedSession,
+) -> ParseRun {
+    let mut session = resume_session(from, fallback_dedupe);
+    // Per-message context (cwd, branch) used to build segments afterward.
+    let mut contexts: Vec<(Option<String>, Option<String>)> = Vec::new();
+    let mut offset = from.offset;
+    let mut seq = from.next_seq;
+    let mut calls = Calls {
+        id_map: HashMap::new(),
+        archived,
+        earlier_results: Vec::new(),
+    };
+
+    for line in content.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len() as i64;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(obj) = serde_json::from_str::<Value>(trimmed) else {
+            session.note_partial("unparseable line (possibly truncated)");
+            continue;
+        };
+        let event_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
+
+        // Session-level metadata.
+        if session.native_session_id.is_none() {
+            session.native_session_id = str_field(&obj, "sessionId");
+        }
+        if session.agent_version.is_none() {
+            session.agent_version = str_field(&obj, "version");
+        }
+
+        match event_type {
+            "custom-title" => {
+                session.title = str_field(&obj, "customTitle").or(session.title.take());
+                continue;
+            }
+            "ai-title" => {
+                if session.title.is_none() {
+                    session.title = str_field(&obj, "aiTitle");
+                }
+                continue;
+            }
+            // Internal bookkeeping events carry no conversation content.
+            "queue-operation" | "last-prompt" => continue,
+            "user" | "assistant" | "system" | "attachment" | "summary" | "mode" | "pr-link" => {}
+            other => {
+                session.note_partial(format!("unhandled event type: {}", bounded(other)));
+                continue;
+            }
+        }
+
+        let msg = build_message(&obj, event_type, seq, line_start, &mut session);
+        extract_tool_calls(&obj, seq, &mut session, &mut calls);
+        contexts.push((str_field(&obj, "cwd"), str_field(&obj, "gitBranch")));
+        if let Some(ts) = msg.ts {
+            session.started_at = Some(session.started_at.map_or(ts, |s| s.min(ts)));
+            session.ended_at = Some(session.ended_at.map_or(ts, |e| e.max(ts)));
+        }
+        if session.primary_model.is_none() {
+            session.primary_model = msg.model.clone();
+        }
+        session.messages.push(msg);
+        seq += 1;
+    }
+
+    assign_segments(&mut session, &contexts, from);
+    super::common::resolve_file_event_segments(&mut session);
+    let end = ParseEnd {
+        offset,
+        next_seq: seq,
+        earlier_results: calls.earlier_results,
+        cwd: None,
+        model: None,
+        restates_session: false,
+    };
+    finish_parse(from, session, end, archived)
+}
+
+/// Tool-call pairing state: calls parsed in this run, and results for calls
+/// parsed before it.
+struct Calls<'a> {
+    /// native_call_id -> index into session.tool_calls.
+    id_map: HashMap<String, usize>,
+    archived: &'a dyn ArchivedSession,
+    earlier_results: Vec<ParsedToolResult>,
 }
 
 /// Extract tool calls and results from a message's content blocks, pairing
 /// results to calls by `tool_use_id`, and derive file events from file-mutating
 /// tool invocations.
-fn extract_tool_calls(
-    obj: &Value,
-    seq: i64,
-    session: &mut ParsedSession,
-    id_map: &mut HashMap<String, usize>,
-) {
+fn extract_tool_calls(obj: &Value, seq: i64, session: &mut ParsedSession, calls: &mut Calls<'_>) {
     let Some(blocks) = obj
         .get("message")
         .and_then(|m| m.get("content"))
@@ -163,7 +188,7 @@ fn extract_tool_calls(
                     is_error: None,
                     duration_ms: None,
                 });
-                id_map.insert(id.clone(), idx);
+                calls.id_map.insert(id.clone(), idx);
                 if let Some(fe) = file_event_from_tool(&name, block, id) {
                     session.file_events.push(fe);
                 }
@@ -173,11 +198,20 @@ fn extract_tool_calls(
                     session.note_partial("tool_result without tool_use_id");
                     continue;
                 };
-                if let Some(&idx) = id_map.get(&tid) {
+                let output_text = tool_result_text(block);
+                let is_error = block.get("is_error").and_then(Value::as_bool);
+                if let Some(&idx) = calls.id_map.get(&tid) {
                     let tc = &mut session.tool_calls[idx];
                     tc.result_ref = Some((seq, ordinal));
-                    tc.output_text = tool_result_text(block);
-                    tc.is_error = block.get("is_error").and_then(Value::as_bool);
+                    tc.output_text = output_text;
+                    tc.is_error = is_error;
+                } else if calls.archived.has_tool_call(&tid) {
+                    calls.earlier_results.push(ParsedToolResult {
+                        native_call_id: tid,
+                        result_ref: (seq, ordinal),
+                        output_text,
+                        is_error,
+                    });
                 } else {
                     session.note_partial("tool_result without matching tool_use");
                 }
@@ -395,16 +429,21 @@ fn raw_part(ordinal: i64, kind: PartKind, block: &Value) -> ParsedPart {
 }
 
 /// Group consecutive messages sharing (cwd, branch) into segments and assign
-/// each message its `segment_ix`.
-fn assign_segments(session: &mut ParsedSession, contexts: &[(Option<String>, Option<String>)]) {
-    session.segments.clear();
-    let mut current: Option<(Option<String>, Option<String>)> = None;
+/// each message its `segment_ix`, continuing the segment `from` left open.
+fn assign_segments(
+    session: &mut ParsedSession,
+    contexts: &[(Option<String>, Option<String>)],
+    from: &ParseCheckpoint,
+) {
+    session.segments = from.open_segment.iter().cloned().collect();
+    let base = from.segment_count.saturating_sub(session.segments.len());
+    let mut current = from
+        .open_segment
+        .as_ref()
+        .map(|s| (s.cwd.clone(), s.git_branch.clone()));
     for (i, ctx) in contexts.iter().enumerate() {
         let seq = session.messages[i].seq;
         if current.as_ref() != Some(ctx) {
-            if let Some(last) = session.segments.last_mut() {
-                last.seq_end = session.messages[i.saturating_sub(1)].seq;
-            }
             session.segments.push(ParsedSegment {
                 seq_start: seq,
                 seq_end: seq,
@@ -417,8 +456,7 @@ fn assign_segments(session: &mut ParsedSession, contexts: &[(Option<String>, Opt
             });
             current = Some(ctx.clone());
         }
-        let ix = session.segments.len() - 1;
-        session.messages[i].segment_ix = ix;
+        session.messages[i].segment_ix = base + session.segments.len() - 1;
         if let Some(last) = session.segments.last_mut() {
             last.seq_end = seq;
         }
@@ -521,6 +559,30 @@ impl AgentAdapter for ClaudeCodeAdapter {
 
     fn parse_content(&self, content: &str, fallback_dedupe: &str) -> ParsedSession {
         self.parse_str(content, fallback_dedupe)
+    }
+
+    fn parse_checkpointed(
+        &self,
+        content: &str,
+        fallback_dedupe: &str,
+    ) -> (ParsedSession, Option<ParseCheckpoint>) {
+        parse_from(
+            &ParseCheckpoint::default(),
+            content,
+            fallback_dedupe,
+            &NothingArchived,
+        )
+        .checkpointed()
+    }
+
+    fn parse_append(
+        &self,
+        from: &ParseCheckpoint,
+        tail: &str,
+        fallback_dedupe: &str,
+        archived: &dyn ArchivedSession,
+    ) -> Option<ParsedAppend> {
+        parse_from(from, tail, fallback_dedupe, archived).append()
     }
 }
 

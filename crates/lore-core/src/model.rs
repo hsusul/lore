@@ -353,9 +353,238 @@ impl ParsedSession {
     }
 }
 
+/// A tool result whose call was parsed before the checkpoint an append resumed
+/// from. Persisting it fills in that earlier call's result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedToolResult {
+    pub native_call_id: String,
+    pub result_ref: (i64, i64),
+    pub output_text: Option<String>,
+    pub is_error: Option<bool>,
+}
+
+/// A parser's state after the last line it consumed. Parsing appended lines
+/// from a checkpoint yields what parsing the whole file would, so an append
+/// costs the new lines rather than the history.
+///
+/// Rows are not kept here; lines that refer back to earlier rows ask the
+/// archive (`crate::adapters::ArchivedSession`). What no earlier line could
+/// resolve is kept, because a later line that resolves it changes an earlier
+/// row and the append cannot be parsed on its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParseCheckpoint {
+    /// Byte offset of the next line.
+    pub offset: i64,
+    pub next_seq: i64,
+    pub segment_count: usize,
+    pub tool_call_count: usize,
+    pub file_event_count: usize,
+    pub native_session_id: Option<String>,
+    pub agent_version: Option<String>,
+    pub primary_model: Option<String>,
+    /// A title the agent recorded. Wins over `derived_title`.
+    pub native_title: Option<String>,
+    /// The title derived from the first meaningful user request.
+    pub derived_title: Option<String>,
+    pub started_at: Option<i64>,
+    pub ended_at: Option<i64>,
+    /// Cumulative totals the source recorded (`ParsedSession::total_tokens`).
+    pub total_tokens: Tokens,
+    /// Per-message usage summed so far, the fallback for absent totals.
+    pub message_tokens: Tokens,
+    pub note_count: usize,
+    pub first_note: Option<String>,
+    /// The last segment. The next message extends it when its context matches.
+    pub open_segment: Option<ParsedSegment>,
+    /// Turn context the next message inherits when the agent records it apart
+    /// from messages (Codex `turn_context`).
+    pub cwd: Option<String>,
+    pub model: Option<String>,
+    /// Parent uuids no parsed message carries.
+    pub unresolved_parents: Vec<String>,
+    /// Tool call ids that file events name but no parsed call carries.
+    pub unresolved_calls: Vec<String>,
+}
+
+/// Lines parsed from a [`ParseCheckpoint`]. `session` carries the
+/// session-level values as of the new end, and only the rows these lines add.
+/// Its `segments` start at index `checkpoint.segment_count -
+/// session.segments.len()`, re-emitting the open segment, and message
+/// `segment_ix` values index the whole session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedAppend {
+    pub session: ParsedSession,
+    pub earlier_results: Vec<ParsedToolResult>,
+    pub checkpoint: ParseCheckpoint,
+}
+
+const CHECKPOINT_FORMAT: i64 = 1;
+
+impl ParseCheckpoint {
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        use serde_json::json;
+        let tokens = |t: Tokens| json!([t.input, t.output, t.cache]);
+        let segment = self.open_segment.as_ref().map(|s| {
+            json!({
+                "seq_start": s.seq_start, "seq_end": s.seq_end, "cwd": s.cwd,
+                "model": s.model, "provider": s.provider, "git_branch": s.git_branch,
+                "git_commit_sha": s.git_commit_sha, "git_remote_url": s.git_remote_url,
+            })
+        });
+        json!({
+            "format": CHECKPOINT_FORMAT,
+            "offset": self.offset,
+            "next_seq": self.next_seq,
+            "segment_count": self.segment_count,
+            "tool_call_count": self.tool_call_count,
+            "file_event_count": self.file_event_count,
+            "native_session_id": self.native_session_id,
+            "agent_version": self.agent_version,
+            "primary_model": self.primary_model,
+            "native_title": self.native_title,
+            "derived_title": self.derived_title,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "total_tokens": tokens(self.total_tokens),
+            "message_tokens": tokens(self.message_tokens),
+            "note_count": self.note_count,
+            "first_note": self.first_note,
+            "open_segment": segment,
+            "cwd": self.cwd,
+            "model": self.model,
+            "unresolved_parents": self.unresolved_parents,
+            "unresolved_calls": self.unresolved_calls,
+        })
+        .to_string()
+    }
+
+    /// `None` for anything [`Self::to_json`] of this build did not write; the
+    /// caller then parses the whole file.
+    #[must_use]
+    pub fn from_json(text: &str) -> Option<Self> {
+        use serde_json::Value;
+        let v: Value = serde_json::from_str(text).ok()?;
+        if v.get("format")?.as_i64()? != CHECKPOINT_FORMAT {
+            return None;
+        }
+        let int = |v: &Value, k: &str| v.get(k)?.as_i64();
+        let count = |k: &str| usize::try_from(v.get(k)?.as_u64()?).ok();
+        let opt_int = |v: &Value, k: &str| match v.get(k)? {
+            Value::Null => Some(None),
+            n => n.as_i64().map(Some),
+        };
+        let opt_str = |v: &Value, k: &str| match v.get(k)? {
+            Value::Null => Some(None),
+            s => s.as_str().map(|s| Some(s.to_string())),
+        };
+        let tokens = |k: &str| {
+            let t = v.get(k)?.as_array()?;
+            let field = |i: usize| match t.get(i)? {
+                Value::Null => Some(None),
+                n => n.as_i64().map(Some),
+            };
+            Some(Tokens {
+                input: field(0)?,
+                output: field(1)?,
+                cache: field(2)?,
+            })
+        };
+        let strings = |k: &str| {
+            v.get(k)?
+                .as_array()?
+                .iter()
+                .map(|s| s.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+        };
+        let open_segment = match v.get("open_segment")? {
+            Value::Null => None,
+            s => Some(ParsedSegment {
+                seq_start: int(s, "seq_start")?,
+                seq_end: int(s, "seq_end")?,
+                cwd: opt_str(s, "cwd")?,
+                model: opt_str(s, "model")?,
+                provider: opt_str(s, "provider")?,
+                git_branch: opt_str(s, "git_branch")?,
+                git_commit_sha: opt_str(s, "git_commit_sha")?,
+                git_remote_url: opt_str(s, "git_remote_url")?,
+            }),
+        };
+        Some(ParseCheckpoint {
+            offset: int(&v, "offset")?,
+            next_seq: int(&v, "next_seq")?,
+            segment_count: count("segment_count")?,
+            tool_call_count: count("tool_call_count")?,
+            file_event_count: count("file_event_count")?,
+            native_session_id: opt_str(&v, "native_session_id")?,
+            agent_version: opt_str(&v, "agent_version")?,
+            primary_model: opt_str(&v, "primary_model")?,
+            native_title: opt_str(&v, "native_title")?,
+            derived_title: opt_str(&v, "derived_title")?,
+            started_at: opt_int(&v, "started_at")?,
+            ended_at: opt_int(&v, "ended_at")?,
+            total_tokens: tokens("total_tokens")?,
+            message_tokens: tokens("message_tokens")?,
+            note_count: count("note_count")?,
+            first_note: opt_str(&v, "first_note")?,
+            open_segment,
+            cwd: opt_str(&v, "cwd")?,
+            model: opt_str(&v, "model")?,
+            unresolved_parents: strings("unresolved_parents")?,
+            unresolved_calls: strings("unresolved_calls")?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoint_json_round_trips() {
+        let checkpoint = ParseCheckpoint {
+            offset: 120,
+            next_seq: 3,
+            segment_count: 1,
+            tool_call_count: 2,
+            file_event_count: 1,
+            native_session_id: Some("s".into()),
+            agent_version: None,
+            primary_model: Some("m".into()),
+            native_title: None,
+            derived_title: Some("Fix the cache".into()),
+            started_at: Some(1),
+            ended_at: Some(9),
+            total_tokens: Tokens::default(),
+            message_tokens: Tokens {
+                input: Some(5),
+                output: None,
+                cache: Some(0),
+            },
+            note_count: 1,
+            first_note: Some("unknown event".into()),
+            open_segment: Some(ParsedSegment {
+                seq_start: 0,
+                seq_end: 2,
+                cwd: Some("/repo".into()),
+                model: None,
+                provider: None,
+                git_branch: Some("main".into()),
+                git_commit_sha: None,
+                git_remote_url: None,
+            }),
+            cwd: None,
+            model: Some("gpt".into()),
+            unresolved_parents: vec!["p".into()],
+            unresolved_calls: vec![],
+        };
+        let json = checkpoint.to_json();
+        assert_eq!(ParseCheckpoint::from_json(&json), Some(checkpoint));
+        assert_eq!(
+            ParseCheckpoint::from_json(&json.replace("\"format\":1", "\"format\":2")),
+            None
+        );
+    }
 
     #[test]
     fn enum_string_forms_match_schema() {

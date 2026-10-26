@@ -14,15 +14,17 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::common::{
-    bounded, epoch_ms, fallback_title, non_negative_int_field, resolve_file_event_segments,
-    sanitize_path, str_field, unified_diff_line_counts,
+    bounded, epoch_ms, finish_parse, non_negative_int_field, resolve_file_event_segments,
+    resume_session, sanitize_path, str_field, unified_diff_line_counts, ParseEnd, ParseRun,
 };
 use super::{
-    AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
+    AgentAdapter, AgentId, AgentMetadata, ArchivedSession, Capabilities, Detection, DiscoveryRoots,
+    NothingArchived, SessionRef,
 };
 use crate::model::{
-    EventKind, FileChangeKind, FileEventSource, ParsedFileEvent, ParsedMessage, ParsedPart,
-    ParsedSegment, ParsedSession, ParsedToolCall, PartKind, Role, Tokens,
+    EventKind, FileChangeKind, FileEventSource, ParseCheckpoint, ParsedAppend, ParsedFileEvent,
+    ParsedMessage, ParsedPart, ParsedSegment, ParsedSession, ParsedToolCall, ParsedToolResult,
+    PartKind, Role, Tokens,
 };
 
 const AGENT_ID: AgentId = AgentId("codex");
@@ -61,176 +63,199 @@ impl CodexAdapter {
     /// Parse rollout content. Separated for deterministic testing.
     #[must_use]
     pub fn parse_str(&self, content: &str, fallback_dedupe: &str) -> ParsedSession {
-        let mut session = ParsedSession::new(fallback_dedupe);
-        let mut cwd: Option<String> = None;
-        let mut model: Option<String> = None;
-        let mut provider: Option<String> = None;
-        let mut git: RecordedGit = (None, None, None);
-        // (cwd, model) at each emitted message, for segmentation.
-        let mut contexts: Vec<(Option<String>, Option<String>)> = Vec::new();
-        let mut offset: i64 = 0;
-        let mut seq: i64 = 0;
-        // native call_id -> index into session.tool_calls, for result pairing.
-        let mut id_map: HashMap<String, usize> = HashMap::new();
+        self.parse_checkpointed(content, fallback_dedupe).0
+    }
+}
 
-        for line in content.split_inclusive('\n') {
-            let line_start = offset;
-            offset += line.len() as i64;
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let Ok(obj) = serde_json::from_str::<Value>(trimmed) else {
-                session.note_partial("unparseable line (possibly truncated)");
-                continue;
-            };
-            let typ = obj.get("type").and_then(Value::as_str).unwrap_or("");
-            let ts = obj
-                .get("timestamp")
-                .and_then(Value::as_str)
-                .and_then(epoch_ms);
-            if let Some(ts) = ts {
-                session.started_at = Some(session.started_at.map_or(ts, |s| s.min(ts)));
-                session.ended_at = Some(session.ended_at.map_or(ts, |e| e.max(ts)));
-            }
-            let payload = obj.get("payload");
+/// Parse rollout `content` as the lines that follow `from`.
+fn parse_from(
+    from: &ParseCheckpoint,
+    content: &str,
+    fallback_dedupe: &str,
+    archived: &dyn ArchivedSession,
+) -> ParseRun {
+    let mut session = resume_session(from, fallback_dedupe);
+    let mut cwd = from.cwd.clone();
+    let mut model = from.model.clone();
+    // Every segment carries the provider. Recorded git reaches only the
+    // first segment, which a checkpoint has already emitted.
+    let mut provider = from.open_segment.as_ref().and_then(|s| s.provider.clone());
+    let mut git: RecordedGit = (None, None, None);
+    let mut restates_session = false;
+    // (cwd, model) at each emitted message, for segmentation.
+    let mut contexts: Vec<(Option<String>, Option<String>)> = Vec::new();
+    let mut offset = from.offset;
+    let mut seq = from.next_seq;
+    // native call_id -> index into session.tool_calls, for result pairing.
+    let mut id_map: HashMap<String, usize> = HashMap::new();
+    let mut earlier_results = Vec::new();
 
-            match typ {
-                "session_meta" => {
-                    if let Some(p) = payload {
-                        session.native_session_id = str_field(p, "id");
-                        session.agent_version = str_field(p, "cli_version");
-                        provider = str_field(p, "model_provider");
-                        if let Some(c) = str_field(p, "cwd") {
-                            cwd = Some(c);
-                        }
-                        git = recorded_git(p);
+    for line in content.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len() as i64;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(obj) = serde_json::from_str::<Value>(trimmed) else {
+            session.note_partial("unparseable line (possibly truncated)");
+            continue;
+        };
+        let typ = obj.get("type").and_then(Value::as_str).unwrap_or("");
+        let ts = obj
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(epoch_ms);
+        if let Some(ts) = ts {
+            session.started_at = Some(session.started_at.map_or(ts, |s| s.min(ts)));
+            session.ended_at = Some(session.ended_at.map_or(ts, |e| e.max(ts)));
+        }
+        let payload = obj.get("payload");
+
+        match typ {
+            "session_meta" => {
+                restates_session = true;
+                if let Some(p) = payload {
+                    session.native_session_id = str_field(p, "id");
+                    session.agent_version = str_field(p, "cli_version");
+                    provider = str_field(p, "model_provider");
+                    if let Some(c) = str_field(p, "cwd") {
+                        cwd = Some(c);
+                    }
+                    git = recorded_git(p);
+                }
+            }
+            "turn_context" => {
+                if let Some(p) = payload {
+                    if let Some(c) = str_field(p, "cwd") {
+                        cwd = Some(c);
+                    }
+                    if let Some(m) = str_field(p, "model") {
+                        model = Some(m);
                     }
                 }
-                "turn_context" => {
-                    if let Some(p) = payload {
-                        if let Some(c) = str_field(p, "cwd") {
-                            cwd = Some(c);
-                        }
-                        if let Some(m) = str_field(p, "model") {
-                            model = Some(m);
-                        }
+            }
+            "response_item" => {
+                let Some(p) = payload else { continue };
+                match p.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "message" => {
+                        let msg = message_item(p, seq, ts, model.clone(), line_start);
+                        session.messages.push(msg);
+                        contexts.push((cwd.clone(), model.clone()));
+                        seq += 1;
+                    }
+                    "reasoning" => {
+                        let msg = reasoning_item(p, seq, ts, model.clone(), line_start);
+                        session.messages.push(msg);
+                        contexts.push((cwd.clone(), model.clone()));
+                        seq += 1;
+                    }
+                    "function_call" | "custom_tool_call" => {
+                        let part = tool_part(PartKind::ToolUse, None, p);
+                        session.messages.push(tool_message(
+                            Role::Assistant,
+                            part,
+                            seq,
+                            ts,
+                            line_start,
+                        ));
+                        contexts.push((cwd.clone(), model.clone()));
+                        register_tool_call(p, seq, &mut session, &mut id_map);
+                        seq += 1;
+                    }
+                    "function_call_output" | "custom_tool_call_output" => {
+                        let output_text = json_text(p.get("output"));
+                        let part = tool_part(PartKind::ToolResult, output_text.clone(), p);
+                        session
+                            .messages
+                            .push(tool_message(Role::Tool, part, seq, ts, line_start));
+                        contexts.push((cwd.clone(), model.clone()));
+                        let paired = attach_tool_output(
+                            p,
+                            seq,
+                            output_text,
+                            &mut session,
+                            &id_map,
+                            archived,
+                        );
+                        earlier_results.extend(paired);
+                        seq += 1;
+                    }
+                    // tool_search_* / web_search_call are recorded but not yet modeled.
+                    "tool_search_call" | "tool_search_output" | "web_search_call" => {}
+                    other => {
+                        session.note_partial(format!("unknown response_item: {}", bounded(other)));
                     }
                 }
-                "response_item" => {
-                    let Some(p) = payload else { continue };
-                    match p.get("type").and_then(Value::as_str).unwrap_or("") {
-                        "message" => {
-                            let msg = message_item(p, seq, ts, model.clone(), line_start);
-                            session.messages.push(msg);
-                            contexts.push((cwd.clone(), model.clone()));
-                            seq += 1;
-                        }
-                        "reasoning" => {
-                            let msg = reasoning_item(p, seq, ts, model.clone(), line_start);
-                            session.messages.push(msg);
-                            contexts.push((cwd.clone(), model.clone()));
-                            seq += 1;
-                        }
-                        "function_call" | "custom_tool_call" => {
-                            let part = tool_part(PartKind::ToolUse, None, p);
-                            session.messages.push(tool_message(
-                                Role::Assistant,
-                                part,
-                                seq,
-                                ts,
-                                line_start,
-                            ));
-                            contexts.push((cwd.clone(), model.clone()));
-                            register_tool_call(p, seq, &mut session, &mut id_map);
-                            seq += 1;
-                        }
-                        "function_call_output" | "custom_tool_call_output" => {
-                            let output_text = json_text(p.get("output"));
-                            let part = tool_part(PartKind::ToolResult, output_text.clone(), p);
-                            session.messages.push(tool_message(
-                                Role::Tool,
-                                part,
-                                seq,
-                                ts,
-                                line_start,
-                            ));
-                            contexts.push((cwd.clone(), model.clone()));
-                            attach_tool_output(p, seq, output_text, &mut session, &id_map);
-                            seq += 1;
-                        }
-                        // tool_search_* / web_search_call are recorded but not yet modeled.
-                        "tool_search_call" | "tool_search_output" | "web_search_call" => {}
-                        other => {
-                            session
-                                .note_partial(format!("unknown response_item: {}", bounded(other)));
+            }
+            "event_msg" => {
+                let Some(p) = payload else { continue };
+                // Conversation comes from response_item; most event_msg entries are
+                // telemetry. context_compacted leaves a marker; patch_apply_end yields
+                // file events attached to the matching tool call by call_id.
+                match p.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "context_compacted" => {
+                        session
+                            .messages
+                            .push(compaction_marker(None, seq, ts, line_start));
+                        contexts.push((cwd.clone(), model.clone()));
+                        seq += 1;
+                    }
+                    "patch_apply_end" => extract_patch_changes(p, ts, &mut session),
+                    "token_count" => {
+                        if let Some(tokens) = token_totals(p) {
+                            session.total_tokens = tokens;
                         }
                     }
-                }
-                "event_msg" => {
-                    let Some(p) = payload else { continue };
-                    // Conversation comes from response_item; most event_msg entries are
-                    // telemetry. context_compacted leaves a marker; patch_apply_end yields
-                    // file events attached to the matching tool call by call_id.
-                    match p.get("type").and_then(Value::as_str).unwrap_or("") {
-                        "context_compacted" => {
-                            session
-                                .messages
-                                .push(compaction_marker(None, seq, ts, line_start));
-                            contexts.push((cwd.clone(), model.clone()));
-                            seq += 1;
-                        }
-                        "patch_apply_end" => extract_patch_changes(p, ts, &mut session),
-                        "token_count" => {
-                            if let Some(tokens) = token_totals(p) {
-                                session.total_tokens = tokens;
-                            }
-                        }
-                        // Known telemetry that carries no conversation content of
-                        // its own (the conversation is reconstructed from
-                        // response_item). Intentionally ignored, not flagged
-                        // (CODEX.md §3).
-                        "task_started"
-                        | "user_message"
-                        | "agent_message"
-                        | "agent_reasoning"
-                        | "thread_settings_applied"
-                        | "mcp_tool_call_start"
-                        | "mcp_tool_call_end"
-                        | "web_search_start"
-                        | "web_search_end"
-                        | "task_complete"
-                        | "turn_aborted" => {}
-                        // A genuinely new event_msg subtype: degrade to a bounded,
-                        // content-free note rather than dropping it silently.
-                        other => {
-                            session.note_partial(format!("unknown event_msg: {}", bounded(other)));
-                        }
+                    // Known telemetry that carries no conversation content of
+                    // its own (the conversation is reconstructed from
+                    // response_item). Intentionally ignored, not flagged
+                    // (CODEX.md §3).
+                    "task_started"
+                    | "user_message"
+                    | "agent_message"
+                    | "agent_reasoning"
+                    | "thread_settings_applied"
+                    | "mcp_tool_call_start"
+                    | "mcp_tool_call_end"
+                    | "web_search_start"
+                    | "web_search_end"
+                    | "task_complete"
+                    | "turn_aborted" => {}
+                    // A genuinely new event_msg subtype: degrade to a bounded,
+                    // content-free note rather than dropping it silently.
+                    other => {
+                        session.note_partial(format!("unknown event_msg: {}", bounded(other)));
                     }
                 }
-                "compacted" => {
-                    let text = payload.and_then(|p| str_field(p, "message"));
-                    session
-                        .messages
-                        .push(compaction_marker(text, seq, ts, line_start));
-                    contexts.push((cwd.clone(), model.clone()));
-                    seq += 1;
-                }
-                // Known non-conversation record types.
-                "world_state" | "inter_agent_communication_metadata" => {}
-                other => {
-                    session.note_partial(format!("unknown record type: {}", bounded(other)));
-                }
+            }
+            "compacted" => {
+                let text = payload.and_then(|p| str_field(p, "message"));
+                session
+                    .messages
+                    .push(compaction_marker(text, seq, ts, line_start));
+                contexts.push((cwd.clone(), model.clone()));
+                seq += 1;
+            }
+            // Known non-conversation record types.
+            "world_state" | "inter_agent_communication_metadata" => {}
+            other => {
+                session.note_partial(format!("unknown record type: {}", bounded(other)));
             }
         }
-
-        assign_segments(&mut session, &contexts, provider.as_ref(), &git);
-        resolve_file_event_segments(&mut session);
-        // Codex has no native title event, so any derived title is synthetic.
-        session.title = fallback_title(&session.messages);
-        session.title_is_synthetic = session.title.is_some();
-        session
     }
+
+    assign_segments(&mut session, &contexts, from, provider.as_ref(), &git);
+    resolve_file_event_segments(&mut session);
+    let end = ParseEnd {
+        offset,
+        next_seq: seq,
+        earlier_results,
+        cwd,
+        model,
+        restates_session,
+    };
+    finish_parse(from, session, end, archived)
 }
 
 /// Derive file events from a `patch_apply_end.changes` object (keyed by path).
@@ -517,22 +542,25 @@ fn push_reasoning_text(value: Option<&Value>, parts: &mut Vec<ParsedPart>, ord: 
     }
 }
 
-/// Group consecutive messages by (cwd, model). Recorded git attaches to the
-/// first segment only (it is stamped once at session start), and provider to all.
+/// Group consecutive messages by (cwd, model), continuing the segment `from`
+/// left open. Recorded git attaches to the first segment only (it is stamped
+/// once at session start), and provider to all.
 fn assign_segments(
     session: &mut ParsedSession,
     contexts: &[(Option<String>, Option<String>)],
+    from: &ParseCheckpoint,
     provider: Option<&String>,
     git: &RecordedGit,
 ) {
-    session.segments.clear();
-    let mut current: Option<(Option<String>, Option<String>)> = None;
+    session.segments = from.open_segment.iter().cloned().collect();
+    let base = from.segment_count.saturating_sub(session.segments.len());
+    let mut current = from
+        .open_segment
+        .as_ref()
+        .map(|s| (s.cwd.clone(), s.model.clone()));
     for (i, ctx) in contexts.iter().enumerate() {
         let seq = session.messages[i].seq;
         if current.as_ref() != Some(ctx) {
-            if let Some(last) = session.segments.last_mut() {
-                last.seq_end = session.messages[i.saturating_sub(1)].seq;
-            }
             let first = session.segments.is_empty();
             session.segments.push(ParsedSegment {
                 seq_start: seq,
@@ -546,8 +574,7 @@ fn assign_segments(
             });
             current = Some(ctx.clone());
         }
-        let ix = session.segments.len() - 1;
-        session.messages[i].segment_ix = ix;
+        session.messages[i].segment_ix = base + session.segments.len() - 1;
         if let Some(last) = session.segments.last_mut() {
             last.seq_end = seq;
         }
@@ -620,22 +647,25 @@ fn register_tool_call(
     id_map.insert(call_id, idx);
 }
 
-/// Attach a tool output to its call by `call_id`.
+/// Attach a tool output to its call by `call_id`. A call parsed before this run
+/// gets the output back as a result for the caller to record.
 fn attach_tool_output(
     p: &Value,
     seq: i64,
     output_text: Option<String>,
     session: &mut ParsedSession,
     id_map: &HashMap<String, usize>,
-) {
+    archived: &dyn ArchivedSession,
+) -> Option<ParsedToolResult> {
     let Some(call_id) = str_field(p, "call_id") else {
         session.note_partial("tool output without call_id");
-        return;
+        return None;
     };
-    let Some(&idx) = id_map.get(&call_id) else {
+    let call = id_map.get(&call_id).copied();
+    if call.is_none() && !archived.has_tool_call(&call_id) {
         session.note_partial("tool output without matching call");
-        return;
-    };
+        return None;
+    }
     let is_error = str_field(p, "status")
         .as_deref()
         .map(|s| !matches!(s, "completed" | "success" | "ok"))
@@ -652,10 +682,19 @@ fn attach_tool_output(
                 }
             })
         });
+    let Some(idx) = call else {
+        return Some(ParsedToolResult {
+            native_call_id: call_id,
+            result_ref: (seq, 0),
+            output_text,
+            is_error,
+        });
+    };
     let tc = &mut session.tool_calls[idx];
     tc.result_ref = Some((seq, 0));
     tc.output_text = output_text;
     tc.is_error = is_error;
+    None
 }
 
 /// Extract text from a JSON value that may be a string or a structured object.
@@ -739,6 +778,30 @@ impl AgentAdapter for CodexAdapter {
 
     fn parse_content(&self, content: &str, fallback_dedupe: &str) -> ParsedSession {
         self.parse_str(content, fallback_dedupe)
+    }
+
+    fn parse_checkpointed(
+        &self,
+        content: &str,
+        fallback_dedupe: &str,
+    ) -> (ParsedSession, Option<ParseCheckpoint>) {
+        parse_from(
+            &ParseCheckpoint::default(),
+            content,
+            fallback_dedupe,
+            &NothingArchived,
+        )
+        .checkpointed()
+    }
+
+    fn parse_append(
+        &self,
+        from: &ParseCheckpoint,
+        tail: &str,
+        fallback_dedupe: &str,
+        archived: &dyn ArchivedSession,
+    ) -> Option<ParsedAppend> {
+        parse_from(from, tail, fallback_dedupe, archived).append()
     }
 }
 
