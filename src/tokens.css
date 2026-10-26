@@ -1,0 +1,286 @@
+/*
+ * Lore design tokens: lore-design-spec.md v2, Sections 4 to 7, 9, 12 and 13.
+ * Every color, size, space, radius, shadow and duration the UI uses is a token here.
+ * Tailwind's theme (tailwind.config.ts) maps onto these names and nothing else.
+ *
+ * Colors declare the measured macOS value first. WKWebView then swaps in the
+ * -apple-system-* keyword under @supports, so the system appearance and accent
+ * drive them; Chromium dev previews keep the fallback.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Section 4: color, light */
+  --label: rgba(0, 0, 0, 0.847);
+  --label-2: rgba(0, 0, 0, 0.6);
+  --label-3: rgba(0, 0, 0, 0.259);
+  --separator: rgba(0, 0, 0, 0.098);
+  --bg-content: #ffffff;
+  --bg-window: #ececec;
+  --bg-toolbar: #f5f5f5;
+  --bg-sidebar: #e9e9e9;
+  --bg-popover: #ffffff;
+  --bg-button: #ffffff;
+  --fill: rgba(0, 0, 0, 0.098);
+  --fill-2: rgba(0, 0, 0, 0.047);
+  --fill-3: rgba(0, 0, 0, 0.027);
+  --selected: #0064e1;
+  --selected-unfocused: #dcdcdc;
+  --on-selected: #ffffff;
+  --accent: #007aff;
+  --accent-fill: #0064e1;
+  --link: #0068da;
+  --focus-ring: rgba(0, 100, 225, 0.75);
+  --mark: rgba(255, 204, 0, 0.45);
+  --red-fill: #d70015;
+  --red: #ff3b30;
+  --green: #28cd41;
+  --orange: #ff9500;
+  --diff-add-bg: rgba(40, 205, 65, 0.14);
+  --diff-del-bg: rgba(255, 59, 48, 0.12);
+  --diff-add-fg: #1a7f37;
+  --diff-del-fg: #c9271e;
+  --seg-on: #ffffff;
+  --seg-ring: rgba(0, 0, 0, 0.45);
+  --token-key: rgba(0, 0, 0, 0.6);
+  --scrim: rgba(0, 0, 0, 0.1);
+
+  /* Section 5: type */
+  --font-sans: -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --t-large-title-size: 26px;
+  --t-large-title-line: 32px;
+  --t-title1-size: 22px;
+  --t-title1-line: 26px;
+  --t-title2-size: 17px;
+  --t-title2-line: 22px;
+  --t-title3-size: 15px;
+  --t-title3-line: 20px;
+  --t-headline-size: 13px;
+  --t-headline-line: 16px;
+  --t-body-size: 13px;
+  --t-body-line: 18px;
+  --t-control-line: 16px;
+  --t-callout-size: 12px;
+  --t-callout-line: 15px;
+  --t-subheadline-size: 11px;
+  --t-subheadline-line: 14px;
+  --t-footnote-size: 10px;
+  --t-footnote-line: 13px;
+  --t-code-size: 12px;
+  --t-code-line: 18px;
+
+  /* Section 6: spacing */
+  --s-2: 2px;
+  --s-4: 4px;
+  --s-6: 6px;
+  --s-8: 8px;
+  --s-10: 10px;
+  --s-12: 12px;
+  --s-16: 16px;
+  --s-20: 20px;
+  --s-24: 24px;
+  --s-32: 32px;
+
+  /* Section 6: shape */
+  --r-control: 5px;
+  --r-group: 10px;
+  --r-sheet: 12px;
+  --r-capsule: 9999px;
+  --hairline: 1px;
+  --ring: 0.5px;
+  --focus-w: 3px;
+  --contrast-border: 0px;
+
+  /* Section 6: elevation */
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.18);
+  --shadow-sheet: 0 20px 48px rgba(0, 0, 0, 0.28);
+  --shadow-button: 0 0.5px 1px rgba(0, 0, 0, 0.15);
+
+  /* Section 6: motion */
+  --dur-popover-in: 120ms;
+  --dur-popover-out: 80ms;
+  --dur-sheet-in: 200ms;
+  --dur-sheet-out: 150ms;
+  --dur-disclosure: 120ms;
+  --ease-out: cubic-bezier(0, 0, 0.58, 1);
+  --ease-sheet: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --sheet-slide: -6px;
+
+  /* Sections 7, 9 and 12: window and control metrics */
+  --toolbar-h: 52px;
+  --traffic-zone: 72px;
+  --sidebar-w: 220px;
+  --list-w: 320px;
+  --source-row-h: 28px;
+  --menu-row-h: 22px;
+  --control-h: 22px;
+  --seg-h: 22px;
+  --toolbar-btn: 28px;
+  --search-w: 260px;
+  --search-h: 28px;
+  --popover-w: 320px;
+  --menu-min-w: 180px;
+  --palette-w: 640px;
+  --palette-top: 18vh;
+  --palette-input-h: 48px;
+  --palette-list-h: 420px;
+  --i-13: 13px;
+  --i-15: 15px;
+  --i-17: 17px;
+  --stroke-13: 1.66;
+  --stroke-15: 1.75;
+  --stroke-17: 1.6;
+}
+
+/* Section 15: Apple's dark. The same values follow the system and the Settings override. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --label: rgba(255, 255, 255, 0.847);
+    --label-2: rgba(255, 255, 255, 0.549);
+    --label-3: rgba(255, 255, 255, 0.247);
+    --separator: rgba(255, 255, 255, 0.098);
+    --bg-content: #1e1e1e;
+    --bg-window: #323232;
+    --bg-toolbar: #2c2c2c;
+    --bg-sidebar: #282828;
+    --bg-popover: #2c2c2e;
+    --bg-button: rgba(255, 255, 255, 0.18);
+    --fill: rgba(255, 255, 255, 0.098);
+    --fill-2: rgba(255, 255, 255, 0.047);
+    --fill-3: rgba(255, 255, 255, 0.027);
+    --selected: #0059d1;
+    --selected-unfocused: #464646;
+    --on-selected: #ffffff;
+    --accent: #007aff;
+    --accent-fill: #0059d1;
+    --link: #419cff;
+    --focus-ring: rgba(26, 169, 255, 0.75);
+    --mark: rgba(255, 214, 10, 0.35);
+    --red-fill: #d70015;
+    --red: #ff453a;
+    --green: #32d74b;
+    --orange: #ff9f0a;
+    --diff-add-bg: rgba(50, 215, 75, 0.16);
+    --diff-del-bg: rgba(255, 69, 58, 0.16);
+    --diff-add-fg: #5fd47a;
+    --diff-del-fg: #ff7b72;
+    --seg-on: rgba(255, 255, 255, 0.098);
+    --seg-ring: rgba(255, 255, 255, 0.45);
+    --token-key: rgba(255, 255, 255, 0.847);
+    --scrim: rgba(0, 0, 0, 0.3);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --label: rgba(255, 255, 255, 0.847);
+  --label-2: rgba(255, 255, 255, 0.549);
+  --label-3: rgba(255, 255, 255, 0.247);
+  --separator: rgba(255, 255, 255, 0.098);
+  --bg-content: #1e1e1e;
+  --bg-window: #323232;
+  --bg-toolbar: #2c2c2c;
+  --bg-sidebar: #282828;
+  --bg-popover: #2c2c2e;
+  --bg-button: rgba(255, 255, 255, 0.18);
+  --fill: rgba(255, 255, 255, 0.098);
+  --fill-2: rgba(255, 255, 255, 0.047);
+  --fill-3: rgba(255, 255, 255, 0.027);
+  --selected: #0059d1;
+  --selected-unfocused: #464646;
+  --on-selected: #ffffff;
+  --accent: #007aff;
+  --accent-fill: #0059d1;
+  --link: #419cff;
+  --focus-ring: rgba(26, 169, 255, 0.75);
+  --mark: rgba(255, 214, 10, 0.35);
+  --red-fill: #d70015;
+  --red: #ff453a;
+  --green: #32d74b;
+  --orange: #ff9f0a;
+  --diff-add-bg: rgba(50, 215, 75, 0.16);
+  --diff-del-bg: rgba(255, 69, 58, 0.16);
+  --diff-add-fg: #5fd47a;
+  --diff-del-fg: #ff7b72;
+  --seg-on: rgba(255, 255, 255, 0.098);
+  --seg-ring: rgba(255, 255, 255, 0.45);
+  --token-key: rgba(255, 255, 255, 0.847);
+  --scrim: rgba(0, 0, 0, 0.3);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/*
+ * WebKit system colors, declared after the fallbacks. The selector list repeats the
+ * dark selectors so the keywords also win over the dark fallbacks; the keywords
+ * themselves follow the element's color-scheme.
+ */
+@supports (color: -apple-system-label) {
+  :root,
+  :root:not([data-theme="light"]),
+  :root[data-theme="dark"] {
+    --label: -apple-system-label;
+    --label-3: -apple-system-tertiary-label;
+    --separator: -apple-system-separator;
+    --bg-content: -apple-system-control-background;
+    --selected: -apple-system-selected-content-background;
+    --selected-unfocused: -apple-system-unemphasized-selected-content-background;
+    --on-selected: -apple-system-alternate-selected-text;
+    --accent: -apple-system-control-accent;
+    --accent-fill: -apple-system-selected-content-background;
+    --red: -apple-system-red;
+    --green: -apple-system-green;
+    --orange: -apple-system-orange;
+  }
+}
+
+/* Section 13 and 18.13: Increase Contrast. Declared last so it wins over the keywords. */
+@media (prefers-contrast: more) {
+  :root,
+  :root:not([data-theme="light"]) {
+    --separator: rgba(0, 0, 0, 0.25);
+    --label-2: rgba(0, 0, 0, 0.7);
+    --contrast-border: var(--hairline);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --separator: rgba(255, 255, 255, 0.25);
+      --label-2: rgba(255, 255, 255, 0.7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --separator: rgba(255, 255, 255, 0.25);
+    --label-2: rgba(255, 255, 255, 0.7);
+  }
+}
+
+/* Section 7.2: list width by window width. */
+@media (max-width: 1099px) {
+  :root {
+    --list-w: 280px;
+  }
+}
+
+@media (max-width: 999px) {
+  :root {
+    --list-w: 260px;
+  }
+}
+
+/* Section 6: under reduced motion every transition is opacity-only and at most 100ms. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-popover-in: 100ms;
+    --dur-popover-out: 80ms;
+    --dur-sheet-in: 100ms;
+    --dur-sheet-out: 100ms;
+    --dur-disclosure: 0ms;
+    --sheet-slide: 0px;
+  }
+}
