@@ -3,6 +3,8 @@ import { ChevronDown } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { Source } from "../hooks/workspace";
+import type { SearchSort } from "../ipc";
+import { SORTS } from "./SearchField";
 import { ICON } from "./ui/button";
 import {
   DropdownMenu,
@@ -54,11 +56,13 @@ export function ScopeTitle({ title, subtitle }: { title: string; subtitle: strin
 
 /**
  * The scope title as a menu, for when the sidebar is hidden (spec 7.2, 8): the same
- * sources and counts as the sidebar, so every scope stays one click away.
+ * sources and counts as the sidebar, so every scope stays one click away. While a
+ * search runs it also holds the sort order (spec 9.2).
  */
 export function ScopeMenu({
   title,
   subtitle,
+  sort,
   sections,
   selected,
   onChoose,
@@ -66,6 +70,7 @@ export function ScopeMenu({
 }: {
   title: string;
   subtitle: string;
+  sort: { value: SearchSort; onChange: (sort: SearchSort) => void } | null;
   sections: SourceSection[];
   selected: Source;
   onChoose: (source: Source) => void;
@@ -116,6 +121,19 @@ export function ScopeMenu({
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onNewFolder}>New Folder…</DropdownMenuItem>
+        {sort && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Sort By</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={sort.value} onValueChange={(value) => sort.onChange(value as SearchSort)}>
+              {SORTS.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value}>
+                  {option.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

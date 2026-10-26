@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { agentLabel, clamp, formatAgo, formatRelative, formatTime, formatTokens } from "./format";
+import { agentLabel, clamp, formatAgo, formatMailDate, formatRelative, formatTime, formatTokens } from "./format";
 
 describe("format helpers", () => {
   describe("formatAgo", () => {
@@ -15,9 +15,21 @@ describe("format helpers", () => {
     });
   });
 
+  describe("formatMailDate", () => {
+    const now = new Date(2026, 9, 26, 16, 30).getTime();
+
+    it("writes dates the way Mail's message list does", () => {
+      expect(formatMailDate(new Date(2026, 9, 26, 14, 0).getTime(), now)).toBe("2:00 PM");
+      expect(formatMailDate(new Date(2026, 9, 25, 23, 59).getTime(), now)).toBe("Yesterday");
+      expect(formatMailDate(new Date(2026, 9, 22, 9, 0).getTime(), now)).toBe("Thursday");
+      expect(formatMailDate(new Date(2026, 9, 19, 9, 0).getTime(), now)).toBe("10/19/26");
+      expect(formatMailDate(null, now)).toBe("");
+    });
+  });
+
   describe("agentLabel", () => {
     it("maps known agent ids to friendly display names", () => {
-      expect(agentLabel("claude-code")).toBe("Claude");
+      expect(agentLabel("claude-code")).toBe("Claude Code");
       expect(agentLabel("codex")).toBe("Codex");
     });
 

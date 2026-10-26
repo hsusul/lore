@@ -1,9 +1,17 @@
+import { clsx } from "clsx";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { clamp } from "../format";
 import { useWindowing } from "../virtual";
+import { Button } from "./ui/button";
 
-export type OpenVia = "keyboard" | "pointer";
+/** How a row was opened: Enter hands focus to the reader; arrows and clicks keep it here. */
+export type OpenVia = "keyboard" | "pointer" | "arrow";
+
+export interface MoreState {
+  label: string;
+  status: "idle" | "loading" | "failed";
+}
 
 interface ListBoxProps<T> {
   id: string;
@@ -14,17 +22,37 @@ interface ListBoxProps<T> {
   renderRow: (item: T) => ReactNode;
   onOpen: (item: T, via: OpenVia) => void;
   listRef: RefObject<HTMLUListElement>;
-  /** Arrow up from the first row hands focus back (to the query line). */
+  /** Fixed row height: two-line rows, or the three-line rows of search results. */
+  height: "row" | "hit-row";
+  /** Arrow up from the first row hands focus back (to the search field). */
   onExitTop?: () => void;
   /** Called when the user reaches the end, by scrolling or by keyboard. */
   onReachEnd?: () => void;
-  footer?: ReactNode;
+  /** The "Load older" button, when there is more to load. */
+  more?: MoreState | null;
+}
+
+/** Whether the window is key. Selection turns gray when it is not, as in Mail. */
+function useWindowActive(): boolean {
+  const [active, setActive] = useState(true);
+  useEffect(() => {
+    const on = () => setActive(true);
+    const off = () => setActive(false);
+    window.addEventListener("focus", on);
+    window.addEventListener("blur", off);
+    return () => {
+      window.removeEventListener("focus", on);
+      window.removeEventListener("blur", off);
+    };
+  }, []);
+  return active;
 }
 
 /**
- * A virtualized single-select listbox. Arrow keys or j/k move the active row,
- * Home and End jump, Enter opens. Rows must share one fixed height so the
- * window math in `virtual.ts` holds.
+ * A virtualized single-select listbox in Mail's manner (spec 9.2, 11): the selection
+ * is the open session and is the only focus indicator. Arrow keys or j/k open the
+ * next or previous row, Enter moves focus into the reader. Rows must share one fixed
+ * height so the window math in `virtual.ts` holds.
  */
 export default function ListBox<T>({
   id,
@@ -35,27 +63,45 @@ export default function ListBox<T>({
   renderRow,
   onOpen,
   listRef,
+  height,
   onExitTop,
   onReachEnd,
-  footer,
+  more,
 }: ListBoxProps<T>) {
-  const listKey = items.length > 0 ? keyOf(items[0]) : null;
-  const [cursor, setCursor] = useState({ listKey, index: 0 });
+  const selected = items.findIndex(isOpen);
   const last = items.length - 1;
-  const active = cursor.listKey === listKey ? clamp(cursor.index, 0, Math.max(last, 0)) : 0;
+  const [listFocused, setListFocused] = useState(false);
+  const windowActive = useWindowActive();
   const scroller = useRef<HTMLDivElement>(null);
-  const { startIndex, endIndex, padTop, padBottom, scrollToIndex } = useWindowing(
-    scroller,
-    items.length,
-  );
+  // The first row of the next page, which takes the selection once it arrives.
+  const openWhenLoaded = useRef<number | null>(null);
+  const { startIndex, endIndex, padTop, padBottom, scrollToIndex } = useWindowing(scroller, items.length);
 
   useEffect(() => {
-    scrollToIndex(active);
-  }, [active, scrollToIndex]);
+    if (selected >= 0) scrollToIndex(selected);
+  }, [selected, scrollToIndex]);
 
-  function move(index: number) {
-    setCursor({ listKey, index: clamp(index, 0, Math.max(last, 0)) });
-    if (index > last) onReachEnd?.();
+  const moreStatus = more?.status;
+  useEffect(() => {
+    if (moreStatus === "failed") openWhenLoaded.current = null;
+  }, [moreStatus]);
+
+  useEffect(() => {
+    const index = openWhenLoaded.current;
+    if (index === null || items.length <= index) return;
+    openWhenLoaded.current = null;
+    onOpen(items[index], "arrow");
+    listRef.current?.focus();
+  }, [items, listRef, onOpen]);
+
+  function loadMore() {
+    openWhenLoaded.current = items.length;
+    onReachEnd?.();
+  }
+
+  function select(index: number) {
+    const item = items[clamp(index, 0, Math.max(last, 0))];
+    if (item) onOpen(item, "arrow");
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLUListElement>) {
@@ -63,28 +109,29 @@ export default function ListBox<T>({
     switch (event.key) {
       case "ArrowDown":
       case "j":
-        move(active + 1);
+        if (selected >= last && more) loadMore();
+        else select(selected + 1);
         break;
       case "ArrowUp":
       case "k":
-        if (active === 0 && onExitTop) onExitTop();
-        else move(active - 1);
+        if (selected <= 0 && onExitTop) onExitTop();
+        else select(selected - 1);
         break;
       case "PageDown":
-        move(active + page);
+        select(selected + page);
         break;
       case "PageUp":
-        move(active - page);
+        select(Math.max(selected - page, 0));
         break;
       case "Home":
-        move(0);
+        select(0);
         break;
       case "End":
-        move(last);
+        select(last);
         onReachEnd?.();
         break;
       case "Enter": {
-        const item = items[active];
+        const item = items[Math.max(selected, 0)];
         if (item) onOpen(item, "keyboard");
         break;
       }
@@ -106,32 +153,30 @@ export default function ListBox<T>({
       <ul
         ref={listRef}
         id={id}
-        className="listbox__list"
+        className={clsx("listbox__list pt-1.5", selected < 0 && "focus-visible:shadow-focus-inset")}
         role="listbox"
         aria-label={label}
         tabIndex={0}
-        aria-activedescendant={items.length > 0 ? optionId(active) : undefined}
+        data-focused={listFocused && windowActive ? "" : undefined}
+        aria-activedescendant={selected >= 0 ? optionId(selected) : undefined}
         onKeyDown={onKeyDown}
+        onFocus={() => setListFocused(true)}
+        onBlur={() => setListFocused(false)}
       >
         {padTop > 0 && <li aria-hidden="true" style={{ height: padTop }} />}
         {items.slice(startIndex, endIndex).map((item, offset) => {
           const index = startIndex + offset;
-          const key = keyOf(item);
-          const open = isOpen(item);
           return (
             <li
-              key={key}
+              key={keyOf(item)}
               id={optionId(index)}
               data-vrow
               role="option"
-              aria-selected={open}
+              aria-selected={index === selected}
               aria-setsize={items.length}
               aria-posinset={index + 1}
-              className={`row${index === active ? " is-active" : ""}${open ? " is-open" : ""}`}
-              onClick={() => {
-                setCursor({ listKey, index });
-                onOpen(item, "pointer");
-              }}
+              className={clsx("row", height === "row" ? "h-row" : "h-hit-row")}
+              onClick={() => onOpen(item, "pointer")}
             >
               {renderRow(item)}
             </li>
@@ -139,7 +184,13 @@ export default function ListBox<T>({
         })}
         {padBottom > 0 && <li aria-hidden="true" style={{ height: padBottom }} />}
       </ul>
-      {footer}
+      {more && (
+        <div className="flex justify-center p-2.5">
+          <Button disabled={more.status === "loading"} onClick={loadMore}>
+            {more.status === "loading" ? "Loading…" : more.status === "failed" ? "Could Not Load More. Try Again" : more.label}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

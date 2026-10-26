@@ -1,7 +1,7 @@
 // Small shared formatting helpers for the UI.
 
 const AGENT_LABELS: Record<string, string> = {
-  "claude-code": "Claude",
+  "claude-code": "Claude Code",
   codex: "Codex",
 };
 
@@ -53,6 +53,26 @@ export function formatRelative(ms: number | null): string {
   const weeks = Math.round(days / 7);
   if (weeks < 5) return `${weeks}w`;
   return formatShortDate(ms);
+}
+
+const DAY_MS = 86_400_000;
+
+function startOfDay(ms: number): number {
+  const d = new Date(ms);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+/**
+ * A date as Mail's message list writes it (spec 9.2): the time today ("2:00 PM"),
+ * "Yesterday", the weekday within the past week, then a short date ("10/19/26").
+ */
+export function formatMailDate(ms: number | null, now: number = Date.now()): string {
+  if (ms == null || !Number.isFinite(ms)) return "";
+  const days = Math.round((startOfDay(now) - startOfDay(ms)) / DAY_MS);
+  if (days === 0) return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (days === 1) return "Yesterday";
+  if (days > 1 && days < 7) return new Date(ms).toLocaleDateString(undefined, { weekday: "long" });
+  return new Date(ms).toLocaleDateString(undefined, { month: "numeric", day: "numeric", year: "2-digit" });
 }
 
 const AGO_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [

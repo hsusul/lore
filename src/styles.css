@@ -228,15 +228,6 @@ mark {
   min-width: 0;
 }
 
-.pane__note {
-  margin: 0;
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--separator);
-  background: var(--fill);
-  color: var(--label-2);
-  font-size: var(--t-callout-size);
-}
-
 .listbox {
   flex: 1;
   min-height: 0;
@@ -250,84 +241,68 @@ mark {
   outline: none;
 }
 
-.listbox__foot {
-  display: flex;
-  justify-content: center;
-  padding: 10px;
-}
-
+/*
+ * Session rows (spec 9.2): Mail's inset rows. A hairline from the text edge to the row's
+ * right edge sits between rows, drawn on top of each row so it can hide around the
+ * selection without :has(). Selection is gray, and blue with white text while the list
+ * has focus in the key window. No hover, no ring, no stripe.
+ */
 .row {
+  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2px;
-  height: 60px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--separator);
-  border-left: 3px solid transparent;
-  cursor: pointer;
+  gap: var(--s-2);
+  min-width: 0;
+  margin: 0 var(--s-10);
+  padding: 0 var(--s-10);
+  border-radius: var(--r-control);
+  color: var(--label);
+  cursor: default;
 }
 
-#results .row {
-  height: 88px;
+.row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--s-10);
+  right: 0;
+  height: var(--hairline);
+  background: var(--separator);
 }
 
-.row:hover {
-  background: var(--fill-2);
+.row[aria-posinset="1"]::before,
+.row[aria-selected="true"]::before,
+.row[aria-selected="true"] + .row::before {
+  display: none;
 }
 
-.row.is-open {
-  border-left-color: var(--link);
-  background: var(--bg-popover);
-}
-
-.listbox__list:focus-visible .row.is-active {
-  box-shadow: inset 0 0 0 2px var(--focus-ring);
-}
-
-.listbox__list:not(:focus-visible) .row.is-active:not(.is-open) {
-  background: transparent;
-}
-
-.listbox__list:focus-visible .row.is-active {
-  background: var(--fill-2);
-}
-
-.row__title {
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.row.is-open .row__title {
-  color: var(--link);
-}
-
-.row__meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  overflow: hidden;
+.row__secondary {
   color: var(--label-2);
-  font-size: var(--t-callout-size);
-  white-space: nowrap;
 }
 
-.row__time {
-  margin-left: auto;
-  color: var(--label-2);
-  font-variant-numeric: tabular-nums;
+.row[aria-selected="true"] {
+  background: var(--selected-unfocused);
 }
 
-.row__snippet {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--label-2);
-  font-size: var(--t-callout-size);
-  line-height: 1.4;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+.row[aria-selected="true"] .row__secondary {
+  color: var(--label);
+}
+
+.listbox__list[data-focused] .row[aria-selected="true"] {
+  background: var(--selected);
+  color: var(--on-selected);
+}
+
+.listbox__list[data-focused] .row[aria-selected="true"] .row__secondary {
+  color: var(--on-selected);
+}
+
+/* The translucent yellow turns olive over the blue fill, so a hit there is underlined instead. */
+.listbox__list[data-focused] .row[aria-selected="true"] mark {
+  background: none;
+  color: inherit;
+  text-decoration: underline;
 }
 
 .placeholder {
