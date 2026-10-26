@@ -6,7 +6,7 @@
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
 use lore_core::adapters::codex::CodexAdapter;
 use lore_core::ingest::persist_session;
-use lore_core::search::{search, search_page, SortOrder, HIGHLIGHT_START};
+use lore_core::search::{search, search_page, session_documents_page, SortOrder, HIGHLIGHT_START};
 use lore_core::storage::blob::BlobStore;
 use rusqlite::Connection;
 
@@ -239,6 +239,35 @@ fn snippets_never_surface_a_secret() {
         !hits[0].snippet.contains(body),
         "no raw secret in a snippet"
     );
+}
+
+#[test]
+fn session_documents_read_back_redacted_text_in_order() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let secret = format!("ghp{}", "_0123456789abcdefghijklmnopqrstuvwxyz");
+    let sid = persist_claude(
+        &conn,
+        &blobs,
+        &user_message("r1", "/p", &format!("deploy with token {secret} now")),
+        "r1",
+    );
+
+    let docs = session_documents_page(&conn, &sid, None, 50).unwrap();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].label, "user");
+    assert!(docs[0].text.starts_with("deploy with token "));
+    assert!(docs[0].text.ends_with(" now"));
+    assert!(!docs[0]
+        .text
+        .contains("0123456789abcdefghijklmnopqrstuvwxyz"));
+
+    assert!(session_documents_page(&conn, &sid, Some(docs[0].id), 50)
+        .unwrap()
+        .is_empty());
+    assert!(session_documents_page(&conn, "no-such-session", None, 50)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

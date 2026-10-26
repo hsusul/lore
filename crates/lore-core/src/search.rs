@@ -370,6 +370,53 @@ pub fn search_page(
     Ok(SearchPage { hits, next_cursor })
 }
 
+/// One row of a session's redacted projection, as [`session_documents_page`]
+/// returns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedactedDocument {
+    /// The projection row id; pass the last one back as `after_id`.
+    pub id: i64,
+    /// The message role for a message part, otherwise the projected field
+    /// (`title`, `patch`).
+    pub label: String,
+    pub text: String,
+}
+
+/// Read a session's searchable text back from the redacted `search_document`
+/// projection, in ingest order (title, then messages by seq, then patches).
+///
+/// This is the read for surfaces that hand archive text to a model: it can only
+/// return what search could, so a flagged span, a thinking block, or tool
+/// payload JSON never leaves the archive through it. `query::get_session` is
+/// the cleartext read and stays local to the UI.
+pub fn session_documents_page(
+    conn: &Connection,
+    session_id: &str,
+    after_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<RedactedDocument>> {
+    let mut stmt = conn.prepare(
+        "SELECT sd.id, COALESCE(m.role, sd.field), sd.redacted_text
+         FROM search_document sd
+         LEFT JOIN message_part p ON sd.source_kind = 'message_part' AND p.id = sd.source_id
+         LEFT JOIN message m ON m.id = p.message_id
+         WHERE sd.session_id = ?1 AND sd.id > ?2
+         ORDER BY sd.id
+         LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![session_id, after_id.unwrap_or(0), limit.clamp(1, MAX_LIMIT)],
+        |row| {
+            Ok(RedactedDocument {
+                id: row.get(0)?,
+                label: row.get(1)?,
+                text: row.get(2)?,
+            })
+        },
+    )?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// Build the outer keyset predicate (with a leading ` WHERE `) and its bound
 /// params for `sort` and `cursor`. Empty when there is no cursor. Each arm keeps
 /// only rows strictly after the cursor in that sort's total order; `started_at`
