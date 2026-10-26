@@ -1,8 +1,178 @@
 //! Small parsing helpers shared by adapters.
 
-use crate::model::{ParsedMessage, PartKind, Role};
+use std::collections::{BTreeSet, HashSet};
+
+use super::ArchivedSession;
+use crate::model::{
+    ParseCheckpoint, ParseStatus, ParsedAppend, ParsedMessage, ParsedSession, ParsedToolResult,
+    PartKind, Role, Tokens,
+};
 
 const TITLE_MAX_CHARS: usize = 80;
+
+/// A session holding the session-level values `from` recorded and no rows, for
+/// a parse that continues there. Its `title` is the native title so far.
+pub(crate) fn resume_session(from: &ParseCheckpoint, fallback_dedupe: &str) -> ParsedSession {
+    let mut session = ParsedSession::new(fallback_dedupe);
+    session.native_session_id = from.native_session_id.clone();
+    session.agent_version = from.agent_version.clone();
+    session.primary_model = from.primary_model.clone();
+    session.title = from.native_title.clone();
+    session.started_at = from.started_at;
+    session.ended_at = from.ended_at;
+    session.total_tokens = from.total_tokens;
+    if from.note_count > 0 {
+        session.status = ParseStatus::Partial;
+    }
+    session
+}
+
+/// Where a parse that started at `from` ended, beyond the session rows.
+pub(crate) struct ParseEnd {
+    pub offset: i64,
+    pub next_seq: i64,
+    pub earlier_results: Vec<ParsedToolResult>,
+    pub cwd: Option<String>,
+    pub model: Option<String>,
+    /// The lines restate session-level context that earlier rows carry.
+    pub restates_session: bool,
+}
+
+/// A parse from a checkpoint. `appendable` is false when the lines change
+/// rows that earlier lines produced, so they cannot be persisted on their own.
+pub(crate) struct ParseRun {
+    pub parsed: ParsedAppend,
+    pub appendable: bool,
+}
+
+impl ParseRun {
+    /// The checkpoint a later append resumes from. A session without messages
+    /// has no segment to carry context forward, so it is parsed whole again.
+    pub(crate) fn checkpointed(self) -> (ParsedSession, Option<ParseCheckpoint>) {
+        let checkpoint = self.parsed.checkpoint;
+        let resumable = checkpoint.open_segment.is_some().then_some(checkpoint);
+        (self.parsed.session, resumable)
+    }
+
+    pub(crate) fn append(self) -> Option<ParsedAppend> {
+        self.appendable.then_some(self.parsed)
+    }
+}
+
+/// Settle the title and record where the next append resumes. `session.title`
+/// holds the native title on entry.
+pub(crate) fn finish_parse(
+    from: &ParseCheckpoint,
+    mut session: ParsedSession,
+    end: ParseEnd,
+    archived: &dyn ArchivedSession,
+) -> ParseRun {
+    let uuids: HashSet<&str> = session
+        .messages
+        .iter()
+        .filter_map(|m| m.native_uuid.as_deref())
+        .collect();
+    let call_ids: HashSet<&str> = session
+        .tool_calls
+        .iter()
+        .map(|t| t.native_call_id.as_str())
+        .collect();
+    // A line that resolves what an earlier line left open changes that
+    // earlier line's row.
+    let resolves_earlier = from
+        .unresolved_parents
+        .iter()
+        .any(|u| uuids.contains(u.as_str()))
+        || from
+            .unresolved_calls
+            .iter()
+            .any(|c| call_ids.contains(c.as_str()));
+    let appendable = !resolves_earlier && !end.restates_session;
+
+    let mut unresolved_parents: BTreeSet<String> =
+        from.unresolved_parents.iter().cloned().collect();
+    for parent in session
+        .messages
+        .iter()
+        .filter_map(|m| m.parent_native_uuid.as_deref())
+    {
+        if !uuids.contains(parent) && !archived.has_message(parent) {
+            unresolved_parents.insert(parent.to_string());
+        }
+    }
+    let mut unresolved_calls: BTreeSet<String> = from.unresolved_calls.iter().cloned().collect();
+    for call in session
+        .file_events
+        .iter()
+        .filter_map(|f| f.tool_native_call_id.as_deref())
+    {
+        if !call_ids.contains(call) && !archived.has_tool_call(call) {
+            unresolved_calls.insert(call.to_string());
+        }
+    }
+
+    let native_title = session.title.take();
+    let derived_title = from
+        .derived_title
+        .clone()
+        .or_else(|| fallback_title(&session.messages));
+    session.title_is_synthetic = native_title.is_none() && derived_title.is_some();
+    session.title = native_title.clone().or_else(|| derived_title.clone());
+
+    let base = from
+        .segment_count
+        .saturating_sub(usize::from(from.open_segment.is_some()));
+    let checkpoint = ParseCheckpoint {
+        offset: end.offset,
+        next_seq: end.next_seq,
+        segment_count: base + session.segments.len(),
+        tool_call_count: from.tool_call_count + session.tool_calls.len(),
+        file_event_count: from.file_event_count + session.file_events.len(),
+        native_session_id: session.native_session_id.clone(),
+        agent_version: session.agent_version.clone(),
+        primary_model: session.primary_model.clone(),
+        native_title,
+        derived_title,
+        started_at: session.started_at,
+        ended_at: session.ended_at,
+        total_tokens: session.total_tokens,
+        message_tokens: session
+            .messages
+            .iter()
+            .fold(from.message_tokens, |sum, m| add_tokens(sum, m.tokens)),
+        note_count: from.note_count + session.notes.len(),
+        first_note: from
+            .first_note
+            .clone()
+            .or_else(|| session.notes.first().map(|n| n.message.clone())),
+        open_segment: session.segments.last().cloned(),
+        cwd: end.cwd,
+        model: end.model,
+        unresolved_parents: unresolved_parents.into_iter().collect(),
+        unresolved_calls: unresolved_calls.into_iter().collect(),
+    };
+    ParseRun {
+        parsed: ParsedAppend {
+            session,
+            earlier_results: end.earlier_results,
+            checkpoint,
+        },
+        appendable,
+    }
+}
+
+/// Per-field saturating sum; a field stays absent until some message has it.
+fn add_tokens(sum: Tokens, more: Tokens) -> Tokens {
+    let add = |a: Option<i64>, b: Option<i64>| match (a, b) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0).saturating_add(b.unwrap_or(0))),
+    };
+    Tokens {
+        input: add(sum.input, more.input),
+        output: add(sum.output, more.output),
+        cache: add(sum.cache, more.cache),
+    }
+}
 
 /// Derive a compact title from the first meaningful user request when the
 /// native log does not provide one. Agent/runtime bootstrap messages are

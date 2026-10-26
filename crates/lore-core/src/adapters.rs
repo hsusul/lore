@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::model::ParsedSession;
+use crate::model::{ParseCheckpoint, ParsedAppend, ParsedSession};
 
 pub(crate) mod common;
 
@@ -87,6 +87,25 @@ pub enum AdapterError {
     Unreadable,
 }
 
+/// The rows a session already has in the archive, for appended lines that refer
+/// back past a [`ParseCheckpoint`].
+pub trait ArchivedSession {
+    fn has_message(&self, native_uuid: &str) -> bool;
+    fn has_tool_call(&self, native_call_id: &str) -> bool;
+}
+
+/// A session with nothing archived yet: every reference is to the parsed lines.
+pub(crate) struct NothingArchived;
+
+impl ArchivedSession for NothingArchived {
+    fn has_message(&self, _: &str) -> bool {
+        false
+    }
+    fn has_tool_call(&self, _: &str) -> bool {
+        false
+    }
+}
+
 /// The read-only interface every agent adapter implements.
 pub trait AgentAdapter: Send + Sync {
     fn id(&self) -> AgentId;
@@ -120,6 +139,32 @@ pub trait AgentAdapter: Send + Sync {
     /// rather than panicking. `fallback_dedupe` seeds the dedupe key when the
     /// source carries no native session id.
     fn parse_content(&self, content: &str, fallback_dedupe: &str) -> ParsedSession;
+
+    /// [`AgentAdapter::parse_content`] plus the parser state after the last
+    /// line, so a later append can resume there. `None` when this adapter
+    /// cannot resume, which keeps every change on a whole-file parse.
+    fn parse_checkpointed(
+        &self,
+        content: &str,
+        fallback_dedupe: &str,
+    ) -> (ParsedSession, Option<ParseCheckpoint>) {
+        (self.parse_content(content, fallback_dedupe), None)
+    }
+
+    /// Parse `tail`, the complete lines appended after `from`, as if the whole
+    /// file had been parsed. `archived` answers for rows parsed before `from`.
+    /// `None` when the tail changes what earlier lines produced; the caller
+    /// then parses the whole file.
+    fn parse_append(
+        &self,
+        from: &ParseCheckpoint,
+        tail: &str,
+        fallback_dedupe: &str,
+        archived: &dyn ArchivedSession,
+    ) -> Option<ParsedAppend> {
+        let _ = (from, tail, fallback_dedupe, archived);
+        None
+    }
 
     /// Parse one session file into the normalized model. The default reads the
     /// file once and delegates to [`AgentAdapter::parse_content`]; adapters need

@@ -13,13 +13,14 @@
 //! (`SECRET_SCANNING.md`, `SEARCH.md`). Recorded-patch blobs finalize their
 //! `scan_state` here.
 
-use std::collections::{HashMap, HashSet};
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::adapters::{AdapterRegistry, AgentAdapter, SessionRef};
-use crate::model::ParsedSession;
+use crate::adapters::{AdapterRegistry, AgentAdapter, ArchivedSession, SessionRef};
+use crate::model::{ParseCheckpoint, ParsedAppend, ParsedSession};
 use crate::storage::blob::{BlobStore, StagedBlob};
 use crate::storage::{Result, StorageError};
 
@@ -153,19 +154,38 @@ fn persist_rows(
         ],
     )?;
 
-    // A native title (custom/ai) is distinct content, so it is scanned and
-    // indexed like any cleartext. A synthetic fallback title merely echoes the
-    // first user message — already scanned and indexed — so re-scanning or
-    // re-indexing it would duplicate both secret findings and search hits
-    // (`SEARCH.md` §6). It is kept only in `agent_session.title` for display.
+    project_title(tx, &session_id, agent_id, parsed)?;
+    insert_rows(
+        tx,
+        &session_id,
+        agent_id,
+        parsed,
+        source_artifact_id,
+        patch_blobs,
+        RowBase::default(),
+    )?;
+    Ok(session_id)
+}
+
+/// A native title (custom/ai) is distinct content, so it is scanned and
+/// indexed like any cleartext. A synthetic fallback title merely echoes the
+/// first user message — already scanned and indexed — so re-scanning or
+/// re-indexing it would duplicate both secret findings and search hits
+/// (`SEARCH.md` §6). It is kept only in `agent_session.title` for display.
+fn project_title(
+    tx: &Connection,
+    session_id: &str,
+    agent_id: &str,
+    parsed: &ParsedSession,
+) -> Result<()> {
     if let Some(title) = &parsed.title {
         if !parsed.title_is_synthetic {
             scan_and_project(
                 tx,
-                &session_id,
+                session_id,
                 None,
                 "session",
-                &session_id,
+                session_id,
                 "title",
                 title,
                 true,
@@ -174,18 +194,43 @@ fn persist_rows(
             )?;
         }
     }
+    Ok(())
+}
 
-    // Segments.
-    let mut segment_ids = Vec::with_capacity(parsed.segments.len());
+/// How many segments and file events the session already holds below the
+/// rows being inserted. Zero for a whole session.
+#[derive(Debug, Clone, Copy, Default)]
+struct RowBase {
+    segments: usize,
+    file_events: usize,
+}
+
+/// Insert the rows `parsed` carries. `base` says where its segments and file
+/// events start among the session's. A reference to a message or tool call
+/// that `parsed` lacks resolves against rows already in the archive.
+fn insert_rows(
+    tx: &Connection,
+    session_id: &str,
+    agent_id: &str,
+    parsed: &ParsedSession,
+    source_artifact_id: Option<&str>,
+    patch_blobs: &[Option<StagedBlob>],
+    base: RowBase,
+) -> Result<()> {
+    let segment_count = base.segments + parsed.segments.len();
+    let segment_id =
+        |ix: usize| (ix < segment_count).then(|| det_id("seg", &[session_id, &ix.to_string()]));
+
+    // Segments. The first may be the open segment an append extends.
     for (i, seg) in parsed.segments.iter().enumerate() {
-        let sid = det_id("seg", &[&session_id, &i.to_string()]);
         tx.execute(
             "INSERT INTO session_segment
                 (id, session_id, seq_start, seq_end, cwd, model, provider,
                  context_source, resolution_confidence)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,'event','unresolved')",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,'event','unresolved')
+             ON CONFLICT(id) DO UPDATE SET seq_end = excluded.seq_end",
             params![
-                sid,
+                segment_id(base.segments + i),
                 session_id,
                 seg.seq_start,
                 seg.seq_end,
@@ -194,14 +239,13 @@ fn persist_rows(
                 seg.provider
             ],
         )?;
-        segment_ids.push(sid);
     }
 
     // Pre-assign message ids and build the uuid->id map for parent resolution.
     let mut msg_ids = Vec::with_capacity(parsed.messages.len());
     let mut uuid_to_id: HashMap<String, String> = HashMap::new();
     for m in &parsed.messages {
-        let mid = det_id("m", &[&session_id, &m.seq.to_string()]);
+        let mid = det_id("m", &[session_id, &m.seq.to_string()]);
         if let Some(u) = &m.native_uuid {
             uuid_to_id.insert(u.clone(), mid.clone());
         }
@@ -212,12 +256,14 @@ fn persist_rows(
     let mut part_ids: HashMap<(i64, i64), String> = HashMap::new();
     for (mi, m) in parsed.messages.iter().enumerate() {
         let mid = &msg_ids[mi];
-        let segment_id = segment_ids.get(m.segment_ix);
-        let parent_id = m
-            .parent_native_uuid
-            .as_ref()
-            .and_then(|u| uuid_to_id.get(u))
-            .cloned();
+        let segment_id = segment_id(m.segment_ix);
+        let parent_id = match &m.parent_native_uuid {
+            Some(u) => match uuid_to_id.get(u) {
+                Some(id) => Some(id.clone()),
+                None => archived_message_id(tx, session_id, u)?,
+            },
+            None => None,
+        };
         tx.execute(
             "INSERT INTO message
                 (id, session_id, segment_id, native_uuid, parent_id, parent_native_uuid, seq,
@@ -266,11 +312,11 @@ fn persist_rows(
             // Scan every cleartext part for secrets. Index the text projection
             // only when the part is searchable (thinking is scanned, not
             // indexed); tool payload JSON is scanned but never indexed.
-            let seg = segment_id.map(String::as_str);
+            let seg = segment_id.as_deref();
             if let Some(text) = &p.text {
                 scan_and_project(
                     tx,
-                    &session_id,
+                    session_id,
                     seg,
                     "message_part",
                     &pid,
@@ -284,7 +330,7 @@ fn persist_rows(
             if let Some(content) = &p.content_json {
                 scan_and_project(
                     tx,
-                    &session_id,
+                    session_id,
                     seg,
                     "message_part",
                     &pid,
@@ -300,13 +346,12 @@ fn persist_rows(
     }
 
     // Tool calls (the invocation part must exist to satisfy the NOT NULL FK).
-    let mut persisted_tool_call_ids = HashSet::new();
     for tc in &parsed.tool_calls {
         let Some(call_part_id) = part_ids.get(&tc.call_ref) else {
             continue;
         };
         let result_part_id = tc.result_ref.as_ref().and_then(|r| part_ids.get(r));
-        let tid = det_id("t", &[&session_id, &tc.native_call_id]);
+        let tid = det_id("t", &[session_id, &tc.native_call_id]);
         tx.execute(
             "INSERT INTO tool_call
                 (id, session_id, call_part_id, result_part_id, native_call_id, name,
@@ -325,19 +370,22 @@ fn persist_rows(
                 tc.duration_ms,
             ],
         )?;
-        persisted_tool_call_ids.insert(tc.native_call_id.as_str());
     }
 
     // File events. A recorded patch payload is referenced from its staged blob
     // (byte-faithful; the diff itself lives in the content-addressed store).
     for (i, fe) in parsed.file_events.iter().enumerate() {
-        let fid = det_id("f", &[&session_id, &i.to_string()]);
-        let segment_id = segment_ids.get(fe.segment_ix);
-        let tool_call_id = fe
-            .tool_native_call_id
-            .as_ref()
-            .filter(|call_id| persisted_tool_call_ids.contains(call_id.as_str()))
-            .map(|c| det_id("t", &[&session_id, c]));
+        let fid = det_id("f", &[session_id, &(base.file_events + i).to_string()]);
+        // An event belongs to its call's segment. The call is in the archive
+        // whether this pass inserted it or an earlier ingest did.
+        let call = match &fe.tool_native_call_id {
+            Some(native) => archived_call(tx, &det_id("t", &[session_id, native]))?,
+            None => None,
+        };
+        let (tool_call_id, segment_id) = match call {
+            Some((id, segment_id)) => (Some(id), segment_id),
+            None => (None, segment_id(fe.segment_ix)),
+        };
         let patch_blob_id = match patch_blobs.get(i).and_then(Option::as_ref) {
             Some(staged) => Some(BlobStore::reference(tx, staged, PATCH_MEDIA_TYPE)?),
             None => None,
@@ -393,11 +441,10 @@ fn persist_rows(
         // failure quarantines the patch: no projection, blob marked
         // `failed_quarantined` (SECRET_SCANNING.md §6).
         if let Some(patch) = &fe.patch_text {
-            let seg = segment_id.map(String::as_str);
             let outcome = scan_and_project(
                 tx,
-                &session_id,
-                seg,
+                session_id,
+                segment_id.as_deref(),
                 "file_event",
                 &fid,
                 "patch",
@@ -422,11 +469,13 @@ fn persist_rows(
 
     // Agent-recorded git observations from segment context (branch/commit as the
     // agent stamped them; never labeled a captured session-time snapshot).
+    // An open segment an append extends already has its observation.
     for (i, seg) in parsed.segments.iter().enumerate() {
         if seg.git_branch.is_none() && seg.git_commit_sha.is_none() {
             continue;
         }
-        let gid = det_id("g", &[&session_id, &i.to_string()]);
+        let ix = (base.segments + i).to_string();
+        let gid = det_id("g", &[session_id, &ix]);
         // Store only the credential-free normalized remote; a recorded URL may
         // carry an embedded token and must never be persisted verbatim.
         let remote_url_norm = seg
@@ -437,11 +486,12 @@ fn persist_rows(
             "INSERT INTO git_observation
                 (id, session_id, segment_id, source, observed_at, temporal_confidence,
                  branch, commit_sha, remote_url_norm)
-             VALUES (?1,?2,?3,'agent_recorded', unixepoch('now')*1000, 'near_event', ?4,?5,?6)",
+             VALUES (?1,?2,?3,'agent_recorded', unixepoch('now')*1000, 'near_event', ?4,?5,?6)
+             ON CONFLICT(id) DO NOTHING",
             params![
                 gid,
                 session_id,
-                segment_ids[i],
+                det_id("seg", &[session_id, &ix]),
                 seg.git_branch,
                 seg.git_commit_sha,
                 remote_url_norm,
@@ -453,9 +503,151 @@ fn persist_rows(
     // projects (migration 0011). Enrichment refreshes it again once repository
     // identity is resolved; this pass makes agent-recorded branches and commits
     // searchable even for a session Lore never manages to enrich.
-    crate::search::project_session_git(tx, &session_id)?;
+    crate::search::project_session_git(tx, session_id)?;
+    Ok(())
+}
 
-    Ok(session_id)
+/// The id of a message already in the archive, by its native uuid.
+fn archived_message_id(tx: &Connection, session_id: &str, uuid: &str) -> Result<Option<String>> {
+    Ok(tx
+        .prepare_cached("SELECT id FROM message WHERE session_id = ?1 AND native_uuid = ?2")?
+        .query_row(params![session_id, uuid], |r| r.get(0))
+        .optional()?)
+}
+
+/// Persist lines appended after `from`: add their rows, fill in results for
+/// calls parsed before them, and bring the session's aggregates to the new end.
+fn append_rows(
+    tx: &Connection,
+    session_id: &str,
+    agent_id: &str,
+    from: &ParseCheckpoint,
+    append: &ParsedAppend,
+    source_artifact_id: &str,
+    patch_blobs: &[Option<StagedBlob>],
+) -> Result<()> {
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
+    let parsed = &append.session;
+    let end = &append.checkpoint;
+    tx.execute(
+        "UPDATE agent_session SET
+            title = ?2, ended_at = ?3, primary_model = ?4, message_count = ?5,
+            tool_call_count = ?6, total_input_tokens = ?7, total_output_tokens = ?8,
+            total_cache_tokens = ?9, parse_status = ?10, parse_note = ?11, agent_version = ?12
+         WHERE id = ?1",
+        params![
+            session_id,
+            parsed.title,
+            parsed.ended_at,
+            parsed.primary_model,
+            end.next_seq,
+            i64::try_from(end.tool_call_count).unwrap_or(i64::MAX),
+            end.total_tokens.input.or(end.message_tokens.input),
+            end.total_tokens.output.or(end.message_tokens.output),
+            end.total_tokens.cache.or(end.message_tokens.cache),
+            parsed.status.as_str(),
+            note_summary(end.note_count, end.first_note.as_deref()),
+            parsed.agent_version,
+        ],
+    )?;
+
+    // Only a native title is projected, so only a new one changes the index.
+    if from.native_title != end.native_title {
+        tx.execute(
+            "DELETE FROM search_document
+             WHERE session_id = ?1 AND source_kind = 'session' AND source_id = ?1
+               AND field = 'title'",
+            [session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM secret_finding
+             WHERE source_kind = 'session' AND source_id = ?1 AND field = 'title'",
+            [session_id],
+        )?;
+        project_title(tx, session_id, agent_id, parsed)?;
+    }
+
+    insert_rows(
+        tx,
+        session_id,
+        agent_id,
+        parsed,
+        Some(source_artifact_id),
+        patch_blobs,
+        RowBase {
+            segments: end.segment_count.saturating_sub(parsed.segments.len()),
+            file_events: from.file_event_count,
+        },
+    )?;
+
+    for result in &append.earlier_results {
+        let (seq, ordinal) = result.result_ref;
+        let message_id = det_id("m", &[session_id, &seq.to_string()]);
+        tx.execute(
+            "UPDATE tool_call SET result_part_id = ?2, output_text = ?3, is_error = ?4
+             WHERE id = ?1",
+            params![
+                det_id("t", &[session_id, &result.native_call_id]),
+                det_id("p", &[&message_id, &ordinal.to_string()]),
+                result.output_text,
+                result.is_error,
+            ],
+        )?;
+    }
+
+    tx.execute(
+        "UPDATE session_source SET last_seq = COALESCE(?3, last_seq)
+         WHERE session_id = ?1 AND source_artifact_id = ?2",
+        params![
+            session_id,
+            source_artifact_id,
+            parsed.messages.last().map(|m| m.seq)
+        ],
+    )?;
+    Ok(())
+}
+
+/// Rows a session already has, answered from the archive. A query error marks
+/// the answers unreliable so the caller parses the whole file instead.
+struct ArchivedRows<'a> {
+    conn: &'a Connection,
+    session_id: &'a str,
+    failed: Cell<bool>,
+}
+
+impl ArchivedRows<'_> {
+    fn found<T>(&self, lookup: Result<Option<T>>) -> bool {
+        lookup
+            .unwrap_or_else(|_| {
+                self.failed.set(true);
+                None
+            })
+            .is_some()
+    }
+}
+
+impl ArchivedSession for ArchivedRows<'_> {
+    fn has_message(&self, native_uuid: &str) -> bool {
+        self.found(archived_message_id(self.conn, self.session_id, native_uuid))
+    }
+
+    fn has_tool_call(&self, native_call_id: &str) -> bool {
+        let id = det_id("t", &[self.session_id, native_call_id]);
+        self.found(archived_call(self.conn, &id))
+    }
+}
+
+/// An archived tool call's id and the segment of the message that invoked it.
+fn archived_call(tx: &Connection, call_id: &str) -> Result<Option<(String, Option<String>)>> {
+    Ok(tx
+        .prepare_cached(
+            "SELECT t.id, m.segment_id FROM tool_call t
+             JOIN message_part p ON p.id = t.call_part_id
+             JOIN message m ON m.id = p.message_id
+             WHERE t.id = ?1",
+        )?
+        .query_row([call_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?)
 }
 
 fn session_token_totals(parsed: &ParsedSession) -> crate::model::Tokens {
@@ -495,13 +687,15 @@ fn parse_note(parsed: &ParsedSession) -> Option<String> {
     if let Some(n) = &parsed.note {
         return Some(bounded(n));
     }
-    match parsed.notes.len() {
-        0 => None,
-        n => Some(bounded(&format!(
-            "{n} parser note(s); first: {}",
-            parsed.notes[0].message
-        ))),
-    }
+    note_summary(
+        parsed.notes.len(),
+        parsed.notes.first().map(|n| n.message.as_str()),
+    )
+}
+
+fn note_summary(count: usize, first: Option<&str>) -> Option<String> {
+    let first = first.filter(|_| count > 0)?;
+    Some(bounded(&format!("{count} parser note(s); first: {first}")))
 }
 
 fn bounded(s: &str) -> String {
@@ -695,6 +889,7 @@ struct SourceRow {
     generation: i64,
     parser_version: Option<String>,
     ingest_state: Option<String>,
+    resume_json: Option<String>,
 }
 
 struct SourceSnapshot {
@@ -706,6 +901,9 @@ struct SourceSnapshot {
     prefix_hash: String,
     last_offset: i64,
     last_line: i64,
+    /// `full_hash` of the bytes the last ingest saw, when the file still has
+    /// that many. Equal to that ingest's `full_hash` only if they are unchanged.
+    hash_through_previous_size: Option<String>,
 }
 
 struct SessionSourceRow {
@@ -722,10 +920,13 @@ pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 ///
 /// Idempotent by construction: a changed file is fully re-parsed and its session
 /// rows are replaced, so append / truncate / rewrite all converge to the correct
-/// state. Classification (via size + a prefix hash) drives generation bumps and
-/// lets an unchanged file be skipped without re-parsing. Source-artifact
-/// tracking, the session rows, the session↔source link, and the checkpoint all
-/// commit in one transaction.
+/// state. The exception is an append whose earlier bytes are provably the ones
+/// the last ingest parsed: only the new lines are parsed and only their rows
+/// are added, from the parser checkpoint that ingest stored. Classification
+/// (via size + a prefix hash) drives generation bumps and lets an unchanged
+/// file be skipped without re-parsing. Source-artifact tracking, the session
+/// rows, the session↔source link, and the checkpoint all commit in one
+/// transaction.
 pub fn ingest_file(
     conn: &Connection,
     adapter: &dyn AgentAdapter,
@@ -734,6 +935,9 @@ pub fn ingest_file(
 ) -> Result<IngestOutcome> {
     let meta = std::fs::metadata(path).map_err(|_| StorageError::Io)?;
     let is_oversized = meta.len() > MAX_SOURCE_BYTES;
+    let agent_id = adapter.id().0;
+    let path_str = path.to_string_lossy();
+    let by_path = find_source_by_path(conn, agent_id, &path_str)?;
 
     let (content, snapshot, oversized_note) = if is_oversized {
         // Parse a bounded prefix (cut at a complete line) so a multi-hundred-MiB
@@ -746,19 +950,20 @@ pub fn ingest_file(
         (content, snap, Some(note))
     } else {
         let content = std::fs::read_to_string(path).map_err(|_| StorageError::Io)?;
-        let snap = source_snapshot(path, &meta, &content);
+        let previous_size = by_path.as_ref().and_then(|r| usize::try_from(r.size).ok());
+        let snap = source_snapshot(path, &meta, &content, previous_size);
         (content, snap, None)
     };
 
-    let agent_id = adapter.id().0;
-
-    let prev = find_source(
-        conn,
-        agent_id,
-        snapshot.native_file_id.as_deref(),
-        &snapshot.path,
-        &snapshot.full_hash,
-    )?;
+    let prev = match by_path {
+        Some(row) => Some(row),
+        None => find_source_by_native_id(
+            conn,
+            agent_id,
+            snapshot.native_file_id.as_deref(),
+            &snapshot.full_hash,
+        )?,
+    };
 
     let (artifact_id, generation, change) = match &prev {
         None => (
@@ -812,10 +1017,28 @@ pub fn ingest_file(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| snapshot.path.clone());
 
-    let mut parsed = adapter.parse_content(&content, &fallback);
+    if let (Some(row), ChangeClass::Appended, None) = (&prev, change, &oversized_note) {
+        let source = AppendSource {
+            row,
+            content: &content,
+            snapshot: &snapshot,
+            fallback: &fallback,
+        };
+        if let Some(session_id) = ingest_append(conn, adapter, &source, blobs)? {
+            return Ok(IngestOutcome::Ingested {
+                session_id,
+                source_artifact_id: artifact_id,
+                generation,
+                change,
+            });
+        }
+    }
+
+    let (mut parsed, checkpoint) = adapter.parse_checkpointed(&content, &fallback);
     if let Some(note) = oversized_note {
         parsed.note_partial(note);
     }
+    let resume = checkpoint.filter(|_| ends_on_line(&snapshot));
 
     // Stage blob files before opening the transaction (DATA_MODEL.md §3).
     let patch_blobs = stage_patch_blobs(blobs, &parsed)?;
@@ -857,25 +1080,7 @@ pub fn ingest_file(
             parsed.messages.last().map(|m| m.seq),
         ],
     )?;
-    tx.execute(
-        "INSERT INTO ingest_state
-            (source_artifact_id, generation, last_offset, last_line, prefix_hash,
-             parser_version, state, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,'ok', unixepoch('now')*1000)
-         ON CONFLICT(source_artifact_id) DO UPDATE SET
-            generation = excluded.generation, last_offset = excluded.last_offset,
-            last_line = excluded.last_line, prefix_hash = excluded.prefix_hash,
-            parser_version = excluded.parser_version, state = 'ok',
-            updated_at = excluded.updated_at",
-        params![
-            artifact_id,
-            generation,
-            snapshot.last_offset,
-            snapshot.last_line,
-            snapshot.prefix_hash,
-            PARSER_VERSION,
-        ],
-    )?;
+    write_ingest_state(&tx, &artifact_id, generation, &snapshot, resume.as_ref())?;
     tx.commit()?;
 
     Ok(IngestOutcome::Ingested {
@@ -884,6 +1089,145 @@ pub fn ingest_file(
         generation,
         change,
     })
+}
+
+/// An appended source and what the last ingest recorded for it.
+struct AppendSource<'a> {
+    row: &'a SourceRow,
+    content: &'a str,
+    snapshot: &'a SourceSnapshot,
+    fallback: &'a str,
+}
+
+/// Parse and persist only the lines appended since the last ingest. Returns
+/// the session id, or `None` when the archive does not provably hold what that
+/// ingest's checkpoint describes, or the new lines change earlier rows; the
+/// caller then parses the whole file.
+fn ingest_append(
+    conn: &Connection,
+    adapter: &dyn AgentAdapter,
+    source: &AppendSource<'_>,
+    blobs: &BlobStore,
+) -> Result<Option<String>> {
+    let row = source.row;
+    let Some(from) = row
+        .resume_json
+        .as_deref()
+        .and_then(ParseCheckpoint::from_json)
+    else {
+        return Ok(None);
+    };
+    // The checkpoint must sit at the end of exactly the bytes it parsed, and
+    // those bytes must be unchanged, not just their 4 KiB prefix.
+    let parsed_bytes_unchanged = row.parser_version.as_deref() == Some(PARSER_VERSION)
+        && row.ingest_state.as_deref() == Some("ok")
+        && from.offset == row.size
+        && row.full_hash.is_some()
+        && row.full_hash == source.snapshot.hash_through_previous_size;
+    let tail = usize::try_from(row.size)
+        .ok()
+        .and_then(|n| source.content.get(n..));
+    let (true, Some(tail)) = (parsed_bytes_unchanged, tail) else {
+        return Ok(None);
+    };
+    let Some(session_id) = sole_session(conn, &row.id, from.next_seq)? else {
+        return Ok(None);
+    };
+
+    let archived = ArchivedRows {
+        conn,
+        session_id: &session_id,
+        failed: Cell::new(false),
+    };
+    let Some(append) = adapter.parse_append(&from, tail, source.fallback, &archived) else {
+        return Ok(None);
+    };
+    // Search rows carry the session start, and the session id names the rows.
+    let agent_id = adapter.id().0;
+    if archived.failed.get()
+        || session_id_for(agent_id, &append.session) != session_id
+        || append.session.started_at != from.started_at
+    {
+        return Ok(None);
+    }
+
+    let patch_blobs = stage_patch_blobs(blobs, &append.session)?;
+    let _write = crate::storage::write_lock();
+    let tx = conn.unchecked_transaction()?;
+    append_rows(
+        &tx,
+        &session_id,
+        agent_id,
+        &from,
+        &append,
+        &row.id,
+        &patch_blobs,
+    )?;
+    update_source(&tx, &row.id, source.snapshot, row.generation)?;
+    add_path_alias(&tx, &row.id, &source.snapshot.path)?;
+    let resume = ends_on_line(source.snapshot).then_some(&append.checkpoint);
+    write_ingest_state(&tx, &row.id, row.generation, source.snapshot, resume)?;
+    tx.commit()?;
+    Ok(Some(session_id))
+}
+
+/// The session `source_artifact_id` alone feeds, when it holds `message_count`
+/// messages. A session another source also feeds may hold that source's rows.
+fn sole_session(
+    conn: &Connection,
+    source_artifact_id: &str,
+    message_count: i64,
+) -> Result<Option<String>> {
+    let mut statement = conn.prepare(
+        "SELECT s.id FROM session_source ss
+         JOIN agent_session s ON s.id = ss.session_id
+         WHERE ss.source_artifact_id = ?1 AND s.message_count = ?2
+           AND (SELECT count(*) FROM session_source o WHERE o.session_id = s.id) = 1",
+    )?;
+    let mut sessions = statement
+        .query_map(params![source_artifact_id, message_count], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(if sessions.len() == 1 {
+        sessions.pop()
+    } else {
+        None
+    })
+}
+
+/// A checkpoint is only resumable at a line boundary: a partial last line is
+/// parsed again whole once the agent finishes writing it.
+fn ends_on_line(snapshot: &SourceSnapshot) -> bool {
+    snapshot.last_offset == snapshot.size
+}
+
+fn write_ingest_state(
+    tx: &Connection,
+    source_artifact_id: &str,
+    generation: i64,
+    snapshot: &SourceSnapshot,
+    resume: Option<&ParseCheckpoint>,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO ingest_state
+            (source_artifact_id, generation, last_offset, last_line, prefix_hash,
+             parser_version, state, updated_at, resume_json)
+         VALUES (?1,?2,?3,?4,?5,?6,'ok', unixepoch('now')*1000, ?7)
+         ON CONFLICT(source_artifact_id) DO UPDATE SET
+            generation = excluded.generation, last_offset = excluded.last_offset,
+            last_line = excluded.last_line, prefix_hash = excluded.prefix_hash,
+            parser_version = excluded.parser_version, state = 'ok',
+            updated_at = excluded.updated_at, resume_json = excluded.resume_json",
+        params![
+            source_artifact_id,
+            generation,
+            snapshot.last_offset,
+            snapshot.last_line,
+            snapshot.prefix_hash,
+            PARSER_VERSION,
+            resume.map(ParseCheckpoint::to_json),
+        ],
+    )?;
+    Ok(())
 }
 
 fn session_id_for(agent_id: &str, parsed: &ParsedSession) -> String {
@@ -949,51 +1293,52 @@ fn detach_reassigned_source(
     Ok(())
 }
 
-fn find_source(
+fn source_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRow> {
+    Ok(SourceRow {
+        id: r.get(0)?,
+        size: r.get(1)?,
+        full_hash: r.get(2)?,
+        prefix_hash: r.get(3)?,
+        generation: r.get(4)?,
+        parser_version: r.get(5)?,
+        ingest_state: r.get(6)?,
+        resume_json: r.get(7)?,
+    })
+}
+
+fn find_source_by_path(conn: &Connection, agent_id: &str, path: &str) -> Result<Option<SourceRow>> {
+    conn.query_row(
+        "SELECT sa.id, sa.size, sa.full_hash, sa.prefix_hash, sa.generation,
+                ist.parser_version, ist.state, ist.resume_json
+         FROM source_artifact sa
+         LEFT JOIN ingest_state ist ON ist.source_artifact_id = sa.id
+         WHERE sa.agent_id = ?1 AND sa.current_path = ?2",
+        params![agent_id, path],
+        source_row,
+    )
+    .optional()
+    .map_err(StorageError::from)
+}
+
+/// A moved source: same file identity and content, new path.
+fn find_source_by_native_id(
     conn: &Connection,
     agent_id: &str,
     native_file_id: Option<&str>,
-    path: &str,
     full_hash: &str,
 ) -> Result<Option<SourceRow>> {
-    let map = |r: &rusqlite::Row<'_>| {
-        Ok(SourceRow {
-            id: r.get(0)?,
-            size: r.get(1)?,
-            full_hash: r.get(2)?,
-            prefix_hash: r.get(3)?,
-            generation: r.get(4)?,
-            parser_version: r.get(5)?,
-            ingest_state: r.get(6)?,
-        })
-    };
-    let by_path = conn
-        .query_row(
-            "SELECT sa.id, sa.size, sa.full_hash, sa.prefix_hash, sa.generation,
-                    ist.parser_version, ist.state
-             FROM source_artifact sa
-             LEFT JOIN ingest_state ist ON ist.source_artifact_id = sa.id
-             WHERE sa.agent_id = ?1 AND sa.current_path = ?2",
-            params![agent_id, path],
-            map,
-        )
-        .optional()?;
-    if by_path.is_some() {
-        return Ok(by_path);
-    }
-
     let Some(fid) = native_file_id else {
         return Ok(None);
     };
     conn.query_row(
         "SELECT sa.id, sa.size, sa.full_hash, sa.prefix_hash, sa.generation,
-                ist.parser_version, ist.state
+                ist.parser_version, ist.state, ist.resume_json
          FROM source_artifact sa
          LEFT JOIN ingest_state ist ON ist.source_artifact_id = sa.id
          WHERE sa.agent_id = ?1 AND sa.native_file_id = ?2 AND sa.full_hash = ?3
          ORDER BY sa.last_seen_at DESC LIMIT 1",
         params![agent_id, fid, full_hash],
-        map,
+        source_row,
     )
     .optional()
     .map_err(StorageError::from)
@@ -1131,34 +1476,54 @@ fn oversized_source_snapshot(
         prefix_hash,
         last_offset: 0,
         last_line: 0,
+        hash_through_previous_size: None,
     }
 }
 
-fn source_snapshot(path: &Path, meta: &std::fs::Metadata, content: &str) -> SourceSnapshot {
+fn source_snapshot(
+    path: &Path,
+    meta: &std::fs::Metadata,
+    content: &str,
+    previous_size: Option<usize>,
+) -> SourceSnapshot {
     let bytes = content.as_bytes();
-    let (full_hash, prefix_hash, last_offset, last_line) = fingerprint_and_checkpoint(bytes);
+    let (full_hash, prefix_hash, last_offset, last_line, hash_through_previous_size) =
+        fingerprint_and_checkpoint(bytes, previous_size);
     SourceSnapshot {
         path: path.to_string_lossy().into_owned(),
         native_file_id: file_id(meta),
-        size: i64::try_from(meta.len()).unwrap_or(i64::MAX),
+        // The bytes read, not the earlier stat: an agent can append between
+        // the two, and the size must describe what the hashes and the
+        // checkpoint cover.
+        size: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
         mtime: mtime_ms(meta),
         full_hash,
         prefix_hash,
         last_offset,
         last_line,
+        hash_through_previous_size,
     }
 }
 
 /// Compute both source fingerprints and the complete-record checkpoint in one
 /// traversal. Changed multi-megabyte sessions are commonly append-only; avoid
 /// walking their full history separately for hashing and newline accounting.
-fn fingerprint_and_checkpoint(bytes: &[u8]) -> (String, String, i64, i64) {
+/// The same pass yields the full hash of the first `mark` bytes, which proves
+/// an append left the earlier bytes alone.
+fn fingerprint_and_checkpoint(
+    bytes: &[u8],
+    mark: Option<usize>,
+) -> (String, String, i64, i64, Option<String>) {
     let mut full = crate::hash::Fnv1a64::new();
     let mut prefix = crate::hash::Fnv1a64::new();
     let mut last_offset = 0usize;
     let mut complete_lines = 0usize;
+    let mut at_mark = None;
 
     for (index, byte) in bytes.iter().copied().enumerate() {
+        if Some(index) == mark {
+            at_mark = Some(full);
+        }
         full.update_byte(byte);
         if index < PREFIX_BYTES {
             prefix.update_byte(byte);
@@ -1168,12 +1533,16 @@ fn fingerprint_and_checkpoint(bytes: &[u8]) -> (String, String, i64, i64) {
             complete_lines = complete_lines.saturating_add(1);
         }
     }
+    if mark == Some(bytes.len()) {
+        at_mark = Some(full);
+    }
 
     (
         full.finish_hex(),
         prefix.finish_hex(),
         i64::try_from(last_offset).unwrap_or(i64::MAX),
         i64::try_from(complete_lines).unwrap_or(i64::MAX),
+        at_mark.map(crate::hash::Fnv1a64::finish_hex),
     )
 }
 
@@ -1218,11 +1587,32 @@ mod tests {
     #[test]
     fn combined_fingerprint_preserves_hashes_and_complete_line_checkpoint() {
         let bytes = b"first\nsecond\npartial";
-        let (full, prefix, offset, lines) = fingerprint_and_checkpoint(bytes);
+        let (full, prefix, offset, lines, at_mark) = fingerprint_and_checkpoint(bytes, Some(6));
         assert_eq!(full, fnv1a_hex(bytes));
         assert_eq!(prefix, fnv1a_hex(&bytes[..bytes.len().min(PREFIX_BYTES)]));
         assert_eq!((offset, lines), (13, 2));
+        assert_eq!(at_mark, Some(fnv1a_hex(b"first\n")));
+        let whole = fingerprint_and_checkpoint(bytes, Some(bytes.len())).4;
+        assert_eq!(whole, Some(fnv1a_hex(bytes)));
+        assert_eq!(fingerprint_and_checkpoint(bytes, Some(99)).4, None);
     }
+    // An agent appending between the stat and the read must not leave a size
+    // that disagrees with the hashed bytes: the checkpoint would be dropped
+    // and the next append would parse the whole file.
+    #[test]
+    fn snapshot_size_is_the_bytes_read_even_when_the_file_grew_after_stat() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("growing.jsonl");
+        std::fs::write(&path, "{\"a\":1}\n").unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        std::fs::write(&path, "{\"a\":1}\n{\"b\":2}\n").unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+
+        let snapshot = source_snapshot(&path, &meta, &content, None);
+        assert_eq!((snapshot.size, snapshot.last_offset), (16, 16));
+        assert!(ends_on_line(&snapshot));
+    }
+
     use crate::adapters::codex::CodexAdapter;
     use crate::model::{EventKind, ParsedMessage, Role, Tokens};
     use crate::storage::blob::BlobStore;
