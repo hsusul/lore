@@ -160,7 +160,7 @@ async function renderLoaded() {
 }
 
 function typeQuery(text: string) {
-  fireEvent.change(screen.getByRole("textbox", { name: "Search sessions" }), { target: { value: text } });
+  fireEvent.change(screen.getByRole("combobox", { name: "Search sessions" }), { target: { value: text } });
 }
 
 describe("browsing", () => {
@@ -193,9 +193,13 @@ describe("browsing", () => {
     await renderLoaded();
     fireEvent.click(screen.getByRole("button", { name: "Load older sessions" }));
 
-    await screen.findByRole("option", { name: /Port dotfiles to nix/ });
-    expect(screen.getAllByRole("option").map((o) => o.textContent?.slice(0, 12))).toEqual(["Fix flaky re", "Port dotfile"]);
+    const list = screen.getByRole("listbox", { name: "Sessions in All Sessions" });
+    const older = await within(list).findByRole("option", { name: /Port dotfiles to nix/ });
+    expect(within(list).getAllByRole("option").map((o) => o.textContent?.slice(0, 12))).toEqual(["Fix flaky re", "Port dotfile"]);
     expect(m.listSessionsPage).toHaveBeenLastCalledWith(100, "c1");
+    // The first newly loaded row takes the selection and the list keeps focus.
+    await waitFor(() => expect(older.getAttribute("aria-selected")).toBe("true"));
+    expect(document.activeElement).toBe(list);
   });
 
   it("paints only the latest session when responses arrive out of order", async () => {
@@ -223,7 +227,7 @@ describe("search", () => {
 
     const result = await screen.findByRole("option", { name: /Port dotfiles to nix/ });
     expect(within(result).getByText("retry").tagName).toBe("MARK");
-    expect(within(result).getByText("in message")).toBeTruthy();
+    expect(result.textContent).toBe("Port dotfiles to nixthe retry loop");
     expect(m.searchPage).toHaveBeenLastCalledWith("retry agent:codex", 50, null, "relevance");
   });
 
@@ -232,13 +236,15 @@ describe("search", () => {
     await renderLoaded();
     fireEvent.click(within(screen.getByRole("navigation", { name: "Sidebar" })).getByRole("button", { name: /^lore/ }));
     typeQuery("retry");
-    await screen.findByText("Searching sessions in lore.", { exact: false });
+    const scopeBar = screen.getByRole("radiogroup", { name: "Search:" });
+    expect(within(scopeBar).getByRole("radio", { name: "lore" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Searching “lore”");
     await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("retry repo:repo-lore", 50, null, "relevance"));
 
-    await user.click(screen.getByRole("combobox", { name: "Sort results" }));
-    await user.click(await screen.findByRole("option", { name: "Newest" }));
+    await user.click(screen.getByRole("button", { name: "Sort results, Best Match" }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "Newest" }));
     await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("retry repo:repo-lore", 50, null, "newest"));
-    expect(screen.getByRole("combobox", { name: "Sort results" }).textContent).toBe("Newest");
+    expect(screen.getByRole("button", { name: "Sort results, Newest" })).toBeTruthy();
   });
 
   it("lists sessions for a query of filters alone", async () => {
@@ -250,25 +256,154 @@ describe("search", () => {
     expect(m.searchPage).toHaveBeenLastCalledWith("agent:codex has:error", 50, null, "relevance");
   });
 
+  it("lists the matching sessions for agent:codex alone, newest first as the backend orders them", async () => {
+    const newer = { ...hit("b", "Port dotfiles to nix", "Port dotfiles to nix"), rank: 0 };
+    const older = { ...hit("c", "Bump the codex sandbox", "Bump the codex sandbox"), rank: 0 };
+    m.searchPage.mockImplementation(async (query) =>
+      query === "agent:codex" ? { hits: [newer, older], next_cursor: null } : { hits: [], next_cursor: null },
+    );
+    await renderLoaded();
+    typeQuery("agent:codex");
+
+    const results = await screen.findByRole("listbox", { name: "Search results" });
+    expect(within(results).getAllByRole("option").map((o) => o.textContent)).toEqual(["Port dotfiles to nixCodex", "Bump the codex sandboxCodex"]);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Searching “All Sessions”");
+    expect(screen.getByText("2 sessions")).toBeTruthy();
+    expect(m.searchPage).toHaveBeenLastCalledWith("agent:codex", 50, null, "relevance");
+  });
+
+  it("shows one row per session with how many more matches it has", async () => {
+    const hits = [
+      hit("a", "Fix flaky retry backoff", "the \u{e000}retry\u{e001} budget"),
+      { ...hit("a", "Fix flaky retry backoff", "\u{e000}retry\u{e001} once more"), source_id: "p-a2" },
+      hit("b", "Port dotfiles to nix", "a \u{e000}retry\u{e001} wrapper"),
+      { ...hit("a", "Fix flaky retry backoff", "last \u{e000}retry\u{e001}"), source_id: "p-a3" },
+    ];
+    m.searchPage.mockImplementation(async (query) => ({ hits, next_cursor: query === "retry" ? null : "c1" }));
+    await renderLoaded();
+    typeQuery("retry");
+
+    const results = await screen.findByRole("listbox", { name: "Search results" });
+    expect(within(results).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Fix flaky retry backoffthe retry budget2 more matches",
+      "Port dotfiles to nixa retry wrapper",
+    ]);
+    expect(screen.getByText("2 sessions")).toBeTruthy();
+
+    // With pages still to load, neither count is exact.
+    typeQuery("backoff");
+    expect(await screen.findByText("More matches in this session")).toBeTruthy();
+    expect(screen.getByText("More than 2 sessions")).toBeTruthy();
+  });
+
   it("opens the filter reference from ? and inserts a filter", async () => {
     const user = userEvent.setup();
     await renderLoaded();
-    const field = screen.getByRole("textbox", { name: "Search sessions" });
+    const field = screen.getByRole("combobox", { name: "Search sessions" });
     await user.click(field);
     expect(screen.queryByRole("dialog", { name: "Search filters" })).toBeNull();
 
     await user.keyboard("?");
     const reference = await screen.findByRole("dialog", { name: "Search filters" });
+    expect(within(reference).getByRole("button", { name: /repo:lore/ })).toBeTruthy();
+    expect(within(reference).getByRole("button", { name: /worktree:feat/ })).toBeTruthy();
+    expect(within(reference).getByRole("radio", { name: "Best Match" }).getAttribute("aria-checked")).toBe("true");
     await user.click(within(reference).getByRole("button", { name: /agent:codex/ }));
     expect((field as HTMLInputElement).value).toBe("agent:");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search filters" })).toBeNull());
     expect(document.activeElement).toBe(field);
   });
 
+  it("turns a finished filter into a token and deletes it with two Backspaces", async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    const field = screen.getByRole("combobox", { name: "Search sessions" }) as HTMLInputElement;
+    await user.click(field);
+    await user.keyboard("has:patch retry");
+
+    const search = screen.getByRole("search");
+    expect(search.textContent).toBe("has:patch");
+    expect(within(search).getByText("has:").className).toContain("font-mono");
+    expect(field.value).toBe("retry");
+    await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("has:patch retry", 50, null, "relevance"));
+
+    field.setSelectionRange(0, 0);
+    fireEvent.keyDown(field, { key: "Backspace" });
+    expect(within(search).getByText("has:").parentElement?.hasAttribute("data-selected")).toBe(true);
+    expect(field.value).toBe("retry");
+    fireEvent.keyDown(field, { key: "Backspace" });
+    expect(search.textContent).toBe("");
+    expect(field.value).toBe("retry");
+    await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("retry", 50, null, "relevance"));
+
+    await user.click(within(search).getByRole("button", { name: "Clear Search" }));
+    expect(field.value).toBe("");
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("offers values after a bare key and picks one with the keyboard", async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    const field = screen.getByRole("combobox", { name: "Search sessions" }) as HTMLInputElement;
+    await user.click(field);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.keyboard("agent:");
+    const values = await screen.findByRole("listbox", { name: "Values for agent:" });
+    const options = within(values).getAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual(["agent:claude-code2", "Filter Reference⌘/"]);
+    expect(field.getAttribute("aria-activedescendant")).toBe(options[0].id);
+    await user.keyboard("{ArrowDown}");
+    expect(options[1].getAttribute("aria-selected")).toBe("true");
+    await user.keyboard("{ArrowUp}{Enter}");
+
+    expect(field.value).toBe("");
+    expect(screen.getByRole("search").textContent).toBe("agent:claude-code");
+    expect(screen.queryByRole("listbox", { name: "Values for agent:" })).toBeNull();
+    await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("agent:claude-code", 50, null, "relevance"));
+  });
+
+  it("closes the suggestions with Escape or a click elsewhere, keeping the text", async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    const field = screen.getByRole("combobox", { name: "Search sessions" }) as HTMLInputElement;
+    await user.click(field);
+    await user.keyboard("repo:");
+    const values = await screen.findByRole("listbox", { name: "Values for repo:" });
+    expect(within(values).getAllByRole("option")[0].textContent).toBe("repo:lore1");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("listbox", { name: "Values for repo:" })).toBeNull());
+    expect(field.value).toBe("repo:");
+
+    await user.keyboard("l");
+    expect(await screen.findByRole("listbox", { name: "Values for repo:" })).toBeTruthy();
+    await user.click(await screen.findByText("No Results"));
+    await waitFor(() => expect(screen.queryByRole("listbox", { name: "Values for repo:" })).toBeNull());
+    expect(field.value).toBe("repo:l");
+  });
+
   it("says when nothing matches", async () => {
     await renderLoaded();
     typeQuery("zzzqx");
-    expect(await screen.findByText("No sessions match “zzzqx”.")).toBeTruthy();
+    expect(await screen.findByText("No Results")).toBeTruthy();
+    expect(screen.getByText("“zzzqx”")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clear Filters" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Search All Sessions" })).toBeNull();
+  });
+
+  it("offers to search everything and to drop the filters when a scoped search finds nothing", async () => {
+    await renderLoaded();
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Sidebar" })).getByRole("button", { name: /^lore/ }));
+    typeQuery("zzzqx agent:codex");
+    expect(await screen.findByText("No Results")).toBeTruthy();
+    expect(screen.getByText("No Results").parentElement?.textContent).toContain("“zzzqx” with agent:codex");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear Filters" }));
+    await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("zzzqx repo:repo-lore", 50, null, "relevance"));
+    fireEvent.click(await screen.findByRole("button", { name: "Search All Sessions" }));
+    await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("zzzqx", 50, null, "relevance"));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Searching “All Sessions”");
   });
 
   it("reports a failed search in place", async () => {
@@ -291,20 +426,49 @@ describe("search", () => {
   });
 });
 
+describe("selection", () => {
+  it("fills the selected row blue only while the list has focus in the key window", async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    const list = screen.getByRole("listbox", { name: "Sessions in All Sessions" });
+    const row = screen.getByRole("option", { name: /Fix flaky retry backoff/ });
+    expect(row.textContent).toBe("Fix flaky retry backoffClaude Code, 3 messages");
+
+    await user.click(row);
+    expect(row.getAttribute("aria-selected")).toBe("true");
+    expect(list.hasAttribute("data-focused")).toBe(true);
+
+    fireEvent.blur(window);
+    expect(list.hasAttribute("data-focused")).toBe(false);
+    fireEvent.focus(window);
+    expect(list.hasAttribute("data-focused")).toBe(true);
+
+    await user.click(screen.getByRole("combobox", { name: "Search sessions" }));
+    expect(list.hasAttribute("data-focused")).toBe(false);
+    expect(row.getAttribute("aria-selected")).toBe("true");
+  });
+});
+
 describe("keyboard", () => {
   it("moves from the query line into the list, opens with Enter, and backs out with Escape", async () => {
     await renderLoaded();
     fireEvent.keyDown(document.body, { key: "/" });
-    const query = screen.getByRole("textbox", { name: "Search sessions" });
+    const query = screen.getByRole("combobox", { name: "Search sessions" });
     expect(document.activeElement).toBe(query);
 
     fireEvent.keyDown(query, { key: "ArrowDown" });
     const list = screen.getByRole("listbox", { name: "Sessions in All Sessions" });
     expect(document.activeElement).toBe(list);
 
+    // Arrows move the selection and open each session in place; Enter moves into the reader.
     fireEvent.keyDown(list, { key: "ArrowDown" });
-    fireEvent.keyDown(list, { key: "Enter" });
+    expect(await screen.findByRole("article", { name: "Fix flaky retry backoff" })).toBeTruthy();
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    expect(screen.getByRole("option", { name: /Port dotfiles to nix/ }).getAttribute("aria-selected")).toBe("true");
     const reader = await screen.findByRole("article", { name: "Port dotfiles to nix" });
+    expect(document.activeElement).toBe(list);
+    // The session is already open, so Enter only moves focus.
+    fireEvent.keyDown(list, { key: "Enter" });
     await waitFor(() => expect(document.activeElement).toBe(reader));
 
     fireEvent.keyDown(reader, { key: "Escape" });
@@ -490,13 +654,15 @@ describe("window shell", () => {
     await renderLoaded();
     fireEvent.click(within(sidebar()).getByRole("button", { name: /Claude Code/ }));
 
-    expect((screen.getByRole("textbox", { name: "Search sessions" }) as HTMLInputElement).value).toBe("agent:claude-code");
+    const search = screen.getByRole("search");
+    expect((within(search).getByRole("combobox", { name: "Search sessions" }) as HTMLInputElement).value).toBe("");
+    expect(search.textContent).toBe("agent:claude-code");
     await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("agent:claude-code", 50, null, "relevance"));
     expect(within(sidebar()).getByRole("button", { name: /Claude Code/ }).getAttribute("aria-current")).toBe("true");
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Claude Code");
 
     fireEvent.click(within(sidebar()).getByRole("button", { name: /All Sessions/ }));
-    expect((screen.getByRole("textbox", { name: "Search sessions" }) as HTMLInputElement).value).toBe("");
+    expect((screen.getByRole("combobox", { name: "Search sessions" }) as HTMLInputElement).value).toBe("");
     expect(await screen.findByRole("option", { name: /Port dotfiles to nix/ })).toBeTruthy();
   });
 

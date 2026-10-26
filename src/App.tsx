@@ -3,14 +3,14 @@ import { Command as CommandIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import CommandPalette, { type Command } from "./components/CommandPalette";
-import { BrowsePane, SearchPane } from "./components/ListPane";
+import { BrowsePane, ScopeBar, SearchPane } from "./components/ListPane";
 import type { OpenVia } from "./components/ListBox";
 import MessageBar from "./components/MessageBar";
 import { ConfirmDialog, NameDialog } from "./components/Modal";
 import Onboarding from "./components/Onboarding";
 import Reader, { type ReaderActions } from "./components/Reader";
 import ScanControl from "./components/ScanControl";
-import SearchField from "./components/SearchField";
+import SearchField, { type FilterValues } from "./components/SearchField";
 import SettingsDialog from "./components/SettingsDialog";
 import Sidebar, { SidebarToggle } from "./components/Sidebar";
 import { sourceRow, sourceSections } from "./components/sources";
@@ -18,7 +18,7 @@ import Toolbar, { ScopeMenu, ScopeTitle } from "./components/Toolbar";
 import { Button, ICON } from "./components/ui/button";
 import { Tooltip, TooltipProvider } from "./components/ui/tooltip";
 import { agentLabel } from "./format";
-import { queryTerms } from "./hooks/query";
+import { isRunnable, queryFilters, queryTerms, withoutFilters } from "./hooks/query";
 import { useCatalog, type Catalog } from "./hooks/useCatalog";
 import { useDebounced } from "./hooks/useDebounced";
 import { useLastScan } from "./hooks/useLastScan";
@@ -47,6 +47,7 @@ import {
   type DetectedAgent,
   type FolderSummary,
   type SearchHit,
+  type SearchSort,
   type SessionSummary,
 } from "./ipc";
 
@@ -96,13 +97,14 @@ export default function App() {
   );
   const browse = usePagedList(fetchBrowse, SESSION_PAGE, sessionKey);
 
-  const searching = ws.query.trim() !== "";
+  // A bare `agent:` waiting for a value searches nothing yet, so the list stays put.
+  const searching = isRunnable(ws.query);
   const settledQuery = useDebounced(ws.query, SEARCH_DEBOUNCE_MS);
   const terms = useMemo(() => queryTerms(settledQuery), [settledQuery]);
   // The backend scopes a search to a repository by id; a folder cannot narrow
-  // a search yet, so the pane says so rather than pretending.
-  const backendQuery = scope.kind === "repository" ? `${settledQuery} repo:${scope.id}` : settledQuery;
-  const hasQuery = settledQuery.trim() !== "";
+  // a search yet, so the scope bar says so rather than pretending.
+  const backendQuery = scope.kind === "repository" ? `${settledQuery.trim()} repo:${scope.id}` : settledQuery.trim();
+  const hasQuery = isRunnable(settledQuery);
   const fetchSearch = useMemo<FetchPage<SearchHit> | null>(
     () =>
       !hasQuery
@@ -150,17 +152,21 @@ export default function App() {
   const focusQuery = useCallback(() => queryRef.current?.focus(), []);
   const focusList = useCallback(() => listRef.current?.focus(), []);
 
+  // Arrow keys open sessions in place, so Enter often lands on a session that is
+  // already open; the request count lets that Enter still move focus.
+  const [focusRequests, setFocusRequests] = useState(0);
   const openSession = useCallback((id: string, via: OpenVia = "pointer") => {
     focusReaderOnLoad.current = via === "keyboard";
+    if (via === "keyboard") setFocusRequests((n) => n + 1);
     dispatch({ type: "open", id });
   }, []);
 
   useEffect(() => {
-    if (open.state.status === "ready" && focusReaderOnLoad.current) {
+    if (open.state.status === "ready" && open.state.id === ws.openId && focusReaderOnLoad.current) {
       focusReaderOnLoad.current = false;
       readerRef.current?.focus();
     }
-  }, [open.state]);
+  }, [open.state, ws.openId, focusRequests]);
 
   const chooseSource = useCallback((source: Source, focus: "list" | "stay" = "list") => {
     dispatch({ type: "source", source });
@@ -414,12 +420,35 @@ export default function App() {
     repositories.length === 0 &&
     agents.every((a) => a.session_count === 0);
 
+  const plural = (n: number) => `${n} ${n === 1 ? "session" : "sessions"}`;
   const scopeCount = selectedRow?.count ?? null;
+  // An agent row is a saved search with an exact count in the sidebar; any other
+  // search counts the sessions it has loaded, and says "More than" while pages remain.
+  const searchTitled = searching && (selected.kind !== "agent" || selectedRow === null);
+  const searchState = search.state;
+  const found = searchState.status === "ready" ? new Set(searchState.items.map((h) => h.session_id)).size : null;
   const subtitle = scanning
     ? "Scanning…"
-    : catalogState.status !== "ready" || scopeCount === null
-      ? ""
-      : `${scopeCount} ${scopeCount === 1 ? "session" : "sessions"}`;
+    : searchTitled
+      ? searchPending || searchState.status !== "ready" || found === null
+        ? ""
+        : found === 0
+          ? "No results"
+          : searchState.cursor === null
+            ? plural(found)
+            : `More than ${plural(found)}`
+      : catalogState.status !== "ready" || scopeCount === null
+        ? ""
+        : plural(scopeCount);
+  const title = searchTitled ? `Searching “${currentRepo?.display_name ?? "All Sessions"}”` : scopeLabel;
+  const setSort = (sort: SearchSort) => dispatch({ type: "sort", sort });
+  const filterValues = useMemo<FilterValues>(
+    () => ({
+      "agent:": agents.map((a) => ({ value: a.id, count: a.session_count })),
+      "repo:": repositories.map((r) => ({ value: r.display_name, count: r.session_count })),
+    }),
+    [agents, repositories],
+  );
 
   return (
     <TooltipProvider>
@@ -440,11 +469,12 @@ export default function App() {
               <>
                 {!sidebar.visible && <SidebarToggle visible={false} onToggle={sidebar.toggle} />}
                 {sidebar.visible ? (
-                  <ScopeTitle title={scopeLabel} subtitle={subtitle} />
+                  <ScopeTitle title={title} subtitle={subtitle} />
                 ) : (
                   <ScopeMenu
-                    title={scopeLabel}
+                    title={title}
                     subtitle={subtitle}
+                    sort={searching ? { value: ws.sort, onChange: setSort } : null}
                     sections={sections}
                     selected={selected}
                     onChoose={chooseSource}
@@ -472,6 +502,9 @@ export default function App() {
                   onChange={(query) => dispatch({ type: "query", query })}
                   inputRef={queryRef}
                   onLeaveDown={focusList}
+                  values={filterValues}
+                  sort={ws.sort}
+                  onSort={setSort}
                 />
               </>
             }
@@ -503,28 +536,32 @@ export default function App() {
                 <div className="flex min-h-0 min-w-0 border-r bg-bg-content select-none">
                   {searching ? (
                     <SearchPane
-                      query={ws.query}
+                      query={settledQuery}
+                      terms={terms}
+                      filters={queryFilters(settledQuery)}
                       pending={searchPending}
-                      scopeNote={
-                        currentRepo ? (
-                          <>
-                            Searching sessions in {currentRepo.display_name}.{" "}
-                            <button type="button" className="link" onClick={() => chooseSource(ALL)}>
-                              Search everything
-                            </button>
-                          </>
-                        ) : currentFolder ? (
-                          "Searching all sessions. A folder cannot narrow a search yet."
-                        ) : null
+                      scopeBar={
+                        <ScopeBar
+                          scope={
+                            currentRepo
+                              ? { label: currentRepo.display_name, narrows: true }
+                              : currentFolder
+                                ? { label: currentFolder.name, narrows: false }
+                                : null
+                          }
+                          onSearchAll={() => chooseSource(ALL, "stay")}
+                          sort={ws.sort}
+                          onSort={setSort}
+                        />
                       }
-                      sort={ws.sort}
-                      onSort={(sort) => dispatch({ type: "sort", sort })}
                       state={search.state}
                       openId={ws.openId}
                       onOpen={openSession}
                       onMore={() => void search.loadMore()}
                       listRef={listRef}
                       onExitTop={focusQuery}
+                      onSearchAll={currentRepo ? () => chooseSource(ALL) : null}
+                      onClearFilters={() => dispatch({ type: "query", query: withoutFilters(ws.query) })}
                     />
                   ) : (
                     <BrowsePane
