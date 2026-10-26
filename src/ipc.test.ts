@@ -10,6 +10,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => open(..
 import {
   addAgentRoot,
   chooseAgentRootDirectory,
+  HIGHLIGHT_END,
+  HIGHLIGHT_START,
   listDetectedAgents,
   listFolderSessionsPage,
   listRepositorySessionsPage,
@@ -19,6 +21,8 @@ import {
   removeAgentRoot,
   rescan,
 } from "./ipc";
+import source from "./ipc?raw";
+import { createMockHandlers } from "./mock/ipc-mock";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -252,5 +256,108 @@ describe("ipc contract", () => {
     const updateResult = await checkForUpdates();
     expect(invoke).toHaveBeenCalledWith("check_for_updates");
     expect(updateResult.current_version).toBe("0.1.0");
+  });
+});
+
+// The browser-only sample-data mock must answer every command `ipc.ts` sends.
+// The commands are read from the source, so a new `invoke("...")` without a
+// handler in `src/mock/ipc-mock.ts` fails here.
+describe("browser sample-data mock", () => {
+  const commands = [
+    ...new Set([...source.matchAll(/invoke(?:<[^(]*>)?\(\s*"([a-z_]+)"/g)].map((m) => m[1])),
+  ];
+  const events = [
+    ...new Set([...source.matchAll(/listen(?:<[^(]*>)?\(\s*"([a-z_]+)"/g)].map((m) => m[1])),
+  ];
+
+  function makeMock() {
+    const emitted: Array<[string, unknown]> = [];
+    const handlers = createMockHandlers((event, payload) => emitted.push([event, payload]), {
+      now: Date.UTC(2026, 0, 1),
+      scanStepMs: 0,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const call = async (cmd: string, args: Record<string, unknown> = {}): Promise<any> =>
+      handlers[cmd](args);
+    return { handlers, emitted, call };
+  }
+
+  it("finds the commands and events ipc.ts uses", () => {
+    expect(commands).toContain("list_sessions_page");
+    expect(commands).toContain("rescan");
+    expect(events).toContain("scan_progress");
+  });
+
+  it("has a handler for every command ipc.ts invokes", () => {
+    const { handlers } = makeMock();
+    expect(commands.filter((cmd) => typeof handlers[cmd] !== "function")).toEqual([]);
+  });
+
+  it("wraps search matches in the backend's highlight markers", async () => {
+    const { call } = makeMock();
+    const page = await call("search_page", { query: "rounding", limit: 50, cursor: null, sort: "relevance" });
+    expect(page.hits.length).toBeGreaterThan(0);
+    for (const hit of page.hits) {
+      expect(hit.snippet).toContain(HIGHLIGHT_START);
+      expect(hit.snippet).toContain(HIGHLIGHT_END);
+    }
+  });
+
+  it("returns nothing for a word that is not in the sample data", async () => {
+    const { call } = makeMock();
+    const page = await call("search_page", { query: "zzyzxnotaword", limit: 50, cursor: null, sort: "relevance" });
+    expect(page).toEqual({ hits: [], next_cursor: null });
+  });
+
+  it("pages search results without repeats and rejects a cursor from another query", async () => {
+    const { call } = makeMock();
+    const args = { query: "tests", limit: 50, sort: "relevance" };
+    const first = await call("search_page", { ...args, cursor: null });
+    expect(first.next_cursor).not.toBeNull();
+    const second = await call("search_page", { ...args, cursor: first.next_cursor });
+    expect(second.hits.length).toBeGreaterThan(0);
+    const ids = [...first.hits, ...second.hits].map((h: { source_id: string }) => h.source_id);
+    expect(new Set(ids).size).toBe(ids.length);
+    await expect(
+      call("search_page", { ...args, query: "other", cursor: first.next_cursor }),
+    ).rejects.toThrow(/cursor/);
+  });
+
+  it("pages sessions newest first by cursor", async () => {
+    const { call } = makeMock();
+    const first = await call("list_sessions_page", { limit: 100, cursor: null });
+    const second = await call("list_sessions_page", { limit: 100, cursor: first.next_cursor });
+    expect(first.sessions).toHaveLength(100);
+    expect(second.sessions.length).toBeGreaterThan(0);
+    const ids = [...first.sessions, ...second.sessions].map((s: { id: string }) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("keeps settings and the backup schedule in memory", async () => {
+    const { call } = makeMock();
+    await call("set_setting", { key: "theme", valueJson: '"dark"' });
+    expect(await call("get_setting", { key: "theme" })).toBe('"dark"');
+    await call("set_backup_schedule", { interval: "daily", keep: 3 });
+    expect(await call("get_backup_schedule")).toEqual({ interval: "daily", keep: 3 });
+  });
+
+  it("emits scan_progress events during a rescan and ends with done", async () => {
+    const { call, emitted } = makeMock();
+    const result = await call("rescan");
+    const progress = emitted
+      .filter(([event]) => event === "scan_progress")
+      .map(([, payload]) => payload as { done: boolean });
+    expect(progress.length).toBeGreaterThan(2);
+    expect(progress[progress.length - 1].done).toBe(true);
+    expect(result.discovered).toBeGreaterThan(0);
+  });
+
+  it("restores the sample sessions on rescan after forget everything", async () => {
+    const { call } = makeMock();
+    await call("forget_everything");
+    expect((await call("list_sessions_page", { limit: 10, cursor: null })).sessions).toEqual([]);
+    const result = await call("rescan");
+    expect(result.ingested).toBe(result.discovered);
+    expect((await call("list_sessions_page", { limit: 10, cursor: null })).sessions).toHaveLength(10);
   });
 });
