@@ -55,6 +55,27 @@ export function formatRelative(ms: number | null): string {
   return formatShortDate(ms);
 }
 
+const AGO_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["hour", 60],
+  ["day", 24],
+  ["week", 7],
+  ["month", 4.35],
+  ["year", 12],
+];
+
+/** Relative time in words for tooltips ("just now", "2 minutes ago", "yesterday"). */
+export function formatAgo(ms: number, now: number = Date.now()): string {
+  let value = (now - ms) / 60_000;
+  if (value < 1) return "just now";
+  let unit: Intl.RelativeTimeFormatUnit = "minute";
+  for (const [next, size] of AGO_STEPS) {
+    if (value / size < 1) break;
+    value /= size;
+    unit = next;
+  }
+  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(-Math.round(value), unit);
+}
+
 /** Compact token count formatting (e.g. 1.2k, 45k, 1.4M). */
 export function formatTokens(tokens: number | null): string {
   if (tokens == null || !Number.isFinite(tokens) || tokens <= 0) return "";
