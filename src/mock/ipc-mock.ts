@@ -12,7 +12,9 @@ import type {
   FileContentDto,
   MergeQueueDto,
   MergeResultDto,
+  ProviderDto,
   RepoSettingsDto,
+  SaveProviderRequest,
   TaskDiffDto,
   TaskDto,
   UnlistenFn,
@@ -810,6 +812,7 @@ export function createTask(request: CreateTaskRequest): Promise<TaskDto> {
       permission: request.permission ?? "edits",
       model: request.model,
       effort: request.effort,
+      provider: request.provider,
       claims: request.claims,
       auto_handoff: request.auto_handoff ?? true,
     }),
@@ -866,6 +869,9 @@ export function continueTask(request: ContinueTaskRequest): Promise<TaskDto> {
     agent,
     model: request.model === undefined ? t.dto.model : request.model || undefined,
     effort: request.effort ?? t.dto.effort,
+    // Providers run through Codex, so a handoff to Claude Code drops one.
+    provider:
+      agent === "claude_code" ? undefined : request.provider === undefined ? t.dto.provider : request.provider || undefined,
     state: "running",
     exit_code: null,
     runs: (t.dto.runs ?? 1) + 1,
@@ -975,6 +981,55 @@ export function taskActivity(id: string): Promise<ActivityDto[]> {
   const t = find(id);
   advance(t);
   return delay([...t.activity]);
+}
+
+// ── Model providers ──────────────────────────────────────────────────────
+
+let providers: ProviderDto[] = [
+  {
+    id: "ollama",
+    name: "Ollama",
+    kind: "ollama",
+    base_url: null,
+    models: ["gpt-oss:20b", "qwen3-coder:30b"],
+    has_api_key: false,
+  },
+];
+
+export function listProviders(): Promise<ProviderDto[]> {
+  return delay(providers.map((p) => ({ ...p, models: [...p.models] })));
+}
+
+export function saveProvider(request: SaveProviderRequest): Promise<ProviderDto> {
+  const name = request.name.trim();
+  const models = [...new Set(request.models.map((m) => m.trim()).filter(Boolean))];
+  if (!name) return Promise.reject(new Error("provider name must be 1-60 printable characters"));
+  if (models.length === 0) return Promise.reject(new Error("add 1-50 model ids, such as gpt-oss:20b or qwen/qwen3-coder"));
+  const custom = request.kind === "custom";
+  const baseUrl = custom ? (request.base_url ?? "").trim().replace(/\/+$/, "") : null;
+  if (custom && !/^https?:\/\/\S+$/.test(baseUrl ?? "")) {
+    return Promise.reject(new Error("base URL must be an http:// or https:// address, such as https://openrouter.ai/api/v1"));
+  }
+  const existing = providers.find((p) => p.id === request.id);
+  const key = request.api_key?.trim();
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "provider";
+  let id = existing?.id ?? slug;
+  for (let i = 2; !existing && providers.some((p) => p.id === id); i++) id = `${slug}-${i}`;
+  const saved: ProviderDto = {
+    id,
+    name,
+    kind: request.kind,
+    base_url: baseUrl,
+    models,
+    has_api_key: custom && (key === undefined ? Boolean(existing?.has_api_key) : key !== ""),
+  };
+  providers = existing ? providers.map((p) => (p.id === saved.id ? saved : p)) : [...providers, saved];
+  return delay(saved);
+}
+
+export function deleteProvider(id: string): Promise<void> {
+  providers = providers.filter((p) => p.id !== id);
+  return delay(undefined);
 }
 
 export function getRepoSettings(repoPath: string): Promise<RepoSettingsDto> {

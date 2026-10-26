@@ -4,12 +4,15 @@
 //! `codex exec --help` (0.154.0) on 2026-09-14. Lore never passes a flag that
 //! bypasses the agent's permission prompts or sandbox (ADR-0007).
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lore_ipc::{ActivityDto, ActivityKind, TaskAgent, TaskEffort, TaskPermission};
+use lore_ipc::{ActivityDto, ActivityKind, ProviderKind, TaskAgent, TaskEffort, TaskPermission};
+
+use crate::providers::ProviderLaunch;
 
 /// Program used to launch each agent. Defaults to `claude` / `codex` on `PATH`;
 /// tests substitute a fake agent script.
@@ -41,22 +44,31 @@ pub struct Launch<'a> {
     pub model: Option<&'a str>,
     /// Claude `--effort` / Codex `model_reasoning_effort`.
     pub effort: Option<TaskEffort>,
+    /// A model provider for this run (Codex only).
+    pub provider: Option<&'a ProviderLaunch>,
 }
 
-/// A model id Lore will pass as a CLI argument: letters, digits, `.`, `_`, `-`,
-/// no leading dash, so it cannot be read as a flag.
+/// Environment variable a custom provider's API key reaches Codex through, so
+/// the key never appears in the agent's arguments.
+pub const PROVIDER_KEY_ENV: &str = "LORE_PROVIDER_API_KEY";
+
+/// A model id Lore will pass as a CLI argument: letters, digits, `.`, `_`,
+/// `-`, `:` and `/` (for ids like `gpt-oss:20b` and `qwen/qwen3-coder`), not
+/// starting with `-`, `.` or `/` and without `..`, so it cannot be read as a
+/// flag or a path.
 pub fn parse_model(raw: Option<&str>) -> crate::Result<Option<String>> {
     let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
     if raw.len() > 80
-        || raw.starts_with('-')
+        || raw.starts_with(['-', '.', '/'])
+        || raw.contains("..")
         || !raw
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/'))
     {
         return Err(crate::Error::Invalid(format!(
-            "model must be a short alias or id such as opus, sonnet, fable, or gpt-5 (got {raw})"
+            "model must be a short id such as opus, claude-opus-5-5, gpt-5.6-sol, or gpt-oss:20b (got {raw})"
         )));
     }
     Ok(Some(raw.to_string()))
@@ -107,6 +119,9 @@ pub fn command(programs: &AgentPrograms, launch: Launch<'_>) -> Command {
             // Codex continuations start a new session with a brief instead.
             cmd.args(["exec", "--json", "--sandbox", "workspace-write", "--cd"])
                 .arg(launch.worktree);
+            if let Some(provider) = launch.provider {
+                provider_flags(&mut cmd, provider);
+            }
             if let Some(model) = launch.model {
                 cmd.arg("--model").arg(model);
             }
@@ -120,6 +135,56 @@ pub fn command(programs: &AgentPrograms, launch: Launch<'_>) -> Command {
     };
     cmd.current_dir(launch.worktree);
     cmd
+}
+
+/// Point one Codex run at a provider. Local ones use Codex's own `--oss`
+/// support; a custom one is defined for this run only with `-c` overrides, so
+/// the user's `~/.codex/config.toml` is never touched.
+fn provider_flags(cmd: &mut Command, provider: &ProviderLaunch) {
+    match provider.kind {
+        ProviderKind::Ollama => {
+            cmd.args(["--oss", "--local-provider", "ollama"]);
+        }
+        ProviderKind::Lmstudio => {
+            cmd.args(["--oss", "--local-provider", "lmstudio"]);
+        }
+        ProviderKind::Custom => {
+            let key = format!("lore-{}", provider.id);
+            let mut set = |field: &str, value: &str| {
+                cmd.arg("-c").arg(format!(
+                    "model_providers.{key}.{field}={}",
+                    toml_string(value)
+                ));
+            };
+            set("name", &provider.name);
+            if let Some(url) = &provider.base_url {
+                set("base_url", url);
+            }
+            set("wire_api", "responses");
+            if let Some(api_key) = &provider.api_key {
+                set("env_key", PROVIDER_KEY_ENV);
+                cmd.env(PROVIDER_KEY_ENV, api_key);
+            }
+            cmd.arg("-c")
+                .arg(format!("model_provider={}", toml_string(&key)));
+        }
+    }
+}
+
+/// `value` as a TOML basic string, for `codex -c key=value`.
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 const SESSION_TAIL_BYTES: u64 = 4 * 1024 * 1024;
@@ -358,9 +423,25 @@ fn activity_with_tail(log: &Path, max_events: usize, tail: u64) -> Vec<ActivityD
         return Vec::new();
     };
     let mut events: Vec<ActivityDto> = Vec::new();
+    // Codex reports an item when it starts and again when it completes. Keep
+    // the first so a running command shows; ids restart with each run.
+    let mut seen_items: HashSet<String> = HashSet::new();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
         match serde_json::from_str::<serde_json::Value>(line) {
-            Ok(v) => events.extend(activity_from_event(&v)),
+            Ok(v) => {
+                if v.get("type").and_then(|t| t.as_str()) == Some("thread.started") {
+                    seen_items.clear();
+                }
+                let id = v.pointer("/item/id").and_then(|i| i.as_str());
+                if id.is_some_and(|id| seen_items.contains(id)) {
+                    continue;
+                }
+                let rows = activity_from_event(&v);
+                if let (Some(id), false) = (id, rows.is_empty()) {
+                    seen_items.insert(id.to_string());
+                }
+                events.extend(rows);
+            }
             Err(_) if !line.starts_with('{') => events.push(ActivityDto {
                 kind: line_kind(line),
                 text: cap(line),
@@ -612,6 +693,7 @@ mod tests {
             resume_session: Some("abc"),
             model: None,
             effort: None,
+            provider: None,
         };
         let a = args(base.clone());
         let mode = a.iter().position(|x| x == "--permission-mode").unwrap();
@@ -687,6 +769,29 @@ mod tests {
         assert_eq!(events.last().map(|e| e.kind), Some(ActivityKind::Error));
     }
 
+    /// Shapes captured from `codex exec --json` 0.162.1 on 2026-10-14: a
+    /// command is reported when it starts and again when it completes.
+    #[test]
+    fn codex_command_shows_once_per_run() {
+        let started = r#"{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"npm test","aggregated_output":"","exit_code":null,"status":"in_progress"}}"#;
+        let completed = r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"npm test","aggregated_output":"ok","exit_code":0,"status":"completed"}}"#;
+        let f = log_with(&[
+            r#"{"type":"thread.started","thread_id":"a"}"#,
+            started,
+            completed,
+            // A continuation appends a new run whose ids start over.
+            r#"{"type":"thread.started","thread_id":"b"}"#,
+            started,
+            completed,
+        ]);
+        let tools: Vec<String> = activity(f.path(), 20)
+            .into_iter()
+            .filter(|e| e.kind == ActivityKind::Tool)
+            .map(|e| e.text)
+            .collect();
+        assert_eq!(tools, ["run npm test", "run npm test"]);
+    }
+
     #[test]
     fn truncates_long_text() {
         let long = "a".repeat(1000);
@@ -730,6 +835,7 @@ mod tests {
                 resume_session: None,
                 model: None,
                 effort: None,
+                provider: None,
             },
         );
         let args: Vec<_> = cmd
@@ -753,6 +859,7 @@ mod tests {
                 resume_session: None,
                 model: None,
                 effort: None,
+                provider: None,
             },
         );
         let args: Vec<_> = cmd
@@ -775,6 +882,7 @@ mod tests {
             resume_session: None,
             model: Some("opus"),
             effort: Some(TaskEffort::High),
+            provider: None,
         });
         let model = claude.iter().position(|x| x == "--model").unwrap();
         assert_eq!(claude[model + 1], "opus");
@@ -790,6 +898,7 @@ mod tests {
             resume_session: None,
             model: Some("gpt-6-astra"),
             effort: Some(TaskEffort::Max),
+            provider: None,
         });
         let model = codex.iter().position(|x| x == "--model").unwrap();
         assert_eq!(codex[model + 1], "gpt-6-astra");
@@ -810,5 +919,110 @@ mod tests {
         assert!(parse_model(Some("--dangerously-skip-permissions")).is_err());
         assert!(parse_model(Some("opus 5")).is_err());
         assert!(parse_model(Some("../evil")).is_err());
+    }
+
+    fn provider(kind: ProviderKind, api_key: Option<&str>) -> ProviderLaunch {
+        ProviderLaunch {
+            id: "openrouter".into(),
+            name: "Open \"Router\"".into(),
+            kind,
+            base_url: (kind == ProviderKind::Custom).then(|| "https://openrouter.ai/api/v1".into()),
+            api_key: api_key.map(str::to_string),
+        }
+    }
+
+    fn codex_with(provider: &ProviderLaunch) -> Command {
+        command(
+            &AgentPrograms::default(),
+            Launch {
+                agent: TaskAgent::Codex,
+                permission: TaskPermission::Edits,
+                worktree: Path::new("/w"),
+                prompt: "do it",
+                resume_session: None,
+                model: Some("qwen/qwen3-coder"),
+                effort: None,
+                provider: Some(provider),
+            },
+        )
+    }
+
+    fn argv(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn local_providers_use_codex_oss() {
+        for (kind, name) in [
+            (ProviderKind::Ollama, "ollama"),
+            (ProviderKind::Lmstudio, "lmstudio"),
+        ] {
+            let args = argv(&codex_with(&provider(kind, None)));
+            assert!(
+                args.windows(3)
+                    .any(|w| w == ["--oss", "--local-provider", name]),
+                "{args:?}"
+            );
+            assert!(
+                args.windows(2)
+                    .any(|w| w == ["--model", "qwen/qwen3-coder"]),
+                "{args:?}"
+            );
+            assert_eq!(&args[args.len() - 2..], ["--", "do it"]);
+        }
+    }
+
+    #[test]
+    fn a_custom_provider_is_defined_for_the_run_and_its_key_stays_out_of_argv() {
+        let cmd = codex_with(&provider(ProviderKind::Custom, Some("sk-secret")));
+        let args = argv(&cmd);
+        let configs: Vec<&str> = args
+            .windows(2)
+            .filter(|w| w[0] == "-c")
+            .map(|w| w[1].as_str())
+            .collect();
+        assert_eq!(
+            configs,
+            [
+                r#"model_providers.lore-openrouter.name="Open \"Router\"""#,
+                r#"model_providers.lore-openrouter.base_url="https://openrouter.ai/api/v1""#,
+                r#"model_providers.lore-openrouter.wire_api="responses""#,
+                r#"model_providers.lore-openrouter.env_key="LORE_PROVIDER_API_KEY""#,
+                r#"model_provider="lore-openrouter""#,
+            ]
+        );
+        assert!(!args.iter().any(|a| a.contains("sk-secret")), "{args:?}");
+        let env: Vec<_> = cmd.get_envs().collect();
+        assert!(env
+            .iter()
+            .any(|(k, v)| *k == PROVIDER_KEY_ENV && v.is_some_and(|v| v == "sk-secret")));
+
+        let keyless = argv(&codex_with(&provider(ProviderKind::Custom, None)));
+        assert!(
+            !keyless.iter().any(|a| a.contains("env_key")),
+            "{keyless:?}"
+        );
+    }
+
+    #[test]
+    fn toml_strings_escape_quotes_backslashes_and_controls() {
+        assert_eq!(toml_string("a\"b\\c\n"), r#""a\"b\\c\u000A""#);
+    }
+
+    #[test]
+    fn parse_model_takes_local_and_routed_ids_but_nothing_path_like() {
+        for ok in [
+            "gpt-oss:20b",
+            "qwen/qwen3-coder",
+            "openai/gpt-oss-20b",
+            "deepseek-v3.1",
+        ] {
+            assert_eq!(parse_model(Some(ok)).unwrap().as_deref(), Some(ok));
+        }
+        for bad in ["/etc/passwd", ".hidden", "a/../b", "-m", "a b"] {
+            assert!(parse_model(Some(bad)).is_err(), "{bad}");
+        }
     }
 }

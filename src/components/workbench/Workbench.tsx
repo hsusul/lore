@@ -22,6 +22,7 @@ import EditorTabs from "./EditorTabs";
 import FileView from "./FileView";
 import Home from "./Home";
 import NewAgentDialog from "./NewAgentDialog";
+import ProvidersDialog from "./ProvidersDialog";
 import { Mark, PanelIcon, SearchIcon, SidebarIcon } from "./icons";
 import Sash from "./Sash";
 import { ExplorerPanel } from "./Sidebar";
@@ -87,6 +88,7 @@ export default function Workbench() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   /** The New agent dialog: closed, or open with an optional starting prompt. */
   const [newAgentDialog, setNewAgentDialog] = useState<{ draft?: string } | null>(null);
+  const [providersOpen, setProvidersOpen] = useState(false);
   const dialogOpenRef = useRef(false);
   dialogOpenRef.current = newAgentDialog !== null;
 
@@ -402,6 +404,7 @@ export default function Workbench() {
       { id: "cmd:show-agents", group: "Command", label: "Show agents", run: showAgents },
       { id: "cmd:toggle-panel", group: "Command", label: "Toggle panel", hint: shortcut("J"), run: togglePanel },
       { id: "cmd:merge-queue", group: "Command", label: "Merge queue", run: openMergeQueue },
+      { id: "cmd:providers", group: "Command", label: "Model providers…", run: () => setProvidersOpen(true) },
       {
         id: "cmd:theme",
         group: "Command",
@@ -752,6 +755,8 @@ export default function Workbench() {
           onOpenFolder={() => void openFolder()}
         />
       )}
+
+      {providersOpen && <ProvidersDialog onClose={() => setProvidersOpen(false)} />}
 
       {paletteOpen && (
         <CommandPalette

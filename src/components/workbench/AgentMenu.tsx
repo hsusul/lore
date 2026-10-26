@@ -12,7 +12,9 @@ import {
   type ModelOption,
 } from "./agentOptions";
 import { ChevronIcon, TickIcon } from "./icons";
+import ProvidersDialog from "./ProvidersDialog";
 import { AGENT_LABELS } from "./state";
+import { refreshProviders, useProviders } from "./useProviders";
 
 export const PERMISSION_LABELS: Record<TaskPermission, string> = {
   edits: "Edits",
@@ -55,6 +57,10 @@ type Props = {
   onModelChange?: (model: string | null) => void;
   effort?: TaskEffort | null;
   onEffortChange?: (effort: TaskEffort | null) => void;
+  /** The saved model provider `model` runs through (Codex only), if one was picked. */
+  provider?: string | null;
+  /** When set, the model list offers saved providers' models and a way to add providers. */
+  onProviderChange?: (provider: string | null) => void;
 };
 
 /**
@@ -79,6 +85,8 @@ export default function AgentMenu({
   onModelChange,
   effort = null,
   onEffortChange,
+  provider = null,
+  onProviderChange,
 }: Props) {
   const full = onPermissionChange != null && onAutoHandoffChange != null;
   // Permission modes are Claude's; Codex always runs in its own sandbox.
@@ -94,6 +102,13 @@ export default function AgentMenu({
   /** The pane row to focus after going back, so ← lands where → started. */
   const returnTo = useRef<Pane | null>(null);
   const menuId = useId();
+  const withProviders = onProviderChange != null;
+  const providers = useProviders();
+  const [managing, setManaging] = useState(false);
+
+  useEffect(() => {
+    if (open && withProviders) void refreshProviders();
+  }, [open, withProviders]);
 
   useEffect(() => {
     if (!open) setPane("root");
@@ -217,8 +232,12 @@ export default function AgentMenu({
 
   function pickAgent(next: TaskAgent) {
     onAgentChange(next);
-    if (model && !modelsFor(next).some((item) => item.id === model)) {
-      onModelChange?.(null);
+    if (next !== agent) {
+      // A model and provider belong to the agent they were picked for.
+      if (model && !modelsFor(next).some((item) => item.id === model)) {
+        onModelChange?.(null);
+      }
+      if (provider) onProviderChange?.(null);
     }
     back();
   }
@@ -230,8 +249,23 @@ export default function AgentMenu({
 
   function pickModel(next: string | null) {
     onModelChange?.(next);
+    if (provider) onProviderChange?.(null);
     returnTo.current = "model";
     setPane("root");
+  }
+
+  /** A provider's model; providers run through Codex, so this picks Codex too. */
+  function pickProviderModel(id: string, next: string) {
+    if (agent !== "codex") onAgentChange("codex");
+    onProviderChange?.(id);
+    onModelChange?.(next);
+    returnTo.current = "model";
+    setPane("root");
+  }
+
+  function manageProviders() {
+    setOpen(false);
+    setManaging(true);
   }
 
   function pickEffort(next: TaskEffort | null) {
@@ -241,7 +275,9 @@ export default function AgentMenu({
 
   const triggerText = pickerLabel(AGENT_LABELS[agent], agent, model, effort);
   /** A model typed in under Other model rather than picked from the list. */
-  const customModel = model && !modelsFor(agent).some((item) => item.id === model) ? model : null;
+  const customModel = model && !provider && !modelsFor(agent).some((item) => item.id === model) ? model : null;
+  const providerName = provider ? (providers.find((p) => p.id === provider)?.name ?? provider) : null;
+  const modelValue = providerName ? `${model ?? "Default"} · ${providerName}` : modelLabel(agent, model);
 
   const menu = shown ? (
     <div
@@ -275,7 +311,7 @@ export default function AgentMenu({
           )}
           <div className="model-menu__group">
             <PaneRow pane="agent" value={AGENT_LABELS[agent]} onOpen={setPane} />
-            <PaneRow pane="model" value={modelLabel(agent, model)} onOpen={setPane} />
+            <PaneRow pane="model" value={modelValue} onOpen={setPane} />
             <PaneRow pane="effort" value={effortLabel(effort)} onOpen={setPane} />
           </div>
         </>
@@ -318,7 +354,7 @@ export default function AgentMenu({
       {pane === "model" && (
         <>
           <div role="radiogroup" aria-label="Model">
-            <OptionRow role="radio" checked={!model} onPick={() => pickModel(null)}>
+            <OptionRow role="radio" checked={!model && !provider} onPick={() => pickModel(null)}>
               Default
             </OptionRow>
             {modelGroups(modelsFor(agent)).map(([group, items]) => (
@@ -329,14 +365,42 @@ export default function AgentMenu({
                   </div>
                 )}
                 {items.map((item) => (
-                  <OptionRow key={item.id} role="radio" checked={model === item.id} onPick={() => pickModel(item.id)}>
+                  <OptionRow
+                    key={item.id}
+                    role="radio"
+                    checked={!provider && model === item.id}
+                    onPick={() => pickModel(item.id)}
+                  >
                     {item.label}
                   </OptionRow>
                 ))}
               </div>
             ))}
+            {withProviders &&
+              providers.map((p) => (
+                <div
+                  key={`provider:${p.id}`}
+                  role="group"
+                  aria-label={agent === "codex" ? p.name : `${p.name}, runs in Codex`}
+                >
+                  <div className="model-menu__heading" aria-hidden="true">
+                    {agent === "codex" ? p.name : `${p.name} · via Codex`}
+                  </div>
+                  {p.models.map((id) => (
+                    <OptionRow
+                      key={id}
+                      role="radio"
+                      checked={provider === p.id && model === id}
+                      onPick={() => pickProviderModel(p.id, id)}
+                    >
+                      {id}
+                    </OptionRow>
+                  ))}
+                </div>
+              ))}
           </div>
           <PaneRow pane="custom" value={customModel ?? ""} onOpen={setPane} />
+          {withProviders && <ProvidersRow hint={providers.length === 0} onOpen={manageProviders} />}
         </>
       )}
       {pane === "custom" && (
@@ -386,6 +450,16 @@ export default function AgentMenu({
         <ChevronIcon size={12} />
       </button>
       {menu ? createPortal(menu, document.body) : null}
+      {managing &&
+        createPortal(
+          <ProvidersDialog
+            onClose={() => {
+              setManaging(false);
+              triggerRef.current?.focus();
+            }}
+          />,
+          document.body,
+        )}
     </div>
   );
 }
@@ -396,8 +470,33 @@ function PaneRow({ pane, value, onOpen }: { pane: Exclude<Pane, "root">; value: 
     <button type="button" role="menuitem" data-pane={pane} className="model-menu__row" onClick={() => onOpen(pane)}>
       <span>{PANE_TITLES[pane]}</span>
       <span className="model-menu__value">
-        {value}
+        <span className="model-menu__value-text">{value}</span>
         <ChevronIcon size={12} />
+      </span>
+    </button>
+  );
+}
+
+/** Opens the providers dialog; with none saved yet, it says what one can be. */
+function ProvidersRow({ hint, onOpen }: { hint: boolean; onOpen: () => void }) {
+  const labelId = useId();
+  const hintId = useId();
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      aria-labelledby={labelId}
+      aria-describedby={hint ? hintId : undefined}
+      className={`model-menu__row${hint ? " model-menu__row--hinted" : ""}`}
+      onClick={onOpen}
+    >
+      <span className="model-menu__option">
+        <span id={labelId}>Model providers…</span>
+        {hint && (
+          <span id={hintId} className="model-menu__hint">
+            Add open-source models: Ollama, LM Studio, or any API.
+          </span>
+        )}
       </span>
     </button>
   );
@@ -490,7 +589,7 @@ function CustomModel({ agent, initial, onApply }: { agent: TaskAgent; initial: s
       />
       <p id={hintId} className={`model-menu__hint${invalid ? " model-menu__hint--error" : ""}`}>
         {invalid
-          ? "Use letters, digits, dots, dashes, and underscores."
+          ? "Use letters, digits, and . _ - : /, starting with a letter or digit."
           : `Any model id ${AGENT_LABELS[agent]} accepts. Enter to use it.`}
       </p>
     </div>

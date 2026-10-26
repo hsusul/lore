@@ -56,6 +56,38 @@ pub(crate) fn not_a_git_repository(err: Error) -> Error {
     }
 }
 
+/// When `path` is a folder of repositories rather than one, say which ones it
+/// holds so the user can pick one. Any other error passes through.
+pub(crate) fn name_child_repos(err: Error, path: &str) -> Error {
+    let Error::Invalid(msg) = &err else {
+        return err;
+    };
+    if !msg.starts_with("That folder isn't inside") {
+        return err;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return err;
+    };
+    let mut repos: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().join(".git").exists())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    if repos.is_empty() {
+        return err;
+    }
+    repos.sort();
+    let shown = repos.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+    let more = match repos.len() {
+        n if n > 3 => format!(", and {} more", n - 3),
+        _ => String::new(),
+    };
+    Error::Invalid(format!(
+        "That folder isn't a git repository, but it contains {}: {shown}{more}. Open one of those instead.",
+        repos.len()
+    ))
+}
+
 fn resolve(root: &Path, rel: &str) -> Result<PathBuf> {
     let rel = Path::new(rel);
     if rel.is_absolute()

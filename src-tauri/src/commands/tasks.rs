@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use lore_ipc::{
     ActivityDto, ContinueTaskRequest, CreateTaskRequest, DecisionDto, DirEntryDto, FileContentDto,
-    MergeQueueDto, MergeResultDto, RepoSettingsDto, TaskDiffDto, TaskDto, TasksChangedEvent,
+    MergeQueueDto, MergeResultDto, ProviderDto, RepoSettingsDto, SaveProviderRequest, TaskDiffDto,
+    TaskDto, TasksChangedEvent,
 };
 use lore_orchestrator::{describe, AgentPrograms, TaskSnapshot};
 use tauri::async_runtime::spawn_blocking;
@@ -143,6 +144,33 @@ pub async fn set_repo_test_command(
     with_orchestrator(app, move |o| {
         o.set_repo_test_command(&repo_path, command.as_deref())
             .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Saved model providers for Codex runs.
+#[tauri::command]
+pub async fn list_providers(app: AppHandle) -> Result<Vec<ProviderDto>, String> {
+    with_orchestrator(app, |o| Ok(o.providers())).await
+}
+
+/// Add or update a model provider. Its API key goes to the system keychain.
+#[tauri::command]
+pub async fn save_provider(
+    app: AppHandle,
+    request: SaveProviderRequest,
+) -> Result<ProviderDto, String> {
+    with_orchestrator(app, move |o| {
+        o.save_provider(&request).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Remove a model provider and its saved key.
+#[tauri::command]
+pub async fn delete_provider(app: AppHandle, id: String) -> Result<(), String> {
+    with_orchestrator(app, move |o| {
+        o.delete_provider(&id).map_err(|e| e.to_string())
     })
     .await
 }

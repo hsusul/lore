@@ -41,6 +41,7 @@ export default function NewAgentForm({
   const [permission, setPermission] = useState<TaskPermission>("edits");
   const [model, setModel] = useState<string | null>(null);
   const [effort, setEffort] = useState<TaskEffort | null>(null);
+  const [provider, setProvider] = useState<string | null>(null);
   const [claimsText, setClaimsText] = useState("");
   const [autoHandoff, setAutoHandoff] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -88,6 +89,7 @@ export default function NewAgentForm({
       if (claims.length > 0) request.claims = claims;
       if (model) request.model = model;
       if (effort) request.effort = effort;
+      if (provider) request.provider = provider;
       return request;
     };
     setBusy(true);
@@ -173,6 +175,8 @@ export default function NewAgentForm({
               onModelChange={setModel}
               effort={effort}
               onEffortChange={setEffort}
+              provider={provider}
+              onProviderChange={setProvider}
               disabled={disabled}
             />
             <ChipField

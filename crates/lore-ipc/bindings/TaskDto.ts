@@ -42,6 +42,10 @@ last_activity: string | null, permission?: TaskPermission,
  */
 model?: string, effort?: TaskEffort, 
 /**
+ * Id of the model provider the latest run went through, when one was chosen.
+ */
+provider?: string, 
+/**
  * How many times an agent has run in this worktree (1 + continuations).
  */
 runs?: number, 

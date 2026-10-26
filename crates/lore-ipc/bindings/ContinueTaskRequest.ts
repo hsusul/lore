@@ -19,4 +19,10 @@ model?: string,
 /**
  * Replace the stored effort for this run. Omit to keep the task's effort.
  */
-effort?: TaskEffort, };
+effort?: TaskEffort, 
+/**
+ * Replace the stored model provider for this run; an empty string returns
+ * to the agent's own provider. Omit to keep the task's. A handoff to Claude
+ * Code always drops it.
+ */
+provider?: string, };

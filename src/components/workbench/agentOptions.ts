@@ -42,10 +42,18 @@ export const CODEX_MODELS: ModelOption[] = [
 
 /**
  * Whether the orchestrator will accept `raw` as a model (it checks the same in
- * `parse_model`): letters, digits, `.`, `_`, `-`, no leading dash, at most 80.
+ * `parse_model`): letters, digits, `.`, `_`, `-`, `:`, `/` (for ids such as
+ * `gpt-oss:20b` or `qwen/qwen3-coder`), no leading `-`, `.`, or `/`, no `..`,
+ * at most 80.
  */
 export function isModelId(raw: string): boolean {
-  return raw.length > 0 && raw.length <= 80 && !raw.startsWith("-") && /^[A-Za-z0-9._-]+$/.test(raw);
+  return (
+    raw.length > 0 &&
+    raw.length <= 80 &&
+    !/^[-./]/.test(raw) &&
+    !raw.includes("..") &&
+    /^[A-Za-z0-9._:/-]+$/.test(raw)
+  );
 }
 
 export const EFFORTS: { id: TaskEffort; label: string; hint: string }[] = [

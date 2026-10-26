@@ -81,7 +81,10 @@ pub fn run() {
             set_repo_test_command,
             start_merge_queue,
             get_merge_queue,
-            cancel_merge_queue
+            cancel_merge_queue,
+            list_providers,
+            save_provider,
+            delete_provider
         ])
         .build(tauri::generate_context!());
     let app = match app {

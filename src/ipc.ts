@@ -16,7 +16,10 @@ import type { FileContentDto } from "../crates/lore-ipc/bindings/FileContentDto"
 import type { MergeQueueDto } from "../crates/lore-ipc/bindings/MergeQueueDto";
 import type { MergeQueueItemDto } from "../crates/lore-ipc/bindings/MergeQueueItemDto";
 import type { MergeResultDto } from "../crates/lore-ipc/bindings/MergeResultDto";
+import type { ProviderDto } from "../crates/lore-ipc/bindings/ProviderDto";
+import type { ProviderKind } from "../crates/lore-ipc/bindings/ProviderKind";
 import type { RepoSettingsDto } from "../crates/lore-ipc/bindings/RepoSettingsDto";
+import type { SaveProviderRequest } from "../crates/lore-ipc/bindings/SaveProviderRequest";
 import type { TaskAgent } from "../crates/lore-ipc/bindings/TaskAgent";
 import type { TaskDiffDto } from "../crates/lore-ipc/bindings/TaskDiffDto";
 import type { TaskDto } from "../crates/lore-ipc/bindings/TaskDto";
@@ -37,7 +40,10 @@ export type {
   MergeQueueDto,
   MergeQueueItemDto,
   MergeResultDto,
+  ProviderDto,
+  ProviderKind,
   RepoSettingsDto,
+  SaveProviderRequest,
   TaskAgent,
   TaskDiffDto,
   TaskDto,
@@ -149,6 +155,23 @@ export function getRepoSettings(repoPath: string): Promise<RepoSettingsDto> {
 export function setRepoTestCommand(repoPath: string, command: string | null): Promise<RepoSettingsDto> {
   if (mock) return mock.then((m) => m.setRepoTestCommand(repoPath, command));
   return invoke<RepoSettingsDto>("set_repo_test_command", { repoPath, command });
+}
+
+/** Saved model providers that Codex runs can go through. */
+export function listProviders(): Promise<ProviderDto[]> {
+  if (mock) return mock.then((m) => m.listProviders());
+  return invoke<ProviderDto[]>("list_providers");
+}
+
+/** Add or update a model provider; its API key goes to the system keychain. */
+export function saveProvider(request: SaveProviderRequest): Promise<ProviderDto> {
+  if (mock) return mock.then((m) => m.saveProvider(request));
+  return invoke<ProviderDto>("save_provider", { request });
+}
+
+export function deleteProvider(id: string): Promise<void> {
+  if (mock) return mock.then((m) => m.deleteProvider(id));
+  return invoke<void>("delete_provider", { id });
 }
 
 /**

@@ -22,6 +22,7 @@
 pub mod agent;
 mod git;
 mod process;
+mod providers;
 pub mod workspace;
 
 use std::collections::{HashMap, HashSet};
@@ -31,17 +32,18 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lore_ipc::{
     ActivityDto, ActivityKind, ContinueTaskRequest, CreateTaskRequest, DecisionDto, MergeQueueDto,
-    MergeQueueItemDto, MergeResultDto, RepoSettingsDto, TaskAgent, TaskDiffDto, TaskDto,
-    TaskEffort, TaskOverlapDto, TaskPermission, TaskState,
+    MergeQueueItemDto, MergeResultDto, ProviderDto, RepoSettingsDto, SaveProviderRequest,
+    TaskAgent, TaskDiffDto, TaskDto, TaskEffort, TaskOverlapDto, TaskPermission, TaskState,
 };
 use serde::{Deserialize, Serialize};
 
 pub use agent::AgentPrograms;
+pub use providers::{Keychain, MemorySecrets, ProviderLaunch, SecretStore};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -102,6 +104,9 @@ struct TaskRecord {
     model: Option<String>,
     #[serde(default)]
     effort: Option<TaskEffort>,
+    /// Id of the saved model provider the latest run went through (Codex only).
+    #[serde(default)]
+    provider: Option<String>,
     /// Runs in this worktree: the first launch plus each continuation.
     #[serde(default = "one")]
     runs: u32,
@@ -174,6 +179,11 @@ struct Inner {
 pub struct Orchestrator {
     root: PathBuf,
     inner: Mutex<Inner>,
+    /// Where provider API keys live; the system keychain unless a test swaps it.
+    secrets: Mutex<Arc<dyn SecretStore>>,
+    /// One writer at a time for `providers.json` and its keys, without holding
+    /// the task lock while the keychain answers.
+    provider_writes: Mutex<()>,
     _instance: InstanceLock,
 }
 
@@ -379,6 +389,8 @@ impl Orchestrator {
                 test_timeout: DEFAULT_TEST_TIMEOUT,
                 load_warning,
             }),
+            secrets: Mutex::new(Arc::new(Keychain)),
+            provider_writes: Mutex::new(()),
             _instance: instance,
         };
         if changed {
@@ -415,7 +427,8 @@ impl Orchestrator {
     /// Record a workspace root the user opened, allowing it to be browsed.
     /// Returns the repository top-level.
     pub fn open_workspace(&self, path: &str) -> Result<PathBuf> {
-        let top = workspace::repository_root(path)?;
+        let top =
+            workspace::repository_root(path).map_err(|e| workspace::name_child_repos(e, path))?;
         self.lock().opened_roots.insert(top.clone());
         Ok(top)
     }
@@ -478,6 +491,28 @@ impl Orchestrator {
 
         let claims = normalize_claims(req.claims.as_deref().unwrap_or(&[]))?;
         let model = agent::parse_model(req.model.as_deref())?;
+        // The keychain may ask the user, so the provider is resolved before any lock.
+        let provider = match req
+            .provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            None => None,
+            Some(id) => {
+                if req.agent != TaskAgent::Codex {
+                    return Err(Error::Invalid(
+                        "model providers run through Codex; choose Codex as the agent".into(),
+                    ));
+                }
+                Some(self.provider_launch(id)?)
+            }
+        };
+        // A provider without a chosen model runs the first one it lists.
+        let model = match (model, &provider) {
+            (None, Some((_, first))) => first.clone(),
+            (model, _) => model,
+        };
 
         // Git work, without the lock.
         let repo = git::toplevel(&requested).map_err(workspace::not_a_git_repository)?;
@@ -514,6 +549,7 @@ impl Orchestrator {
             permission: req.permission.unwrap_or_default(),
             model,
             effort: req.effort,
+            provider: provider.as_ref().map(|(p, _)| p.id.clone()),
             runs: 1,
             merged_into: None,
             claims: claims.clone(),
@@ -534,7 +570,13 @@ impl Orchestrator {
             coordination_preamble(&inner.tasks, &record),
             record.prompt
         );
-        match spawn(&inner.programs, &record, &opening, None) {
+        match spawn(
+            &inner.programs,
+            &record,
+            &opening,
+            None,
+            provider.as_ref().map(|(p, _)| p),
+        ) {
             Ok(child) => {
                 record.pid = Some(child.id());
                 inner.children.insert(id.clone(), child);
@@ -613,15 +655,32 @@ impl Orchestrator {
             ));
         }
 
-        // Log parsing and git for the brief, without the lock.
+        // Log parsing, git for the brief, and the keychain, without the lock.
         let new_agent = req.agent.unwrap_or(task.agent);
+        // Providers run through Codex, so a switch to Claude Code drops one.
+        let next_provider = match (new_agent, req.provider.as_deref().map(str::trim)) {
+            (TaskAgent::ClaudeCode, _) | (_, Some("")) => None,
+            (TaskAgent::Codex, Some(id)) => Some(id.to_string()),
+            (TaskAgent::Codex, None) => task.provider.clone(),
+        };
+        let provider = next_provider
+            .as_deref()
+            .map(|id| self.provider_launch(id))
+            .transpose()?;
         let next_model = match &req.model {
             Some(raw) => agent::parse_model(Some(raw))?,
+            // The model belongs to the agent and provider it was chosen for; a
+            // new one starts on its default (or the provider's first model).
+            None if new_agent != task.agent || next_provider != task.provider => {
+                provider.as_ref().and_then(|(_, first)| first.clone())
+            }
             None => task.model.clone(),
         };
         let next_effort = req.effort.or(task.effort);
-        let same_setup =
-            new_agent == task.agent && next_model == task.model && next_effort == task.effort;
+        let same_setup = new_agent == task.agent
+            && next_model == task.model
+            && next_effort == task.effort
+            && next_provider == task.provider;
         let session = (same_setup && new_agent == TaskAgent::ClaudeCode)
             .then(|| agent::claude_session_id(&task.log_path))
             .flatten();
@@ -644,12 +703,19 @@ impl Orchestrator {
         record.agent = new_agent;
         record.model = next_model;
         record.effort = next_effort;
+        record.provider = next_provider;
         record.runs += 1;
         if !automatic {
             record.auto_handoffs = 0;
         }
         record.exit_code = None;
-        let child = match spawn(&inner.programs, &record, &full_prompt, session.as_deref()) {
+        let child = match spawn(
+            &inner.programs,
+            &record,
+            &full_prompt,
+            session.as_deref(),
+            provider.as_ref().map(|(p, _)| p),
+        ) {
             Ok(child) => {
                 record.pid = Some(child.id());
                 record.state = TaskState::Running;
@@ -917,6 +983,96 @@ impl Orchestrator {
         fs::write(&tmp, serde_json::to_vec_pretty(&all)?)?;
         fs::rename(tmp, self.root.join(REPOS_FILE))?;
         Ok(settings)
+    }
+
+    /// Saved model providers, in the order they were added.
+    pub fn providers(&self) -> Vec<ProviderDto> {
+        providers::load(&self.root)
+            .iter()
+            .map(providers::ProviderRecord::dto)
+            .collect()
+    }
+
+    /// Add a provider, or update one when `req.id` is set. A key goes to the
+    /// secret store first, so the file never claims a key that was not saved.
+    pub fn save_provider(&self, req: &SaveProviderRequest) -> Result<ProviderDto> {
+        let _writer = self
+            .provider_writes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let mut all = providers::load(&self.root);
+        let mut record = providers::validate(req, &all)?;
+        let secrets = self.secret_store();
+        match providers::key_change(req)? {
+            Some(Some(key)) => {
+                secrets.set(&record.id, &key)?;
+                record.has_api_key = true;
+            }
+            Some(None) => {
+                secrets.delete(&record.id)?;
+                record.has_api_key = false;
+            }
+            None => {}
+        }
+        match all.iter_mut().find(|p| p.id == record.id) {
+            Some(slot) => *slot = record.clone(),
+            None => all.push(record.clone()),
+        }
+        providers::store(&self.root, &all)?;
+        Ok(record.dto())
+    }
+
+    /// Remove a provider and its key. A task that used it must pick another
+    /// model to run again: Lore never moves a local model's work to another
+    /// provider on its own.
+    pub fn delete_provider(&self, id: &str) -> Result<()> {
+        let _writer = self
+            .provider_writes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let mut all = providers::load(&self.root);
+        let before = all.len();
+        all.retain(|p| p.id != id);
+        if all.len() == before {
+            return Err(Error::Invalid("that provider no longer exists".into()));
+        }
+        self.secret_store().delete(id)?;
+        providers::store(&self.root, &all)
+    }
+
+    /// Use another secret store for provider keys (tests use memory).
+    pub fn set_secret_store(&self, store: Arc<dyn SecretStore>) {
+        *self.secrets.lock().unwrap_or_else(|p| p.into_inner()) = store;
+    }
+
+    fn secret_store(&self) -> Arc<dyn SecretStore> {
+        Arc::clone(&self.secrets.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+
+    /// What a run needs to go through provider `id`, and its first model.
+    fn provider_launch(&self, id: &str) -> Result<(ProviderLaunch, Option<String>)> {
+        let record = providers::load(&self.root)
+            .into_iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| {
+                Error::Invalid("that model provider no longer exists; pick another model".into())
+            })?;
+        let api_key = if record.has_api_key {
+            self.secret_store().get(&record.id)?
+        } else {
+            None
+        };
+        let first = record.models.first().cloned();
+        Ok((
+            ProviderLaunch {
+                id: record.id,
+                name: record.name,
+                kind: record.kind,
+                base_url: record.base_url,
+                api_key,
+            },
+            first,
+        ))
     }
 
     /// Override the merge-queue test timeout (tests use a short one).
@@ -1387,6 +1543,7 @@ impl Orchestrator {
                 agent: Some(other),
                 model: None,
                 effort: None,
+                provider: None,
             };
             if self.continue_task_inner(&request, true).is_ok() {
                 self.record_decision(
@@ -1859,6 +2016,7 @@ fn spawn(
     task: &TaskRecord,
     prompt: &str,
     resume: Option<&str>,
+    provider: Option<&ProviderLaunch>,
 ) -> Result<Child> {
     let mut log = fs::OpenOptions::new()
         .create(true)
@@ -1886,6 +2044,7 @@ fn spawn(
             resume_session: resume,
             model: task.model.as_deref(),
             effort: task.effort,
+            provider,
         },
     )
     .process_group(0)
@@ -1930,6 +2089,7 @@ pub fn describe(snapshot: &TaskSnapshot) -> TaskDto {
         permission: Some(t.permission),
         model: t.model.clone(),
         effort: t.effort,
+        provider: t.provider.clone(),
         runs: Some(i64::from(t.runs)),
         uncommitted_count: Some(if exists {
             i64::try_from(git::uncommitted(&t.worktree_path).len()).unwrap_or(i64::MAX)

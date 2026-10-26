@@ -34,4 +34,9 @@ model?: string,
 /**
  * Reasoning / effort level. Omit to use the agent's own default.
  */
-effort?: TaskEffort, };
+effort?: TaskEffort, 
+/**
+ * Id of a saved model provider to run `model` through. Codex only; omit to
+ * use the agent's own provider.
+ */
+provider?: string, };

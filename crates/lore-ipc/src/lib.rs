@@ -453,6 +453,11 @@ pub struct CreateTaskRequest {
     #[serde(default)]
     #[ts(optional)]
     pub effort: Option<TaskEffort>,
+    /// Id of a saved model provider to run `model` through. Codex only; omit to
+    /// use the agent's own provider.
+    #[serde(default)]
+    #[ts(optional)]
+    pub provider: Option<String>,
 }
 
 /// How hard the model should try (Claude `--effort`, Codex `model_reasoning_effort`).
@@ -526,6 +531,12 @@ pub struct ContinueTaskRequest {
     #[serde(default)]
     #[ts(optional)]
     pub effort: Option<TaskEffort>,
+    /// Replace the stored model provider for this run; an empty string returns
+    /// to the agent's own provider. Omit to keep the task's. A handoff to Claude
+    /// Code always drops it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub provider: Option<String>,
 }
 
 /// Outcome of `merge_task`.
@@ -581,6 +592,10 @@ pub struct TaskDto {
     #[serde(default)]
     #[ts(optional)]
     pub effort: Option<TaskEffort>,
+    /// Id of the model provider the latest run went through, when one was chosen.
+    #[serde(default)]
+    #[ts(optional)]
+    pub provider: Option<String>,
     /// How many times an agent has run in this worktree (1 + continuations).
     #[serde(default)]
     #[ts(optional, type = "number")]
@@ -650,6 +665,71 @@ pub struct RepoSettingsDto {
     /// Shell command the merge queue runs in a task's worktree before merging,
     /// e.g. `npm test`. None means merges are not gated on tests.
     pub test_command: Option<String>,
+}
+
+/// Where a provider's models run. Every provider runs through Codex, which
+/// supports local models and any endpoint that speaks the OpenAI Responses API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProviderKind {
+    /// A local Ollama server (`codex --oss --local-provider ollama`).
+    Ollama,
+    /// A local LM Studio server (`codex --oss --local-provider lmstudio`).
+    Lmstudio,
+    /// Any endpoint that speaks the OpenAI Responses API, such as OpenRouter or
+    /// a vLLM server.
+    Custom,
+}
+
+/// A model provider the user added (`list_providers`, `save_provider`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProviderDto {
+    pub id: String,
+    pub name: String,
+    pub kind: ProviderKind,
+    /// Base URL of a custom provider's API, e.g. `https://openrouter.ai/api/v1`.
+    pub base_url: Option<String>,
+    /// Model ids offered in the model picker.
+    pub models: Vec<String>,
+    /// Whether an API key is saved for it. The key itself never leaves the backend.
+    pub has_api_key: bool,
+}
+
+/// Input of `save_provider`: a new provider, or an update when `id` is set.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SaveProviderRequest {
+    #[serde(default)]
+    #[ts(optional)]
+    pub id: Option<String>,
+    pub name: String,
+    pub kind: ProviderKind,
+    /// Required for a custom provider; ignored for local ones.
+    #[serde(default)]
+    #[ts(optional)]
+    pub base_url: Option<String>,
+    pub models: Vec<String>,
+    /// A new API key to save in the system keychain. Omit to keep the saved
+    /// one; an empty string removes it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub api_key: Option<String>,
+}
+
+impl std::fmt::Debug for SaveProviderRequest {
+    // Never print the key, even in a debug log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SaveProviderRequest")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .field("base_url", &self.base_url)
+            .field("models", &self.models)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// One task in a merge queue.

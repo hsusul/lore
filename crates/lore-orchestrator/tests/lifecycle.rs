@@ -66,6 +66,7 @@ fn request(repo: &Path, title: &str) -> CreateTaskRequest {
         auto_handoff: Some(false),
         model: None,
         effort: None,
+        provider: None,
     }
 }
 
@@ -454,6 +455,7 @@ fn continue_resumes_claude_and_hands_off_to_codex_with_a_brief() {
         agent: None,
         model: None,
         effort: None,
+        provider: None,
     };
     orch.continue_task(&cont).unwrap();
     let done = wait_for(&orch, &id, TaskState::Finished);
@@ -474,6 +476,7 @@ fn continue_resumes_claude_and_hands_off_to_codex_with_a_brief() {
         agent: Some(TaskAgent::Codex),
         model: None,
         effort: None,
+        provider: None,
     };
     orch.commit_task(&id, "wip").unwrap();
     orch.continue_task(&handoff).unwrap();
@@ -538,6 +541,7 @@ fn commit_and_merge_into_primary_checkout() {
             agent: None,
             model: None,
             effort: None,
+            provider: None,
         })
         .is_err());
 }
@@ -703,6 +707,28 @@ fn open_workspace_maps_a_non_git_folder_to_a_plain_message() {
 }
 
 #[test]
+fn open_workspace_on_a_folder_of_repositories_names_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let agent = fake_agent(tmp.path(), "true");
+    let orch = Orchestrator::open(tmp.path().join("orch"), programs(&agent)).unwrap();
+    let parent = tmp.path().join("projects");
+    for name in ["zeta", "alpha", "mid", "beta"] {
+        let dir = parent.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        sh(&dir, &["init", "-q"]);
+    }
+    fs::create_dir_all(parent.join("notes")).unwrap();
+    let err = orch
+        .open_workspace(&parent.display().to_string())
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        err,
+        "That folder isn't a git repository, but it contains 4: alpha, beta, mid, and 1 more. Open one of those instead."
+    );
+}
+
+#[test]
 fn slow_stop_does_not_block_status_and_helpers_block_commit_until_gone() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = commit_env_repo(tmp.path());
@@ -784,6 +810,7 @@ fn continue_rolls_back_when_the_store_cannot_be_saved() {
         agent: None,
         model: None,
         effort: None,
+        provider: None,
     });
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     assert!(result.is_err());
@@ -920,6 +947,7 @@ fn decisions_are_recorded_and_reach_the_next_agent() {
         agent: Some(TaskAgent::Codex),
         model: None,
         effort: None,
+        provider: None,
     })
     .unwrap();
     wait_for(&orch, &second, TaskState::Finished);
@@ -1602,4 +1630,211 @@ fn unclean_exit_marks_a_running_queue_interrupted_on_relaunch() {
         .decisions(None, 20)
         .iter()
         .any(|d| d.kind == "queue_interrupted"));
+}
+
+/// Records args and the provider key the agent's environment carried.
+fn env_recording_agent(tmp: &Path) -> PathBuf {
+    fake_agent(
+        tmp,
+        r#"n=$(ls "$PWD"/../../calls-* 2>/dev/null | wc -l | tr -d ' ')
+printf '%s\n' "$@" > "$PWD/../../calls-$n.txt"
+printf '%s' "$LORE_PROVIDER_API_KEY" > "$PWD/../../env-$n.txt"
+echo '{"type":"result","is_error":false,"result":"ok"}'"#,
+    )
+}
+
+fn custom_provider(api_key: Option<&str>) -> lore_ipc::SaveProviderRequest {
+    lore_ipc::SaveProviderRequest {
+        id: None,
+        name: "OpenRouter".into(),
+        kind: lore_ipc::ProviderKind::Custom,
+        base_url: Some("https://openrouter.ai/api/v1".into()),
+        models: vec!["qwen/qwen3-coder".into(), "deepseek/deepseek-v3".into()],
+        api_key: api_key.map(str::to_string),
+    }
+}
+
+#[test]
+fn providers_are_saved_with_their_keys_in_the_secret_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&tmp.path().join("agent"))).unwrap();
+    let secrets = std::sync::Arc::new(lore_orchestrator::MemorySecrets::default());
+    orch.set_secret_store(secrets.clone());
+
+    let saved = orch
+        .save_provider(&custom_provider(Some("sk-secret")))
+        .unwrap();
+    assert_eq!(saved.id, "openrouter");
+    assert!(saved.has_api_key);
+    assert_eq!(orch.providers(), vec![saved.clone()]);
+    use lore_orchestrator::SecretStore;
+    assert_eq!(
+        secrets.get("openrouter").unwrap().as_deref(),
+        Some("sk-secret")
+    );
+    // The key is never written to Lore's own files.
+    assert!(!fs::read_to_string(root.join("providers.json"))
+        .unwrap()
+        .contains("sk-secret"));
+
+    // An update without a key keeps it; an empty key removes it.
+    let mut update = custom_provider(None);
+    update.id = Some("openrouter".into());
+    update.models = vec!["qwen/qwen3-coder".into()];
+    assert!(orch.save_provider(&update).unwrap().has_api_key);
+    update.api_key = Some(String::new());
+    assert!(!orch.save_provider(&update).unwrap().has_api_key);
+    assert_eq!(secrets.get("openrouter").unwrap(), None);
+
+    orch.delete_provider("openrouter").unwrap();
+    assert!(orch.providers().is_empty());
+    assert!(orch.delete_provider("openrouter").is_err());
+}
+
+#[test]
+fn codex_runs_through_a_saved_provider_and_claude_code_refuses_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = env_recording_agent(tmp.path());
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    orch.set_secret_store(std::sync::Arc::new(
+        lore_orchestrator::MemorySecrets::default(),
+    ));
+    orch.save_provider(&custom_provider(Some("sk-secret")))
+        .unwrap();
+
+    let mut req = request(&repo, "routed");
+    req.agent = TaskAgent::Codex;
+    req.provider = Some("openrouter".into());
+    let id = orch.create_task(&req).unwrap().id().to_string();
+    let done = wait_for(&orch, &id, TaskState::Finished);
+    assert_eq!(done.provider.as_deref(), Some("openrouter"));
+    // No model chosen: the provider's first one runs.
+    assert_eq!(done.model.as_deref(), Some("qwen/qwen3-coder"));
+    let args = call_args(&root, 0);
+    assert!(
+        args.windows(2)
+            .any(|w| w == ["--model", "qwen/qwen3-coder"]),
+        "{args:?}"
+    );
+    assert!(
+        args.windows(2)
+            .any(|w| w == ["-c", r#"model_provider="lore-openrouter""#]),
+        "{args:?}"
+    );
+    assert!(!args.iter().any(|a| a.contains("sk-secret")), "{args:?}");
+    assert_eq!(
+        fs::read_to_string(root.join("env-0.txt")).unwrap(),
+        "sk-secret"
+    );
+
+    let mut claude = request(&repo, "not through claude");
+    claude.provider = Some("openrouter".into());
+    assert!(orch
+        .create_task(&claude)
+        .unwrap_err()
+        .to_string()
+        .contains("Codex"));
+    let mut missing = request(&repo, "missing");
+    missing.agent = TaskAgent::Codex;
+    missing.provider = Some("gone".into());
+    assert!(orch
+        .create_task(&missing)
+        .unwrap_err()
+        .to_string()
+        .contains("no longer exists"));
+}
+
+#[test]
+fn a_handoff_to_claude_code_drops_the_provider_and_its_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = env_recording_agent(tmp.path());
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    orch.set_secret_store(std::sync::Arc::new(
+        lore_orchestrator::MemorySecrets::default(),
+    ));
+    orch.save_provider(&custom_provider(None)).unwrap();
+
+    let mut req = request(&repo, "local model");
+    req.agent = TaskAgent::Codex;
+    req.provider = Some("openrouter".into());
+    req.model = Some("deepseek/deepseek-v3".into());
+    let id = orch.create_task(&req).unwrap().id().to_string();
+    wait_for(&orch, &id, TaskState::Finished);
+
+    orch.continue_task(&lore_ipc::ContinueTaskRequest {
+        id: id.clone(),
+        prompt: "finish it".into(),
+        agent: Some(TaskAgent::ClaudeCode),
+        model: None,
+        effort: None,
+        provider: None,
+    })
+    .unwrap();
+    let done = wait_for(&orch, &id, TaskState::Finished);
+    assert_eq!(done.agent, TaskAgent::ClaudeCode);
+    assert_eq!(done.provider, None);
+    assert_eq!(done.model, None);
+    let args = call_args(&root, 1);
+    assert!(
+        !args
+            .iter()
+            .any(|a| a == "--model" || a.contains("model_provider")),
+        "{args:?}"
+    );
+    // No key in the environment either: this provider never had one.
+    assert_eq!(fs::read_to_string(root.join("env-0.txt")).unwrap(), "");
+}
+
+#[test]
+fn a_task_whose_provider_was_removed_must_pick_another_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = commit_env_repo(tmp.path());
+    let agent = env_recording_agent(tmp.path());
+    let root = tmp.path().join("orch");
+    let orch = Orchestrator::open(&root, programs(&agent)).unwrap();
+    orch.set_secret_store(std::sync::Arc::new(
+        lore_orchestrator::MemorySecrets::default(),
+    ));
+    orch.save_provider(&custom_provider(None)).unwrap();
+
+    let mut req = request(&repo, "routed");
+    req.agent = TaskAgent::Codex;
+    req.provider = Some("openrouter".into());
+    let id = orch.create_task(&req).unwrap().id().to_string();
+    wait_for(&orch, &id, TaskState::Finished);
+    orch.delete_provider("openrouter").unwrap();
+
+    // Never a silent move to another provider: the next run needs a new choice.
+    let mut next = lore_ipc::ContinueTaskRequest {
+        id: id.clone(),
+        prompt: "again".into(),
+        agent: None,
+        model: None,
+        effort: None,
+        provider: None,
+    };
+    assert!(orch
+        .continue_task(&next)
+        .unwrap_err()
+        .to_string()
+        .contains("no longer exists"));
+
+    // Choosing Codex's own provider (an empty id) runs on its default model.
+    next.provider = Some(String::new());
+    orch.continue_task(&next).unwrap();
+    let done = wait_for(&orch, &id, TaskState::Finished);
+    assert_eq!(done.provider, None);
+    assert_eq!(done.model, None);
+    let args = call_args(&root, 1);
+    assert!(
+        !args
+            .iter()
+            .any(|a| a == "--model" || a.contains("model_provider")),
+        "{args:?}"
+    );
 }

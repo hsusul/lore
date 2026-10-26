@@ -110,6 +110,7 @@ export default function AgentView({
   const [nextAgent, setNextAgent] = useState<TaskAgent>(currentAgent ?? "claude_code");
   const [nextModel, setNextModel] = useState<string | null>(task?.model ?? null);
   const [nextEffort, setNextEffort] = useState<TaskEffort | null>(task?.effort ?? null);
+  const [nextProvider, setNextProvider] = useState<string | null>(task?.provider ?? null);
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string | null>(null);
 
@@ -120,7 +121,8 @@ export default function AgentView({
   useEffect(() => {
     setNextModel(task?.model ?? null);
     setNextEffort(task?.effort ?? null);
-  }, [task?.model, task?.effort]);
+    setNextProvider(task?.provider ?? null);
+  }, [task?.model, task?.effort, task?.provider]);
 
   if (!task) {
     return <p className="wb-note wb-view-pad">This agent no longer exists.</p>;
@@ -227,6 +229,9 @@ export default function AgentView({
       if (handoff) request.agent = nextAgent;
       request.model = nextModel ?? "";
       if (nextEffort) request.effort = nextEffort;
+      // An empty provider leaves one the task ran through for Codex's own.
+      if (nextProvider) request.provider = nextProvider;
+      else if (task?.provider) request.provider = "";
       await onContinue(request);
       setPrompt("");
     } catch (e) {
@@ -641,6 +646,8 @@ export default function AgentView({
                       onModelChange={setNextModel}
                       effort={nextEffort}
                       onEffortChange={setNextEffort}
+                      provider={nextProvider}
+                      onProviderChange={setNextProvider}
                       disabled={continuing}
                       placement="up"
                     />
