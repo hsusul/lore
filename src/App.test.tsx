@@ -1,88 +1,62 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const scan = vi.hoisted(() => ({
-  handler: null as null | ((progress: {
-    discovered: number;
-    ingested: number;
-    skipped: number;
-    failed: number;
-    enriched: number;
-    done: boolean;
-  }) => void),
-}));
+import type { ScanProgress } from "./ipc";
+
+const events = vi.hoisted(() => ({ scan: null as null | ((p: ScanProgress) => void) }));
 
 vi.mock("./ipc", () => ({
-  listDetectedAgents: vi.fn().mockResolvedValue([]),
-  chooseAgentRootDirectory: vi.fn().mockResolvedValue(null),
-  addAgentRoot: vi.fn().mockResolvedValue(undefined),
-  removeAgentRoot: vi.fn().mockResolvedValue(undefined),
-  listRepositories: vi.fn().mockResolvedValue([]),
-  listSessionsPage: vi.fn().mockResolvedValue({ sessions: [], next_cursor: null }),
-  listRepositorySessionsPage: vi.fn().mockResolvedValue({
-    sessions: [],
-    next_cursor: null,
-  }),
-  listFolders: vi.fn().mockResolvedValue([]),
-  listFolderSessionsPage: vi.fn().mockResolvedValue({ sessions: [], next_cursor: null }),
-  createFolder: vi.fn().mockResolvedValue({ id: "f", name: "f", session_count: 0, position: 0 }),
-  renameFolder: vi.fn().mockResolvedValue(undefined),
-  deleteFolder: vi.fn().mockResolvedValue(undefined),
-  setSessionFolder: vi.fn().mockResolvedValue(undefined),
-  getSession: vi.fn().mockResolvedValue(null),
-  getGitSnapshot: vi.fn().mockResolvedValue([]),
-  getFilePatch: vi.fn().mockResolvedValue(null),
-  sessionSecretCount: vi.fn().mockResolvedValue(0),
-  exportSessionMarkdown: vi.fn().mockResolvedValue(""),
-  forgetSession: vi.fn().mockResolvedValue({ blobs_removed: 0, source_paths: [] }),
-  forgetEverything: vi.fn().mockResolvedValue({ blobs_removed: 0, source_paths: [] }),
-  search: vi.fn().mockResolvedValue([]),
-  searchPage: vi.fn().mockResolvedValue({ hits: [], next_cursor: null }),
-  getSetting: vi.fn().mockResolvedValue(null),
-  setSetting: vi.fn().mockResolvedValue(undefined),
-  getBackupSchedule: vi.fn().mockResolvedValue({ interval: "off", keep: 7 }),
-  setBackupSchedule: vi.fn().mockResolvedValue(undefined),
-  backupNow: vi.fn().mockResolvedValue(undefined),
-  rescan: vi.fn().mockResolvedValue({}),
-  onScanProgress: vi.fn().mockImplementation(async (handler) => {
-    scan.handler = handler;
-    return () => {};
-  }),
   HIGHLIGHT_START: "\u{e000}",
   HIGHLIGHT_END: "\u{e001}",
+  listDetectedAgents: vi.fn(),
+  listRepositories: vi.fn(),
+  listFolders: vi.fn(),
+  listSessionsPage: vi.fn(),
+  listRepositorySessionsPage: vi.fn(),
+  listFolderSessionsPage: vi.fn(),
+  listSessionMessagesPage: vi.fn(),
+  getSession: vi.fn(),
+  getGitSnapshot: vi.fn(),
+  sessionSecretCount: vi.fn(),
+  getFilePatch: vi.fn(),
+  searchPage: vi.fn(),
+  rescan: vi.fn(),
+  onScanProgress: vi.fn(async (handler: (p: ScanProgress) => void) => {
+    events.scan = handler;
+    return () => {};
+  }),
+  chooseAgentRootDirectory: vi.fn(),
+  addAgentRoot: vi.fn(),
+  removeAgentRoot: vi.fn(),
+  createFolder: vi.fn(),
+  renameFolder: vi.fn(),
+  deleteFolder: vi.fn(),
+  setSessionFolder: vi.fn(),
+  exportSessionMarkdown: vi.fn(),
+  saveSessionExport: vi.fn(),
+  forgetSession: vi.fn(),
+  forgetEverything: vi.fn(),
+  getBackupSchedule: vi.fn(),
+  setBackupSchedule: vi.fn(),
+  backupNow: vi.fn(),
 }));
 
 import App from "./App";
-import {
-  addAgentRoot,
-  chooseAgentRootDirectory,
-  forgetEverything,
-  getSession,
-  listDetectedAgents,
-  listFolders,
-  listRepositories,
-  listRepositorySessionsPage,
-  listSessionsPage,
-  rescan,
-  removeAgentRoot,
-  searchPage,
-  type DetectedAgent,
-  type RepositorySummary,
-  type SessionPage,
-  type SessionDetail,
-  type SessionSummary,
-} from "./ipc";
+import * as ipc from "./ipc";
+import type { DetectedAgent, MessageDto, SearchHit, SessionDetail, SessionSummary } from "./ipc";
 
-function summary(id: string, title: string): SessionSummary {
+const m = vi.mocked(ipc);
+
+function session(id: string, title: string, agent = "claude-code"): SessionSummary {
   return {
     id,
-    agent_id: "codex",
+    agent_id: agent,
     title,
     started_at: null,
     ended_at: null,
-    message_count: 0,
-    tool_call_count: 0,
-    primary_model: null,
+    message_count: 3,
+    tool_call_count: 1,
+    primary_model: "claude-sonnet-4-5",
     parse_status: "ok",
     total_input_tokens: null,
     total_output_tokens: null,
@@ -91,769 +65,349 @@ function summary(id: string, title: string): SessionSummary {
   };
 }
 
-function detail(session: SessionSummary): SessionDetail {
+function message(seq: number, role: string, parts: MessageDto["parts"]): MessageDto {
+  return { id: `m${seq}`, seq, role, event_kind: "message", is_sidechain: false, ts: null, model: null, parts };
+}
+
+function detail(summary: SessionSummary): SessionDetail {
   return {
-    summary: session,
+    summary,
     parse_note: null,
     segments: [],
-    messages: [],
-    file_events: [],
+    messages: [
+      message(1, "user", [{ ordinal: 0, kind: "text", text: "Make the retry backoff deterministic.", content_json: null, searchable: true }]),
+      message(2, "assistant", [
+        {
+          ordinal: 0,
+          kind: "tool_use",
+          text: null,
+          content_json: JSON.stringify({ type: "tool_use", name: "Bash", input: { command: "cargo test sync" } }),
+          searchable: false,
+        },
+      ]),
+    ],
+    file_events: [
+      {
+        id: "fe1",
+        path: "src/sync/worker.rs",
+        change_kind: "edit",
+        old_path: null,
+        lines_added: 1,
+        lines_removed: 1,
+        source: "agent_patch",
+        has_patch: true,
+      },
+    ],
     next_message_cursor: null,
   };
 }
 
-function repository(id: string, name: string): RepositorySummary {
+function hit(sessionId: string, title: string, snippet: string): SearchHit {
   return {
-    id,
-    display_name: name,
-    identity_confidence: "confirmed",
-    primary_path: null,
-    is_missing: false,
-    session_count: 1,
-    worktree_count: 1,
+    session_id: sessionId,
+    source_kind: "message_part",
+    source_id: `p-${sessionId}`,
+    field: "text",
+    snippet,
+    rank: -1,
+    title,
+    agent_id: "codex",
+    started_at: null,
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+const agents: DetectedAgent[] = [
+  { id: "claude-code", display_name: "Claude Code", installed: true, version: null, session_count: 2, roots: ["~/.claude/projects"], custom_roots: [] },
+];
 
-afterEach(() => {
-  vi.mocked(listDetectedAgents).mockResolvedValue([]);
-  vi.mocked(chooseAgentRootDirectory).mockResolvedValue(null);
-  vi.mocked(addAgentRoot).mockResolvedValue(undefined);
-  vi.mocked(removeAgentRoot).mockResolvedValue(undefined);
-  vi.mocked(listRepositories).mockResolvedValue([]);
-  vi.mocked(listSessionsPage).mockResolvedValue({ sessions: [], next_cursor: null });
-  vi.mocked(listRepositorySessionsPage).mockResolvedValue({
-    sessions: [],
-    next_cursor: null,
-  });
-  vi.mocked(getSession).mockResolvedValue(null);
-  vi.mocked(rescan).mockClear();
-  vi.mocked(searchPage).mockResolvedValue({ hits: [], next_cursor: null });
+const alpha = session("a", "Fix flaky retry backoff");
+const beta = session("b", "Port dotfiles to nix", "codex");
+
+beforeEach(() => {
+  m.listDetectedAgents.mockResolvedValue(agents);
+  m.listRepositories.mockResolvedValue([
+    { id: "repo-lore", display_name: "lore", identity_confidence: "confirmed", primary_path: null, is_missing: false, session_count: 1, worktree_count: 1 },
+  ]);
+  m.listFolders.mockResolvedValue([{ id: "f1", name: "Release prep", session_count: 0, position: 0 }]);
+  m.listSessionsPage.mockResolvedValue({ sessions: [alpha, beta], next_cursor: null });
+  m.listRepositorySessionsPage.mockResolvedValue({ sessions: [alpha], next_cursor: null });
+  m.listFolderSessionsPage.mockResolvedValue({ sessions: [], next_cursor: null });
+  m.getSession.mockImplementation(async (id) => detail(id === "b" ? beta : alpha));
+  m.getGitSnapshot.mockResolvedValue([]);
+  m.sessionSecretCount.mockResolvedValue(0);
+  m.searchPage.mockResolvedValue({ hits: [], next_cursor: null });
+  m.rescan.mockResolvedValue({ discovered: 0, ingested: 0, skipped: 0, failed: 0, enriched: 0 });
+  m.getFilePatch.mockResolvedValue("@@ -1,2 +1,2 @@\n-let jitter = random();\n+let jitter = self.rng.gen();\n keep();\n");
+  m.setSessionFolder.mockResolvedValue(undefined);
+  m.forgetSession.mockResolvedValue({ blobs_removed: 2, source_paths: [] });
+  m.getBackupSchedule.mockResolvedValue({ interval: "off", keep: 7 });
 });
 
-describe("App shell", () => {
-  it("renders the three-pane shell heading and a rescan control", async () => {
-    render(<App />);
-    expect(
-      await screen.findByRole("heading", { name: "Lore", level: 1 }),
-    ).toBeTruthy();
-    expect(screen.getByRole("button", { name: /rescan/i })).toBeTruthy();
-    // Panes present: repositories nav and sessions listbox.
-    expect(screen.getByRole("navigation", { name: /repositories/i })).toBeTruthy();
+afterEach(() => {
+  vi.clearAllMocks();
+  events.scan = null;
+});
+
+async function renderLoaded() {
+  render(<App />);
+  await screen.findByRole("option", { name: /Fix flaky retry backoff/ });
+}
+
+function typeQuery(text: string) {
+  fireEvent.change(screen.getByRole("textbox", { name: "Search sessions" }), { target: { value: text } });
+}
+
+describe("browsing", () => {
+  it("lists the newest sessions and opens one into the reader", async () => {
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("option", { name: /Port dotfiles to nix/ }));
+
+    const reader = await screen.findByRole("article", { name: "Port dotfiles to nix" });
+    expect(within(reader).getByText("Make the retry backoff deterministic.")).toBeTruthy();
+    expect(within(reader).getByText("cargo test sync")).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Port dotfiles to nix/ }).getAttribute("aria-selected")).toBe("true");
   });
 
-  it("shows loading rather than a false empty archive while initial queries settle", async () => {
-    const agents = deferred<DetectedAgent[]>();
-    vi.mocked(listDetectedAgents).mockReturnValueOnce(agents.promise);
+  it("browses one repository from the scope picker", async () => {
+    m.listSessionsPage.mockResolvedValue({ sessions: [alpha, beta], next_cursor: null });
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("button", { name: /All sessions/ }));
+    fireEvent.click(await screen.findByRole("option", { name: "lore, repository" }));
 
-    render(<App />);
-
-    expect(screen.queryByRole("heading", { name: /your agent history/i })).toBeNull();
-    expect(screen.getByText("Loading archive…")).toBeTruthy();
-
-    await act(async () => agents.resolve([]));
-    expect(
-      await screen.findByRole("heading", { name: "Your agent history, searchable." }),
-    ).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("option", { name: /Port dotfiles/ })).toBeNull());
+    expect(screen.getByRole("heading", { name: "lore" })).toBeTruthy();
+    expect(m.listRepositorySessionsPage).toHaveBeenCalledWith("repo-lore", 100, null);
   });
 
-  it("offers a truthful local-first onboarding path for an empty archive", async () => {
-    vi.mocked(listDetectedAgents).mockResolvedValue([
-      {
-        id: "claude-code",
-        display_name: "Claude Code",
-        installed: true,
-        version: null,
-        session_count: 0,
-        roots: ["/Users/dev/.claude/projects"],
-        custom_roots: [],
-      },
-      {
-        id: "codex",
-        display_name: "Codex",
-        installed: false,
-        version: null,
-        session_count: 0,
-        roots: ["/Users/dev/.codex/sessions"],
-        custom_roots: [],
-      },
-    ]);
+  it("appends an older page when asked", async () => {
+    m.listSessionsPage
+      .mockResolvedValueOnce({ sessions: [alpha], next_cursor: "c1" })
+      .mockResolvedValueOnce({ sessions: [beta], next_cursor: null });
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "Load older sessions" }));
 
-    render(<App />);
-
-    expect(
-      await screen.findByRole("heading", { name: "Your agent history, searchable." }),
-    ).toBeTruthy();
-    expect(screen.getByText("/Users/dev/.claude/projects")).toBeTruthy();
-    expect(screen.getByText("/Users/dev/.codex/sessions")).toBeTruthy();
-    expect(screen.getByText(/local and read-only/i)).toBeTruthy();
-    expect(screen.getByText("Claude Code").closest("li")?.textContent).toContain("detected");
-    expect(screen.getByText("Codex").closest("li")?.textContent).toContain("not detected");
-
-    vi.mocked(chooseAgentRootDirectory).mockResolvedValueOnce("/Volumes/archive/codex");
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Choose Codex folder" }));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(chooseAgentRootDirectory).toHaveBeenCalledWith("Codex");
-    expect(addAgentRoot).toHaveBeenCalledWith("codex", "/Volumes/archive/codex");
-    expect(screen.getByRole("status").textContent).toContain("Codex folder added");
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Scan agent history" }));
-      await Promise.resolve();
-    });
-    expect(rescan).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "Scanning agent history…" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Review privacy and agents" }));
-    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+    await screen.findByRole("option", { name: /Port dotfiles to nix/ });
+    expect(screen.getAllByRole("option").map((o) => o.textContent?.slice(0, 12))).toEqual(["Fix flaky re", "Port dotfile"]);
+    expect(m.listSessionsPage).toHaveBeenLastCalledWith(100, "c1");
   });
 
-  it("never relabels a failed initial load as an empty archive", async () => {
-    vi.mocked(listDetectedAgents).mockRejectedValueOnce(new Error("archive unavailable"));
+  it("paints only the latest session when responses arrive out of order", async () => {
+    let releaseFirst!: (d: SessionDetail) => void;
+    m.getSession.mockImplementationOnce(() => new Promise((resolve) => (releaseFirst = resolve)));
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Port dotfiles to nix/ }));
+    await screen.findByRole("article", { name: "Port dotfiles to nix" });
 
-    render(<App />);
-
-    expect((await screen.findByRole("alert")).textContent).toContain("archive unavailable");
-    expect(screen.getByText("Sessions unavailable.")).toBeTruthy();
-    expect(screen.queryByText("No sessions yet.")).toBeNull();
-    fireEvent.change(screen.getByRole("searchbox", { name: /search/i }), {
-      target: { value: "retry" },
-    });
-
-    expect(screen.queryByRole("heading", { name: /your agent history/i })).toBeNull();
-    expect(screen.getByText("Archive unavailable.")).toBeTruthy();
+    await act(async () => releaseFirst(detail(alpha)));
+    expect(screen.getByRole("article", { name: "Port dotfiles to nix" })).toBeTruthy();
+    expect(screen.queryByRole("article", { name: "Fix flaky retry backoff" })).toBeNull();
   });
+});
 
-  it("opens the command palette on ⌘K", async () => {
-    render(<App />);
-    await screen.findByRole("heading", { name: "Lore", level: 1 });
-    fireEvent.keyDown(window, { key: "k", metaKey: true });
-    expect(screen.getByRole("dialog", { name: /command palette/i })).toBeTruthy();
-  });
-
-  it("focuses the search box on / when not already typing", async () => {
-    render(<App />);
-    await screen.findByRole("heading", { name: "Lore", level: 1 });
-    fireEvent.keyDown(window, { key: "/" });
-    expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: /search/i }));
-  });
-
-  it("renders scan progress as a bar with a percentage", async () => {
-    render(<App />);
-    await screen.findByRole("heading", { name: "Lore", level: 1 });
-    act(() => {
-      scan.handler?.({
-        discovered: 100,
-        ingested: 30,
-        skipped: 10,
-        failed: 10,
-        enriched: 5,
-        done: false,
-      });
-    });
-    const bar = screen.getByRole("progressbar", { name: /archive scan progress/i });
-    expect(bar.getAttribute("aria-valuenow")).toBe("50");
-    expect(screen.getByText(/50\/100 sessions · 50%/)).toBeTruthy();
-  });
-
-  it("shows a completion summary once the scan is done", async () => {
-    render(<App />);
-    await screen.findByRole("heading", { name: "Lore", level: 1 });
-    act(() => {
-      scan.handler?.({
-        discovered: 100,
-        ingested: 90,
-        skipped: 5,
-        failed: 5,
-        enriched: 40,
-        done: true,
-      });
-    });
-    expect(screen.getByText(/scan complete · 90 ingested/i)).toBeTruthy();
-  });
-
-  it("returns focus to the palette trigger after Escape", async () => {
-    render(<App />);
-    const trigger = await screen.findByRole("button", { name: /open command palette/i });
-    trigger.focus();
-    fireEvent.click(trigger);
-    const input = screen.getByRole("combobox");
-    expect(document.activeElement).toBe(input);
-
-    fireEvent.keyDown(input, { key: "Escape" });
-
-    expect(screen.queryByRole("dialog", { name: /command palette/i })).toBeNull();
-    expect(document.activeElement).toBe(trigger);
-  });
-
-  it("finds and opens an archived session from the command palette", async () => {
-    const archived = summary("archive-session", "Retry with exponential backoff");
-    vi.mocked(searchPage).mockResolvedValue({
-      hits: [
-        {
-          session_id: archived.id,
-          source_kind: "message_part",
-          source_id: "part-1",
-          field: "text",
-          snippet: "use exponential backoff",
-          rank: -1,
-          title: archived.title,
-          agent_id: archived.agent_id,
-          started_at: archived.started_at,
-        },
-      ],
+describe("search", () => {
+  it("runs a filtered query and highlights the matched words", async () => {
+    m.searchPage.mockResolvedValue({
+      hits: [hit("b", "Port dotfiles to nix", "the \u{e000}retry\u{e001} loop")],
       next_cursor: null,
     });
-    vi.mocked(getSession).mockResolvedValue(detail(archived));
-    vi.useFakeTimers();
+    await renderLoaded();
+    typeQuery("retry agent:codex");
 
-    try {
-      render(<App />);
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      fireEvent.keyDown(window, { key: "k", metaKey: true });
-      const palette = screen.getByRole("combobox");
-      const searchPageMock = vi.mocked(searchPage);
-      searchPageMock.mockClear();
-
-      fireEvent.change(palette, { target: { value: "backoff" } });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(200);
-      });
-
-      expect(searchPageMock).toHaveBeenCalledWith("backoff", 50);
-      expect(screen.getByText("Retry with exponential backoff")).toBeTruthy();
-      await act(async () => {
-        fireEvent.keyDown(palette, { key: "Enter" });
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(getSession).toHaveBeenCalledWith(archived.id);
-    } finally {
-      vi.useRealTimers();
-    }
+    const result = await screen.findByRole("option", { name: /Port dotfiles to nix/ });
+    expect(within(result).getByText("retry").tagName).toBe("MARK");
+    expect(within(result).getByText("in message")).toBeTruthy();
+    expect(m.searchPage).toHaveBeenLastCalledWith("retry agent:codex", 50, null, "relevance");
   });
 
-  it("keeps rescan busy until the worker reports completion", async () => {
-    render(<App />);
-    const button = await screen.findByRole("button", { name: "Rescan" });
-    fireEvent.click(button);
+  it("scopes a search to the chosen repository and re-sorts it", async () => {
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("button", { name: /All sessions/ }));
+    fireEvent.click(await screen.findByRole("option", { name: "lore, repository" }));
+    typeQuery("retry");
+    await screen.findByText("Searching sessions in lore.", { exact: false });
+    await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("retry repo:repo-lore", 50, null, "relevance"));
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort results" }), { target: { value: "newest" } });
+    await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("retry repo:repo-lore", 50, null, "newest"));
+  });
+
+  it("explains that filters alone do not search", async () => {
+    await renderLoaded();
+    typeQuery("agent:codex has:error");
+
+    expect(await screen.findByText("Filters narrow a search. Add a word to search for.")).toBeTruthy();
+    expect(m.searchPage).not.toHaveBeenCalled();
+    typeQuery("retry agent:codex has:error");
+    await waitFor(() => expect(m.searchPage).toHaveBeenCalledWith("retry agent:codex has:error", 50, null, "relevance"));
+  });
+
+  it("says when nothing matches", async () => {
+    await renderLoaded();
+    typeQuery("zzzqx");
+    expect(await screen.findByText("No sessions match “zzzqx”.")).toBeTruthy();
+  });
+
+  it("reports a failed search in place", async () => {
+    m.searchPage.mockRejectedValue(new Error("fts5: syntax error"));
+    await renderLoaded();
+    typeQuery("retry");
+    expect(await screen.findByText("The search did not run.")).toBeTruthy();
+    expect(screen.getByText("Error: fts5: syntax error")).toBeTruthy();
+  });
+
+  it("highlights the search words inside the opened session", async () => {
+    m.searchPage.mockResolvedValue({ hits: [hit("a", "Fix flaky retry backoff", "\u{e000}backoff\u{e001}")], next_cursor: null });
+    await renderLoaded();
+    typeQuery("backoff");
+    fireEvent.click(await screen.findByRole("option", { name: /Fix flaky retry backoff/ }));
+
+    const reader = await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+    const marks = within(reader).getAllByText("backoff");
+    expect(marks.map((el) => el.tagName)).toEqual(["MARK"]);
+  });
+});
+
+describe("keyboard", () => {
+  it("moves from the query line into the list, opens with Enter, and backs out with Escape", async () => {
+    await renderLoaded();
+    fireEvent.keyDown(document.body, { key: "/" });
+    const query = screen.getByRole("textbox", { name: "Search sessions" });
+    expect(document.activeElement).toBe(query);
+
+    fireEvent.keyDown(query, { key: "ArrowDown" });
+    const list = screen.getByRole("listbox", { name: "Sessions in All sessions" });
+    expect(document.activeElement).toBe(list);
+
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    fireEvent.keyDown(list, { key: "Enter" });
+    const reader = await screen.findByRole("article", { name: "Port dotfiles to nix" });
+    await waitFor(() => expect(document.activeElement).toBe(reader));
+
+    fireEvent.keyDown(reader, { key: "Escape" });
+    expect(document.activeElement).toBe(list);
+    fireEvent.keyDown(list, { key: "k" });
+    fireEvent.keyDown(list, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(query);
+  });
+
+  it("opens the palette with ⌘K and jumps to a session", async () => {
+    await renderLoaded();
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const input = await screen.findByRole("combobox", { name: /Jump to a session/ });
+    fireEvent.change(input, { target: { value: "dotfiles" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(await screen.findByRole("article", { name: "Port dotfiles to nix" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).toBeNull();
+  });
+});
+
+describe("scan", () => {
+  it("shows progress from the worker and a summary when it finishes", async () => {
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
     expect(await screen.findByRole("button", { name: "Scanning…" })).toBeTruthy();
 
-    act(() => {
-      scan.handler?.({
-        discovered: 2,
-        ingested: 1,
-        skipped: 0,
-        failed: 0,
-        enriched: 1,
-        done: true,
-      });
-    });
-    expect(await screen.findByRole("button", { name: "Rescan" })).toBeTruthy();
+    act(() => events.scan?.({ discovered: 10, ingested: 2, skipped: 1, failed: 0, enriched: 0, done: false }));
+    expect(screen.getByRole("progressbar", { name: "Archive scan" }).getAttribute("aria-valuetext")).toBe("3 of 10 sessions");
+    expect(screen.getByText("Scanning 3 of 10")).toBeTruthy();
+
+    act(() => events.scan?.({ discovered: 10, ingested: 8, skipped: 1, failed: 1, enriched: 3, done: true }));
+    expect(screen.getByText("Scan finished: 8 new or changed, 1 unchanged, 1 unreadable")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Rescan" })).toBeTruthy();
   });
 
-  it("debounces rapid search input and only queries the latest text", async () => {
-    render(<App />);
-    await screen.findByRole("heading", { name: "Lore", level: 1 });
-
-    const search = screen.getByRole("searchbox", { name: /search/i });
-    const searchPageMock = vi.mocked(searchPage);
-    searchPageMock.mockClear();
-    vi.useFakeTimers();
-
-    try {
-      fireEvent.change(search, { target: { value: "r" } });
-      fireEvent.change(search, { target: { value: "ret" } });
-      fireEvent.change(search, { target: { value: "retry" } });
-
-      expect(searchPageMock).not.toHaveBeenCalled();
-
-      await act(async () => {
-        vi.advanceTimersByTime(200);
-        await Promise.resolve();
-      });
-
-      expect(searchPageMock).toHaveBeenCalledTimes(1);
-      expect(searchPageMock).toHaveBeenCalledWith("retry", 50);
-    } finally {
-      vi.useRealTimers();
-    }
+  it("refreshes the list as the worker ingests sessions", async () => {
+    await renderLoaded();
+    m.listSessionsPage.mockResolvedValue({ sessions: [session("c", "A brand new session"), alpha, beta], next_cursor: null });
+    act(() => events.scan?.({ discovered: 3, ingested: 1, skipped: 0, failed: 0, enriched: 0, done: false }));
+    expect(await screen.findByRole("option", { name: /A brand new session/ }, { timeout: 2000 })).toBeTruthy();
   });
 
-  it("moves keyboard focus from search into its results and back", async () => {
-    vi.mocked(searchPage).mockResolvedValue({
-      hits: [
-        {
-          session_id: "search-session",
-          source_kind: "message_part",
-          source_id: "search-part",
-          field: "text",
-          snippet: "retry result",
-          rank: -1,
-          title: "Retry result",
-          agent_id: "codex",
-          started_at: null,
-        },
-      ],
-      next_cursor: null,
-    });
+  it("reports a rescan that could not start", async () => {
+    m.rescan.mockRejectedValue("background ingestion worker unavailable");
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("background ingestion worker unavailable");
+    expect(screen.getByText("Scan failed")).toBeTruthy();
+  });
+});
+
+describe("states", () => {
+  it("never shows a failed first load as an empty archive, and recovers on retry", async () => {
+    m.listRepositories.mockRejectedValueOnce(new Error("database is locked"));
     render(<App />);
-    await screen.findByRole("heading", { name: "Lore", level: 1 });
-    const search = screen.getByRole("searchbox", { name: /search/i });
-    vi.useFakeTimers();
+    expect(await screen.findByText("Lore could not open the archive.")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /searchable place/ })).toBeNull();
 
-    try {
-      fireEvent.change(search, { target: { value: "retry" } });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(200);
-      });
-      const results = screen.getByRole("listbox", { name: /search results/i });
-
-      search.focus();
-      fireEvent.keyDown(search, { key: "ArrowDown" });
-      expect(document.activeElement).toBe(results);
-
-      fireEvent.keyDown(results, { key: "ArrowUp" });
-      expect(document.activeElement).toBe(search);
-    } finally {
-      vi.useRealTimers();
-    }
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("option", { name: /Fix flaky retry backoff/ })).toBeTruthy();
   });
 
-  it("removes results from the previous query as soon as new text is entered", async () => {
+  it("offers first-run setup for a truly empty archive", async () => {
+    m.listDetectedAgents.mockResolvedValue([{ ...agents[0], session_count: 0 }]);
+    m.listRepositories.mockResolvedValue([]);
+    m.listSessionsPage.mockResolvedValue({ sessions: [], next_cursor: null });
     render(<App />);
-    await screen.findByRole("heading", { name: "Lore", level: 1 });
 
-    const search = screen.getByRole("searchbox", { name: /search/i });
-    const searchPageMock = vi.mocked(searchPage);
-    searchPageMock.mockClear();
-    searchPageMock.mockResolvedValueOnce({
-      hits: [
-        {
-          session_id: "s1",
-          source_kind: "message_part",
-          source_id: "p1",
-          field: "text",
-          snippet: "alpha result",
-          rank: -1,
-          title: "Old alpha result",
-          agent_id: "codex",
-          started_at: null,
-        },
-      ],
-      next_cursor: null,
-    });
-    vi.useFakeTimers();
-
-    try {
-      fireEvent.change(search, { target: { value: "alpha" } });
-      await act(async () => {
-        vi.advanceTimersByTime(200);
-        await Promise.resolve();
-      });
-      expect(screen.getByText("Old alpha result")).toBeTruthy();
-
-      fireEvent.change(search, { target: { value: "beta" } });
-      expect(screen.queryByText("Old alpha result")).toBeNull();
-      expect(screen.getByRole("status").textContent).toContain("Searching");
-    } finally {
-      vi.useRealTimers();
-      searchPageMock.mockResolvedValue({ hits: [], next_cursor: null });
-    }
+    expect(await screen.findByRole("heading", { name: "Every agent session you have run, in one searchable place." })).toBeTruthy();
+    expect(screen.getByText("~/.claude/projects")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Scan agent history" }));
+    expect(await screen.findByRole("button", { name: "Scanning agent history…" })).toBeTruthy();
+    expect(m.rescan).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels a pending search when the query is cleared", async () => {
-    render(<App />);
-    await screen.findByRole("heading", { name: "Lore", level: 1 });
+  it("shows a session that failed to open, with a retry", async () => {
+    m.getSession.mockRejectedValueOnce(new Error("database is locked"));
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
+    expect(await screen.findByText("Lore could not open this session.")).toBeTruthy();
 
-    const search = screen.getByRole("searchbox", { name: /search/i });
-    const searchPageMock = vi.mocked(searchPage);
-    searchPageMock.mockClear();
-    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("article", { name: "Fix flaky retry backoff" })).toBeTruthy();
+  });
+});
 
-    try {
-      fireEvent.change(search, { target: { value: "retry" } });
-      fireEvent.change(search, { target: { value: "" } });
+describe("session actions", () => {
+  it("loads and renders a recorded patch with line numbers", async () => {
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
+    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+    fireEvent.click(screen.getByRole("tab", { name: /Files/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Show patch" }));
 
-      await act(async () => {
-        vi.advanceTimersByTime(200);
-        await Promise.resolve();
-      });
-
-      expect(searchPageMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    const patch = await screen.findByRole("figure", { name: "Patch for src/sync/worker.rs" });
+    const rows = within(patch).getAllByRole("row").map((row) => row.textContent);
+    expect(rows).toEqual(["@@ -1,2 +1,2 @@", "1-let jitter = random();", "1+let jitter = self.rng.gen();", "22 keep();"]);
+    expect(m.getFilePatch).toHaveBeenCalledWith("fe1");
   });
 
-  it("loads a newly selected repository only once", async () => {
-    vi.mocked(listRepositories).mockResolvedValue([repository("repo-a", "Repo A")]);
-    const repositorySessions = vi.mocked(listRepositorySessionsPage);
-    repositorySessions.mockResolvedValue({ sessions: [], next_cursor: null });
+  it("files the open session into a folder", async () => {
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
+    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+    fireEvent.change(screen.getByRole("combobox", { name: "File in folder" }), { target: { value: "f1" } });
 
-    render(<App />);
-    const repoButton = await screen.findByRole("button", { name: /Repo A/i });
-    repositorySessions.mockClear();
-
-    fireEvent.click(repoButton);
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(repositorySessions).toHaveBeenCalledTimes(1);
-    expect(repositorySessions).toHaveBeenCalledWith("repo-a", 100, null);
+    expect(await screen.findByText("Filed in “Release prep”.")).toBeTruthy();
+    expect(m.setSessionFolder).toHaveBeenCalledWith("a", "f1");
   });
 
-  it("keeps sessions for the latest repository when responses finish out of order", async () => {
-    vi.mocked(listRepositories).mockResolvedValue([
-      repository("repo-a", "Repo A"),
-      repository("repo-b", "Repo B"),
-    ]);
-    const repoA = deferred<SessionPage>();
-    const repoB = deferred<SessionPage>();
-    vi.mocked(listRepositorySessionsPage).mockImplementation((id) =>
-      id === "repo-a" ? repoA.promise : repoB.promise,
-    );
+  it("forgets a session only after confirming", async () => {
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
+    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+    fireEvent.click(screen.getByRole("button", { name: "Forget…" }));
 
-    render(<App />);
-    const repoAButton = await screen.findByRole("button", { name: /Repo A/i });
-    const repoBButton = screen.getByRole("button", { name: /Repo B/i });
+    const dialog = screen.getByRole("alertdialog", { name: "Forget “Fix flaky retry backoff”?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(m.forgetSession).not.toHaveBeenCalled();
+    expect(screen.getByRole("article", { name: "Fix flaky retry backoff" })).toBeTruthy();
 
-    fireEvent.click(repoAButton);
-    fireEvent.click(repoBButton);
-    expect(screen.getByRole("status").textContent).toContain("Loading sessions");
-    await act(async () =>
-      repoB.resolve({
-        sessions: [summary("session-b", "B session")],
-        next_cursor: null,
-      }),
-    );
-    expect(screen.getByText("B session")).toBeTruthy();
-
-    await act(async () =>
-      repoA.resolve({
-        sessions: [summary("session-a", "A session")],
-        next_cursor: null,
-      }),
-    );
-    expect(screen.queryByText("A session")).toBeNull();
-    expect(screen.getByText("B session")).toBeTruthy();
-  });
-
-  it("ignores an error from a superseded repository request", async () => {
-    vi.mocked(listRepositories).mockResolvedValue([
-      repository("repo-a", "Repo A"),
-      repository("repo-b", "Repo B"),
-    ]);
-    const repoA = deferred<SessionPage>();
-    const repoB = deferred<SessionPage>();
-    vi.mocked(listRepositorySessionsPage).mockImplementation((id) =>
-      id === "repo-a" ? repoA.promise : repoB.promise,
-    );
-
-    render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /Repo A/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Repo B/i }));
-    await act(async () =>
-      repoB.resolve({
-        sessions: [summary("session-b", "B session")],
-        next_cursor: null,
-      }),
-    );
-    await act(async () => repoA.reject(new Error("stale repository failure")));
-
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByText("B session")).toBeTruthy();
-  });
-
-  it("allows dismissing an active error banner", async () => {
-    vi.mocked(listRepositories).mockRejectedValueOnce(new Error("network failure"));
-    render(<App />);
-    const alert = await screen.findByRole("alert");
-    expect(alert).toBeTruthy();
-    expect(screen.getByText("Error: network failure")).toBeTruthy();
-
-    fireEvent.click(screen.getByLabelText("Dismiss error"));
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("settles repository loading when a background refresh supersedes it", async () => {
-    vi.mocked(listRepositories).mockResolvedValue([repository("repo-a", "Repo A")]);
-    const manual = deferred<SessionPage>();
-    const repositorySessions = vi.mocked(listRepositorySessionsPage);
-    repositorySessions
-      .mockImplementationOnce(() => manual.promise)
-      .mockResolvedValue({
-        sessions: [summary("refreshed", "Refreshed session")],
-        next_cursor: null,
-      });
-
-    render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /Repo A/i }));
-    expect(screen.getByRole("status").textContent).toContain("Loading sessions");
-
-    vi.useFakeTimers();
-    try {
-      act(() => {
-        scan.handler?.({
-          discovered: 1,
-          ingested: 1,
-          skipped: 0,
-          failed: 0,
-          enriched: 1,
-          done: true,
-        });
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(300);
-      });
-
-      expect(screen.queryByText("Loading sessions…")).toBeNull();
-      expect(screen.getByText("Refreshed session")).toBeTruthy();
-
-      await act(async () =>
-        manual.resolve({
-          sessions: [summary("stale", "Stale session")],
-          next_cursor: null,
-        }),
-      );
-      expect(screen.queryByText("Stale session")).toBeNull();
-      expect(screen.getByText("Refreshed session")).toBeTruthy();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("starts with a bounded session page and appends older sessions", async () => {
-    const pages = vi.mocked(listSessionsPage);
-    pages.mockClear();
-    pages
-      .mockResolvedValueOnce({
-        sessions: [summary("new-session", "New session")],
-        next_cursor: "older-cursor",
-      })
-      .mockResolvedValueOnce({
-        sessions: [summary("old-session", "Old session")],
-        next_cursor: null,
-      });
-
-    render(<App />);
-    expect(await screen.findByText("New session")).toBeTruthy();
-    expect(pages).toHaveBeenNthCalledWith(1, 100, null);
-
-    fireEvent.click(screen.getByRole("button", { name: /load older sessions/i }));
-    expect(await screen.findByText("Old session")).toBeTruthy();
-    expect(screen.getByText("New session")).toBeTruthy();
-    expect(pages).toHaveBeenNthCalledWith(2, 100, "older-cursor");
-    expect(screen.queryByRole("button", { name: /load older sessions/i })).toBeNull();
-  });
-
-  it("does not append an older page after the repository changes", async () => {
-    vi.mocked(listRepositories).mockResolvedValue([
-      repository("repo-a", "Repo A"),
-      repository("repo-b", "Repo B"),
-    ]);
-    const olderA = deferred<{ sessions: SessionSummary[]; next_cursor: string | null }>();
-    vi.mocked(listRepositorySessionsPage).mockImplementation((id, _limit, cursor) => {
-      if (id === "repo-a" && cursor === null) {
-        return Promise.resolve({
-          sessions: [summary("a-new", "A newest")],
-          next_cursor: "a-older",
-        });
-      }
-      if (id === "repo-a") return olderA.promise;
-      return Promise.resolve({
-        sessions: [summary("b-new", "B newest")],
-        next_cursor: null,
-      });
-    });
-
-    render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /Repo A/i }));
-    expect(await screen.findByText("A newest")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /load older sessions/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Repo B/i }));
-    expect(await screen.findByText("B newest")).toBeTruthy();
-
-    await act(async () => {
-      olderA.resolve({
-        sessions: [summary("a-old", "A older")],
-        next_cursor: null,
-      });
-    });
-    expect(screen.queryByText("A older")).toBeNull();
-    expect(screen.getByText("B newest")).toBeTruthy();
-  });
-
-  it("preserves the loaded session depth during a background refresh", async () => {
-    const first = Array.from({ length: 100 }, (_, index) =>
-      summary(`new-${index}`, `New ${index}`),
-    );
-    const older = Array.from({ length: 20 }, (_, index) =>
-      summary(`old-${index}`, `Old ${index}`),
-    );
-    const pages = vi.mocked(listSessionsPage);
-    pages.mockClear();
-    pages
-      .mockResolvedValueOnce({ sessions: first, next_cursor: "older" })
-      .mockResolvedValueOnce({ sessions: older, next_cursor: null })
-      .mockResolvedValueOnce({ sessions: [...first, ...older], next_cursor: null });
-
-    render(<App />);
-    await screen.findByText("New 0");
-    fireEvent.click(screen.getByRole("button", { name: /load older sessions/i }));
-    await screen.findByText("Old 19");
-
-    vi.useFakeTimers();
-    try {
-      act(() => {
-        scan.handler?.({
-          discovered: 1,
-          ingested: 1,
-          skipped: 0,
-          failed: 0,
-          enriched: 1,
-          done: true,
-        });
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(300);
-      });
-      expect(pages).toHaveBeenLastCalledWith(120, null);
-      expect(screen.getByText("Old 19")).toBeTruthy();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps the latest session detail when responses finish out of order", async () => {
-    const sessionA = summary("session-a", "A session");
-    const sessionB = summary("session-b", "B session");
-    vi.mocked(listSessionsPage).mockResolvedValue({
-      sessions: [sessionA, sessionB],
-      next_cursor: null,
-    });
-    const detailA = deferred<SessionDetail | null>();
-    const detailB = deferred<SessionDetail | null>();
-    vi.mocked(getSession).mockImplementation((id) =>
-      id === sessionA.id ? detailA.promise : detailB.promise,
-    );
-
-    render(<App />);
-    fireEvent.click(await screen.findByText("A session"));
-    fireEvent.click(screen.getByText("B session"));
-    expect(screen.getByRole("status").textContent).toContain("Loading session");
-
-    await act(async () => detailB.resolve(detail(sessionB)));
-    expect(screen.getByRole("heading", { name: "B session", level: 2 })).toBeTruthy();
-
-    await act(async () => detailA.resolve(detail(sessionA)));
-    expect(screen.queryByRole("heading", { name: "A session", level: 2 })).toBeNull();
-    expect(screen.getByRole("heading", { name: "B session", level: 2 })).toBeTruthy();
-  });
-
-  it("ignores an error from a superseded session request", async () => {
-    const sessionA = summary("session-a", "A session");
-    const sessionB = summary("session-b", "B session");
-    vi.mocked(listSessionsPage).mockResolvedValue({
-      sessions: [sessionA, sessionB],
-      next_cursor: null,
-    });
-    const detailA = deferred<SessionDetail | null>();
-    const detailB = deferred<SessionDetail | null>();
-    vi.mocked(getSession).mockImplementation((id) =>
-      id === sessionA.id ? detailA.promise : detailB.promise,
-    );
-
-    render(<App />);
-    fireEvent.click(await screen.findByText("A session"));
-    fireEvent.click(screen.getByText("B session"));
-    await act(async () => detailB.resolve(detail(sessionB)));
-    await act(async () => detailA.reject(new Error("stale session failure")));
-
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByRole("heading", { name: "B session", level: 2 })).toBeTruthy();
-  });
-
-  it("resets active repo, folder, search, and session when forgetting everything", async () => {
-    const session = summary("session-1", "Initial session");
-    vi.mocked(listSessionsPage).mockResolvedValue({
-      sessions: [session],
-      next_cursor: null,
-    });
-    vi.mocked(listRepositorySessionsPage).mockResolvedValue({
-      sessions: [session],
-      next_cursor: null,
-    });
-    vi.mocked(listRepositories).mockResolvedValue([
-      {
-        id: "repo-1",
-        display_name: "lore",
-        session_count: 1,
-        worktree_count: 1,
-        identity_confidence: "confirmed",
-        primary_path: "/Users/dev/Lore",
-        is_missing: false,
-      },
-    ]);
-    vi.mocked(listFolders).mockResolvedValue([
-      {
-        id: "folder-1",
-        name: "Sprint 1",
-        session_count: 1,
-        position: 0,
-      },
-    ]);
-    vi.mocked(getSession).mockResolvedValue(detail(session));
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    render(<App />);
-
-    // Select repository
-    fireEvent.click(await screen.findByText("lore"));
-    // Open session
-    fireEvent.click(await screen.findByText("Initial session"));
-    expect(await screen.findByRole("heading", { name: "Initial session", level: 2 })).toBeTruthy();
-
-    // Open settings and click Forget everything
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
-
-    // Mock empty response after forget
-    vi.mocked(listRepositories).mockResolvedValue([]);
-    vi.mocked(listFolders).mockResolvedValue([]);
-    vi.mocked(listSessionsPage).mockResolvedValue({
-      sessions: [],
-      next_cursor: null,
-    });
-    vi.mocked(forgetEverything).mockResolvedValueOnce({
-      blobs_removed: 3,
-      source_paths: [],
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Forget everything" }));
-    });
-
-    expect(forgetEverything).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
-    expect(screen.getByRole("status").textContent).toContain("Archive cleared (3 blob(s) removed).");
-    expect(screen.queryByRole("heading", { name: "Initial session", level: 2 })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Forget…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Forget session" }));
+    expect(await screen.findByText("Forgot “Fix flaky retry backoff”.")).toBeTruthy();
+    expect(m.forgetSession).toHaveBeenCalledWith("a");
+    expect(screen.getByText("Pick a session to read it.")).toBeTruthy();
   });
 });
