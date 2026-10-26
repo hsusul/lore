@@ -168,8 +168,11 @@ fn grow_and_compare(
                 .unwrap();
             kept.push(replaced == 0);
         }
-        live.execute_batch("INSERT INTO search_fts(search_fts) VALUES('integrity-check');")
-            .unwrap();
+        // `rank = 1` also checks the index against search_document.
+        live.execute_batch(
+            "INSERT INTO search_fts(search_fts, rank) VALUES('integrity-check', 1);",
+        )
+        .unwrap();
 
         let fresh = lore_core::storage::open_in_memory().unwrap();
         let fresh_id = session_id(ingest_file(&fresh, adapter, &path, &blobs).unwrap());
