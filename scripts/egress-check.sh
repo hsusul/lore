@@ -17,7 +17,7 @@
 # can install without the desktop app, so an unaudited dependency in it would
 # reach exactly the machines the archive promise is about.
 #
-# Runs on macOS (sandbox-exec) and Linux (unshare -rn / CI). Exit non-zero on
+# Runs on macOS (sandbox-exec) and Linux (unshare or bwrap / CI). Exit non-zero on
 # any violation.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -116,15 +116,17 @@ case "$(uname -s)" in
     ;;
   Linux)
     # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor, so
-    # `unshare -rn` can be unavailable on an otherwise ordinary runner. Fall
+    # `unshare` can be unavailable on an otherwise ordinary runner. Fall
     # back to bubblewrap before giving up.
-    if unshare -rn /bin/true 2>/dev/null; then
-      wrapper=(unshare -rn)
+    # --map-current-user, not -r: mapping to root inside the namespace would
+    # bypass file permissions and break tests that rely on them.
+    if unshare --user --map-current-user --net /bin/true 2>/dev/null; then
+      wrapper=(unshare --user --map-current-user --net)
     elif command -v bwrap >/dev/null 2>&1 \
       && bwrap --unshare-net --dev-bind / / /bin/true 2>/dev/null; then
       wrapper=(bwrap --unshare-net --dev-bind / /)
     else
-      skip_runtime "no usable network-deny wrapper (tried unshare -rn and bwrap)"
+      skip_runtime "no usable network-deny wrapper (tried unshare and bwrap)"
     fi
     ;;
   *)
