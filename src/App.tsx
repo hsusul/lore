@@ -456,6 +456,7 @@ export default function App() {
             reader={
               <>
                 <div data-tauri-drag-region data-slot="reader-actions" className="flex h-full min-w-0 flex-1 items-center" />
+                <ScanControl scan={ws.scan} lastScanAt={lastScanAt} onRescan={() => void startScan()} />
                 <Tooltip label="Command Palette (⌘K)">
                   <Button
                     variant="toolbar"
@@ -466,7 +467,6 @@ export default function App() {
                     <CommandIcon className={ICON.toolbar} aria-hidden="true" />
                   </Button>
                 </Tooltip>
-                <ScanControl scan={ws.scan} lastScanAt={lastScanAt} onRescan={() => void startScan()} />
                 <SearchField
                   value={ws.query}
                   onChange={(query) => dispatch({ type: "query", query })}

@@ -333,6 +333,9 @@ describe("scan", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
     const scanning = await screen.findByRole("button", { name: "Scanning" });
     expect(screen.getByText("Scanning…")).toBeTruthy();
+    expect(scanning.getAttribute("aria-disabled")).toBe("true");
+    // aria-disabled grays the button; the busy spinner must not inherit that disabled color.
+    expect(scanning.querySelector("svg")?.getAttribute("class")).toContain("text-label-2");
 
     act(() => events.scan?.({ discovered: 10, ingested: 2, skipped: 1, failed: 0, enriched: 0, done: false }));
     expect(screen.getByRole("progressbar", { name: "Archive scan" }).getAttribute("aria-valuetext")).toBe("3 of 10 sessions");
@@ -374,8 +377,14 @@ describe("scan", () => {
     const user = userEvent.setup();
     m.rescan.mockRejectedValue("background ingestion worker unavailable");
     await renderLoaded();
+    const toolbar = () =>
+      within(screen.getByRole("banner"))
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label"));
+    expect(toolbar()).toEqual(["Rescan", "Command Palette", "Search Filters"]);
     fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
     expect((await screen.findByRole("alert")).textContent).toBe("Scan failed: background ingestion worker unavailable");
+    expect(toolbar()).toEqual(["Scan failed", "Rescan", "Command Palette", "Search Filters"]);
 
     await user.click(screen.getByRole("button", { name: "Scan failed" }));
     const popover = screen.getByRole("dialog", { name: "Scan failed" });

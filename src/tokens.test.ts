@@ -102,6 +102,8 @@ const PAIRS: [string, string, string[], number][] = [
   ["text on focused selection", "on-selected", ["selected"], TEXT],
   ["default button label", "on-selected", ["accent-fill"], TEXT],
   ["destructive button label", "on-selected", ["red-fill"], TEXT],
+  ["destructive push button label on content", "red-text", ["bg-content", "bg-button"], TEXT],
+  ["destructive push button label in a sheet or popover", "red-text", ["bg-popover", "bg-button"], TEXT],
   ["link on content", "link", content, TEXT],
   ["added count on content", "diff-add-fg", content, TEXT],
   ["deleted count on content", "diff-del-fg", content, TEXT],
@@ -112,6 +114,7 @@ const PAIRS: [string, string, string[], number][] = [
   ["focus ring on sidebar", "focus-ring", ["bg-sidebar"], NON_TEXT],
   ["selected segment ring on its track", "seg-ring", ["bg-content", "fill-2"], NON_TEXT],
   ["toolbar icon on toolbar", "label-2", ["bg-toolbar"], NON_TEXT],
+  ["scan warning icon on toolbar", "orange-icon", ["bg-toolbar"], NON_TEXT],
 ];
 
 describe("token contrast", () => {

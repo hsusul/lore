@@ -34,6 +34,8 @@
   --focus-ring: rgba(0, 100, 225, 0.75);
   --mark: rgba(255, 204, 0, 0.45);
   --red-fill: #d70015;
+  --red-text: #d70015;
+  --orange-icon: #c93400;
   --red: #ff3b30;
   --green: #28cd41;
   --orange: #ff9500;
@@ -159,6 +161,8 @@
     --focus-ring: rgba(26, 169, 255, 0.75);
     --mark: rgba(255, 214, 10, 0.35);
     --red-fill: #d70015;
+    --red-text: #ffb1ac;
+    --orange-icon: #ff9f0a;
     --red: #ff453a;
     --green: #32d74b;
     --orange: #ff9f0a;
@@ -197,6 +201,8 @@
   --focus-ring: rgba(26, 169, 255, 0.75);
   --mark: rgba(255, 214, 10, 0.35);
   --red-fill: #d70015;
+  --red-text: #ffb1ac;
+  --orange-icon: #ff9f0a;
   --red: #ff453a;
   --green: #32d74b;
   --orange: #ff9f0a;

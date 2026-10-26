@@ -132,12 +132,12 @@ mark {
 }
 
 .btn--danger {
-  color: var(--red);
+  color: var(--red-text);
 }
 
 .btn--danger-solid {
-  background: var(--red);
-  border-color: var(--red);
+  background: var(--red-fill);
+  border-color: var(--red-fill);
   color: var(--bg-popover);
 }
 
@@ -211,7 +211,7 @@ mark {
 
 .flag--danger {
   background: var(--fill);
-  color: var(--red);
+  color: var(--red-text);
 }
 
 .flag--ok {
@@ -420,7 +420,7 @@ mark {
 
 .notice--danger {
   background: var(--fill);
-  color: var(--red);
+  color: var(--red-text);
 }
 
 .notice__title {
@@ -640,7 +640,7 @@ mark {
 }
 
 .tool--error .tool__name {
-  color: var(--red);
+  color: var(--red-text);
 }
 
 /* Diffs */

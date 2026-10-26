@@ -34,6 +34,8 @@ const colors = Object.fromEntries(
     "focus-ring",
     "mark",
     "red",
+    "red-text",
+    "orange-icon",
     "green",
     "orange",
     "diff-add-bg",

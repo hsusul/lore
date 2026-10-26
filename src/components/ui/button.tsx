@@ -25,7 +25,7 @@ export const Button = forwardRef<
       className={clsx(
         "inline-flex flex-none items-center justify-center whitespace-nowrap outline-none focus-visible:shadow-focus disabled:text-label-3",
         VARIANTS[variant],
-        destructive && "text-red",
+        destructive && "text-red-text",
         className,
       )}
       {...props}

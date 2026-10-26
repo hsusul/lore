@@ -47,7 +47,8 @@ function ProgressRing({ percent }: { percent: number }) {
 /**
  * Rescan and the scan state, which replace the status bar (spec 9.9, 18.8). The icon turns
  * into a spinner, then a progress ring; a failure adds a warning that explains itself.
- * The button never changes size, and a polite live region announces each phase.
+ * The button never changes size, and a polite live region announces each phase. The
+ * warning sits before Rescan, so nothing after it moves when it appears (spec 17.23).
  */
 export default function ScanControl({
   scan,
@@ -82,7 +83,7 @@ export default function ScanControl({
           <Tooltip label="The last scan failed">
             <PopoverTrigger asChild>
               <Button variant="toolbar" aria-label="Scan failed">
-                <TriangleAlert className={clsx(ICON.toolbar, "text-orange")} aria-hidden="true" />
+                <TriangleAlert className={clsx(ICON.toolbar, "text-orange-icon")} aria-hidden="true" />
               </Button>
             </PopoverTrigger>
           </Tooltip>
@@ -111,7 +112,8 @@ export default function ScanControl({
           ) : determinate && fraction ? (
             <ProgressRing percent={percent} />
           ) : (
-            <Loader className={clsx(ICON.body, "animate-spin")} aria-hidden="true" />
+            // A running scan is busy, not disabled: the spinner keeps the active icon color.
+            <Loader className={clsx(ICON.body, "animate-spin text-label-2")} aria-hidden="true" />
           )}
           {running && (
             <span
