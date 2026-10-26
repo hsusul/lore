@@ -387,3 +387,87 @@ fn codex_recorded_patch_payloads_persist_as_faithful_blobs() {
     // Move: the recorded move diff round-trips.
     assert!(read_patch("src/renamed.ts").contains("moved"));
 }
+
+fn claude_line(session: &str, uuid: &str, parent: Option<&str>, role: &str, text: &str) -> String {
+    let line = serde_json::json!({
+        "type": role, "uuid": uuid, "parentUuid": parent, "sessionId": session,
+        "timestamp": "2026-08-10T10:01:00.000Z", "cwd": "/repo/app", "gitBranch": "main",
+        "message": {"role": role, "content": text}
+    });
+    format!("{line}\n")
+}
+
+fn search_ids(conn: &Connection, session_id: &str) -> Vec<i64> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM search_document WHERE session_id = ?1 ORDER BY id")
+        .unwrap();
+    let ids = stmt
+        .query_map([session_id], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<i64>>>()
+        .unwrap();
+    ids
+}
+
+// An append must cost the new rows, not the whole session: re-inserting every
+// search projection is what made a live agent's session burn a core. Session B
+// is ingested between A's two passes so a delete-and-reinsert of A cannot hide
+// behind reused rowids.
+#[test]
+fn an_append_keeps_existing_search_rows_and_adds_only_the_new_one() {
+    use lore_core::ingest::{ingest_file, ChangeClass, IngestOutcome};
+
+    let dir = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = blob_store();
+    let adapter = ClaudeCodeAdapter::new();
+
+    let a_path = dir.path().join("a.jsonl");
+    let a_prefix = [
+        claude_line("sess-a", "a1", None, "user", "alpha one"),
+        claude_line("sess-a", "a2", Some("a1"), "assistant", "alpha two"),
+        claude_line("sess-a", "a3", Some("a2"), "user", "alpha three"),
+        claude_line("sess-a", "a4", Some("a3"), "assistant", "alpha four"),
+    ]
+    .concat();
+    std::fs::write(&a_path, &a_prefix).unwrap();
+    let IngestOutcome::Ingested { session_id: a, .. } =
+        ingest_file(&conn, &adapter, &a_path, &blobs).unwrap()
+    else {
+        panic!("session A must ingest");
+    };
+
+    let b_path = dir.path().join("b.jsonl");
+    std::fs::write(
+        &b_path,
+        claude_line("sess-b", "b1", None, "user", "bravo one"),
+    )
+    .unwrap();
+    ingest_file(&conn, &adapter, &b_path, &blobs).unwrap();
+
+    let before = search_ids(&conn, &a);
+    assert_eq!(before.len(), 4);
+
+    let appended = claude_line("sess-a", "a5", Some("a4"), "user", "alpha five");
+    std::fs::write(&a_path, format!("{a_prefix}{appended}")).unwrap();
+    let outcome = ingest_file(&conn, &adapter, &a_path, &blobs).unwrap();
+    assert!(matches!(
+        outcome,
+        IngestOutcome::Ingested {
+            change: ChangeClass::Appended,
+            ..
+        }
+    ));
+
+    let after = search_ids(&conn, &a);
+    assert_eq!(&after[..4], &before[..], "existing search rows are kept");
+    assert_eq!(after.len(), 5, "exactly one search row is added");
+    let added: String = conn
+        .query_row(
+            "SELECT redacted_text FROM search_document WHERE id = ?1",
+            [after[4]],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(added, "alpha five");
+}
