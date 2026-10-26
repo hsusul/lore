@@ -1,4 +1,5 @@
 import type { ScanProgress, SearchSort } from "../ipc";
+import { agentFilter, agentQuery } from "./query";
 
 /** What the list pane browses when no query is typed. */
 export type Scope =
@@ -8,9 +9,21 @@ export type Scope =
 
 export const ALL: Scope = { kind: "all" };
 
-export function sameScope(a: Scope, b: Scope): boolean {
+/**
+ * A row in the sidebar or the scope menu: a scope to browse, or an agent, which is a
+ * saved `agent:` search over everything.
+ */
+export type Source = Scope | { kind: "agent"; id: string };
+
+export function sameSource(a: Source, b: Source): boolean {
   if (a.kind === "all" || b.kind === "all") return a.kind === b.kind;
   return a.kind === b.kind && a.id === b.id;
+}
+
+/** What the sidebar shows as selected: the agent whose filter is the whole query, else the scope. */
+export function currentSource(ws: Pick<Workspace, "scope" | "query">): Source {
+  const agent = agentFilter(ws.query);
+  return agent !== null && ws.scope.kind === "all" ? { kind: "agent", id: agent } : ws.scope;
 }
 
 /**
@@ -23,7 +36,7 @@ export type ScanState =
   | { phase: "done"; progress: ScanProgress }
   | { phase: "failed"; error: string };
 
-/** One transient line in the status bar. Errors stay until dismissed or replaced. */
+/** One transient message under the toolbar. Errors stay until dismissed or replaced. */
 export type Flash = { tone: "notice" | "error"; text: string } | null;
 
 /** At most one overlay is open; opening another replaces it. */
@@ -31,7 +44,6 @@ export type Overlay =
   | { kind: "none" }
   | { kind: "palette" }
   | { kind: "settings" }
-  | { kind: "scope" }
   | {
       kind: "confirm";
       title: string;
@@ -70,7 +82,7 @@ export const initialWorkspace: Workspace = {
 };
 
 export type Action =
-  | { type: "scope"; scope: Scope }
+  | { type: "source"; source: Source }
   | { type: "query"; query: string }
   | { type: "sort"; sort: SearchSort }
   | { type: "open"; id: string | null }
@@ -83,8 +95,13 @@ export type Action =
 
 export function workspaceReducer(state: Workspace, action: Action): Workspace {
   switch (action.type) {
-    case "scope":
-      return { ...state, scope: action.scope, overlay: { kind: "none" } };
+    case "source": {
+      const { source } = action;
+      if (source.kind === "agent") return { ...state, scope: ALL, query: agentQuery(source.id), overlay: { kind: "none" } };
+      // Leaving an agent row drops its filter; a typed search keeps running in the new scope.
+      const query = currentSource(state).kind === "agent" ? "" : state.query;
+      return { ...state, scope: source, query, overlay: { kind: "none" } };
+    }
     case "query":
       return { ...state, query: action.query };
     case "sort":
@@ -105,11 +122,7 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
           : { phase: "running", progress: action.progress },
       };
     case "scan-failed":
-      return {
-        ...state,
-        scan: { phase: "failed", error: action.error },
-        flash: { tone: "error", text: action.error },
-      };
+      return { ...state, scan: { phase: "failed", error: action.error } };
     case "forgot-everything":
       return { ...initialWorkspace, scan: state.scan };
   }

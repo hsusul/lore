@@ -109,7 +109,7 @@ export default {
     minHeight: sizes,
     maxHeight: sizes,
     size: sizes,
-    inset: { 0: "0px", full: "100%", toolbar: v("toolbar-h"), palette: v("palette-top") },
+    inset: { ...spacing, full: "100%", toolbar: v("toolbar-h"), palette: v("palette-top") },
     zIndex: { 0: "0", 10: "10", 20: "20", 50: "50" },
     fontFamily: { sans: v("font-sans"), mono: v("font-mono") },
     fontSize: {
