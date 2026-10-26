@@ -6,6 +6,9 @@
 //! plus a few structured filters; plain terms are wrapped as FTS5 phrases and
 //! bound as a parameter, so a malformed or hostile query can never become raw
 //! SQL or FTS syntax. Ranking is BM25; matches are wrapped in highlight markers.
+//! A query of filters alone skips FTS and lists matching sessions newest first;
+//! its snippets still come from the redacted projection, and its filter values
+//! are bound parameters like every other.
 
 use lore_ipc::{SearchHit, SearchPage};
 use rusqlite::types::Value;
@@ -128,6 +131,22 @@ struct ParsedQuery {
     git: GitFilters,
 }
 
+impl ParsedQuery {
+    /// True when at least one structured filter survived parsing (an empty,
+    /// unparseable, or unknown-class value does not count).
+    fn has_filters(&self) -> bool {
+        self.agent.is_some()
+            || self.path.is_some()
+            || self.tool.is_some()
+            || self.model.is_some()
+            || self.before.is_some()
+            || self.after.is_some()
+            || self.has_error
+            || self.has_patch
+            || !self.git.is_empty()
+    }
+}
+
 /// Filters over provenance-labelled Git evidence.
 ///
 /// `source_class` is a **constraint on the other three**, not a filter in its
@@ -162,8 +181,9 @@ const GIT_SOURCE_CLASSES: &[&str] = &["agent_recorded", "lore_captured", "lore_r
 
 /// Search the archive, returning the first page only. `raw` is the user's query
 /// (plain terms plus optional `agent:`, `path:`, `tool:`, and `has:error`
-/// filters); returns up to `limit` hits ranked best-first. An empty term set
-/// yields no results. Convenience wrapper over [`search_page`] for callers that
+/// filters); returns up to `limit` hits ranked best-first. A query with no terms
+/// and no filters yields no results; filters alone list matching sessions (see
+/// [`search_page`]). Convenience wrapper over [`search_page`] for callers that
 /// do not paginate.
 pub fn search(conn: &Connection, raw: &str, limit: i64) -> Result<Vec<SearchHit>> {
     Ok(search_page(conn, raw, limit, None, SortOrder::Relevance)?.hits)
@@ -177,6 +197,18 @@ pub fn search(conn: &Connection, raw: &str, limit: i64) -> Result<Vec<SearchHit>
 /// to fetch the next page. A cursor is only meaningful for the identical query
 /// **and sort** that produced it; a malformed cursor degrades to the first page
 /// rather than erroring.
+///
+/// **Filter-only queries.** A query with filters but no plain terms (`has:error`,
+/// `agent:codex`, `repo:lore`, …) returns one hit per matching session, newest
+/// first, under the same keyset and cursor rules. There is no text match to
+/// score, so [`SortOrder::Relevance`] falls back to [`SortOrder::Newest`];
+/// `Oldest` is honoured. Such a hit has `rank` 0 and describes the session by its
+/// first redacted projection document: for a session with a native title that is
+/// `source_kind` `session`, `field` `title`; otherwise it is the opening message
+/// part (`message_part`, its role field). `snippet` is that document's redacted
+/// text, whitespace-collapsed and shortened, with no highlight markers. A session
+/// with no projected text at all gets `session`/`title` and an empty snippet. A
+/// query with neither terms nor filters returns an empty page.
 pub fn search_page(
     conn: &Connection,
     raw: &str,
@@ -186,6 +218,11 @@ pub fn search_page(
 ) -> Result<SearchPage> {
     let query = parse_query(raw);
     let Some(match_expr) = fts_match(&query.terms) else {
+        // No usable terms. Filters alone still select sessions; nothing at all
+        // is an empty page, never a bare FTS MATCH.
+        if query.has_filters() {
+            return filter_only_page(conn, &query, limit, cursor, sort);
+        }
         return Ok(SearchPage {
             hits: Vec::new(),
             next_cursor: None,
@@ -224,95 +261,7 @@ pub fn search_page(
     params.push(Value::Text(HIGHLIGHT_END.to_string()));
     params.push(Value::Text(match_expr));
 
-    if let Some(agent) = query.agent {
-        sql.push_str(" AND sd.agent_id = ?");
-        params.push(Value::Text(agent));
-    }
-    if let Some(before_ts) = query.before {
-        sql.push_str(" AND sd.started_at < ?");
-        params.push(Value::Integer(before_ts));
-    }
-    if let Some(after_ts) = query.after {
-        sql.push_str(" AND sd.started_at >= ?");
-        params.push(Value::Integer(after_ts));
-    }
-    if let Some(model) = query.model {
-        sql.push_str(
-            " AND (EXISTS (SELECT 1 FROM session_segment ss
-                           WHERE ss.session_id = sd.session_id
-                             AND (ss.model LIKE ? ESCAPE '\\' OR ss.provider LIKE ? ESCAPE '\\'))
-                   OR EXISTS (SELECT 1 FROM agent_session asess
-                              WHERE asess.id = sd.session_id
-                                AND asess.primary_model LIKE ? ESCAPE '\\'))",
-        );
-        let pattern = format!("%{}%", like_escape(&model));
-        params.push(Value::Text(pattern.clone()));
-        params.push(Value::Text(pattern.clone()));
-        params.push(Value::Text(pattern));
-    }
-    if query.has_error {
-        sql.push_str(
-            " AND EXISTS (SELECT 1 FROM tool_call tc
-                          WHERE tc.session_id = sd.session_id AND tc.is_error = 1)",
-        );
-    }
-    if query.has_patch {
-        sql.push_str(
-            " AND EXISTS (SELECT 1 FROM file_event fe
-                          WHERE fe.session_id = sd.session_id AND fe.patch_blob_id IS NOT NULL)",
-        );
-    }
-    if let Some(path) = query.path {
-        sql.push_str(
-            " AND EXISTS (SELECT 1 FROM file_event fe
-                          WHERE fe.session_id = sd.session_id AND fe.path LIKE ?)",
-        );
-        params.push(Value::Text(format!("{path}%")));
-    }
-    if let Some(tool) = query.tool {
-        sql.push_str(
-            " AND EXISTS (SELECT 1 FROM tool_call tc
-                          WHERE tc.session_id = sd.session_id AND tc.name = ?)",
-        );
-        params.push(Value::Text(tool));
-    }
-    // Git-dimension filters (migration 0011). ONE semi-join carries all of them,
-    // which is the whole point: `branch:billing git-source:agent_recorded` must
-    // be satisfied by a SINGLE search_git row, so the branch and the provenance
-    // class have to be true of the same piece of evidence. Splitting them into
-    // separate EXISTS clauses would match a session where the agent recorded
-    // some branch and Lore separately observed `billing` — exactly the
-    // conflation GIT_INTEGRATION.md §1 forbids. A semi-join also cannot fan out,
-    // so a session with many observations still counts once.
-    if !query.git.is_empty() {
-        sql.push_str(" AND EXISTS (SELECT 1 FROM search_git g WHERE g.session_id = sd.session_id");
-        if let Some(repo) = query.git.repo {
-            sql.push_str(" AND g.repository_id = ?");
-            params.push(Value::Text(repo));
-        }
-        if let Some(worktree) = query.git.worktree {
-            sql.push_str(" AND g.worktree_id = ?");
-            params.push(Value::Text(worktree));
-        }
-        if let Some(branch) = query.git.branch {
-            sql.push_str(" AND g.branch = ?");
-            params.push(Value::Text(branch));
-        }
-        if let Some(commit) = query.git.commit {
-            // Prefix match so a short sha works, anchored so it cannot wildcard.
-            sql.push_str(" AND g.commit_sha LIKE ? ESCAPE '\\'");
-            params.push(Value::Text(format!("{}%", like_escape(&commit))));
-        }
-        if let Some(class) = query.git.source_class {
-            sql.push_str(" AND g.source_class = ?");
-            params.push(Value::Text(class));
-        }
-        // No guard is needed against the synthetic `segment_link` rows: they
-        // carry NULL branch and NULL commit_sha, and `NULL = ?` is never true,
-        // so they can only ever satisfy repo:/worktree: — which is exactly what
-        // they exist for.
-        sql.push(')');
-    }
+    append_filters(conn, &mut sql, &mut params, &query, &FTS_COLUMNS)?;
     sql.push_str(") m");
 
     // Keyset predicate: keep only rows strictly after the cursor in the chosen
@@ -368,6 +317,297 @@ pub fn search_page(
         .flatten();
     let hits = rows.into_iter().map(|(hit, _)| hit).collect();
     Ok(SearchPage { hits, next_cursor })
+}
+
+/// The column expressions the shared filters bind to. The FTS path filters on
+/// `search_document` (`sd`, denormalized keys per migration 0007); the
+/// filter-only path filters on `agent_session` (`s`) directly. Both are static
+/// strings chosen by this module, never user input.
+struct FilterColumns {
+    session: &'static str,
+    agent: &'static str,
+    started: &'static str,
+}
+
+const FTS_COLUMNS: FilterColumns = FilterColumns {
+    session: "sd.session_id",
+    agent: "sd.agent_id",
+    started: "sd.started_at",
+};
+
+const SESSION_COLUMNS: FilterColumns = FilterColumns {
+    session: "s.id",
+    agent: "s.agent_id",
+    started: "s.started_at",
+};
+
+/// Append every structured filter in `query` to `sql` as ` AND …` clauses, with
+/// its values pushed to `params` in text order. Values are always bound, never
+/// spliced, so a hostile filter value cannot become SQL.
+fn append_filters(
+    conn: &Connection,
+    sql: &mut String,
+    params: &mut Vec<Value>,
+    query: &ParsedQuery,
+    cols: &FilterColumns,
+) -> Result<()> {
+    let FilterColumns {
+        session,
+        agent,
+        started,
+    } = cols;
+    if let Some(agent_id) = &query.agent {
+        sql.push_str(&format!(" AND {agent} = ?"));
+        params.push(Value::Text(agent_id.clone()));
+    }
+    if let Some(before_ts) = query.before {
+        sql.push_str(&format!(" AND {started} < ?"));
+        params.push(Value::Integer(before_ts));
+    }
+    if let Some(after_ts) = query.after {
+        sql.push_str(&format!(" AND {started} >= ?"));
+        params.push(Value::Integer(after_ts));
+    }
+    if let Some(model) = &query.model {
+        sql.push_str(&format!(
+            " AND (EXISTS (SELECT 1 FROM session_segment ss
+                           WHERE ss.session_id = {session}
+                             AND (ss.model LIKE ? ESCAPE '\\' OR ss.provider LIKE ? ESCAPE '\\'))
+                   OR EXISTS (SELECT 1 FROM agent_session asess
+                              WHERE asess.id = {session}
+                                AND asess.primary_model LIKE ? ESCAPE '\\'))"
+        ));
+        let pattern = format!("%{}%", like_escape(model));
+        params.push(Value::Text(pattern.clone()));
+        params.push(Value::Text(pattern.clone()));
+        params.push(Value::Text(pattern));
+    }
+    if query.has_error {
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM tool_call tc
+                          WHERE tc.session_id = {session} AND tc.is_error = 1)"
+        ));
+    }
+    if query.has_patch {
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM file_event fe
+                          WHERE fe.session_id = {session} AND fe.patch_blob_id IS NOT NULL)"
+        ));
+    }
+    if let Some(path) = &query.path {
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM file_event fe
+                          WHERE fe.session_id = {session} AND fe.path LIKE ?)"
+        ));
+        params.push(Value::Text(format!("{path}%")));
+    }
+    if let Some(tool) = &query.tool {
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM tool_call tc
+                          WHERE tc.session_id = {session} AND tc.name = ?)"
+        ));
+        params.push(Value::Text(tool.clone()));
+    }
+    // Git-dimension filters (migration 0011). ONE semi-join carries all of them,
+    // which is the whole point: `branch:billing git-source:agent_recorded` must
+    // be satisfied by a SINGLE search_git row, so the branch and the provenance
+    // class have to be true of the same piece of evidence. Splitting them into
+    // separate EXISTS clauses would match a session where the agent recorded
+    // some branch and Lore separately observed `billing` — exactly the
+    // conflation GIT_INTEGRATION.md §1 forbids. A semi-join also cannot fan out,
+    // so a session with many observations still counts once.
+    if !query.git.is_empty() {
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM search_git g WHERE g.session_id = {session}"
+        ));
+        if let Some(repo) = &query.git.repo {
+            // The resolved ids travel as one JSON array parameter, so a name
+            // shared by many repositories is still one bound value.
+            let ids = resolve_repository_ids(conn, repo)?;
+            sql.push_str(" AND g.repository_id IN (SELECT value FROM json_each(?))");
+            params.push(Value::Text(serde_json::to_string(&ids).unwrap_or_default()));
+        }
+        if let Some(worktree) = &query.git.worktree {
+            sql.push_str(" AND g.worktree_id = ?");
+            params.push(Value::Text(worktree.clone()));
+        }
+        if let Some(branch) = &query.git.branch {
+            sql.push_str(" AND g.branch = ?");
+            params.push(Value::Text(branch.clone()));
+        }
+        if let Some(commit) = &query.git.commit {
+            // Prefix match so a short sha works, anchored so it cannot wildcard.
+            sql.push_str(" AND g.commit_sha LIKE ? ESCAPE '\\'");
+            params.push(Value::Text(format!("{}%", like_escape(commit))));
+        }
+        if let Some(class) = &query.git.source_class {
+            sql.push_str(" AND g.source_class = ?");
+            params.push(Value::Text(class.clone()));
+        }
+        // No guard is needed against the synthetic `segment_link` rows: they
+        // carry NULL branch and NULL commit_sha, and `NULL = ?` is never true,
+        // so they can only ever satisfy repo:/worktree: — which is exactly what
+        // they exist for.
+        sql.push(')');
+    }
+    Ok(())
+}
+
+/// Resolve a `repo:` value to the repository ids it names: the value itself as
+/// an id (so `repo:<id>` keeps working, even for an id with no `repository`
+/// row), plus every repository whose display name, or whose root's last path
+/// component, equals it case-insensitively. A name shared by several
+/// repositories resolves to all of them. A value that names nothing resolves to
+/// itself alone, which no `search_git` row carries — so an unknown name selects
+/// no sessions rather than being dropped and matching everything.
+///
+/// Matching is plain string equality in Rust, never `LIKE`, so `%`, `_` and `*`
+/// in the value are ordinary characters. The `repository` table is one row per
+/// repository, so a full read per query is small.
+fn resolve_repository_ids(conn: &Connection, value: &str) -> Result<Vec<String>> {
+    let wanted = value.to_lowercase();
+    let mut ids = vec![value.to_string()];
+    let mut stmt = conn.prepare("SELECT id, display_name, primary_path FROM repository")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (id, display_name, primary_path) = row?;
+        let by_name = display_name.to_lowercase() == wanted;
+        let by_root = primary_path
+            .as_deref()
+            .is_some_and(|p| path_basename(p).to_lowercase() == wanted);
+        if (by_name || by_root) && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+/// The last component of a path, accepting either separator so an archive from
+/// another platform resolves the same way. Empty for a bare root.
+fn path_basename(path: &str) -> &str {
+    path.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+}
+
+/// Longest snippet, in characters, a filter-only hit carries.
+const FILTER_SNIPPET_CHARS: usize = 160;
+
+/// One page of sessions matching the filters alone — the no-terms arm of
+/// [`search_page`]. See its doc comment for the result shape.
+///
+/// The order is `started_at` (NULLs last) then session id, a total order, so
+/// keyset paging never drops or repeats a session. The cursor is a different
+/// shape from a term-query cursor (it is keyed on the session's text id, not an
+/// FTS document row), so one fed to the other decodes to `None` and degrades to
+/// the first page, like any malformed cursor.
+fn filter_only_page(
+    conn: &Connection,
+    query: &ParsedQuery,
+    limit: i64,
+    cursor: Option<&str>,
+    sort: SortOrder,
+) -> Result<SearchPage> {
+    let limit = limit.clamp(1, MAX_LIMIT);
+    let cursor = cursor.and_then(SessionCursor::decode);
+    let oldest = sort == SortOrder::Oldest;
+    let (cmp, dir) = if oldest { (">", "ASC") } else { ("<", "DESC") };
+
+    // Filter, keyset and LIMIT run on agent_session alone; the display document
+    // is joined only for the page's rows. A session's first projection document
+    // (lowest id) is its native title if it has one, else its opening message.
+    let mut sql = String::with_capacity(1024);
+    sql.push_str(
+        "SELECT p.id, p.agent_id, p.sa, p.title, d.source_kind, d.source_id, d.field,
+                substr(d.redacted_text, 1, 512)
+         FROM (
+           SELECT s.id AS id, s.agent_id AS agent_id, s.started_at AS sa, s.title AS title
+           FROM agent_session s
+           WHERE 1 = 1",
+    );
+    let mut params: Vec<Value> = Vec::with_capacity(16);
+    append_filters(conn, &mut sql, &mut params, query, &SESSION_COLUMNS)?;
+    match &cursor {
+        Some(SessionCursor {
+            started_at: Some(sa),
+            id,
+        }) => {
+            sql.push_str(&format!(
+                " AND (s.started_at IS NULL
+                       OR s.started_at {cmp} ?
+                       OR (s.started_at = ? AND s.id > ?))"
+            ));
+            params.push(Value::Integer(*sa));
+            params.push(Value::Integer(*sa));
+            params.push(Value::Text(id.clone()));
+        }
+        Some(SessionCursor {
+            started_at: None,
+            id,
+        }) => {
+            sql.push_str(" AND s.started_at IS NULL AND s.id > ?");
+            params.push(Value::Text(id.clone()));
+        }
+        None => {}
+    }
+    sql.push_str(&format!(
+        " ORDER BY (s.started_at IS NULL), s.started_at {dir}, s.id LIMIT ?
+         ) p
+         LEFT JOIN search_document d
+           ON d.id = (SELECT MIN(x.id) FROM search_document x WHERE x.session_id = p.id)
+         ORDER BY (p.sa IS NULL), p.sa {dir}, p.id"
+    ));
+    params.push(Value::Integer(limit));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let hits = stmt
+        .query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
+            let text: Option<String> = row.get(7)?;
+            Ok(SearchHit {
+                source_kind: row
+                    .get::<_, Option<String>>(4)?
+                    .unwrap_or_else(|| "session".to_string()),
+                source_id: row
+                    .get::<_, Option<String>>(5)?
+                    .unwrap_or_else(|| session_id.clone()),
+                field: row
+                    .get::<_, Option<String>>(6)?
+                    .unwrap_or_else(|| "title".to_string()),
+                snippet: text.as_deref().map(filter_snippet).unwrap_or_default(),
+                rank: 0.0,
+                title: row.get(3)?,
+                agent_id: row.get(1)?,
+                started_at: row.get(2)?,
+                session_id,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let next_cursor = (hits.len() as i64 == limit)
+        .then(|| hits.last().map(|h| SessionCursor::from_hit(h).encode()))
+        .flatten();
+    Ok(SearchPage { hits, next_cursor })
+}
+
+/// Collapse whitespace runs to single spaces and cut to
+/// [`FILTER_SNIPPET_CHARS`] characters, marking a cut with an ellipsis.
+fn filter_snippet(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= FILTER_SNIPPET_CHARS {
+        return collapsed;
+    }
+    let mut cut: String = collapsed.chars().take(FILTER_SNIPPET_CHARS).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('…');
+    cut
 }
 
 /// One row of a session's redacted projection, as [`session_documents_page`]
@@ -536,6 +776,55 @@ impl Cursor {
             rank,
             started_at,
             id,
+        })
+    }
+}
+
+/// Keyset cursor for a filter-only page: the last session's start time and id.
+/// Encoded `s:<started_at|n>:<id>`; the id is last so it may contain `:`. The
+/// `s:` tag cannot parse as a term cursor's hex rank prefix followed by a valid
+/// timestamp and id, so a cursor from the wrong kind of query decodes to `None`.
+struct SessionCursor {
+    started_at: Option<i64>,
+    id: String,
+}
+
+impl SessionCursor {
+    fn from_hit(hit: &SearchHit) -> Self {
+        SessionCursor {
+            started_at: hit.started_at,
+            id: hit.session_id.clone(),
+        }
+    }
+
+    fn encode(&self) -> String {
+        match self.started_at {
+            Some(sa) => format!("s:{sa}:{}", self.id),
+            None => format!("s:n:{}", self.id),
+        }
+    }
+
+    /// Parse a cursor produced by [`SessionCursor::encode`]; anything else is
+    /// `None` (treated as "no cursor"), never a panic on untrusted input.
+    fn decode(s: &str) -> Option<SessionCursor> {
+        if s.len() > 2_048 {
+            return None;
+        }
+        let mut parts = s.splitn(3, ':');
+        if parts.next()? != "s" {
+            return None;
+        }
+        let started_at = match parts.next()? {
+            "n" => None,
+            v => Some(v.parse::<i64>().ok()?),
+        };
+        let id = parts.next()?;
+        if id.is_empty() {
+            return None;
+        }
+        Some(SessionCursor {
+            started_at,
+            id: id.to_string(),
         })
     }
 }
@@ -1111,6 +1400,72 @@ mod tests {
         let (sql_old, params_old) = keyset(SortOrder::Oldest, &None);
         assert!(sql_old.is_empty());
         assert!(params_old.is_empty());
+    }
+
+    #[test]
+    fn has_filters_counts_only_filters_that_survive_parsing() {
+        assert!(parse_query("has:error").has_filters());
+        assert!(parse_query("agent:codex").has_filters());
+        assert!(parse_query("repo:lore").has_filters());
+        assert!(parse_query("before:2026-08-01").has_filters());
+        assert!(parse_query("git-source:agent_recorded").has_filters());
+        for none in [
+            "",
+            "plain terms only",
+            "agent:",
+            "before:nonsense",
+            "git-source:bogus",
+        ] {
+            assert!(!parse_query(none).has_filters(), "{none:?}");
+        }
+    }
+
+    #[test]
+    fn path_basename_takes_the_last_component_with_either_separator() {
+        assert_eq!(path_basename("/work/Lore-Core"), "Lore-Core");
+        assert_eq!(path_basename("/work/Lore-Core/"), "Lore-Core");
+        assert_eq!(path_basename("C:\\src\\lore"), "lore");
+        assert_eq!(path_basename("lore"), "lore");
+        assert_eq!(path_basename("/"), "");
+        assert_eq!(path_basename(""), "");
+    }
+
+    #[test]
+    fn session_cursor_round_trips_and_rejects_garbage() {
+        for started_at in [Some(1_786_442_402_000_i64), None, Some(-5)] {
+            let c = SessionCursor {
+                started_at,
+                id: "ses_ab:cd".to_string(), // the id is last, so it may hold ':'
+            };
+            let back = SessionCursor::decode(&c.encode()).expect("valid cursor decodes");
+            assert_eq!(back.started_at, started_at);
+            assert_eq!(back.id, "ses_ab:cd");
+        }
+        for bad in ["", "s", "s:", "s:n:", "s:x:abc", "s:5", "0:1:2", "garbage"] {
+            assert!(SessionCursor::decode(bad).is_none(), "{bad:?}");
+        }
+        assert!(SessionCursor::decode(&format!("s:n:{}", "x".repeat(3_000))).is_none());
+        // A term cursor is not a session cursor, and vice versa.
+        assert!(SessionCursor::decode(
+            &Cursor {
+                rank: -1.5,
+                started_at: Some(1),
+                id: 7,
+            }
+            .encode()
+        )
+        .is_none());
+        assert!(Cursor::decode("s:n:ses_1").is_none());
+    }
+
+    #[test]
+    fn filter_snippet_collapses_whitespace_and_marks_a_cut() {
+        assert_eq!(filter_snippet("  a \n\t b  "), "a b");
+        assert_eq!(filter_snippet(""), "");
+        let long = "é".repeat(FILTER_SNIPPET_CHARS + 40);
+        let cut = filter_snippet(&long);
+        assert_eq!(cut.chars().count(), FILTER_SNIPPET_CHARS + 1);
+        assert!(cut.ends_with('…'));
     }
 
     #[test]

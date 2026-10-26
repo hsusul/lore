@@ -945,3 +945,529 @@ fn has_patch_filter_scopes_search_results() {
     assert_eq!(hits_patch.len(), 1);
     assert_eq!(hits_patch[0].session_id, sid1);
 }
+
+// ── Filter-only queries and `repo:` by name ──────────────────────────────────
+
+/// A Claude session whose only tool call failed.
+fn claude_with_error(session: &str, text: &str) -> String {
+    let call = format!("{{\"type\":\"assistant\",\"uuid\":\"a_{session}\",\"sessionId\":\"{session}\",\"cwd\":\"/p\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"tool_use\",\"id\":\"t_{session}\",\"name\":\"Bash\",\"input\":{{\"command\":\"npm test\"}}}}]}}}}\n");
+    let result = format!("{{\"type\":\"user\",\"uuid\":\"r_{session}\",\"sessionId\":\"{session}\",\"cwd\":\"/p\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"tool_result\",\"tool_use_id\":\"t_{session}\",\"is_error\":true,\"content\":\"1 failing\"}}]}}}}\n");
+    format!("{}{call}{result}", user_message(session, "/p", text))
+}
+
+/// Insert a repository row and point every segment of `sessions` at it.
+fn link_repo(
+    conn: &Connection,
+    repo_id: &str,
+    display_name: &str,
+    primary_path: Option<&str>,
+    sessions: &[&str],
+) {
+    conn.execute(
+        "INSERT INTO repository (id, identity_key, display_name, primary_path,
+                                 identity_confidence, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 'high', 0, 0)",
+        rusqlite::params![
+            repo_id,
+            format!("gcd:{repo_id}"),
+            display_name,
+            primary_path
+        ],
+    )
+    .unwrap();
+    for sid in sessions {
+        conn.execute(
+            "UPDATE session_segment SET repository_id = ?1 WHERE session_id = ?2",
+            rusqlite::params![repo_id, sid],
+        )
+        .unwrap();
+        lore_core::search::reproject_for_test(conn, sid).unwrap();
+    }
+}
+
+fn sorted(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids
+}
+
+fn session_ids(hits: &[lore_ipc::SearchHit]) -> Vec<String> {
+    sorted(hits.iter().map(|h| h.session_id.clone()).collect())
+}
+
+#[test]
+fn has_error_alone_returns_exactly_the_sessions_with_an_error() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let e1 = persist_claude(
+        &conn,
+        &blobs,
+        &claude_with_error("e1", "run the suite"),
+        "e1",
+    );
+    let e2 = persist_claude(
+        &conn,
+        &blobs,
+        &claude_with_error("e2", "build the app"),
+        "e2",
+    );
+    persist_claude(
+        &conn,
+        &blobs,
+        &user_message("ok1", "/p", "no failure here"),
+        "ok1",
+    );
+    codex_at(
+        &conn,
+        &blobs,
+        "ok2",
+        "2026-08-11T10:00:00.000Z",
+        "also fine",
+    );
+
+    let hits = search(&conn, "has:error", 20).unwrap();
+    assert_eq!(session_ids(&hits), sorted(vec![e1, e2]));
+
+    // One hit per session, shaped like a hit: no highlight markers, rank 0, and
+    // a snippet taken from the session's opening text.
+    assert_eq!(hits.len(), 2);
+    for hit in &hits {
+        assert_eq!(hit.source_kind, "message_part");
+        assert_eq!(hit.rank, 0.0);
+        assert!(!hit.snippet.contains(HIGHLIGHT_START));
+        assert!(!hit.snippet.contains('\u{e001}'));
+    }
+    let snippets = sorted(hits.iter().map(|h| h.snippet.clone()).collect());
+    assert_eq!(snippets, vec!["build the app", "run the suite"]);
+}
+
+#[test]
+fn agent_codex_alone_returns_only_codex_sessions() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    persist_claude(&conn, &blobs, &user_message("c1", "/p", "claude one"), "c1");
+    persist_claude(&conn, &blobs, &user_message("c2", "/p", "claude two"), "c2");
+    codex_at(&conn, &blobs, "x1", "2026-08-11T10:00:01.000Z", "codex one");
+    codex_at(&conn, &blobs, "x2", "2026-08-11T10:00:02.000Z", "codex two");
+
+    let hits = search(&conn, "agent:codex", 20).unwrap();
+    assert_eq!(hits.len(), 2);
+    assert!(hits.iter().all(|h| h.agent_id == "codex"));
+    // Newest first, and the snippet is the session's opening text.
+    assert_eq!(hits[0].snippet, "codex two");
+    assert_eq!(hits[1].snippet, "codex one");
+    assert_eq!(hits[0].started_at, Some(1_786_442_402_000));
+
+    assert_eq!(search(&conn, "agent:claude-code", 20).unwrap().len(), 2);
+    assert!(search(&conn, "agent:nobody", 20).unwrap().is_empty());
+}
+
+#[test]
+fn a_native_title_is_the_snippet_when_the_session_has_one() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let jsonl = format!(
+        "{}{}",
+        "{\"type\":\"custom-title\",\"sessionId\":\"t1\",\"customTitle\":\"Fix billing webhook signature\"}\n",
+        user_message("t1", "/p", "hello there")
+    );
+    let sid = persist_claude(&conn, &blobs, &jsonl, "t1");
+
+    let hits = search(&conn, "agent:claude-code", 20).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].session_id, sid);
+    assert_eq!(hits[0].source_kind, "session");
+    assert_eq!(hits[0].source_id, sid);
+    assert_eq!(hits[0].field, "title");
+    assert_eq!(hits[0].snippet, "Fix billing webhook signature");
+}
+
+#[test]
+fn a_filter_only_snippet_never_surfaces_a_secret() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let secret = format!("ghp{}", "_0123456789abcdefghijklmnopqrstuvwxyz");
+    persist_claude(
+        &conn,
+        &blobs,
+        &user_message("k1", "/p", &format!("deploy with token {secret} now")),
+        "k1",
+    );
+
+    let hits = search(&conn, "agent:claude-code", 20).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].snippet.starts_with("deploy with token "));
+    assert!(hits[0].snippet.ends_with(" now"));
+    assert!(!hits[0].snippet.contains(&secret));
+    assert!(!hits[0]
+        .snippet
+        .contains("0123456789abcdefghijklmnopqrstuvwxyz"));
+}
+
+#[test]
+fn a_long_multiline_opening_message_is_collapsed_and_shortened() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let long = format!("first line\\n\\n   second   line {}", "word ".repeat(80));
+    persist_claude(&conn, &blobs, &user_message("l1", "/p", &long), "l1");
+
+    let hits = search(&conn, "agent:claude-code", 20).unwrap();
+    assert_eq!(hits.len(), 1);
+    let snippet = &hits[0].snippet;
+    assert!(snippet.starts_with("first line second line word word"));
+    assert!(snippet.ends_with('…'));
+    assert!(!snippet.contains('\n'));
+    assert_eq!(snippet.chars().count(), 161);
+}
+
+#[test]
+fn an_empty_or_filterless_query_returns_nothing() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    persist_claude(&conn, &blobs, &user_message("c1", "/p", "something"), "c1");
+    codex_at(&conn, &blobs, "x1", "2026-08-11T10:00:00.000Z", "something");
+
+    for raw in [
+        "",
+        "   \t\n ",
+        "\u{feff}\u{200b}\u{200c}",
+        // Filters that parse to nothing are not filters.
+        "agent:",
+        "repo: branch:",
+        "before:not-a-date after:also-not",
+        "git-source:bogus",
+        "agent:\u{200b}\u{200c}",
+    ] {
+        for sort in [SortOrder::Relevance, SortOrder::Newest, SortOrder::Oldest] {
+            let page = search_page(&conn, raw, 20, None, sort).unwrap();
+            assert!(page.hits.is_empty(), "{raw:?} must return nothing");
+            assert!(page.next_cursor.is_none());
+        }
+    }
+}
+
+#[test]
+fn filter_only_paging_neither_drops_nor_repeats_a_session() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    // Codex sessions carry a start time; two share one, so the id tie-break
+    // alone orders them. Claude sessions have none, so they form the trailing
+    // NULL block.
+    for (i, ts) in [
+        "2026-08-11T10:00:01.000Z",
+        "2026-08-11T10:00:02.000Z",
+        "2026-08-11T10:00:02.000Z",
+        "2026-08-11T10:00:03.000Z",
+        "2026-08-11T10:00:04.000Z",
+        "2026-08-11T10:00:05.000Z",
+    ]
+    .iter()
+    .enumerate()
+    {
+        codex_at(
+            &conn,
+            &blobs,
+            &format!("cx{i}"),
+            ts,
+            &format!("codex body {i}"),
+        );
+    }
+    for i in 0..5 {
+        persist_claude(
+            &conn,
+            &blobs,
+            &user_message(&format!("cl{i}"), "/p", &format!("claude body {i}")),
+            &format!("cl{i}"),
+        );
+    }
+    let all: Vec<String> = conn
+        .prepare("SELECT id FROM agent_session")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(all.len(), 11);
+    link_repo(
+        &conn,
+        "repo_page",
+        "pager",
+        None,
+        &all.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+
+    for sort in [SortOrder::Relevance, SortOrder::Newest, SortOrder::Oldest] {
+        let truth = search_page(&conn, "repo:pager", 100, None, sort).unwrap();
+        assert_eq!(truth.hits.len(), 11, "{sort}: every session once");
+        assert!(truth.next_cursor.is_none(), "{sort}: short page is the end");
+
+        let mut paged: Vec<String> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0;
+        loop {
+            let page = search_page(&conn, "repo:pager", 3, cursor.as_deref(), sort).unwrap();
+            pages += 1;
+            assert!(pages <= 12, "{sort}: pagination must terminate");
+            paged.extend(page.hits.iter().map(|h| h.session_id.clone()));
+            match page.next_cursor {
+                Some(c) => cursor = Some(c),
+                None => break,
+            }
+        }
+        let truth_ids: Vec<String> = truth.hits.iter().map(|h| h.session_id.clone()).collect();
+        assert_eq!(paged, truth_ids, "{sort}: paged order equals single-shot");
+        assert_eq!(
+            sorted(paged),
+            sorted(all.clone()),
+            "{sort}: complete, no repeats"
+        );
+
+        // Timestamps lead, in the requested direction; the NULL block trails.
+        let stamps: Vec<Option<i64>> = truth.hits.iter().map(|h| h.started_at).collect();
+        assert!(stamps[..6].iter().all(Option::is_some));
+        assert!(stamps[6..].iter().all(Option::is_none));
+        let dated: Vec<i64> = stamps[..6].iter().map(|s| s.unwrap()).collect();
+        let mut expected = dated.clone();
+        if sort == SortOrder::Oldest {
+            expected.sort();
+        } else {
+            expected.sort_by(|a, b| b.cmp(a));
+        }
+        assert_eq!(dated, expected, "{sort}: Relevance falls back to newest");
+    }
+}
+
+#[test]
+fn a_cursor_from_the_other_kind_of_query_degrades_to_the_first_page() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    for i in 0..4 {
+        codex_at(
+            &conn,
+            &blobs,
+            &format!("x{i}"),
+            &format!("2026-08-11T10:00:0{i}.000Z"),
+            "shared words",
+        );
+    }
+    let first_filter = search_page(&conn, "agent:codex", 2, None, SortOrder::Newest).unwrap();
+    let first_term = search_page(&conn, "shared", 2, None, SortOrder::Newest).unwrap();
+    let filter_cursor = first_filter.next_cursor.clone().unwrap();
+    let term_cursor = first_term.next_cursor.clone().unwrap();
+
+    let fed = search_page(
+        &conn,
+        "agent:codex",
+        2,
+        Some(&term_cursor),
+        SortOrder::Newest,
+    )
+    .unwrap();
+    assert_eq!(fed, first_filter);
+    let fed = search_page(&conn, "shared", 2, Some(&filter_cursor), SortOrder::Newest).unwrap();
+    assert_eq!(fed, first_term);
+
+    // A malformed cursor is the first page, never an error.
+    for bad in ["", "s:", "s:n:", "s:x:abc", "s:5", "garbage", "s::1"] {
+        let page = search_page(&conn, "agent:codex", 2, Some(bad), SortOrder::Newest).unwrap();
+        assert_eq!(page, first_filter, "{bad:?}");
+    }
+}
+
+/// Three repositories over five sessions, for the `repo:` tests.
+///   repo_alpha  display "Lore"       root /work/Lore-Core   -> a1, a2
+///   repo_beta   display "other-name" root /home/me/Beta     -> b1
+///   repo_gamma  display "lore"       root /srv/lore         -> g1   (shares a name)
+fn repo_fixture() -> (Connection, tempfile::TempDir, [String; 4]) {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (bd, blobs) = store();
+    let a1 = persist_claude(&conn, &blobs, &user_message("a1", "/p", "alpha one"), "a1");
+    let a2 = persist_claude(&conn, &blobs, &user_message("a2", "/p", "alpha two"), "a2");
+    let b1 = persist_claude(&conn, &blobs, &user_message("b1", "/p", "beta one"), "b1");
+    let g1 = persist_claude(&conn, &blobs, &user_message("g1", "/p", "gamma one"), "g1");
+    persist_claude(&conn, &blobs, &user_message("n1", "/p", "unlinked"), "n1");
+    link_repo(
+        &conn,
+        "repo_alpha",
+        "Lore",
+        Some("/work/Lore-Core"),
+        &[&a1, &a2],
+    );
+    link_repo(
+        &conn,
+        "repo_beta",
+        "other-name",
+        Some("/home/me/Beta"),
+        &[&b1],
+    );
+    link_repo(&conn, "repo_gamma", "lore", Some("/srv/lore"), &[&g1]);
+    (conn, bd, [a1, a2, b1, g1])
+}
+
+#[test]
+fn repo_by_id_and_by_name_return_the_same_sessions() {
+    let (conn, _bd, [_a1, _a2, b1, _g1]) = repo_fixture();
+
+    // Id, display name, and the last component of the root all name repo_beta.
+    for q in ["repo:repo_beta", "repo:other-name", "repo:Beta"] {
+        let hits = search(&conn, q, 20).unwrap();
+        assert_eq!(session_ids(&hits), vec![b1.clone()], "{q}");
+    }
+    // Terms combine with a name exactly as they do with an id.
+    for q in [
+        "beta repo:repo_beta",
+        "beta repo:other-name",
+        "beta repo:beta",
+    ] {
+        let hits = search(&conn, q, 20).unwrap();
+        assert_eq!(session_ids(&hits), vec![b1.clone()], "{q}");
+    }
+    assert!(search(&conn, "alpha repo:repo_beta", 20)
+        .unwrap()
+        .is_empty());
+    assert!(search(&conn, "alpha repo:other-name", 20)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn repo_with_an_unknown_name_returns_nothing() {
+    let (conn, _bd, _ids) = repo_fixture();
+    for q in [
+        "repo:nonexistent",
+        "repo:lor",
+        "repo:Lore-Cor",
+        "repo:repo_",
+        "alpha repo:nonexistent",
+    ] {
+        assert!(search(&conn, q, 20).unwrap().is_empty(), "{q}");
+    }
+    // An archive with no repository rows at all: still nothing, and no error.
+    let empty = lore_core::storage::open_in_memory().unwrap();
+    assert!(search(&empty, "repo:anything", 20).unwrap().is_empty());
+}
+
+#[test]
+fn repo_name_matching_is_case_insensitive() {
+    let (conn, _bd, [_a1, _a2, b1, _g1]) = repo_fixture();
+    for q in [
+        "repo:BETA",
+        "repo:beta",
+        "repo:Beta",
+        "repo:OTHER-NAME",
+        "repo:Other-Name",
+    ] {
+        let hits = search(&conn, q, 20).unwrap();
+        assert_eq!(session_ids(&hits), vec![b1.clone()], "{q}");
+    }
+    // The root's last component is matched whole: `LORE-CORE` is repo_alpha's
+    // root name, so it finds only repo_alpha's two sessions.
+    let core = search(&conn, "repo:LORE-CORE", 20).unwrap();
+    assert_eq!(core.len(), 2);
+    assert!(core.iter().all(|h| h.snippet.starts_with("alpha")));
+}
+
+#[test]
+fn a_name_shared_by_two_repositories_returns_both() {
+    let (conn, _bd, [a1, a2, b1, g1]) = repo_fixture();
+    // "Lore" (repo_alpha) and "lore" (repo_gamma) are one name, case-folded.
+    for q in ["repo:lore", "repo:LORE", "repo:Lore"] {
+        let hits = search(&conn, q, 20).unwrap();
+        assert_eq!(
+            session_ids(&hits),
+            sorted(vec![a1.clone(), a2.clone(), g1.clone()]),
+            "{q}"
+        );
+    }
+    // Two repositories whose roots end in the same component (one with a
+    // trailing slash) resolve together too; the id form still picks just one.
+    conn.execute(
+        "UPDATE repository SET primary_path = '/mnt/Beta/' WHERE id = 'repo_alpha'",
+        [],
+    )
+    .unwrap();
+    let hits = search(&conn, "repo:beta", 20).unwrap();
+    assert_eq!(
+        session_ids(&hits),
+        sorted(vec![a1, a2, b1.clone()]),
+        "alpha's two sessions plus beta's"
+    );
+    assert_eq!(
+        session_ids(&search(&conn, "repo:repo_beta", 20).unwrap()),
+        vec![b1]
+    );
+}
+
+#[test]
+fn repo_name_combines_with_other_filters() {
+    let (conn, _bd, _ids) = repo_fixture();
+    assert!(search(&conn, "repo:lore has:error", 20).unwrap().is_empty());
+    assert_eq!(
+        search(&conn, "repo:lore agent:claude-code", 20)
+            .unwrap()
+            .len(),
+        3
+    );
+    assert!(search(&conn, "repo:lore agent:codex", 20)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn hostile_filter_values_cannot_break_the_query() {
+    let (conn, _bd, _ids) = repo_fixture();
+    let sessions_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM agent_session", [], |r| r.get(0))
+        .unwrap();
+
+    // None contains whitespace, so each stays a single filter value. Each is
+    // run alone (filter-only path) and beside a term (FTS path).
+    let match_nothing = [
+        "repo:*",
+        "repo:%",
+        "repo:_",
+        "repo:'",
+        "repo:\"",
+        "repo:\"'",
+        "repo:'OR'1'='1",
+        "repo:');DROP/**/TABLE/**/agent_session;--",
+        "repo:\\",
+        "repo:[]",
+        "repo:\"]",
+        "agent:\"",
+        "agent:*",
+        "agent:%",
+        "agent:'OR'1'='1",
+        "tool:*",
+        "tool:\"",
+        "branch:*",
+        "branch:%",
+        "branch:\"",
+        "commit:%",
+        "commit:*",
+        "worktree:*",
+        "model:%",
+        "model:_",
+        "model:*",
+    ];
+    for q in match_nothing {
+        for full in [q.to_string(), format!("alpha {q}")] {
+            for sort in [SortOrder::Relevance, SortOrder::Newest, SortOrder::Oldest] {
+                let page = search_page(&conn, &full, 20, None, sort)
+                    .unwrap_or_else(|e| panic!("{full:?} errored: {e}"));
+                assert!(page.hits.is_empty(), "{full:?} must match nothing");
+            }
+        }
+    }
+    // Values that sanitize to nothing, and quote-only paths, must not error.
+    for q in ["repo:\u{0}", "path:\"", "path:'"] {
+        search_page(&conn, q, 20, None, SortOrder::Newest)
+            .unwrap_or_else(|e| panic!("{q:?} errored: {e}"));
+    }
+
+    let sessions_after: i64 = conn
+        .query_row("SELECT COUNT(*) FROM agent_session", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sessions_before, sessions_after);
+    // The archive still answers an ordinary query afterwards.
+    assert_eq!(search(&conn, "repo:repo_beta", 20).unwrap().len(), 1);
+}
