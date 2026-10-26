@@ -39,7 +39,7 @@ jobs:
           cargo test -p lorectl --test no_network_in_lorectl
       - name: Allow unprivileged user namespaces
         # Ubuntu 24.04 runners block them through AppArmor, which leaves the
-        # egress guard's `unshare -rn` and `bwrap` wrappers unusable.
+        # egress guard's `unshare` and `bwrap` wrappers unusable.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Egress guard (dependency graph + runtime network-deny)
         # REQUIRE_RUNTIME makes an unavailable sandbox wrapper a failure rather
