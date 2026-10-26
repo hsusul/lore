@@ -1,0 +1,14 @@
+-- Migration 0015: ingest indexes its new search rows itself, once per
+-- transaction.
+--
+-- FTS5 flushes its pending terms to disk at each statement that writes it.
+-- Ingest inserts search rows one statement at a time, so the AFTER INSERT
+-- trigger wrote one index segment per row. Ingest now inserts a transaction's
+-- new rows into search_fts with one statement, in rowid order
+-- (`crate::ingest`).
+--
+-- The DELETE and UPDATE triggers stay. Every delete removes its rows in one
+-- statement, so the DELETE trigger already flushes once per delete, and
+-- nothing updates search_document. The existing index is already in sync, so
+-- this migration changes only how later rows reach it.
+DROP TRIGGER search_document_ai;

@@ -110,6 +110,7 @@ fn persist_rows(
         "DELETE FROM agent_session WHERE id = ?1",
         params![session_id],
     )?;
+    let high_water = search_high_water(tx)?;
 
     // Deleting the logical session above cascades its source links. Preserve
     // links from copies/continued artifacts so replaying one source does not
@@ -164,7 +165,33 @@ fn persist_rows(
         patch_blobs,
         RowBase::default(),
     )?;
+    index_search_rows(tx, high_water)?;
     Ok(session_id)
+}
+
+/// The highest search row id. Rows inserted after reading it get higher ids,
+/// since a new INTEGER PRIMARY KEY is one past the largest. Read it after the
+/// transaction's deletes, which can free the largest id for reuse.
+fn search_high_water(tx: &Connection) -> Result<i64> {
+    Ok(tx.query_row(
+        "SELECT coalesce(max(id), 0) FROM search_document",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
+/// Index the search rows above `high_water` with one statement, in rowid
+/// order. FTS5 flushes at each statement that writes it, and ingest inserts
+/// one search row per statement, so migration 0015 dropped the insert trigger
+/// that indexed each row as it landed. A rowid below the last one also forces
+/// a flush, hence the order.
+fn index_search_rows(tx: &Connection, high_water: i64) -> Result<()> {
+    tx.execute(
+        "INSERT INTO search_fts(rowid, redacted_text)
+         SELECT id, redacted_text FROM search_document WHERE id > ?1 ORDER BY id",
+        [high_water],
+    )?;
+    Ok(())
 }
 
 /// A native title (custom/ai) is distinct content, so it is scanned and
@@ -552,7 +579,8 @@ fn append_rows(
     )?;
 
     // Only a native title is projected, so only a new one changes the index.
-    if from.native_title != end.native_title {
+    let title_changed = from.native_title != end.native_title;
+    if title_changed {
         tx.execute(
             "DELETE FROM search_document
              WHERE session_id = ?1 AND source_kind = 'session' AND source_id = ?1
@@ -564,6 +592,9 @@ fn append_rows(
              WHERE source_kind = 'session' AND source_id = ?1 AND field = 'title'",
             [session_id],
         )?;
+    }
+    let high_water = search_high_water(tx)?;
+    if title_changed {
         project_title(tx, session_id, agent_id, parsed)?;
     }
 
@@ -579,6 +610,7 @@ fn append_rows(
             file_events: from.file_event_count,
         },
     )?;
+    index_search_rows(tx, high_water)?;
 
     for result in &append.earlier_results {
         let (seq, ordinal) = result.result_ref;

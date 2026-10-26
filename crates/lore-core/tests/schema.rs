@@ -3,8 +3,6 @@
 //! external-content FTS5 index tracks `search_document`.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use rusqlite::params;
-
 fn db() -> rusqlite::Connection {
     lore_core::storage::open_in_memory().unwrap()
 }
@@ -180,14 +178,16 @@ fn session_uniqueness_null_semantics() {
 }
 
 #[test]
-fn fts_tracks_search_document() {
+fn deleting_a_search_document_de_indexes_it() {
     let conn = db();
     seed_session(&conn);
-    conn.execute(
+    // Ingest indexes new rows itself (migration 0015), as here.
+    conn.execute_batch(
         "INSERT INTO search_document
             (session_id, source_kind, source_id, field, redacted_text, created_at)
-         VALUES ('s1','message_part','p1','text','fix the stripe webhook signature',1)",
-        params![],
+         VALUES ('s1','message_part','p1','text','fix the stripe webhook signature',1);
+         INSERT INTO search_fts(rowid, redacted_text)
+         SELECT id, redacted_text FROM search_document;",
     )
     .unwrap();
     let hits: i64 = conn
@@ -197,7 +197,7 @@ fn fts_tracks_search_document() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(hits, 1, "inserting a search_document must index it in FTS5");
+    assert_eq!(hits, 1);
 
     // Deleting the document must remove it from the FTS index too.
     conn.execute("DELETE FROM search_document WHERE source_id = 'p1'", [])
