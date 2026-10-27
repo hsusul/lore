@@ -84,7 +84,7 @@ export function plural(n: number, one: string, many: string = `${one}s`): string
   return `${n.toLocaleString()} ${n === 1 ? one : many}`;
 }
 
-const AGO_STEPS:[Intl.RelativeTimeFormatUnit, number][] = [
+const AGO_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
   ["hour", 60],
   ["day", 24],
   ["week", 7],

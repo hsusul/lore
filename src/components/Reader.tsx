@@ -106,6 +106,7 @@ function SessionReader({
   terms,
   repositories,
   toolCalls,
+  overlayOpen,
   onBack,
   readerRef,
 }: {
@@ -113,6 +114,8 @@ function SessionReader({
   terms: string[];
   repositories: RepositorySummary[];
   toolCalls: ToolCallMode;
+  /** The palette, Settings or an alert is open, so ⌘1 to ⌘3 belong to it. */
+  overlayOpen: boolean;
   onBack: () => void;
   readerRef: RefObject<HTMLElement>;
 }) {
@@ -128,7 +131,7 @@ function SessionReader({
 
   // The Files tab matches file events to the calls in the loaded transcript.
   const blocks = useMemo(() => buildTranscript(log.messages), [log.messages]);
-  const byFile = useMemo(() => callsByFile(file_events, callsOf(blocks)), [blocks, file_events]);
+  const byFile = useMemo(() => callsByFile(file_events, callsOf(blocks), segments), [blocks, file_events, segments]);
   const byCall = useMemo(() => fileByCall(file_events, byFile), [byFile, file_events]);
   const fileFor = useCallback((call: { key: string }) => byCall.get(call.key) ?? null, [byCall]);
   const revealed = useCallback(() => setReveal(null), []);
@@ -145,6 +148,7 @@ function SessionReader({
   }
 
   useEffect(() => {
+    if (overlayOpen) return;
     function onKey(event: KeyboardEvent) {
       const next = TAB_KEYS[event.key];
       if (!next || !(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
@@ -153,7 +157,7 @@ function SessionReader({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [overlayOpen]);
 
   const tabs: { id: Tab; label: string; count: number }[] = [
     { id: "conversation", label: "Conversation", count: 0 },
@@ -245,6 +249,7 @@ export default function Reader({
   terms: string[];
   repositories: RepositorySummary[];
   toolCalls: ToolCallMode;
+  overlayOpen: boolean;
   onBack: () => void;
   readerRef: RefObject<HTMLElement>;
 }) {

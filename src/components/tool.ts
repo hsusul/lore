@@ -1,5 +1,5 @@
 import { plural } from "../format";
-import type { MessagePartDto } from "../ipc";
+import type { MessageDto, MessagePartDto } from "../ipc";
 import { looksLikePatch, patchPaths } from "./Diff";
 
 /** What a tool call did, which decides its verb, icon, and how a run of calls is summed up. */
@@ -63,6 +63,8 @@ export interface ToolCall {
   /** `${messageId}:${ordinal}`, unique within a session. */
   key: string;
   ts: number | null;
+  /** The message's position, which picks the working folder its relative paths resolve against. */
+  seq: number;
   name: string;
   kind: ToolKind;
   /** The one input that says what the call did: a path, a command, a pattern. */
@@ -140,7 +142,7 @@ function editAsPatch(input: JsonObject): string | null {
 }
 
 /** Read a tool_use part from either agent's shape. */
-export function readCall(part: MessagePartDto, messageId: string, ts: number | null): ToolCall {
+export function readCall(part: MessagePartDto, message: Pick<MessageDto, "id" | "ts" | "seq">): ToolCall {
   const raw = parse(part.content_json);
   const block = isObject(raw) ? raw : {};
   const name = str(block.name) ?? str(block.type) ?? "tool";
@@ -187,8 +189,9 @@ export function readCall(part: MessagePartDto, messageId: string, ts: number | n
   }
 
   return {
-    key: `${messageId}:${part.ordinal}`,
-    ts,
+    key: `${message.id}:${part.ordinal}`,
+    ts: message.ts,
+    seq: message.seq,
     name,
     kind,
     argument,

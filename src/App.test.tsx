@@ -681,6 +681,11 @@ describe("reader", () => {
     expect(within(reader).getByRole("tabpanel").textContent).toContain("No git evidence was recorded or observed for this session.");
     fireEvent.keyDown(window, { key: "1", metaKey: true });
     expect(within(reader).getByRole("tab", { name: "Conversation" }).getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await screen.findByRole("combobox", { name: /Jump to a session/ });
+    fireEvent.keyDown(window, { key: "2", metaKey: true });
+    expect(within(reader).getByRole("tab", { name: "Conversation" }).getAttribute("aria-selected")).toBe("true");
   });
 
   it("shows a tool call as one line that opens to its recorded output and raw input", async () => {
@@ -838,15 +843,16 @@ describe("reader", () => {
   });
 
   it("says which call changed a file and shows that call in the conversation", async () => {
-    m.getSession.mockResolvedValue(
-      withMessages(alpha, [
+    m.getSession.mockResolvedValue({
+      ...withMessages(alpha, [
         message(1, "user", [part(0, "text", "Make it deterministic.")]),
         {
           ...message(2, "assistant", [part(0, "tool_use", { name: "Edit", input: { file_path: "/repo/src/sync/worker.rs", old_string: "a", new_string: "b" } })]),
           ts: new Date(2026, 9, 26, 14, 25).getTime(),
         },
       ]),
-    );
+      segments: [{ id: "s1", seq_start: 0, seq_end: 9, cwd: "/repo", model: null, provider: null, repository_id: null, resolution_confidence: "unresolved" }],
+    });
     const user = userEvent.setup();
     const reader = await openAlpha();
     await user.click(within(reader).getByRole("tab", { name: /Files/ }));

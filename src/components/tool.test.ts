@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { FileEventDto, MessageDto, MessagePartDto } from "../ipc";
+import type { FileEventDto, MessageDto, MessagePartDto, SegmentDto } from "../ipc";
 import { parseDiff, patchPaths } from "./Diff";
 import { readCall, readResult, summarizeRun } from "./tool";
 import { buildTranscript, callsByFile, callsOf, fileByCall } from "./transcript-model";
@@ -17,16 +17,24 @@ function text(value: string, ordinal = 0): MessagePartDto {
   return { ordinal, kind: "text", text: value, content_json: null, searchable: true };
 }
 
-function msg(id: string, role: string, parts: MessagePartDto[], ts: number | null = null): MessageDto {
-  return { id, seq: Number(id.slice(1)), role, event_kind: "message", is_sidechain: false, ts, model: null, parts };
+function msg(id: string, role: string, parts: MessagePartDto[], ts: number | null = null, sidechain = false): MessageDto {
+  return { id, seq: Number(id.slice(1)), role, event_kind: "message", is_sidechain: sidechain, ts, model: null, parts };
 }
+
+const at = (id: string, ts: number | null = null) => ({ id, ts, seq: 0 });
+
+function segment(cwd: string): SegmentDto {
+  return { id: "s1", seq_start: 0, seq_end: 99, cwd, model: null, provider: null, repository_id: null, resolution_confidence: "unresolved" };
+}
+
+/** Each call's argument with the output paired to it, or null when it got none. */
+const pairings = (messages: MessageDto[]) => callsOf(buildTranscript(messages)).map((c) => [c.name, c.argument?.text ?? null, c.result?.text ?? null]);
 
 describe("readCall", () => {
   it("reads a Codex apply_patch call as a patch on the file it names", () => {
     const call = readCall(
       use({ type: "custom_tool_call", name: "apply_patch", input: "*** Begin Patch\n*** Update File: a.rs\n@@\n-old\n+new\n*** End Patch" }),
-      "m1",
-      null,
+      at("m1"),
     );
     expect([call.kind, call.argument, call.paths, call.raw]).toEqual(["edit", { text: "a.rs", isPath: true }, ["a.rs"], null]);
     expect(call.patch?.split("\n")[3]).toBe("-old");
@@ -35,14 +43,13 @@ describe("readCall", () => {
   it("reads a Codex shell call from its JSON-encoded arguments, without the shell wrapper", () => {
     const call = readCall(
       use({ type: "function_call", name: "shell", arguments: JSON.stringify({ command: ["bash", "-lc", "rg -n retry"], timeout_ms: 1000 }) }),
-      "m1",
-      null,
+      at("m1"),
     );
     expect([call.kind, call.argument?.text, call.fields]).toEqual(["run", "rg -n retry", [["Timeout ms", "1000"]]]);
   });
 
   it("turns a Claude Edit into a before and after patch, keeping the path out of the fields", () => {
-    const call = readCall(use({ type: "tool_use", name: "Edit", input: { file_path: "a.rs", old_string: "x = 1", new_string: "x = 2" } }), "m1", 5);
+    const call = readCall(use({ type: "tool_use", name: "Edit", input: { file_path: "a.rs", old_string: "x = 1", new_string: "x = 2" } }), at("m1", 5));
     expect(call.patch).toBe("--- a.rs\n+++ a.rs\n-x = 1\n+x = 2");
     expect([call.argument, call.fields, call.paths, call.ts]).toEqual([{ text: "a.rs", isPath: true }, [], ["a.rs"], 5]);
     expect(JSON.parse(call.raw ?? "")).toEqual({ file_path: "a.rs", old_string: "x = 1", new_string: "x = 2" });
@@ -95,6 +102,46 @@ describe("buildTranscript", () => {
     ]);
   });
 
+  it("never carries a call's wait for output past a real user turn", () => {
+    expect(
+      pairings([
+        msg("m0", "assistant", [use({ name: "Bash", id: "t1", input: { command: "npm test" } })]),
+        msg("m1", "user", [text("Stop, read the config first.")]),
+        msg("m2", "assistant", [use({ name: "Read", id: "t2", input: { file_path: "a.json" } })]),
+        msg("m3", "user", [result("{}")]),
+      ]),
+    ).toEqual([
+      ["Bash", "npm test", null],
+      ["Read", "a.json", "{}"],
+    ]);
+  });
+
+  it("keeps a subagent's results apart from the main thread's", () => {
+    expect(
+      pairings([
+        msg("m0", "assistant", [use({ name: "Task", id: "t1", input: { description: "Find callers" } })]),
+        msg("m1", "assistant", [use({ name: "Grep", id: "t2", input: { pattern: "formatPrice" } })], null, true),
+        msg("m2", "user", [result("src/cart.ts")], null, true),
+        msg("m3", "user", [result("Two callers.")]),
+      ]),
+    ).toEqual([
+      ["Task", "Find callers", "Two callers."],
+      ["Grep", "formatPrice", "src/cart.ts"],
+    ]);
+  });
+
+  it("pairs a result that names an unknown call with nothing", () => {
+    expect(
+      pairings([
+        msg("m0", "assistant", [use({ type: "function_call", name: "shell", call_id: "a", arguments: "{\"command\":\"ls\"}" })]),
+        msg("m1", "tool", [result("stray", { type: "function_call_output", call_id: "zz", output: "stray" })]),
+      ]),
+    ).toEqual([
+      ["shell", "ls", null],
+      ["Output", null, "stray"],
+    ]);
+  });
+
   it("shows a result with no call as its own Output row", () => {
     const calls = callsOf(buildTranscript([msg("m0", "tool", [result("orphan", { call_id: "zz", output: "orphan" })])]));
     expect(calls.map((c) => [c.name, c.result?.text])).toEqual([["Output", "orphan"]]);
@@ -104,10 +151,10 @@ describe("buildTranscript", () => {
 describe("summarizeRun", () => {
   it("says what a run of calls did, in order of first use", () => {
     const calls = [
-      readCall(use({ name: "Read", input: { file_path: "a" } }), "m1", null),
-      readCall(use({ name: "Bash", input: { command: "ls" } }), "m2", null),
-      readCall(use({ name: "Read", input: { file_path: "b" } }), "m3", null),
-      readCall(use({ name: "mcp__linear__get_issue", input: {} }), "m4", null),
+      readCall(use({ name: "Read", input: { file_path: "a" } }), at("m1")),
+      readCall(use({ name: "Bash", input: { command: "ls" } }), at("m2")),
+      readCall(use({ name: "Read", input: { file_path: "b" } }), at("m3")),
+      readCall(use({ name: "mcp__linear__get_issue", input: {} }), at("m4")),
     ];
     expect(summarizeRun(calls)).toBe("Read 2 files, ran 1 command, used mcp__linear__get_issue");
   });
@@ -137,12 +184,34 @@ describe("matching files to calls", () => {
       ]),
     );
     const files = [file("fa", "src/a.ts"), file("fb", "src/b.ts")];
-    const byFile = callsByFile(files, calls);
+    const byFile = callsByFile(files, calls, [segment("/repo")]);
     expect([...byFile].map(([id, cs]) => [id, cs.map((c) => c.key)])).toEqual([
       ["fa", ["m0:0"]],
       ["fb", ["m0:2", "m0:3"]],
     ]);
     expect([...fileByCall(files, byFile)].map(([key, f]) => [key, f.id])).toEqual([["m0:0", "fa"]]);
+  });
+
+  it("resolves a relative patch path against the call's folder, and matches nothing it cannot resolve", () => {
+    const calls = callsOf(
+      buildTranscript([
+        msg("m0", "assistant", [use({ type: "custom_tool_call", name: "apply_patch", input: "*** Begin Patch\n*** Update File: a.ts\n@@\n-x\n+y\n*** End Patch" })]),
+      ]),
+    );
+    const files = [file("root", "a.ts"), file("nested", "src/a.ts")];
+    const ids = (segments: SegmentDto[]) => [...callsByFile(files, calls, segments)].map(([id, cs]) => [id, cs.length]);
+    expect(ids([segment("/repo")])).toEqual([
+      ["root", 1],
+      ["nested", 0],
+    ]);
+    expect(ids([segment("/repo/src")])).toEqual([
+      ["root", 1],
+      ["nested", 0],
+    ]);
+    expect(ids([])).toEqual([
+      ["root", 0],
+      ["nested", 0],
+    ]);
   });
 });
 

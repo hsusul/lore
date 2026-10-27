@@ -662,6 +662,7 @@ export default function App() {
                     terms={searching ? terms : []}
                     repositories={repositories}
                     toolCalls={toolCalls}
+                    overlayOpen={ws.overlay.kind !== "none"}
                     onBack={focusList}
                     readerRef={readerRef}
                   />

@@ -1,4 +1,4 @@
-import type { FileEventDto, MessageDto } from "../ipc";
+import type { FileEventDto, MessageDto, SegmentDto } from "../ipc";
 import { readCall, readResult, type ToolCall } from "./tool";
 
 /** One piece of a turn, in order. Consecutive tool calls share one `tools` item. */
@@ -39,13 +39,19 @@ function isAgentTurn(message: MessageDto): boolean {
 export function buildTranscript(messages: MessageDto[]): Block[] {
   const blocks: Block[] = [];
   const byId = new Map<string, ToolCall>();
-  // Calls still waiting for a result, oldest first. Claude's stored results carry no
-  // call id, so they pair in order, which is how Claude emits them.
-  const waiting: ToolCall[] = [];
+  // Calls still waiting for a result without an id, oldest first, one queue for the main
+  // thread and one for subagents. Claude's stored results carry no call id, so they pair
+  // in order, which is how Claude emits them. A real user turn ends the exchange: a call
+  // still waiting then never gets a later, unrelated output.
+  const waiting = new Map<boolean, ToolCall[]>([
+    [false, []],
+    [true, []],
+  ]);
 
   for (const message of messages) {
     let block: Block;
     const last = blocks[blocks.length - 1];
+    const queue = waiting.get(message.is_sidechain)!;
     if (isAgentTurn(message)) {
       if (last?.kind === "agent" && last.sidechain === message.is_sidechain) block = last;
       else {
@@ -53,6 +59,7 @@ export function buildTranscript(messages: MessageDto[]): Block[] {
         blocks.push(block);
       }
     } else {
+      if (message.role === "user") queue.length = 0;
       block =
         message.role === "user"
           ? { kind: "user", key: message.id, ts: message.ts, items: [] }
@@ -73,21 +80,24 @@ export function buildTranscript(messages: MessageDto[]): Block[] {
       const key = `${message.id}:${part.ordinal}`;
       switch (part.kind) {
         case "tool_use": {
-          const call = readCall(part, message.id, message.ts);
+          const call = readCall(part, message);
           if (call.id) byId.set(call.id, call);
-          waiting.push(call);
+          queue.push(call);
           addCall(call);
           break;
         }
         case "tool_result": {
           const { id, result } = readResult(part);
-          const call = (id !== null ? byId.get(id) : undefined) ?? waiting.find((c) => c.result === null);
+          // A result that names its call pairs with that call or with nothing.
+          const call = id !== null ? byId.get(id) : queue[0];
           if (call && call.result === null) {
             call.result = result;
-            const at = waiting.indexOf(call);
-            if (at >= 0) waiting.splice(at, 1);
+            for (const q of waiting.values()) {
+              const at = q.indexOf(call);
+              if (at >= 0) q.splice(at, 1);
+            }
           } else {
-            addCall({ ...readCall({ ...part, content_json: null }, message.id, message.ts), name: "Output", result });
+            addCall({ ...readCall({ ...part, content_json: null }, message), name: "Output", result });
           }
           break;
         }
@@ -110,15 +120,36 @@ export function callsOf(blocks: Block[]): ToolCall[] {
   return blocks.flatMap((b) => b.items.flatMap((i) => (i.kind === "tools" ? i.calls : [])));
 }
 
-function samePath(a: string, b: string): boolean {
-  const x = a.replace(/^\.\//, "");
-  const y = b.replace(/^\.\//, "");
-  return x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`);
+/** An absolute, normalized path, or null when a relative path has no folder to resolve against. */
+export function resolvePath(path: string, cwd: string | null): string | null {
+  const full = path.startsWith("/") ? path : cwd?.startsWith("/") ? `${cwd}/${path}` : null;
+  if (full === null) return null;
+  const parts: string[] = [];
+  for (const part of full.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join("/")}`;
 }
 
-/** The calls that changed each file event's path, oldest first. */
-export function callsByFile(files: FileEventDto[], calls: ToolCall[]): Map<string, ToolCall[]> {
-  return new Map(files.map((file) => [file.id, calls.filter((c) => c.paths.some((p) => samePath(p, file.path)))]));
+/**
+ * The calls that changed each file event's path, oldest first. Relative paths on either
+ * side resolve against the working folder of the call's segment; a path that cannot be
+ * resolved matches nothing, so a provenance time is never borrowed from another file.
+ */
+export function callsByFile(files: FileEventDto[], calls: ToolCall[], segments: SegmentDto[]): Map<string, ToolCall[]> {
+  const cwdAt = (seq: number) => segments.find((s) => seq >= s.seq_start && seq <= s.seq_end)?.cwd ?? null;
+  return new Map(
+    files.map((file) => [
+      file.id,
+      calls.filter((call) => {
+        const cwd = cwdAt(call.seq);
+        const target = resolvePath(file.path, cwd);
+        return target !== null && call.paths.some((p) => resolvePath(p, cwd) === target);
+      }),
+    ]),
+  );
 }
 
 /**
