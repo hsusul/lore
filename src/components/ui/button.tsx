@@ -3,13 +3,17 @@ import { forwardRef, type ComponentPropsWithoutRef } from "react";
 
 /**
  * macOS buttons (spec 9.7). `push` is the regular rounded button, `default` the one
- * accent-filled button a sheet may have, `toolbar` the 28px borderless icon button.
+ * accent-filled button a sheet may have, `toolbar` the 28px borderless icon button
+ * (`toolbar-menu` when it carries a pull-down chevron), `icon`
+ * the 24px borderless one inside content (a block's copy button, the reader's info button).
  * A destructive action is a push button with `destructive`, which colors the label.
  */
 const VARIANTS = {
   push: "h-control gap-1 rounded-control bg-bg-button px-2.5 text-control text-label shadow-button border-contrast border-separator",
   default: "h-control gap-1 rounded-control bg-accent-fill px-2.5 text-control text-on-selected shadow-button",
   toolbar: "size-toolbar-btn rounded-control text-label-2 hover:bg-fill-2 aria-disabled:text-label-3 aria-disabled:hover:bg-transparent",
+  "toolbar-menu": "h-toolbar-btn gap-0.5 rounded-control px-1 text-label-2 hover:bg-fill-2",
+  icon: "size-tool-row rounded-control text-label-2 hover:bg-fill-2",
 } as const;
 
 export type ButtonVariant = keyof typeof VARIANTS;

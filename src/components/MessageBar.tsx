@@ -3,8 +3,8 @@ import { Button } from "./ui/button";
 
 /**
  * The latest notice or error, in a line under the toolbar until dismissed. It takes the
- * status bar's message slot; the reader redesign moves each confirmation onto the
- * control that caused it (spec 9.12).
+ * status bar's message slot. Reader actions confirm on their own controls instead (spec
+ * 9.12); this line keeps the remaining notices and errors.
  */
 export default function MessageBar({ flash, onDismiss }: { flash: Flash; onDismiss: () => void }) {
   if (!flash) return null;

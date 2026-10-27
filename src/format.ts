@@ -28,33 +28,6 @@ export function formatTime(ms: number | null): string {
   });
 }
 
-function formatShortDate(ms: number): string {
-  return new Date(ms).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-/** Compact relative time ("just now", "5m", "3h", "2d", "4w", or a date). */
-export function formatRelative(ms: number | null): string {
-  if (ms == null || !Number.isFinite(ms)) return "";
-  const diff = Date.now() - ms;
-  if (diff < -60_000) {
-    return formatShortDate(ms);
-  }
-  if (diff <= 45_000) return "just now";
-  const seconds = Math.round(diff / 1000);
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.round(hours / 24);
-  if (days < 7) return `${days}d`;
-  const weeks = Math.round(days / 7);
-  if (weeks < 5) return `${weeks}w`;
-  return formatShortDate(ms);
-}
-
 const DAY_MS = 86_400_000;
 
 function startOfDay(ms: number): number {
@@ -75,7 +48,43 @@ export function formatMailDate(ms: number | null, now: number = Date.now()): str
   return new Date(ms).toLocaleDateString(undefined, { month: "numeric", day: "numeric", year: "2-digit" });
 }
 
-const AGO_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
+/** A clock time ("2:06 PM"). */
+export function formatClock(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+/** A day and time as Mail's message header writes it: "Today at 2:00 PM", "Yesterday at …", "Oct 19 at …". */
+export function formatDayAndTime(ms: number, now: number = Date.now()): string {
+  const days = Math.round((startOfDay(now) - startOfDay(ms)) / DAY_MS);
+  const day =
+    days === 0
+      ? "Today"
+      : days === 1
+        ? "Yesterday"
+        : new Date(ms).toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+            year: new Date(ms).getFullYear() === new Date(now).getFullYear() ? undefined : "numeric",
+          });
+  return `${day} at ${formatClock(ms)}`;
+}
+
+/** A session's length in words ("38 min", "2 hr 5 min"), or null when it is unknown. */
+export function formatDuration(start: number | null, end: number | null): string | null {
+  if (start == null || end == null || end <= start) return null;
+  const minutes = Math.round((end - start) / 60_000);
+  if (minutes < 1) return "under a minute";
+  if (minutes < 60) return `${minutes} min`;
+  const rest = minutes % 60;
+  return rest === 0 ? `${Math.floor(minutes / 60)} hr` : `${Math.floor(minutes / 60)} hr ${rest} min`;
+}
+
+/** "1 file", "3 files". */
+export function plural(n: number, one: string, many: string = `${one}s`): string {
+  return `${n.toLocaleString()} ${n === 1 ? one : many}`;
+}
+
+const AGO_STEPS:[Intl.RelativeTimeFormatUnit, number][] = [
   ["hour", 60],
   ["day", 24],
   ["week", 7],
@@ -94,12 +103,4 @@ export function formatAgo(ms: number, now: number = Date.now()): string {
     unit = next;
   }
   return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(-Math.round(value), unit);
-}
-
-/** Compact token count formatting (e.g. 1.2k, 45k, 1.4M). */
-export function formatTokens(tokens: number | null): string {
-  if (tokens == null || !Number.isFinite(tokens) || tokens <= 0) return "";
-  if (tokens < 1_000) return `${tokens}`;
-  if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
 }

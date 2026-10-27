@@ -11,3 +11,6 @@ export const FLOAT_OFFSET = 8;
 
 /** Menus open flush to their trigger, as macOS pull-down menus do. */
 export const MENU_OFFSET = 4;
+
+/** How long a control's confirmation ("Copied") holds its tooltip open. */
+export const CONFIRM_MS = 1500;

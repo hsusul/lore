@@ -1,6 +1,6 @@
 import * as Primitive from "@radix-ui/react-tooltip";
 import { clsx } from "clsx";
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef, type ReactElement, type ReactNode } from "react";
+import { forwardRef, useState, type ComponentPropsWithoutRef, type ElementRef, type ReactElement, type ReactNode } from "react";
 
 import { FLOAT_OFFSET, TOOLTIP_DELAY_MS } from "./metrics";
 
@@ -32,12 +32,17 @@ export const TooltipContent = forwardRef<
   );
 });
 
-/** A control with a tooltip. The child must forward its ref (a Button does). */
-export function Tooltip({ label, children }: { label: ReactNode; children: ReactElement }) {
+/**
+ * A control with a tooltip. The child must forward its ref (a Button does). A `note`
+ * replaces the label and holds the tooltip open, which is how a control confirms what
+ * it just did ("Copied", spec 9.12) instead of a toast.
+ */
+export function Tooltip({ label, note = null, children }: { label: ReactNode; note?: string | null; children: ReactElement }) {
+  const [hovered, setHovered] = useState(false);
   return (
-    <TooltipRoot>
+    <TooltipRoot open={hovered || note !== null} onOpenChange={setHovered}>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent>{note ?? label}</TooltipContent>
     </TooltipRoot>
   );
 }

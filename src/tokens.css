@@ -131,6 +131,12 @@
   --palette-top: 18vh;
   --palette-input-h: 48px;
   --palette-list-h: 420px;
+  --measure: 620px;
+  --user-turn-w: 560px;
+  --tool-row-h: 24px;
+  --output-max-h: 240px;
+  --line-no-w: 32px;
+  --diff-sign-w: 16px;
   --i-13: 13px;
   --i-15: 15px;
   --i-17: 17px;

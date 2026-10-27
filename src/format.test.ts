@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { agentLabel, clamp, formatAgo, formatMailDate, formatRelative, formatTime, formatTokens } from "./format";
+import { agentLabel, clamp, formatAgo, formatDayAndTime, formatDuration, formatMailDate, formatTime, plural } from "./format";
 
 describe("format helpers", () => {
   describe("formatAgo", () => {
@@ -54,46 +54,26 @@ describe("format helpers", () => {
     });
   });
 
-  describe("formatRelative", () => {
-    it("returns empty string for null and non-finite values", () => {
-      expect(formatRelative(null)).toBe("");
-      expect(formatRelative(NaN)).toBe("");
-      expect(formatRelative(Infinity)).toBe("");
-      expect(formatRelative(-Infinity)).toBe("");
+  describe("reader dates and lengths", () => {
+    const now = new Date(2026, 9, 26, 18, 0).getTime();
+
+    it("writes the start as Mail's header does", () => {
+      expect(formatDayAndTime(new Date(2026, 9, 26, 14, 0).getTime(), now)).toBe("Today at 2:00 PM");
+      expect(formatDayAndTime(new Date(2026, 9, 25, 9, 5).getTime(), now)).toBe("Yesterday at 9:05 AM");
+      expect(formatDayAndTime(new Date(2026, 9, 19, 14, 0).getTime(), now)).toBe("Oct 19 at 2:00 PM");
+      expect(formatDayAndTime(new Date(2025, 9, 19, 14, 0).getTime(), now)).toBe("Oct 19, 2025 at 2:00 PM");
     });
 
-    it("handles future timestamps or clock skew gracefully without negative numbers", () => {
-      const now = Date.now();
-      expect(formatRelative(now + 10_000)).toBe("just now");
-      expect(formatRelative(now + 60_000)).toBe("just now");
-      const futureDate = formatRelative(now + 100 * 24 * 60 * 60 * 1000);
-      expect(futureDate).not.toBe("just now");
-      expect(futureDate.length).toBeGreaterThan(0);
+    it("writes a session's length, or nothing when it is unknown", () => {
+      expect(formatDuration(now, now + 38 * 60_000)).toBe("38 min");
+      expect(formatDuration(now, now + 125 * 60_000)).toBe("2 hr 5 min");
+      expect(formatDuration(now, now + 120 * 60_000)).toBe("2 hr");
+      expect(formatDuration(now, now + 20_000)).toBe("under a minute");
+      expect(formatDuration(now, null)).toBeNull();
     });
 
-    it("formats recent seconds as 'just now'", () => {
-      const now = Date.now();
-      expect(formatRelative(now - 10_000)).toBe("just now");
-      expect(formatRelative(now - 40_000)).toBe("just now");
-    });
-
-    it("formats minutes, hours, days, and weeks", () => {
-      const now = Date.now();
-      expect(formatRelative(now - 5 * 60 * 1000)).toBe("5m");
-      expect(formatRelative(now - 3 * 60 * 60 * 1000)).toBe("3h");
-      expect(formatRelative(now - 2 * 24 * 60 * 60 * 1000)).toBe("2d");
-      expect(formatRelative(now - 14 * 24 * 60 * 60 * 1000)).toBe("2w");
-    });
-  });
-
-  describe("formatTokens", () => {
-    it("formats small and large token counts compactly", () => {
-      expect(formatTokens(null)).toBe("");
-      expect(formatTokens(0)).toBe("");
-      expect(formatTokens(500)).toBe("500");
-      expect(formatTokens(1_500)).toBe("1.5k");
-      expect(formatTokens(24_000)).toBe("24k");
-      expect(formatTokens(1_200_000)).toBe("1.2M");
+    it("counts with the right noun", () => {
+      expect([plural(1, "file"), plural(1200, "match", "matches")]).toEqual(["1 file", "1,200 matches"]);
     });
   });
 

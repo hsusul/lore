@@ -1,130 +1,170 @@
-import { useRef, useState, type RefObject } from "react";
+import { Info } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type RefObject } from "react";
 
-import { agentLabel, formatRelative, formatTime, formatTokens } from "../format";
-import type { FolderSummary, RepositorySummary } from "../ipc";
+import { agentLabel, formatDayAndTime, formatDuration, formatTime, plural } from "../format";
+import { listSessionMessagesPage, type MessageDto, type RepositorySummary } from "../ipc";
 import type { OpenSession, OpenSessionState } from "../hooks/useOpenSession";
+import type { ToolCallMode } from "../hooks/useToolCallMode";
 import ErrorBoundary from "./ErrorBoundary";
 import FileChanges from "./FileChanges";
 import GitEvidence from "./GitEvidence";
-import Transcript from "./Transcript";
+import Transcript, { type MoreMessages } from "./Transcript";
+import { buildTranscript, callsByFile, callsOf, fileByCall } from "./transcript-model";
+import { Button, ICON } from "./ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { Tooltip } from "./ui/tooltip";
 
-export interface ReaderActions {
-  copyMarkdown: (id: string) => void;
-  saveFile: (id: string) => void;
-  file: (id: string, folderId: string | null) => void;
-  forget: (id: string, title: string) => void;
-}
+const PAGE = 200;
 
 type Tab = "conversation" | "files" | "git";
+const TAB_KEYS: Record<string, Tab> = { "1": "conversation", "2": "files", "3": "git" };
 
-function duration(start: number | null, end: number | null): string | null {
-  if (start == null || end == null || end <= start) return null;
-  const minutes = Math.round((end - start) / 60_000);
-  if (minutes < 1) return "under a minute";
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours} h ${minutes % 60} min`;
+/** The metadata line under the title (spec 9.3, 10): one run of clauses joined with " · ". */
+function metadata(session: OpenSession, repositories: RepositorySummary[]): string {
+  const { summary, segments } = session.detail;
+  const repoIds = [...new Set(segments.map((s) => s.repository_id).filter((id): id is string => id !== null))];
+  const repos = repoIds.map((id) => repositories.find((r) => r.id === id)?.display_name ?? id).join(", ");
+  return [
+    agentLabel(summary.agent_id),
+    summary.primary_model,
+    summary.started_at !== null ? formatDayAndTime(summary.started_at) : null,
+    formatDuration(summary.started_at, summary.ended_at),
+    repos || null,
+    summary.parse_status === "partial" ? "Partially parsed" : summary.parse_status === "failed" ? "Not fully parsed" : null,
+    session.secrets > 0 ? `${plural(session.secrets, "secret")} redacted` : null,
+  ]
+    .filter((clause): clause is string => !!clause)
+    .join(" · ");
 }
 
-function ParseNotice({ session }: { session: OpenSession }) {
-  const { summary, parse_note, file_events } = session.detail;
-  if (summary.parse_status === "ok") return null;
-  const failed = summary.parse_status === "failed";
+/** Counts, tokens, cost and the parser's note, behind the info button (spec 9.3). Never a grid on the page. */
+function Details({ session, loaded }: { session: OpenSession; loaded: number }) {
+  const { summary, parse_note } = session.detail;
+  const n = (x: number) => x.toLocaleString();
+  const input = summary.total_input_tokens ?? 0;
+  const output = summary.total_output_tokens ?? 0;
+  const parse =
+    summary.parse_status === "ok"
+      ? "Parsed completely."
+      : `${summary.parse_status === "failed" ? "Lore could not fully read this session" : "Lore read part of this session"}${
+          parse_note ? `: ${parse_note}.` : "."
+        } The original log is untouched, so a later Lore can read it again.`;
+  const secrets =
+    session.secrets > 0
+      ? `${plural(session.secrets, "secret")} redacted from search and exports. The original log still has them.`
+      : "No secrets flagged.";
   return (
-    <section className={`notice notice--${failed ? "danger" : "warn"}`} aria-labelledby="parse-heading">
-      <h3 id="parse-heading" className="notice__title">
-        {failed ? "Lore could not fully read this session" : "Lore read part of this session"}
-      </h3>
-      <p>
-        Recovered {summary.message_count} messages, {summary.tool_call_count} tool calls, and{" "}
-        {file_events.length} file changes{session.git.length > 0 ? ", with git context" : ", with no git context"}.
-        Your original agent log is untouched, so a later Lore can read it again.
-      </p>
-      <p>
-        Parser note:{" "}
-        <code>
-          {parse_note ??
-            (failed
-              ? "Lore could not safely normalize this source format."
-              : "Lore skipped records it could not safely normalize.")}
-        </code>
-      </p>
-    </section>
+    <Popover>
+      <Tooltip label="Details">
+        <PopoverTrigger asChild>
+          <Button variant="icon" aria-label="Details">
+            <Info className={ICON.small} aria-hidden="true" />
+          </Button>
+        </PopoverTrigger>
+      </Tooltip>
+      <PopoverContent align="end" aria-labelledby="details-title">
+        <h3 id="details-title" className="mb-2 text-headline">
+          Details
+        </h3>
+        <dl className="grid grid-cols-facts gap-x-3 gap-y-1 text-callout">
+          <dt className="text-label-2">Messages</dt>
+          <dd className="tabular-nums">
+            {n(Math.max(summary.message_count, loaded))}, including {plural(summary.tool_call_count, "tool call")}
+          </dd>
+          {input + output > 0 && (
+            <>
+              <dt className="text-label-2">Tokens</dt>
+              <dd className="tabular-nums">
+                {n(input)} in, {n(output)} out{summary.total_cache_tokens ? `, ${n(summary.total_cache_tokens)} cached` : ""}
+              </dd>
+            </>
+          )}
+          {summary.est_cost_usd != null && summary.est_cost_usd > 0 && (
+            <>
+              <dt className="text-label-2">Cost</dt>
+              <dd className="tabular-nums">${summary.est_cost_usd.toFixed(2)}, estimated</dd>
+            </>
+          )}
+        </dl>
+        <p className="mt-2 text-callout text-label-2">
+          {parse} {secrets}
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }
 
-function FolderSelect({
-  folders,
-  onFile,
-}: {
-  folders: FolderSummary[];
-  onFile: (folderId: string | null) => void;
-}) {
-  return (
-    <select
-      className="select"
-      aria-label="File in folder"
-      value=""
-      onChange={(event) => {
-        const value = event.target.value;
-        if (value === "") return;
-        onFile(value === "__none" ? null : value);
-      }}
-    >
-      <option value="">File in folder…</option>
-      {folders.map((folder) => (
-        <option key={folder.id} value={folder.id}>
-          {folder.name}
-        </option>
-      ))}
-      <option value="__none">Remove from its folder</option>
-    </select>
-  );
+interface MessageLog {
+  messages: MessageDto[];
+  cursor: string | null;
+  status: MoreMessages["status"];
 }
 
 function SessionReader({
   session,
   terms,
-  folders,
   repositories,
-  actions,
+  toolCalls,
   onBack,
   readerRef,
 }: {
   session: OpenSession;
   terms: string[];
-  folders: FolderSummary[];
   repositories: RepositorySummary[];
-  actions: ReaderActions;
+  toolCalls: ToolCallMode;
   onBack: () => void;
   readerRef: RefObject<HTMLElement>;
 }) {
-  const [tab, setTab] = useState<Tab>("conversation");
-  const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ conversation: null, files: null, git: null });
-  const { summary, segments, file_events, messages, next_message_cursor } = session.detail;
+  const { summary, segments, file_events } = session.detail;
   const title = summary.title ?? "Untitled session";
-  const tokens = (summary.total_input_tokens ?? 0) + (summary.total_output_tokens ?? 0);
-  const length = duration(summary.started_at, summary.ended_at);
-  const tabs: { id: Tab; label: string; count?: number }[] = [
-    { id: "conversation", label: "Conversation" },
-    { id: "files", label: "Files", count: file_events.length },
-    { id: "git", label: "Git", count: session.git.length },
-  ];
+  const [tab, setTab] = useState<Tab>("conversation");
+  const [reveal, setReveal] = useState<string | null>(null);
+  const [log, setLog] = useState<MessageLog>({
+    messages: session.detail.messages,
+    cursor: session.detail.next_message_cursor,
+    status: "idle",
+  });
 
-  function onTabKey(event: React.KeyboardEvent) {
-    const index = tabs.findIndex((t) => t.id === tab);
-    const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-    if (delta === 0) return;
-    event.preventDefault();
-    const next = tabs[(index + delta + tabs.length) % tabs.length].id;
-    setTab(next);
-    tabRefs.current[next]?.focus();
+  // The Files tab matches file events to the calls in the loaded transcript.
+  const blocks = useMemo(() => buildTranscript(log.messages), [log.messages]);
+  const byFile = useMemo(() => callsByFile(file_events, callsOf(blocks)), [blocks, file_events]);
+  const byCall = useMemo(() => fileByCall(file_events, byFile), [byFile, file_events]);
+  const fileFor = useCallback((call: { key: string }) => byCall.get(call.key) ?? null, [byCall]);
+  const revealed = useCallback(() => setReveal(null), []);
+
+  async function loadMore() {
+    if (log.cursor === null || log.status === "loading") return;
+    setLog((prev) => ({ ...prev, status: "loading" }));
+    try {
+      const page = await listSessionMessagesPage(summary.id, PAGE, log.cursor);
+      setLog((prev) => ({ messages: [...prev.messages, ...page.messages], cursor: page.next_cursor, status: "idle" }));
+    } catch {
+      setLog((prev) => ({ ...prev, status: "failed" }));
+    }
   }
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const next = TAB_KEYS[event.key];
+      if (!next || !(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      setTab(next);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const tabs: { id: Tab; label: string; count: number }[] = [
+    { id: "conversation", label: "Conversation", count: 0 },
+    { id: "files", label: "Files", count: file_events.length },
+    { id: "git", label: "Git", count: 0 },
+  ];
 
   return (
     <article
       ref={readerRef}
-      className="reader"
+      className="px-6 pb-8 pt-5 outline-none"
       aria-labelledby="reader-title"
       tabIndex={-1}
       onKeyDown={(event) => {
@@ -134,129 +174,64 @@ function SessionReader({
         }
       }}
     >
-      <header className="reader__head">
-        <h2 id="reader-title" className="reader__title">
-          {title}
-        </h2>
-        <dl className="facts">
-          <div>
-            <dt>Agent</dt>
-            <dd>{agentLabel(summary.agent_id)}</dd>
+      <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)}>
+        <div>
+          <h2 id="reader-title" className="line-clamp-2 max-w-measure text-title2 text-label">
+            {title}
+          </h2>
+          <div className="mt-1 flex min-w-0 items-center gap-1 text-callout text-label-2">
+            <p className="min-w-0 truncate" title={summary.started_at !== null ? formatTime(summary.started_at) : undefined}>
+              {metadata(session, repositories)}
+            </p>
+            <Details session={session} loaded={log.messages.length} />
           </div>
-          {summary.primary_model && (
-            <div>
-              <dt>Model</dt>
-              <dd>{summary.primary_model}</dd>
-            </div>
-          )}
-          {summary.started_at != null && (
-            <div>
-              <dt>Started</dt>
-              <dd title={formatTime(summary.started_at)}>{formatRelative(summary.started_at)}</dd>
-            </div>
-          )}
-          {length && (
-            <div>
-              <dt>Length</dt>
-              <dd>{length}</dd>
-            </div>
-          )}
-          <div>
-            <dt>Messages</dt>
-            <dd>{Math.max(summary.message_count, messages.length)}</dd>
-          </div>
-          <div>
-            <dt>Tool calls</dt>
-            <dd>{summary.tool_call_count}</dd>
-          </div>
-          {tokens > 0 && (
-            <div>
-              <dt>Tokens</dt>
-              <dd
-                title={`${(summary.total_input_tokens ?? 0).toLocaleString()} in, ${(summary.total_output_tokens ?? 0).toLocaleString()} out${summary.total_cache_tokens ? `, ${summary.total_cache_tokens.toLocaleString()} cached` : ""}`}
-              >
-                {formatTokens(tokens)}
-              </dd>
-            </div>
-          )}
-          {summary.est_cost_usd != null && summary.est_cost_usd > 0 && (
-            <div>
-              <dt>Est. cost</dt>
-              <dd>${summary.est_cost_usd.toFixed(2)}</dd>
-            </div>
-          )}
-          {segments.length > 1 && (
-            <div>
-              <dt>Contexts</dt>
-              <dd>{segments.length}</dd>
-            </div>
-          )}
-        </dl>
-        {session.secrets > 0 && (
-          <p className="flag-line">
-            <span className="flag flag--warn">
-              {session.secrets === 1 ? "1 secret flagged" : `${session.secrets} secrets flagged`}
-            </span>{" "}
-            Redacted from search and exports. The original log still has them.
-          </p>
-        )}
-        <div className="reader__actions">
-          <button type="button" className="btn" onClick={() => actions.copyMarkdown(summary.id)}>
-            Copy as Markdown
-          </button>
-          <button type="button" className="btn" onClick={() => actions.saveFile(summary.id)}>
-            Save as file…
-          </button>
-          <FolderSelect folders={folders} onFile={(folderId) => actions.file(summary.id, folderId)} />
-          <span className="reader__spacer" />
-          <button type="button" className="btn btn--danger" onClick={() => actions.forget(summary.id, title)}>
-            Forget…
-          </button>
+          <TabsList aria-label="Session views" className="mt-3">
+            {tabs.map((t, index) => (
+              <TabsTrigger key={t.id} value={t.id} aria-keyshortcuts={`Meta+${index + 1}`}>
+                {t.label}
+                {t.count > 0 && <span className="font-regular tabular-nums text-label-2">{` ${t.count}`}</span>}
+              </TabsTrigger>
+            ))}
+          </TabsList>
         </div>
-      </header>
-
-      <ParseNotice session={session} />
-
-      <div className="tabs" role="tablist" aria-label="Session views" onKeyDown={onTabKey}>
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            ref={(el) => {
-              tabRefs.current[t.id] = el;
-            }}
-            type="button"
-            role="tab"
-            id={`tab-${t.id}`}
-            aria-selected={tab === t.id}
-            aria-controls={`panel-${t.id}`}
-            tabIndex={tab === t.id ? 0 : -1}
-            className="tabs__tab"
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-            {t.count !== undefined && <span className="tabs__count">{t.count}</span>}
-          </button>
-        ))}
-      </div>
-      <div className="reader__panel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         <ErrorBoundary>
-          {tab === "conversation" && (
+          <TabsContent value="conversation" className="mt-5">
             <Transcript
-              sessionId={summary.id}
+              blocks={blocks}
               agentId={summary.agent_id}
-              initial={messages}
-              initialCursor={next_message_cursor}
-              total={summary.message_count}
+              mode={toolCalls}
               terms={terms}
+              fileFor={fileFor}
+              more={log.cursor === null ? null : { status: log.status, onMore: () => void loadMore() }}
+              reveal={reveal}
+              onRevealed={revealed}
+              key={toolCalls}
             />
-          )}
-          {tab === "files" && <FileChanges files={file_events} />}
-          {tab === "git" && (
-            <GitEvidence observations={session.git} segments={segments} repositories={repositories} />
-          )}
+          </TabsContent>
+          <TabsContent value="files" className="mt-5">
+            <FileChanges
+              files={file_events}
+              callsByFile={byFile}
+              onShowCall={(key) => {
+                setReveal(key);
+                setTab("conversation");
+              }}
+            />
+          </TabsContent>
+          <TabsContent value="git" className="mt-5">
+            <GitEvidence observations={session.git} segments={segments} repositories={repositories} summary={summary} />
+          </TabsContent>
         </ErrorBoundary>
-      </div>
+      </Tabs>
     </article>
+  );
+}
+
+function Centered({ role, children }: { role?: "status" | "alert"; children: React.ReactNode }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center" role={role}>
+      {children}
+    </div>
   );
 }
 
@@ -268,44 +243,38 @@ export default function Reader({
   state: OpenSessionState;
   onRetry: () => void;
   terms: string[];
-  folders: FolderSummary[];
   repositories: RepositorySummary[];
-  actions: ReaderActions;
+  toolCalls: ToolCallMode;
   onBack: () => void;
   readerRef: RefObject<HTMLElement>;
 }) {
   switch (state.status) {
     case "none":
       return (
-        <div className="reader-empty">
-          <p className="reader-empty__lead">Pick a session to read it.</p>
-          <p className="quiet">
-            <kbd>↑</kbd> <kbd>↓</kbd> move through the list, <kbd>Enter</kbd> opens, <kbd>Esc</kbd> comes back.
-          </p>
-        </div>
+        <Centered>
+          <p className="text-title3 font-regular text-label-2">No Session Selected</p>
+        </Centered>
       );
     case "loading":
       return (
-        <div className="reader-empty" role="status">
-          <p className="quiet">Opening session…</p>
-        </div>
+        <p className="sr-only" role="status">
+          Opening session…
+        </p>
       );
     case "missing":
       return (
-        <div className="reader-empty" role="status">
-          <p className="reader-empty__lead">This session is no longer in the archive.</p>
-          <p className="quiet">It may have been forgotten. Pick another one from the list.</p>
-        </div>
+        <Centered role="status">
+          <p className="text-title3 font-regular text-label-2">This session is no longer in the archive.</p>
+          <p className="text-callout text-label-2">It may have been forgotten. Choose another one from the list.</p>
+        </Centered>
       );
     case "failed":
       return (
-        <div className="reader-empty" role="alert">
-          <p className="reader-empty__lead">Lore could not open this session.</p>
-          <p className="quiet">{state.error}</p>
-          <button type="button" className="btn" onClick={onRetry}>
-            Try again
-          </button>
-        </div>
+        <Centered role="alert">
+          <p className="text-title3 font-regular text-label-2">Lore could not open this session.</p>
+          <p className="text-callout text-label-2">{state.error}</p>
+          <Button onClick={onRetry}>Try Again</Button>
+        </Centered>
       );
     case "ready":
       return <SessionReader key={state.id} session={state.session} {...props} />;

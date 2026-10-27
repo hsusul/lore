@@ -8,7 +8,8 @@ import type { OpenVia } from "./components/ListBox";
 import MessageBar from "./components/MessageBar";
 import { ConfirmDialog, NameDialog } from "./components/Modal";
 import Onboarding from "./components/Onboarding";
-import Reader, { type ReaderActions } from "./components/Reader";
+import Reader from "./components/Reader";
+import ReaderToolbar, { type ActionNote, type ReaderActions } from "./components/ReaderToolbar";
 import ScanControl from "./components/ScanControl";
 import SearchField, { type FilterValues } from "./components/SearchField";
 import SettingsDialog from "./components/SettingsDialog";
@@ -22,9 +23,11 @@ import { isRunnable, queryFilters, queryTerms, withoutFilters } from "./hooks/qu
 import { useCatalog, type Catalog } from "./hooks/useCatalog";
 import { useDebounced } from "./hooks/useDebounced";
 import { useLastScan } from "./hooks/useLastScan";
+import { useNote } from "./hooks/useNote";
 import { useOpenSession } from "./hooks/useOpenSession";
 import { usePagedList, type FetchPage } from "./hooks/usePagedList";
 import { useSidebar } from "./hooks/useSidebar";
+import { useToolCallMode } from "./hooks/useToolCallMode";
 import { ALL, currentSource, initialWorkspace, workspaceReducer, type Overlay, type Source } from "./hooks/workspace";
 import {
   addAgentRoot,
@@ -64,6 +67,15 @@ function isTyping(target: EventTarget | null): boolean {
   return !!el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
 }
 
+/** The reader action a ⌘ shortcut names (spec 11): ⇧⌘C, ⌘S, ⌘⌫. ⌘⌫ deletes text in a field, so it stays there. */
+function readerKey(event: KeyboardEvent): "copy" | "save" | "forget" | null {
+  const key = event.key.toLowerCase();
+  if (event.shiftKey) return key === "c" ? "copy" : null;
+  if (key === "s") return "save";
+  if (event.key === "Backspace" && !isTyping(event.target)) return "forget";
+  return null;
+}
+
 export default function App() {
   const [ws, dispatch] = useReducer(workspaceReducer, initialWorkspace);
   const catalog = useCatalog();
@@ -71,6 +83,8 @@ export default function App() {
   const [busyAgent, setBusyAgent] = useState<string | null>(null);
   const sidebar = useSidebar();
   const lastScanAt = useLastScan(ws.scan);
+  const [toolCalls, setToolCalls] = useToolCallMode();
+  const [actionNote, showNote] = useNote<ActionNote>();
 
   const queryRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -119,6 +133,11 @@ export default function App() {
   const searchPending = ws.query !== settledQuery;
 
   const open = useOpenSession(ws.openId);
+  const openState = open.state;
+  const reading = useMemo(
+    () => (openState.status === "ready" ? { id: openState.id, title: openState.session.detail.summary.title ?? "Untitled session" } : null),
+    [openState],
+  );
 
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const refreshAll = useCallback(async () => {
@@ -160,6 +179,17 @@ export default function App() {
     if (via === "keyboard") setFocusRequests((n) => n + 1);
     dispatch({ type: "open", id });
   }, []);
+
+  // Launch opens the most recent session, with the selection in the list (spec 10).
+  const launched = useRef(false);
+  const browseReady = browse.state.status === "ready" ? browse.state.items : null;
+  useEffect(() => {
+    if (launched.current || browseReady === null) return;
+    launched.current = true;
+    if (browseReady.length === 0 || ws.openId !== null || isRunnable(ws.query) || ws.scope.kind !== "all") return;
+    dispatch({ type: "open", id: browseReady[0].id });
+    if (document.activeElement === document.body) listRef.current?.focus();
+  }, [browseReady, ws.openId, ws.query, ws.scope.kind]);
 
   useEffect(() => {
     if (open.state.status === "ready" && open.state.id === ws.openId && focusReaderOnLoad.current) {
@@ -285,6 +315,9 @@ export default function App() {
     });
   const folderActions = { onNewFolder: newFolder, onRenameFolder: renameFolderNamed, onDeleteFolder: deleteFolderNamed };
 
+  // Reader actions confirm on their own controls (spec 9.12): Copy and File flip their
+  // tooltips, Save answers with the system save panel, Forget removes the row. Errors still
+  // go to the notices line.
   const actions: ReaderActions = {
     copyMarkdown: (id) =>
       void (async () => {
@@ -292,38 +325,37 @@ export default function App() {
           const markdown = await exportSessionMarkdown(id, false);
           if (markdown == null) return;
           if (!navigator.clipboard?.writeText) {
-            fail("The clipboard is not available here. Use Save as file instead.");
+            fail("The clipboard is not available here. Use Save as File instead.");
             return;
           }
           await navigator.clipboard.writeText(markdown);
-          notice("Copied as Markdown. Flagged secrets are redacted.");
+          showNote({ control: "copy", text: "Copied" });
         } catch (e) {
           fail(e);
         }
       })(),
-    saveFile: (id) =>
-      void saveSessionExport(id, null, false).then((saved) => saved && notice("Saved the session as Markdown."), fail),
+    saveFile: (id) => void saveSessionExport(id, null, false).catch(fail),
     file: (id, folderId) =>
       void setSessionFolder(id, folderId).then(async () => {
         await refreshAll();
         const name = folders.find((f) => f.id === folderId)?.name;
-        notice(name ? `Filed in “${name}”.` : "Removed from its folder.");
+        showNote({ control: "file", text: name ? `Filed in “${name}”` : "Removed from Folder" });
       }, fail),
     forget: (id, title) =>
       overlay({
         kind: "confirm",
         title: `Forget “${title}”?`,
         body: "Lore removes this session and everything derived from it. The original agent log stays on disk.",
-        confirmLabel: "Forget session",
+        confirmLabel: "Forget Session",
         onConfirm: () =>
-          void forgetSession(id).then(async (report) => {
+          void forgetSession(id).then(async () => {
             dispatch({ type: "open", id: null });
             await refreshAll();
-            const kept = report.source_paths.length > 0 ? ` The original log is still at ${report.source_paths.join(", ")}.` : "";
-            notice(`Forgot “${title}”.${kept}`);
           }, fail),
       }),
   };
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
 
   const searchArchive = useCallback(async (q: string): Promise<Command[]> => {
     const page = await searchPage(q, SEARCH_PAGE);
@@ -374,17 +406,43 @@ export default function App() {
     ],
     [browseState, chooseSource, focusQuery, folders, newFolder, openSession, overlay, repositories, sidebar.toggle, startScan],
   );
-  const paletteCommands: Command[] = currentFolder
-    ? [
-        ...commands,
-        { id: "cmd-rename-folder", group: "Action", label: `Rename “${currentFolder.name}”…`, run: () => renameFolderNamed(currentFolder) },
-        { id: "cmd-delete-folder", group: "Action", label: `Delete “${currentFolder.name}”…`, run: () => deleteFolderNamed(currentFolder) },
-      ]
-    : commands;
+  const readerCommands: Command[] = [
+    {
+      id: "cmd-tool-calls",
+      group: "Action",
+      label: toolCalls === "collapsed" ? "Show Tool Calls Expanded" : "Show Tool Calls Collapsed",
+      run: () => setToolCalls(toolCalls === "collapsed" ? "expanded" : "collapsed"),
+    },
+    ...(reading
+      ? [
+          { id: "cmd-copy", group: "Action", label: "Copy as Markdown", hint: "⇧⌘C", run: () => actions.copyMarkdown(reading.id) },
+          { id: "cmd-save", group: "Action", label: "Save as File…", hint: "⌘S", run: () => actions.saveFile(reading.id) },
+          ...folders.map((f) => ({
+            id: `cmd-file-${f.id}`,
+            group: "Action",
+            label: `File in “${f.name}”`,
+            run: () => actions.file(reading.id, f.id),
+          })),
+          { id: "cmd-unfile", group: "Action", label: "Remove from Folder", run: () => actions.file(reading.id, null) },
+          { id: "cmd-forget", group: "Action", label: "Forget Session…", hint: "⌘⌫", run: () => actions.forget(reading.id, reading.title) },
+        ]
+      : []),
+  ];
+  const paletteCommands: Command[] = [
+    ...commands,
+    ...readerCommands,
+    ...(currentFolder
+      ? [
+          { id: "cmd-rename-folder", group: "Action", label: `Rename “${currentFolder.name}”…`, run: () => renameFolderNamed(currentFolder) },
+          { id: "cmd-delete-folder", group: "Action", label: `Delete “${currentFolder.name}”…`, run: () => deleteFolderNamed(currentFolder) },
+        ]
+      : []),
+  ];
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       const mod = event.metaKey || event.ctrlKey;
+      const readerAction = reading && ws.overlay.kind === "none" && mod && !event.altKey ? readerKey(event) : null;
       if (mod && event.key.toLowerCase() === "k") {
         event.preventDefault();
         dispatch({ type: "overlay", overlay: { kind: ws.overlay.kind === "palette" ? "none" : "palette" } });
@@ -397,6 +455,12 @@ export default function App() {
       } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "r") {
         event.preventDefault();
         if (scanPhase !== "running") void startScan();
+      } else if (reading && readerAction) {
+        event.preventDefault();
+        const run = actionsRef.current;
+        if (readerAction === "copy") run.copyMarkdown(reading.id);
+        else if (readerAction === "save") run.saveFile(reading.id);
+        else run.forget(reading.id, reading.title);
       } else if (
         (event.key === "/" && !mod && !event.altKey && !isTyping(event.target)) ||
         (mod && event.altKey && event.code === "KeyF")
@@ -407,7 +471,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [scanPhase, startScan, toggleSidebar, ws.overlay.kind]);
+  }, [reading, scanPhase, startScan, toggleSidebar, ws.overlay.kind]);
 
   const scanning = ws.scan.phase === "running";
   const catalogState = catalog.state;
@@ -485,7 +549,15 @@ export default function App() {
             }
             reader={
               <>
-                <div data-tauri-drag-region data-slot="reader-actions" className="flex h-full min-w-0 flex-1 items-center" />
+                <ReaderToolbar
+                  session={reading}
+                  folders={folders}
+                  actions={actions}
+                  note={actionNote}
+                  toolCalls={toolCalls}
+                  onToolCalls={setToolCalls}
+                />
+                <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
                 <ScanControl scan={ws.scan} lastScanAt={lastScanAt} onRescan={() => void startScan()} />
                 <Tooltip label="Command Palette (⌘K)">
                   <Button
@@ -588,9 +660,8 @@ export default function App() {
                     state={open.state}
                     onRetry={open.retry}
                     terms={searching ? terms : []}
-                    folders={folders}
                     repositories={repositories}
-                    actions={actions}
+                    toolCalls={toolCalls}
                     onBack={focusList}
                     readerRef={readerRef}
                   />

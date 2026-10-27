@@ -473,8 +473,7 @@ describe("keyboard", () => {
     const list = screen.getByRole("listbox", { name: "Sessions in All Sessions" });
     expect(document.activeElement).toBe(list);
 
-    // Arrows move the selection and open each session in place; Enter moves into the reader.
-    fireEvent.keyDown(list, { key: "ArrowDown" });
+    // Launch opened the newest session; arrows open each session in place, Enter moves into the reader.
     expect(await screen.findByRole("article", { name: "Fix flaky retry backoff" })).toBeTruthy();
     fireEvent.keyDown(list, { key: "ArrowDown" });
     expect(screen.getByRole("option", { name: /Port dotfiles to nix/ }).getAttribute("aria-selected")).toBe("true");
@@ -558,10 +557,11 @@ describe("scan", () => {
       within(screen.getByRole("banner"))
         .getAllByRole("button")
         .map((b) => b.getAttribute("aria-label"));
-    expect(toolbar()).toEqual(["Rescan", "Command Palette", "Search Filters"]);
+    const reader = ["Copy as Markdown", "File in Folder", "Save as File…", "More"];
+    expect(toolbar()).toEqual([...reader, "Rescan", "Command Palette", "Search Filters"]);
     fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
     expect((await screen.findByRole("alert")).textContent).toBe("Scan failed: background ingestion worker unavailable");
-    expect(toolbar()).toEqual(["Scan failed", "Rescan", "Command Palette", "Search Filters"]);
+    expect(toolbar()).toEqual([...reader, "Scan failed", "Rescan", "Command Palette", "Search Filters"]);
 
     await user.click(screen.getByRole("button", { name: "Scan failed" }));
     const popover = screen.getByRole("dialog", { name: "Scan failed" });
@@ -598,54 +598,303 @@ describe("states", () => {
   it("shows a session that failed to open, with a retry", async () => {
     m.getSession.mockRejectedValueOnce(new Error("database is locked"));
     await renderLoaded();
-    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
     expect(await screen.findByText("Lore could not open this session.")).toBeTruthy();
+    expect(screen.getByText("Error: database is locked")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Try Again" }));
     expect(await screen.findByRole("article", { name: "Fix flaky retry backoff" })).toBeTruthy();
   });
 });
 
-describe("session actions", () => {
-  it("loads and renders a recorded patch with line numbers", async () => {
-    await renderLoaded();
-    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
-    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
-    fireEvent.click(screen.getByRole("tab", { name: /Files/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Show patch" }));
+describe("reader", () => {
+  function part(ordinal: number, kind: string, value: object | string): MessageDto["parts"][number] {
+    return typeof value === "string"
+      ? { ordinal, kind, text: value, content_json: JSON.stringify(value), searchable: true }
+      : { ordinal, kind, text: null, content_json: JSON.stringify(value), searchable: false };
+  }
 
-    const patch = await screen.findByRole("figure", { name: "Patch for src/sync/worker.rs" });
-    const rows = within(patch).getAllByRole("row").map((row) => row.textContent);
-    expect(rows).toEqual(["@@ -1,2 +1,2 @@", "1-let jitter = random();", "1+let jitter = self.rng.gen();", "22 keep();"]);
-    expect(m.getFilePatch).toHaveBeenCalledWith("fe1");
+  function withMessages(summary: SessionSummary, messages: MessageDto[]): SessionDetail {
+    return { ...detail(summary), messages };
+  }
+
+  async function openAlpha() {
+    await renderLoaded();
+    return screen.findByRole("article", { name: "Fix flaky retry backoff" });
+  }
+
+  it("opens the newest session at launch with the selection in the list", async () => {
+    await openAlpha();
+    const list = screen.getByRole("listbox", { name: "Sessions in All Sessions" });
+    expect(screen.getByRole("option", { name: /Fix flaky retry backoff/ }).getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(list);
   });
 
-  it("files the open session into a folder", async () => {
-    await renderLoaded();
-    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
-    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
-    fireEvent.change(screen.getByRole("combobox", { name: "File in folder" }), { target: { value: "f1" } });
-
-    expect(await screen.findByText("Filed in “Release prep”.")).toBeTruthy();
-    expect(m.setSessionFolder).toHaveBeenCalledWith("a", "f1");
+  it("says No Session Selected when nothing is open, with the actions disabled in place", async () => {
+    m.listSessionsPage.mockResolvedValue({ sessions: [], next_cursor: "more" });
+    render(<App />);
+    expect(await screen.findByText("No Session Selected")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy as Markdown" }).hasAttribute("disabled")).toBe(true);
   });
 
-  it("forgets a session only after confirming", async () => {
-    await renderLoaded();
-    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
-    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
-    fireEvent.click(screen.getByRole("button", { name: "Forget…" }));
+  it("writes the session's facts in one line and keeps counts and cost in Details", async () => {
+    const start = new Date();
+    start.setHours(0, 5, 0, 0);
+    const long: SessionSummary = {
+      ...alpha,
+      started_at: start.getTime(),
+      ended_at: start.getTime() + 38 * 60_000,
+      parse_status: "partial",
+      total_input_tokens: 1000,
+      total_output_tokens: 200,
+      total_cache_tokens: 3000,
+      est_cost_usd: 0.123,
+    };
+    m.getSession.mockResolvedValue({
+      ...detail(long),
+      parse_note: "skipped 2 records",
+      segments: [{ id: "s1", seq_start: 0, seq_end: 1, cwd: "/repo", model: null, provider: null, repository_id: "repo-lore", resolution_confidence: "high" }],
+    });
+    m.sessionSecretCount.mockResolvedValue(2);
+    const user = userEvent.setup();
+    const reader = await openAlpha();
+
+    expect(within(reader).getByText(/^Claude Code · claude-sonnet-4-5 · Today at .+ · 38 min · lore · Partially parsed · 2 secrets redacted$/)).toBeTruthy();
+    await user.click(within(reader).getByRole("button", { name: "Details" }));
+    const details = await screen.findByRole("dialog", { name: "Details" });
+    expect(within(details).getAllByRole("definition").map((d) => d.textContent)).toEqual([
+      "3, including 1 tool call",
+      "1,000 in, 200 out, 3,000 cached",
+      "$0.12, estimated",
+    ]);
+    expect(within(details).getByText(/^Lore read part of this session: skipped 2 records\./).textContent).toContain(
+      "2 secrets redacted from search and exports.",
+    );
+  });
+
+  it("switches tabs with ⌘1 to ⌘3 and counts files only", async () => {
+    const reader = await openAlpha();
+    expect(within(reader).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Conversation", "Files 1", "Git"]);
+
+    fireEvent.keyDown(window, { key: "2", metaKey: true });
+    expect(within(reader).getByRole("tabpanel").textContent).toContain("Edited 1 file,+1 −1");
+    fireEvent.keyDown(window, { key: "3", metaKey: true });
+    expect(within(reader).getByRole("tabpanel").textContent).toContain("No git evidence was recorded or observed for this session.");
+    fireEvent.keyDown(window, { key: "1", metaKey: true });
+    expect(within(reader).getByRole("tab", { name: "Conversation" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("shows a tool call as one line that opens to its recorded output and raw input", async () => {
+    m.getSession.mockResolvedValue(
+      withMessages(alpha, [
+        message(1, "assistant", [part(0, "tool_use", { type: "tool_use", id: "t1", name: "Bash", input: { command: "cargo test sync", description: "Run the sync tests" } })]),
+        message(2, "user", [part(0, "tool_result", "test sync::retry ... ok")]),
+      ]),
+    );
+    const user = userEvent.setup();
+    const reader = await openAlpha();
+    const row = within(reader).getByRole("button", { name: "Ran cargo test sync" });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(within(reader).queryByText("test sync::retry ... ok")).toBeNull();
+
+    await user.click(row);
+    const output = within(reader).getByRole("figure", { name: "Output of Ran cargo test sync" });
+    expect(within(output).getByText("test sync::retry ... ok")).toBeTruthy();
+    expect(within(reader).getByRole("definition").textContent).toBe("Run the sync tests");
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      fireEvent.click(within(output).getByRole("button", { name: "Copy Output" }));
+      expect((await screen.findByRole("tooltip")).textContent).toBe("Copied");
+      expect(writeText).toHaveBeenCalledWith("test sync::retry ... ok");
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+
+    await user.click(within(reader).getByRole("button", { name: "Show Raw Input" }));
+    expect(JSON.parse(within(reader).getByRole("figure", { name: "Raw input" }).textContent ?? "")).toEqual({
+      command: "cargo test sync",
+      description: "Run the sync tests",
+    });
+  });
+
+  it("loads the next page of messages on request", async () => {
+    m.getSession.mockResolvedValue({ ...detail(alpha), next_message_cursor: "c1" });
+    m.listSessionMessagesPage.mockResolvedValue({
+      messages: [message(3, "user", [part(0, "text", "One more thing about jitter.")])],
+      next_cursor: null,
+    });
+    const reader = await openAlpha();
+    fireEvent.click(within(reader).getByRole("button", { name: "Load More Messages" }));
+
+    expect(await within(reader).findByText("One more thing about jitter.")).toBeTruthy();
+    expect(m.listSessionMessagesPage).toHaveBeenCalledWith("a", 200, "c1");
+    expect(within(reader).queryByRole("button", { name: "Load More Messages" })).toBeNull();
+  });
+
+  it("sums up a run of calls in one row that opens to each call", async () => {
+    m.getSession.mockResolvedValue(
+      withMessages(alpha, [
+        message(1, "assistant", [
+          part(0, "tool_use", { name: "Read", input: { file_path: "src/a.rs" } }),
+          part(1, "tool_use", { name: "Bash", input: { command: "cargo build" } }),
+        ]),
+      ]),
+    );
+    const user = userEvent.setup();
+    const reader = await openAlpha();
+    expect(within(reader).queryByRole("button", { name: "Ran cargo build" })).toBeNull();
+
+    await user.click(within(reader).getByRole("button", { name: "Read 1 file, ran 1 command" }));
+    expect(within(reader).getByRole("button", { name: "Read src/a.rs" })).toBeTruthy();
+    expect(within(reader).getByRole("button", { name: "Ran cargo build" })).toBeTruthy();
+  });
+
+  it("opens every call when Show Tool Calls is Expanded, and remembers it", async () => {
+    m.getSession.mockResolvedValue(
+      withMessages(alpha, [
+        message(1, "assistant", [part(0, "tool_use", { name: "Bash", input: { command: "cargo test sync" } })]),
+        message(2, "user", [part(0, "tool_result", "all tests passed")]),
+      ]),
+    );
+    const user = userEvent.setup();
+    const reader = await openAlpha();
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Expanded" }));
+
+    expect(within(reader).getByRole("button", { name: "Ran cargo test sync" }).getAttribute("aria-expanded")).toBe("true");
+    expect(within(reader).getByRole("figure", { name: "Output of Ran cargo test sync" }).textContent).toContain("all tests passed");
+    expect(m.setSetting).toHaveBeenCalledWith("ui.toolCalls", '"expanded"');
+  });
+
+  it("reads the stored tool-call preference at launch", async () => {
+    m.getJsonSetting.mockImplementation(async (key: string) => (key === "ui.toolCalls" ? "expanded" : null));
+    const reader = await openAlpha();
+    await waitFor(() => expect(within(reader).getByRole("button", { name: "Ran cargo test sync" }).getAttribute("aria-expanded")).toBe("true"));
+  });
+
+  it("copies as Markdown from the toolbar or ⇧⌘C and confirms on the button", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    m.exportSessionMarkdown.mockResolvedValue("# Fix flaky retry backoff");
+    try {
+      await openAlpha();
+      fireEvent.click(screen.getByRole("button", { name: "Copy as Markdown" }));
+      expect((await screen.findByRole("tooltip")).textContent).toBe("Copied");
+      expect(writeText).toHaveBeenCalledWith("# Fix flaky retry backoff");
+      expect(m.exportSessionMarkdown).toHaveBeenCalledWith("a", false);
+
+      fireEvent.keyDown(window, { key: "C", metaKey: true, shiftKey: true });
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("saves with ⌘S", async () => {
+    m.saveSessionExport.mockResolvedValue(true);
+    await openAlpha();
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+    expect(m.saveSessionExport).toHaveBeenCalledWith("a", null, false);
+  });
+
+  it("files the open session into a folder from the toolbar menu and confirms on the button", async () => {
+    const user = userEvent.setup();
+    await openAlpha();
+    await user.click(screen.getByRole("button", { name: "File in Folder" }));
+    await user.click(screen.getByRole("menuitem", { name: "Release prep" }));
+
+    await waitFor(() => expect(m.setSessionFolder).toHaveBeenCalledWith("a", "f1"));
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Filed in “Release prep”");
+  });
+
+  it("forgets a session only after confirming, from the More menu or ⌘⌫", async () => {
+    const user = userEvent.setup();
+    await openAlpha();
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Forget Session…/ }));
 
     const dialog = screen.getByRole("alertdialog", { name: "Forget “Fix flaky retry backoff”?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(m.forgetSession).not.toHaveBeenCalled();
     expect(screen.getByRole("article", { name: "Fix flaky retry backoff" })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Forget…" }));
-    fireEvent.click(screen.getByRole("button", { name: "Forget session" }));
-    expect(await screen.findByText("Forgot “Fix flaky retry backoff”.")).toBeTruthy();
-    expect(m.forgetSession).toHaveBeenCalledWith("a");
-    expect(screen.getByText("Pick a session to read it.")).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Backspace", metaKey: true });
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Forget Session" }));
+    await waitFor(() => expect(m.forgetSession).toHaveBeenCalledWith("a"));
+    expect(await screen.findByText("No Session Selected")).toBeTruthy();
+  });
+
+  it("loads and renders a recorded patch with line numbers", async () => {
+    const user = userEvent.setup();
+    const reader = await openAlpha();
+    await user.click(within(reader).getByRole("tab", { name: /Files/ }));
+    await user.click(within(reader).getByRole("button", { name: "src/sync/worker.rs" }));
+
+    const patch = await within(reader).findByRole("figure", { name: "Patch for src/sync/worker.rs" });
+    const rows = within(patch).getAllByRole("row").map((row) => row.textContent);
+    expect(rows).toEqual(["@@ -1,2 +1,2 @@", "1−let jitter = random();", "1+let jitter = self.rng.gen();", "22keep();"]);
+    expect(m.getFilePatch).toHaveBeenCalledWith("fe1");
+  });
+
+  it("says which call changed a file and shows that call in the conversation", async () => {
+    m.getSession.mockResolvedValue(
+      withMessages(alpha, [
+        message(1, "user", [part(0, "text", "Make it deterministic.")]),
+        {
+          ...message(2, "assistant", [part(0, "tool_use", { name: "Edit", input: { file_path: "/repo/src/sync/worker.rs", old_string: "a", new_string: "b" } })]),
+          ts: new Date(2026, 9, 26, 14, 25).getTime(),
+        },
+      ]),
+    );
+    const user = userEvent.setup();
+    const reader = await openAlpha();
+    await user.click(within(reader).getByRole("tab", { name: /Files/ }));
+    expect(within(reader).getByText(/^From an Edit call at 2:25/)).toBeTruthy();
+
+    await user.click(within(reader).getByRole("button", { name: "Show in Conversation" }));
+    expect(within(reader).getByRole("tab", { name: "Conversation" }).getAttribute("aria-selected")).toBe("true");
+    const row = within(reader).getByRole("button", { name: "Edited /repo/src/sync/worker.rs +1 −1" });
+    await waitFor(() => expect(document.activeElement).toBe(row));
+  });
+
+  it("states git evidence as sentences, newest first, naming each fact once", async () => {
+    const start = new Date(2026, 9, 26, 14, 0).getTime();
+    m.getSession.mockResolvedValue(detail({ ...alpha, started_at: start, ended_at: start + 30 * 60_000 }));
+    m.getGitSnapshot.mockResolvedValue([
+      {
+        segment_id: null,
+        source: "agent_recorded",
+        event_ts: start,
+        observed_at: start,
+        temporal_confidence: "exact_event",
+        branch: "main",
+        commit_sha: null,
+        remote_url_norm: "github.com/hsusul/lore",
+        is_dirty: null,
+        commit_exists: null,
+      },
+      {
+        segment_id: null,
+        source: "lore_captured",
+        event_ts: null,
+        observed_at: start + 32 * 60_000,
+        temporal_confidence: "near_event",
+        branch: "main",
+        commit_sha: "abc1234def",
+        remote_url_norm: "github.com/hsusul/lore",
+        is_dirty: true,
+        commit_exists: null,
+      },
+    ]);
+    const user = userEvent.setup();
+    const reader = await openAlpha();
+    await user.click(within(reader).getByRole("tab", { name: "Git" }));
+    const list = within(reader).getByRole("list", { name: "Git observations" });
+    expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "Commit abc1234 captured by Lore 2 minutes after the session ended. The working tree had uncommitted changes.2:32 PM",
+      "Branch main on github.com/hsusul/lore recorded by Claude Code when the session started.2:00 PM",
+    ]);
   });
 });
 
@@ -773,12 +1022,14 @@ describe("window shell", () => {
   });
 
   it("shows a notice under the toolbar until it is dismissed", async () => {
+    m.createFolder.mockResolvedValue({ id: "f2", name: "Ideas", session_count: 0, position: 1 });
     await renderLoaded();
-    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
-    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
-    fireEvent.change(screen.getByRole("combobox", { name: "File in folder" }), { target: { value: "f1" } });
-    expect((await screen.findByText("Filed in “Release prep”.")).getAttribute("role")).toBe("status");
+    fireEvent.click(within(sidebar()).getByRole("button", { name: "New Folder" }));
+    const dialog = screen.getByRole("dialog", { name: "New Folder" });
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "Ideas" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create folder" }));
+    expect((await screen.findByText("Created folder “Ideas”.")).getAttribute("role")).toBe("status");
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByText("Filed in “Release prep”.")).toBeNull();
+    expect(screen.queryByText("Created folder “Ideas”.")).toBeNull();
   });
 });
