@@ -3,7 +3,7 @@ import { Command as CommandIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import CommandPalette, { type Command } from "./components/CommandPalette";
-import { BrowsePane, ScopeBar, SearchPane } from "./components/ListPane";
+import { BrowsePane, groupHits, ScopeBar, SearchPane } from "./components/ListPane";
 import type { OpenVia } from "./components/ListBox";
 import MessageBar from "./components/MessageBar";
 import { ConfirmDialog, NameDialog } from "./components/Modal";
@@ -426,7 +426,7 @@ export default function App() {
   // search counts the sessions it has loaded, and says "More than" while pages remain.
   const searchTitled = searching && (selected.kind !== "agent" || selectedRow === null);
   const searchState = search.state;
-  const found = searchState.status === "ready" ? new Set(searchState.items.map((h) => h.session_id)).size : null;
+  const found = searchState.status === "ready" ? groupHits(searchState.items).length : null;
   const subtitle = scanning
     ? "Scanning…"
     : searchTitled

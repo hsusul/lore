@@ -79,6 +79,7 @@ export default function SearchField({
   const suggesting = !reference && focused && pending !== null && options.length > 0 && dismissedFor !== text;
   // Focus enters the reference but never the suggestions, so only the reference hands it back.
   const lastPanel = useRef<"reference" | "suggestions">("reference");
+  const interactedOutside = useRef(false);
   useEffect(() => {
     if (reference || suggesting) lastPanel.current = reference ? "reference" : "suggestions";
   }, [reference, suggesting]);
@@ -238,10 +239,13 @@ export default function SearchField({
         }}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          if (lastPanel.current === "reference") inputRef.current?.focus();
+          // A click elsewhere already put focus where the user wanted it.
+          if (lastPanel.current === "reference" && !interactedOutside.current) inputRef.current?.focus();
+          interactedOutside.current = false;
         }}
         onInteractOutside={(event) => {
           if (field.current?.contains(event.target as Node)) event.preventDefault();
+          else interactedOutside.current = true;
         }}
         onEscapeKeyDown={(event) => {
           if (field.current?.contains(event.target as Node)) event.preventDefault();

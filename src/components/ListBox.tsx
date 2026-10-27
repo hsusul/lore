@@ -81,11 +81,6 @@ export default function ListBox<T>({
     if (selected >= 0) scrollToIndex(selected);
   }, [selected, scrollToIndex]);
 
-  const moreStatus = more?.status;
-  useEffect(() => {
-    if (moreStatus === "failed") openWhenLoaded.current = null;
-  }, [moreStatus]);
-
   useEffect(() => {
     const index = openWhenLoaded.current;
     if (index === null || items.length <= index) return;
@@ -93,6 +88,13 @@ export default function ListBox<T>({
     onOpen(items[index], "arrow");
     listRef.current?.focus();
   }, [items, listRef, onOpen]);
+
+  // Runs after the effect above, so a finished load that brought no new row (or
+  // failed) drops the request instead of letting a later scroll load steal focus.
+  const moreStatus = more?.status;
+  useEffect(() => {
+    if (moreStatus !== "loading") openWhenLoaded.current = null;
+  }, [moreStatus]);
 
   function loadMore() {
     openWhenLoaded.current = items.length;
@@ -148,12 +150,13 @@ export default function ListBox<T>({
 
   const optionId = (index: number) => `${id}-${index}`;
 
+  // The top gap sits outside the scroller so row offsets stay index * row height for `virtual.ts`.
   return (
-    <div ref={scroller} className="listbox" onScroll={onScroll}>
+    <div ref={scroller} className="listbox mt-1.5" onScroll={onScroll}>
       <ul
         ref={listRef}
         id={id}
-        className={clsx("listbox__list pt-1.5", selected < 0 && "focus-visible:shadow-focus-inset")}
+        className={clsx("listbox__list", selected < 0 && "focus-visible:shadow-focus-inset")}
         role="listbox"
         aria-label={label}
         tabIndex={0}

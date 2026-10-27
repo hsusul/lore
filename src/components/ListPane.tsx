@@ -69,9 +69,11 @@ interface ResultGroup {
  * One row per session, in the order of each session's best hit (spec 9.2, 17.14). A
  * title match would only repeat line 1, so the snippet comes from the best other hit.
  */
-function groupHits(hits: SearchHit[]): ResultGroup[] {
+export function groupHits(hits: SearchHit[]): ResultGroup[] {
   const groups = new Map<string, ResultGroup>();
   for (const hit of hits) {
+    // A tool call's raw JSON is never shown (spec 17.14).
+    if (hit.field === "content_json") continue;
     const group = groups.get(hit.session_id);
     if (!group) groups.set(hit.session_id, { hit, snippet: hit, hits: 1 });
     else {
