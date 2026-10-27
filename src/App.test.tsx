@@ -277,6 +277,8 @@ describe("search", () => {
       hit("a", "Fix flaky retry backoff", "the \u{e000}retry\u{e001} budget"),
       { ...hit("a", "Fix flaky retry backoff", "\u{e000}retry\u{e001} once more"), source_id: "p-a2" },
       hit("b", "Port dotfiles to nix", "a \u{e000}retry\u{e001} wrapper"),
+      // Raw tool-call JSON never becomes a row of its own.
+      { ...hit("c", "Bump the codex sandbox", '{"name":"Bash","input":{"command":"\u{e000}retry\u{e001}"}}'), field: "content_json" },
       { ...hit("a", "Fix flaky retry backoff", "last \u{e000}retry\u{e001}"), source_id: "p-a3" },
     ];
     m.searchPage.mockImplementation(async (query) => ({ hits, next_cursor: query === "retry" ? null : "c1" }));
@@ -361,6 +363,17 @@ describe("search", () => {
     expect(screen.getByRole("search").textContent).toBe("agent:claude-code");
     expect(screen.queryByRole("listbox", { name: "Values for agent:" })).toBeNull();
     await waitFor(() => expect(m.searchPage).toHaveBeenLastCalledWith("agent:claude-code", 50, null, "relevance"));
+  });
+
+  it("leaves focus on the list when a row is clicked while the filter reference is open", async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: "Search Filters" }));
+    expect(await screen.findByRole("dialog", { name: "Search filters" })).toBeTruthy();
+
+    await user.click(screen.getByRole("option", { name: /Port dotfiles to nix/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search filters" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("listbox", { name: "Sessions in All Sessions" }));
   });
 
   it("closes the suggestions with Escape or a click elsewhere, keeping the text", async () => {
