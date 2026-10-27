@@ -53,6 +53,8 @@ export default function SearchField({
   values,
   sort,
   onSort,
+  reference,
+  onReference,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -61,9 +63,11 @@ export default function SearchField({
   values: FilterValues;
   sort: SearchSort;
   onSort: (sort: SearchSort) => void;
+  /** Whether the filter reference is open. The window owns it, so ⌘/ and the palette can open it. */
+  reference: boolean;
+  onReference: (open: boolean) => void;
 }) {
   const field = useRef<HTMLDivElement>(null);
-  const [reference, setReference] = useState(false);
   const [focused, setFocused] = useState(false);
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const [active, setActive] = useState(0);
@@ -87,17 +91,6 @@ export default function SearchField({
   const rowCount = options.length + 1;
   const current = Math.min(active, rowCount - 1);
 
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key === "/") {
-        event.preventDefault();
-        setReference((open) => !open);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   function setText(next: string) {
     setActive(0);
     setDismissedFor(null);
@@ -106,13 +99,13 @@ export default function SearchField({
 
   function insert(filter: string) {
     setText(text === "" || text.endsWith(" ") ? `${text}${filter}` : `${text} ${filter}`);
-    setReference(false);
+    onReference(false);
   }
 
   function choose(row: number) {
     if (!pending) return;
     if (row >= options.length) {
-      setReference(true);
+      onReference(true);
       return;
     }
     const typed = pending.key.length + pending.partial.length;
@@ -135,7 +128,7 @@ export default function SearchField({
       setDismissedFor(text);
     } else if (reference && event.key === "Escape") {
       event.preventDefault();
-      setReference(false);
+      onReference(false);
     } else if (event.key === "ArrowDown" || event.key === "Enter") {
       event.preventDefault();
       onLeaveDown();
@@ -145,7 +138,7 @@ export default function SearchField({
       else onLeaveDown();
     } else if (event.key === "?" && value === "") {
       event.preventDefault();
-      setReference(true);
+      onReference(true);
     } else if (event.key === "Backspace" && tokens.length > 0 && atStart) {
       event.preventDefault();
       if (tokenSelected) onChange(joinQuery(tokens.slice(0, -1), text));
@@ -161,7 +154,7 @@ export default function SearchField({
       open={reference || suggesting}
       onOpenChange={(open) => {
         if (open) return;
-        setReference(false);
+        onReference(false);
         setDismissedFor(text);
       }}
     >
@@ -183,7 +176,7 @@ export default function SearchField({
             aria-keyshortcuts="Meta+/"
             aria-expanded={reference}
             className="flex flex-none items-center rounded-capsule outline-none focus-visible:shadow-focus"
-            onClick={() => setReference((open) => !open)}
+            onClick={() => onReference(!reference)}
           >
             <Search className={ICON.body} aria-hidden="true" />
           </button>

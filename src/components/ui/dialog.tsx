@@ -33,7 +33,7 @@ export const DialogContent = forwardRef<
       <Primitive.Content
         ref={ref}
         className={clsx(
-          "fixed inset-x-0 top-toolbar z-50 mx-auto mt-2 w-fit rounded-sheet bg-bg-popover p-5 text-body text-label shadow-sheet outline-none data-open:animate-sheet-in data-closed:animate-sheet-out",
+          "fixed inset-x-0 top-toolbar z-50 mx-auto mt-2 rounded-sheet bg-bg-popover text-body text-label shadow-sheet outline-none data-open:animate-sheet-in data-closed:animate-sheet-out",
           className,
         )}
         {...props}

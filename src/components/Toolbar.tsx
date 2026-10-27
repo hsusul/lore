@@ -24,7 +24,32 @@ import type { SourceSection } from "./sources";
  * the session list, one over the reader. Empty areas drag the window; the hairline under
  * it and the one between the columns run the full height.
  */
-export default function Toolbar({ list, reader, insetForTrafficLights }: { list: ReactNode; reader: ReactNode; insetForTrafficLights: boolean }) {
+export default function Toolbar({
+  list,
+  reader,
+  insetForTrafficLights,
+  split = true,
+}: {
+  list: ReactNode;
+  reader: ReactNode;
+  insetForTrafficLights: boolean;
+  /** False on first run, when no columns sit under the toolbar to split it. */
+  split?: boolean;
+}) {
+  if (!split) {
+    return (
+      <header
+        data-tauri-drag-region
+        className={clsx(
+          "flex h-toolbar flex-none items-center gap-1 bg-bg-toolbar pr-2.5 shadow-hairline-b select-none",
+          insetForTrafficLights ? "pl-traffic-zone" : "pl-5",
+        )}
+      >
+        {list}
+        {reader}
+      </header>
+    );
+  }
   return (
     <header className="grid h-toolbar flex-none grid-cols-panes bg-bg-toolbar shadow-hairline-b select-none">
       <div

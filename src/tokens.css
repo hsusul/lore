@@ -116,6 +116,8 @@
   --sidebar-w: 220px;
   --list-w: 320px;
   --source-row-h: 28px;
+  /* Palette and Settings pane rows: 28px whatever the density. */
+  --nav-row-h: 28px;
   --row-h: 52px;
   --hit-row-h: 68px;
   --token-h: 20px;
@@ -137,9 +139,19 @@
   --output-max-h: 240px;
   --line-no-w: 32px;
   --diff-sign-w: 16px;
+  --settings-w: 720px;
+  --settings-h: 520px;
+  --settings-side-w: 180px;
+  --form-row-h: 36px;
+  --number-field-w: 48px;
+  --alert-w: 260px;
+  --sheet-sm-w: 320px;
+  --onboard-w: 440px;
   --i-13: 13px;
   --i-15: 15px;
   --i-17: 17px;
+  --i-32: 32px;
+  --i-48: 48px;
   --stroke-13: 1.66;
   --stroke-15: 1.75;
   --stroke-17: 1.6;
@@ -273,6 +285,19 @@
     --separator: rgba(255, 255, 255, 0.25);
     --label-2: rgba(255, 255, 255, 0.7);
   }
+}
+
+/* Sections 9.1 and 9.2: row density, chosen in Settings. Comfortable is the default above. */
+:root[data-density="compact"] {
+  --source-row-h: 24px;
+  --row-h: 44px;
+  --hit-row-h: 60px;
+}
+
+:root[data-density="spacious"] {
+  --source-row-h: 32px;
+  --row-h: 60px;
+  --hit-row-h: 76px;
 }
 
 /* Section 7.2: list width by window width. */

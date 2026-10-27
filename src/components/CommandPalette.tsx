@@ -1,18 +1,41 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { clsx } from "clsx";
+import type { LucideIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
-import { Modal } from "./Modal";
+import { ICON } from "./ui/button";
+import {
+  Command as Cmdk,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandShortcut,
+} from "./ui/command";
+
+/** Palette sections in display order (spec 9.8). View holds what Mail keeps in its View menu. */
+export const GROUPS = ["Actions", "View", "Sessions", "Repositories", "Folders"] as const;
+export type PaletteGroup = (typeof GROUPS)[number];
 
 export interface Command {
   id: string;
-  group: string;
+  group: PaletteGroup;
   label: string;
-  hint?: string;
+  icon: LucideIcon;
+  /** A shortcut in Apple glyph order (⇧⌘C). */
+  shortcut?: string;
+  /** Trailing facts when there is no shortcut: a date, a session count. */
+  detail?: string;
   run: () => void;
 }
 
-const MAX_SHOWN = 50;
+/** With an empty query, the long groups show only their first rows; typing reaches the rest. */
+const IDLE_LIMIT = 5;
+const QUERY_LIMIT = 20;
 const ARCHIVE_DEBOUNCE_MS = 160;
 const ARCHIVE_MIN_LENGTH = 2;
+const LONG_GROUPS: ReadonlySet<PaletteGroup> = new Set(["Sessions", "Repositories", "Folders"]);
 
 /**
  * Score an ordered fuzzy match: substrings beat scattered letters, word starts
@@ -38,9 +61,29 @@ export function fuzzyScore(query: string, candidate: string): number | null {
 
 function scoreCommand(query: string, command: Command): number | null {
   const label = fuzzyScore(query, command.label);
-  const hint = command.hint ? fuzzyScore(query, command.hint) : null;
-  if (label === null && hint === null) return null;
-  return Math.max(label ?? -Infinity, hint === null ? -Infinity : hint - 30);
+  const detail = command.detail ? fuzzyScore(query, command.detail) : null;
+  if (label === null && detail === null) return null;
+  return Math.max(label ?? -Infinity, detail === null ? -Infinity : detail - 30);
+}
+
+/** The commands to show, grouped in GROUPS order and ranked by score within a group. */
+export function rankCommands(query: string, commands: Command[], archive: Command[]): [PaletteGroup, Command[]][] {
+  const trimmed = query.trim();
+  const best = new Map<string, { command: Command; score: number; index: number }>();
+  [...commands, ...archive].forEach((command, index) => {
+    const local = scoreCommand(trimmed, command);
+    // A full-text hit can match a session's body when its title does not, so it ranks last instead of vanishing.
+    const score = local ?? (index >= commands.length ? -100 - index : null);
+    if (score === null) return;
+    const seen = best.get(command.id);
+    if (!seen || score > seen.score) best.set(command.id, { command, score, index });
+  });
+  const ranked = [...best.values()].sort((a, b) => b.score - a.score || a.index - b.index);
+  const limit = trimmed === "" ? IDLE_LIMIT : QUERY_LIMIT;
+  return GROUPS.map((group): [PaletteGroup, Command[]] => {
+    const rows = ranked.filter((m) => m.command.group === group).map((m) => m.command);
+    return [group, LONG_GROUPS.has(group) ? rows.slice(0, limit) : rows];
+  }).filter(([, rows]) => rows.length > 0);
 }
 
 type ArchiveState =
@@ -50,8 +93,9 @@ type ArchiveState =
   | { status: "failed"; query: string };
 
 /**
- * Jump anywhere: actions, repositories, folders, loaded sessions, and a
- * full-text search of the archive for anything else.
+ * The command palette (spec 9.8), Spotlight-like: every action with its shortcut, the
+ * view options, and navigation to sessions, repositories and folders, plus a
+ * full-text search of the archive for sessions that are not loaded.
  */
 export default function CommandPalette({
   commands,
@@ -63,9 +107,7 @@ export default function CommandPalette({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
   const [archive, setArchive] = useState<ArchiveState>({ status: "idle" });
-  const input = useRef<HTMLInputElement>(null);
   const trimmed = query.trim();
 
   useEffect(() => {
@@ -87,101 +129,51 @@ export default function CommandPalette({
     };
   }, [searchArchive, trimmed]);
 
-  const shown = useMemo(() => {
-    if (trimmed === "") return commands.slice(0, MAX_SHOWN);
-    const local = commands
-      .map((command, index) => ({ command, index, score: scoreCommand(trimmed, command) }))
-      .filter((m): m is typeof m & { score: number } => m.score !== null);
-    // Full-text hits can match a session body even when the title does not
-    // fuzzy-match, so they rank after direct matches instead of disappearing.
-    const remote =
-      archive.status === "ready" && archive.query === trimmed
-        ? archive.items.map((command, index) => ({
-            command,
-            index: commands.length + index,
-            score: scoreCommand(trimmed, command) ?? -100 - index,
-          }))
-        : [];
-    const best = new Map<string, (typeof local)[number]>();
-    for (const match of [...local, ...remote]) {
-      const seen = best.get(match.command.id);
-      if (!seen || match.score > seen.score) best.set(match.command.id, match);
-    }
-    return [...best.values()]
-      .sort((a, b) => b.score - a.score || a.index - b.index)
-      .slice(0, MAX_SHOWN)
-      .map((m) => m.command);
-  }, [archive, commands, trimmed]);
+  const groups = useMemo(
+    () => rankCommands(trimmed, commands, archive.status === "ready" && archive.query === trimmed ? archive.items : []),
+    [archive, commands, trimmed],
+  );
 
-  const current = Math.min(active, Math.max(shown.length - 1, 0));
-
-  useEffect(() => {
-    document.getElementById(shown[current]?.id ?? "")?.scrollIntoView?.({ block: "nearest" });
-  }, [current, shown]);
-
-  function run(command: Command | undefined) {
-    if (!command) return;
+  function run(command: Command) {
     onClose();
     command.run();
   }
 
-  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown") setActive(Math.min(current + 1, shown.length - 1));
-    else if (event.key === "ArrowUp") setActive(Math.max(current - 1, 0));
-    else if (event.key === "Home") setActive(0);
-    else if (event.key === "End") setActive(Math.max(shown.length - 1, 0));
-    else if (event.key === "Enter") run(shown[current]);
-    else return;
-    event.preventDefault();
-  }
+  const status =
+    archive.status === "loading" ? "Searching the archive…" : archive.status === "failed" ? "The archive search failed. Local matches are still shown." : "";
 
-  const searching = archive.status === "loading";
   return (
-    <Modal label="Command palette" className="palette" onClose={onClose} initialFocus={input}>
-      <input
-        ref={input}
-        className="palette__input"
-        type="text"
-        maxLength={256}
-        role="combobox"
-        aria-label="Jump to a session, repository, folder, or action"
-        aria-expanded="true"
-        aria-controls="palette-list"
-        aria-activedescendant={shown[current]?.id}
-        placeholder="Jump to a session, repository, folder, or action"
-        value={query}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setActive(0);
-        }}
-        onKeyDown={onKeyDown}
-      />
-      <ul id="palette-list" className="palette__list" role="listbox" aria-label="Results" aria-busy={searching}>
-        {shown.map((command, index) => (
-          <li
-            key={command.id}
-            id={command.id}
-            role="option"
-            aria-selected={index === current}
-            className={`palette__item${index === current ? " is-active" : ""}`}
-            onMouseEnter={() => setActive(index)}
-            onClick={() => run(command)}
-          >
-            <span className="palette__label">{command.label}</span>
-            {command.hint && <span className="palette__hint">{command.hint}</span>}
-            <span className="palette__group">{command.group}</span>
-          </li>
-        ))}
-      </ul>
-      <p className="palette__status" role="status" aria-live="polite">
-        {shown.length === 0 && !searching
-          ? `Nothing matches “${trimmed}”.`
-          : searching
-            ? "Searching the archive…"
-            : archive.status === "failed"
-              ? "Archive search failed. Local matches are still shown."
-              : ""}
-      </p>
-    </Modal>
+    <CommandDialog open onOpenChange={(open) => !open && onClose()} label="Command Palette">
+      <Cmdk shouldFilter={false} loop label="Search sessions and actions">
+        <CommandInput
+          aria-label="Search sessions and actions"
+          placeholder="Search sessions and actions"
+          maxLength={256}
+          value={query}
+          onValueChange={setQuery}
+        />
+        <CommandList>
+          {archive.status !== "loading" && <CommandEmpty>No Results for “{trimmed}”</CommandEmpty>}
+          {groups.map(([group, rows]) => (
+            <CommandGroup key={group} heading={group}>
+              {rows.map((command) => {
+                const Icon = command.icon;
+                const trailing = command.shortcut ?? command.detail;
+                return (
+                  <CommandItem key={command.id} value={command.id} onSelect={() => run(command)}>
+                    <Icon className={clsx(ICON.body, "text-label-2 group-aria-selected:text-on-selected")} aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{command.label}</span>
+                    {trailing && <CommandShortcut>{trailing}</CommandShortcut>}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          ))}
+        </CommandList>
+        <p role="status" aria-live="polite" className={clsx("px-4 text-callout text-label-2", status && "pb-2.5")}>
+          {status}
+        </p>
+      </Cmdk>
+    </CommandDialog>
   );
 }

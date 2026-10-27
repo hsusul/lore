@@ -103,6 +103,9 @@ export function useWindowing(
     const ro =
       typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : undefined;
     ro?.observe(el);
+    // Rows change height without the viewport resizing when the density setting changes;
+    // the list itself resizes then, so watching it re-measures the row.
+    if (el.firstElementChild) ro?.observe(el.firstElementChild);
     return () => {
       el.removeEventListener("scroll", onScroll);
       ro?.disconnect();

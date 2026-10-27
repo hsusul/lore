@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { formatAgo } from "../format";
 import { scanFraction, type ScanState } from "../hooks/workspace";
 import { Button, ICON } from "./ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip } from "./ui/tooltip";
 
 /** A scan shows an indeterminate spinner this long before switching to its progress ring (spec 9.9). */
@@ -54,10 +54,15 @@ export default function ScanControl({
   scan,
   lastScanAt,
   onRescan,
+  refreshError,
+  onRefresh,
 }: {
   scan: ScanState;
   lastScanAt: number | null;
   onRescan: () => void;
+  /** Why the last reload of the archive after a change failed, or null. */
+  refreshError: string | null;
+  onRefresh: () => void;
 }) {
   const running = scan.phase === "running";
   const [determinate, setDeterminate] = useState(false);
@@ -74,25 +79,34 @@ export default function ScanControl({
   const percent = fraction ? Math.round((fraction.done / fraction.total) * 100) : 0;
   const progress = scanProgressText(scan);
   const summary = scanSummary(scan);
-  const idleLabel = [lastScanAt ? `Rescan (⌘R), last scanned ${formatAgo(lastScanAt)}` : "Rescan (⌘R)", summary].filter(Boolean).join(". ");
+  // A failed scan outranks a failed reload: rescanning reloads the archive too.
+  const warning =
+    scan.phase === "failed"
+      ? { label: "Scan failed", tooltip: "The last scan failed", title: "The scan did not finish.", error: scan.error, onRetry: onRescan }
+      : refreshError !== null
+        ? { label: "Archive not updated", tooltip: "The archive could not be reloaded", title: "Lore could not reload the archive.", error: refreshError, onRetry: onRefresh }
+        : null;
+  const idleLabel =[lastScanAt ? `Rescan (⌘R), last scanned ${formatAgo(lastScanAt)}` : "Rescan (⌘R)", summary].filter(Boolean).join(". ");
 
   return (
     <>
-      {scan.phase === "failed" && (
+      {warning && (
         <Popover>
-          <Tooltip label="The last scan failed">
+          <Tooltip label={warning.tooltip}>
             <PopoverTrigger asChild>
-              <Button variant="toolbar" aria-label="Scan failed">
+              <Button variant="toolbar" aria-label={warning.label}>
                 <TriangleAlert className={clsx(ICON.toolbar, "text-orange-icon")} aria-hidden="true" />
               </Button>
             </PopoverTrigger>
           </Tooltip>
-          <PopoverContent align="end" aria-label="Scan failed">
-            <p className="text-headline">The scan did not finish.</p>
-            <p className="mt-1 text-callout text-label-2">{scan.error}</p>
+          <PopoverContent align="end" aria-label={warning.label}>
+            <p className="text-headline">{warning.title}</p>
+            <p className="mt-1 text-callout text-label-2">{warning.error}</p>
             <p className="mt-1 text-callout text-label-2">Your agent logs were not changed.</p>
             <div className="mt-3 flex justify-end">
-              <Button onClick={onRescan}>Try Again</Button>
+              <PopoverClose asChild>
+                <Button onClick={warning.onRetry}>Try Again</Button>
+              </PopoverClose>
             </div>
           </PopoverContent>
         </Popover>
@@ -132,7 +146,7 @@ export default function ScanControl({
         {running ? "Scanning" : summary ? `Scan finished: ${summary}` : ""}
       </span>
       <span role="alert" className="sr-only">
-        {scan.phase === "failed" ? `Scan failed: ${scan.error}` : ""}
+        {warning ? `${warning.label}: ${warning.error}` : ""}
       </span>
     </>
   );

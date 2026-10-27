@@ -1,8 +1,15 @@
 import { ChevronDown, Copy, Download, Ellipsis, FolderInput } from "lucide-react";
 
-import type { ToolCallMode } from "../hooks/useToolCallMode";
+import type { ToolCallMode } from "../hooks/usePreferences";
 import type { FolderSummary } from "../ipc";
 import { Button, ICON } from "./ui/button";
+import {
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+} from "./ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,10 +30,49 @@ export interface ReaderActions {
   forget: (id: string, title: string) => void;
 }
 
-/** A confirmation a toolbar control shows in its own tooltip ("Copied", spec 9.12). */
+/** A confirmation or a failure a toolbar control shows in its own tooltip ("Copied", spec 9.12). */
 export interface ActionNote {
-  control: "copy" | "file";
+  control: "copy" | "file" | "save";
   text: string;
+}
+
+/**
+ * A session row's context menu (spec 9.12): the reader's actions for that row's session,
+ * which need not be the open one.
+ */
+export function SessionMenuItems({
+  session,
+  folders,
+  actions,
+}: {
+  session: { id: string; title: string };
+  folders: FolderSummary[];
+  actions: ReaderActions;
+}) {
+  return (
+    <>
+      <ContextMenuItem onSelect={() => actions.copyMarkdown(session.id)}>Copy as Markdown</ContextMenuItem>
+      <ContextMenuItem onSelect={() => actions.saveFile(session.id)}>Save as File…</ContextMenuItem>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger>File in Folder</ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          {folders.length === 0 ? (
+            <ContextMenuItem disabled>No Folders</ContextMenuItem>
+          ) : (
+            folders.map((folder) => (
+              <ContextMenuItem key={folder.id} onSelect={() => actions.file(session.id, folder.id)}>
+                <span className="truncate">{folder.name}</span>
+              </ContextMenuItem>
+            ))
+          )}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => actions.file(session.id, null)}>Remove from Folder</ContextMenuItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => actions.forget(session.id, session.title)}>Forget Session…</ContextMenuItem>
+    </>
+  );
 }
 
 /**
@@ -87,7 +133,7 @@ export default function ReaderToolbar({
           <DropdownMenuItem onSelect={() => session && actions.file(session.id, null)}>Remove from Folder</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Tooltip label="Save as File… (⌘S)">
+      <Tooltip label="Save as File… (⌘S)" note={noteFor("save")}>
         <Button
           variant="toolbar"
           aria-label="Save as File…"

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { clamp } from "../format";
 import { useWindowing } from "../virtual";
 import { Button } from "./ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./ui/context-menu";
 
 /** How a row was opened: Enter hands focus to the reader; arrows and clicks keep it here. */
 export type OpenVia = "keyboard" | "pointer" | "arrow";
@@ -30,6 +31,8 @@ interface ListBoxProps<T> {
   onReachEnd?: () => void;
   /** The "Load older" button, when there is more to load. */
   more?: MoreState | null;
+  /** The items of a row's context menu. */
+  rowMenu?: (item: T) => ReactNode;
 }
 
 /** Whether the window is key. Selection turns gray when it is not, as in Mail. */
@@ -67,6 +70,7 @@ export default function ListBox<T>({
   onExitTop,
   onReachEnd,
   more,
+  rowMenu,
 }: ListBoxProps<T>) {
   const selected = items.findIndex(isOpen);
   const last = items.length - 1;
@@ -107,6 +111,8 @@ export default function ListBox<T>({
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLUListElement>) {
+    // A row's context menu is portaled but still bubbles through React; its keys are its own.
+    if (event.target !== event.currentTarget) return;
     const page = 10;
     switch (event.key) {
       case "ArrowDown":
@@ -169,7 +175,7 @@ export default function ListBox<T>({
         {padTop > 0 && <li aria-hidden="true" style={{ height: padTop }} />}
         {items.slice(startIndex, endIndex).map((item, offset) => {
           const index = startIndex + offset;
-          return (
+          const row = (
             <li
               key={keyOf(item)}
               id={optionId(index)}
@@ -178,11 +184,19 @@ export default function ListBox<T>({
               aria-selected={index === selected}
               aria-setsize={items.length}
               aria-posinset={index + 1}
-              className={clsx("row", height === "row" ? "h-row" : "h-hit-row")}
+              className={clsx("row data-open:shadow-focus-inset", height === "row" ? "h-row" : "h-hit-row")}
               onClick={() => onOpen(item, "pointer")}
             >
               {renderRow(item)}
             </li>
+          );
+          if (!rowMenu) return row;
+          // A right-click acts on its row without opening it, as in Mail, and rings the row while the menu is open.
+          return (
+            <ContextMenu key={keyOf(item)}>
+              <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+              <ContextMenuContent>{rowMenu(item)}</ContextMenuContent>
+            </ContextMenu>
           );
         })}
         {padBottom > 0 && <li aria-hidden="true" style={{ height: padBottom }} />}

@@ -43,7 +43,8 @@ export default function Sidebar({
   selected: Source;
   onChoose: (source: Source) => void;
   onToggle: () => void;
-  folderActions: FolderActions;
+  /** Null on first run, when the sidebar shows no scopes and offers no New Folder (spec 18.10). */
+  folderActions: FolderActions | null;
 }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
@@ -109,16 +110,18 @@ export default function Sidebar({
           );
         })}
       </div>
-      <div className="px-2.5 pb-2.5 pt-1">
-        <button
-          type="button"
-          className="flex h-source-row items-center gap-1.5 rounded-control px-2 text-body text-label-2 outline-none hover:text-label focus-visible:shadow-focus"
-          onClick={folderActions.onNewFolder}
-        >
-          <Plus className={ICON.body} aria-hidden="true" />
-          New Folder
-        </button>
-      </div>
+      {folderActions && (
+        <div className="px-2.5 pb-2.5 pt-1">
+          <button
+            type="button"
+            className="flex h-source-row items-center gap-1.5 rounded-control px-2 text-body text-label-2 outline-none hover:text-label focus-visible:shadow-focus"
+            onClick={folderActions.onNewFolder}
+          >
+            <Plus className={ICON.body} aria-hidden="true" />
+            New Folder
+          </button>
+        </div>
+      )}
     </nav>
   );
 }
@@ -159,7 +162,7 @@ function SourceButton({
   selected: boolean;
   tabbable: boolean;
   onChoose: (source: Source) => void;
-  folderActions: FolderActions;
+  folderActions: FolderActions | null;
 }) {
   const Icon = row.icon;
   const onSelected = "group-focus-within/sidebar:text-on-selected";
@@ -192,7 +195,7 @@ function SourceButton({
       )}
     </button>
   );
-  if (!row.folder) return button;
+  if (!row.folder || !folderActions) return button;
   const folder = row.folder;
   return (
     <ContextMenu>

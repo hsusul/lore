@@ -1,24 +1,52 @@
 import { clsx } from "clsx";
-import { Command as CommandIcon } from "lucide-react";
+import {
+  ArrowDownUp,
+  Command as CommandIcon,
+  Copy,
+  Download,
+  FileDiff,
+  Folder,
+  FolderGit2,
+  FolderInput,
+  FolderMinus,
+  FolderPlus,
+  GitBranch,
+  Inbox,
+  ListChevronsUpDown,
+  ListFilter,
+  MessageSquare,
+  Monitor,
+  Moon,
+  PanelLeft,
+  Pencil,
+  RefreshCw,
+  Rows2,
+  Rows3,
+  Rows4,
+  Search,
+  Settings,
+  Sun,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import CommandPalette, { type Command } from "./components/CommandPalette";
-import { BrowsePane, groupHits, ScopeBar, SearchPane } from "./components/ListPane";
+import { BrowsePane, groupHits, ScopeBar, SearchPane, type SessionMenu } from "./components/ListPane";
 import type { OpenVia } from "./components/ListBox";
-import MessageBar from "./components/MessageBar";
-import { ConfirmDialog, NameDialog } from "./components/Modal";
 import Onboarding from "./components/Onboarding";
-import Reader from "./components/Reader";
-import ReaderToolbar, { type ActionNote, type ReaderActions } from "./components/ReaderToolbar";
+import Reader, { READER_TABS, type ReaderTab } from "./components/Reader";
+import ReaderToolbar, { SessionMenuItems, type ActionNote, type ReaderActions } from "./components/ReaderToolbar";
 import ScanControl from "./components/ScanControl";
-import SearchField, { type FilterValues } from "./components/SearchField";
+import SearchField, { SORTS, type FilterValues } from "./components/SearchField";
 import SettingsDialog from "./components/SettingsDialog";
+import { Alert, NameSheet } from "./components/Sheets";
 import Sidebar, { SidebarToggle } from "./components/Sidebar";
 import { sourceRow, sourceSections } from "./components/sources";
 import Toolbar, { ScopeMenu, ScopeTitle } from "./components/Toolbar";
 import { Button, ICON } from "./components/ui/button";
 import { Tooltip, TooltipProvider } from "./components/ui/tooltip";
-import { agentLabel } from "./format";
+import { formatMailDate } from "./format";
 import { isRunnable, queryFilters, queryTerms, withoutFilters } from "./hooks/query";
 import { useCatalog, type Catalog } from "./hooks/useCatalog";
 import { useDebounced } from "./hooks/useDebounced";
@@ -26,8 +54,8 @@ import { useLastScan } from "./hooks/useLastScan";
 import { useNote } from "./hooks/useNote";
 import { useOpenSession } from "./hooks/useOpenSession";
 import { usePagedList, type FetchPage } from "./hooks/usePagedList";
+import { PREFERENCES, usePreferences, type PreferenceName } from "./hooks/usePreferences";
 import { useSidebar } from "./hooks/useSidebar";
-import { useToolCallMode } from "./hooks/useToolCallMode";
 import { ALL, currentSource, initialWorkspace, workspaceReducer, type Overlay, type Source } from "./hooks/workspace";
 import {
   addAgentRoot,
@@ -62,6 +90,28 @@ const EMPTY: Catalog = { agents: [], repositories: [], folders: [] };
 const sessionKey = (s: SessionSummary) => s.id;
 const hitKey = (h: SearchHit) => `${h.source_kind}:${h.source_id}:${h.field}`;
 
+/** Icons for the palette's view choices, by preference and value. */
+const CHOICE_ICONS: Record<string, LucideIcon> = {
+  "theme:system": Monitor,
+  "theme:light": Sun,
+  "theme:dark": Moon,
+  "density:compact": Rows4,
+  "density:comfortable": Rows3,
+  "density:spacious": Rows2,
+  "toolCalls:collapsed": ListChevronsUpDown,
+  "toolCalls:expanded": ListChevronsUpDown,
+};
+
+/** How the palette words a view choice: "Use Dark Appearance", "Show Tool Calls Expanded". */
+function choiceLabel(name: PreferenceName, label: string): string {
+  if (name === "theme") return `Use ${label} Appearance`;
+  if (name === "density") return `Use ${label} Density`;
+  const { title } = PREFERENCES[name];
+  return `${title} ${label}`;
+}
+
+const TAB_ICONS: Record<ReaderTab, LucideIcon> = { conversation: MessageSquare, files: FileDiff, git: GitBranch };
+
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   return !!el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
@@ -80,19 +130,24 @@ export default function App() {
   const [ws, dispatch] = useReducer(workspaceReducer, initialWorkspace);
   const catalog = useCatalog();
   const { agents, repositories, folders } = catalog.state.status === "ready" ? catalog.state.catalog : EMPTY;
-  const [busyAgent, setBusyAgent] = useState<string | null>(null);
   const sidebar = useSidebar();
   const lastScanAt = useLastScan(ws.scan);
-  const [toolCalls, setToolCalls] = useToolCallMode();
+  const [prefs, setPreference] = usePreferences();
+  const toolCalls = prefs.toolCalls;
   const [actionNote, showNote] = useNote<ActionNote>();
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [filterReference, setFilterReference] = useState(false);
+  // The tab belongs to the open session: opening another starts it on Conversation.
+  const [tabFor, setTabFor] = useState<{ id: string | null; tab: ReaderTab }>({ id: null, tab: "conversation" });
+  const readerTab = tabFor.id === ws.openId ? tabFor.tab : "conversation";
+  const openId = ws.openId;
+  const setReaderTab = useCallback((tab: ReaderTab) => setTabFor({ id: openId, tab }), [openId]);
 
   const queryRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const readerRef = useRef<HTMLElement>(null);
   const focusReaderOnLoad = useRef(false);
 
-  const notice = useCallback((text: string) => dispatch({ type: "flash", flash: { tone: "notice", text } }), []);
-  const fail = useCallback((e: unknown) => dispatch({ type: "flash", flash: { tone: "error", text: String(e) } }), []);
   const overlay = useCallback((next: Overlay) => dispatch({ type: "overlay", overlay: next }), []);
   const closeOverlay = useCallback(() => overlay({ kind: "none" }), [overlay]);
 
@@ -139,14 +194,16 @@ export default function App() {
     [openState],
   );
 
+  // A failed reload keeps the rows on screen; the Rescan control's warning says so and retries (spec 9.9).
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const refreshAll = useCallback(async () => {
     try {
       await Promise.all([catalog.refresh(), browse.refresh()]);
+      setRefreshError(null);
     } catch (e) {
-      fail(e);
+      setRefreshError(String(e));
     }
-  }, [browse, catalog, fail]);
+  }, [browse, catalog]);
   useEffect(() => {
     refreshRef.current = refreshAll;
   }, [refreshAll]);
@@ -212,75 +269,51 @@ export default function App() {
     }
   }, []);
 
+  /** Ask for a folder for `agent` and read it; the added path, or null when the user cancels. */
   const addRoot = useCallback(
     async (agent: DetectedAgent) => {
-      setBusyAgent(agent.id);
-      try {
-        const path = await chooseAgentRootDirectory(agent.display_name);
-        if (path === null) return;
-        await addAgentRoot(agent.id, path);
-        notice(`Added ${path}. Lore is scanning it now.`);
-        await refreshAll();
-      } catch (e) {
-        fail(e);
-      } finally {
-        setBusyAgent(null);
-      }
+      const path = await chooseAgentRootDirectory(agent.display_name);
+      if (path === null) return null;
+      await addAgentRoot(agent.id, path);
+      await refreshAll();
+      return path;
     },
-    [fail, notice, refreshAll],
+    [refreshAll],
   );
 
   const removeRoot = useCallback(
     async (agent: DetectedAgent, path: string) => {
-      setBusyAgent(agent.id);
-      try {
-        await removeAgentRoot(agent.id, path);
-        notice(`Stopped reading ${path}. Sessions already archived stay.`);
-        await refreshAll();
-      } catch (e) {
-        fail(e);
-      } finally {
-        setBusyAgent(null);
-      }
+      await removeAgentRoot(agent.id, path);
+      await refreshAll();
     },
-    [fail, notice, refreshAll],
+    [refreshAll],
   );
 
+  const forgetAll = useCallback(async () => {
+    const report = await forgetEverything();
+    dispatch({ type: "forgot-everything" });
+    await refreshAll();
+    return report;
+  }, [refreshAll]);
+
+  // Each of these confirms by what it changes: the new folder appears, the renamed one
+  // reads its new name, the deleted one goes away. A failure stays in the sheet that asked.
   const newFolder = useCallback(
     () =>
       overlay({
         kind: "name",
-        title: "New Folder",
-        label: "Folder name",
-        initial: "",
-        confirmLabel: "Create folder",
-        onSubmit: (name) =>
-          void createFolder(name).then(
-            async (folder) => {
-              await refreshAll();
-              notice(`Created folder “${folder.name}”.`);
-            },
-            fail,
-          ),
-      }),
-    [fail, notice, overlay, refreshAll],
-  );
-
-  const forgetAll = useCallback(
-    () =>
-      overlay({
-        kind: "confirm",
-        title: "Forget everything?",
-        body: "This removes every session, repository, finding, and backup from Lore. Your original agent logs are not touched. This cannot be undone.",
-        confirmLabel: "Forget everything",
-        onConfirm: () =>
-          void forgetEverything().then(async (report) => {
-            dispatch({ type: "forgot-everything" });
+        sheet: {
+          title: "New Folder",
+          label: "Name",
+          initial: "",
+          action: "Create",
+          onSubmit: async (name) => {
+            await createFolder(name);
             await refreshAll();
-            notice(`Archive cleared. ${report.blobs_removed} stored blobs removed.`);
-          }, fail),
+          },
+        },
       }),
-    [fail, notice, overlay, refreshAll],
+    [overlay, refreshAll],
   );
 
   const currentFolder = scope.kind === "folder" ? folders.find((f) => f.id === scope.id) ?? null : null;
@@ -293,31 +326,36 @@ export default function App() {
   const renameFolderNamed = (folder: FolderSummary) =>
     overlay({
       kind: "name",
-      title: "Rename Folder",
-      label: "Folder name",
-      initial: folder.name,
-      confirmLabel: "Rename",
-      onSubmit: (name) => void renameFolder(folder.id, name).then(refreshAll, fail),
+      sheet: {
+        title: "Rename Folder",
+        label: "Name",
+        initial: folder.name,
+        action: "Rename",
+        onSubmit: async (name) => {
+          await renameFolder(folder.id, name);
+          await refreshAll();
+        },
+      },
     });
 
   const deleteFolderNamed = (folder: FolderSummary) =>
     overlay({
-      kind: "confirm",
-      title: `Delete “${folder.name}”?`,
-      body: "The folder goes away. Its sessions stay in Lore, just not filed.",
-      confirmLabel: "Delete Folder",
-      onConfirm: () =>
-        void deleteFolder(folder.id).then(async () => {
+      kind: "alert",
+      alert: {
+        title: `Delete “${folder.name}”?`,
+        body: "The folder goes away. Its sessions stay in Lore, just not filed.",
+        action: "Delete Folder",
+        onConfirm: async () => {
+          await deleteFolder(folder.id);
           if (scope.kind === "folder" && scope.id === folder.id) dispatch({ type: "source", source: ALL });
           await refreshAll();
-          notice(`Deleted folder “${folder.name}”.`);
-        }, fail),
+        },
+      },
     });
   const folderActions = { onNewFolder: newFolder, onRenameFolder: renameFolderNamed, onDeleteFolder: deleteFolderNamed };
 
-  // Reader actions confirm on their own controls (spec 9.12): Copy and File flip their
-  // tooltips, Save answers with the system save panel, Forget removes the row. Errors still
-  // go to the notices line.
+  // Reader actions confirm and fail on their own controls (spec 9.12): Copy, Save and File
+  // say so in their tooltips, the system save panel answers Save, Forget removes the row.
   const actions: ReaderActions = {
     copyMarkdown: (id) =>
       void (async () => {
@@ -325,128 +363,169 @@ export default function App() {
           const markdown = await exportSessionMarkdown(id, false);
           if (markdown == null) return;
           if (!navigator.clipboard?.writeText) {
-            fail("The clipboard is not available here. Use Save as File instead.");
+            showNote({ control: "copy", text: "The clipboard is not available here. Use Save as File instead." });
             return;
           }
           await navigator.clipboard.writeText(markdown);
           showNote({ control: "copy", text: "Copied" });
         } catch (e) {
-          fail(e);
+          showNote({ control: "copy", text: `Could not copy: ${String(e)}` });
         }
       })(),
-    saveFile: (id) => void saveSessionExport(id, null, false).catch(fail),
+    saveFile: (id) =>
+      void saveSessionExport(id, null, false).catch((e: unknown) => showNote({ control: "save", text: `Could not save: ${String(e)}` })),
     file: (id, folderId) =>
-      void setSessionFolder(id, folderId).then(async () => {
-        await refreshAll();
-        const name = folders.find((f) => f.id === folderId)?.name;
-        showNote({ control: "file", text: name ? `Filed in “${name}”` : "Removed from Folder" });
-      }, fail),
+      void setSessionFolder(id, folderId).then(
+        async () => {
+          await refreshAll();
+          const name = folders.find((f) => f.id === folderId)?.name;
+          showNote({ control: "file", text: name ? `Filed in “${name}”` : "Removed from Folder" });
+        },
+        (e: unknown) => showNote({ control: "file", text: `Could not file: ${String(e)}` }),
+      ),
     forget: (id, title) =>
       overlay({
-        kind: "confirm",
-        title: `Forget “${title}”?`,
-        body: "Lore removes this session and everything derived from it. The original agent log stays on disk.",
-        confirmLabel: "Forget Session",
-        onConfirm: () =>
-          void forgetSession(id).then(async () => {
-            dispatch({ type: "open", id: null });
+        kind: "alert",
+        alert: {
+          title: `Forget “${title}”?`,
+          body: "Lore removes this session and its search entries from the archive. The original agent log on this Mac is not changed.",
+          action: "Forget Session",
+          onConfirm: async () => {
+            await forgetSession(id);
+            dispatch({ type: "forgot", id });
             await refreshAll();
-          }, fail),
+          },
+        },
       }),
   };
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
+  const sessionMenu: SessionMenu = (session) => <SessionMenuItems session={session} folders={folders} actions={actions} />;
 
-  const searchArchive = useCallback(async (q: string): Promise<Command[]> => {
-    const page = await searchPage(q, SEARCH_PAGE);
-    const seen = new Set<string>();
-    return page.hits
-      .filter((hit) => !seen.has(hit.session_id) && !!seen.add(hit.session_id))
-      .map((hit) => ({
-        id: `cmd-session-${hit.session_id}`,
-        group: "Archive",
-        label: hit.title ?? "Untitled session",
-        hint: `${agentLabel(hit.agent_id)}, full-text match`,
-        run: () => openSession(hit.session_id),
-      }));
-  }, [openSession]);
+  const searchArchive = useCallback(
+    async (q: string): Promise<Command[]> => {
+      const page = await searchPage(q, SEARCH_PAGE);
+      const seen = new Set<string>();
+      return page.hits
+        .filter((hit) => !seen.has(hit.session_id) && !!seen.add(hit.session_id))
+        .map((hit) => ({
+          id: `cmd-session-${hit.session_id}`,
+          group: "Sessions",
+          label: hit.title ?? "Untitled session",
+          icon: MessageSquare,
+          detail: formatMailDate(hit.started_at),
+          run: () => openSession(hit.session_id),
+        }));
+    },
+    [openSession],
+  );
 
+  const setSort = useCallback((sort: SearchSort) => dispatch({ type: "sort", sort }), []);
   const toggleSidebar = sidebar.toggle;
   const scanPhase = ws.scan.phase;
-  const browseState = browse.state;
-  const commands = useMemo<Command[]>(
-    () => [
-      { id: "cmd-rescan", group: "Action", label: "Rescan archive", hint: "⌘R", run: () => void startScan() },
-      { id: "cmd-search", group: "Action", label: "Search sessions", hint: "/", run: () => requestAnimationFrame(focusQuery) },
-      { id: "cmd-all", group: "Action", label: "Browse all sessions", run: () => chooseSource(ALL) },
-      { id: "cmd-folder", group: "Action", label: "New folder…", run: newFolder },
-      { id: "cmd-sidebar", group: "Action", label: "Show or hide the sidebar", hint: "⌃⌘S", run: sidebar.toggle },
-      { id: "cmd-settings", group: "Action", label: "Settings", hint: "Sources, backups, privacy", run: () => overlay({ kind: "settings" }) },
-      ...repositories.map((r) => ({
-        id: `cmd-repo-${r.id}`,
-        group: "Repository",
-        label: r.display_name,
-        hint: `${r.session_count} sessions`,
-        run: () => chooseSource({ kind: "repository", id: r.id }),
-      })),
-      ...folders.map((f) => ({
-        id: `cmd-folder-${f.id}`,
-        group: "Folder",
-        label: f.name,
-        hint: `${f.session_count} sessions`,
-        run: () => chooseSource({ kind: "folder", id: f.id }),
-      })),
-      ...(browseState.status === "ready" ? browseState.items : []).map((s) => ({
-        id: `cmd-session-${s.id}`,
-        group: "Session",
-        label: s.title ?? "Untitled session",
-        hint: agentLabel(s.agent_id),
-        run: () => openSession(s.id),
-      })),
-    ],
-    [browseState, chooseSource, focusQuery, folders, newFolder, openSession, overlay, repositories, sidebar.toggle, startScan],
-  );
-  const readerCommands: Command[] = [
-    {
-      id: "cmd-tool-calls",
-      group: "Action",
-      label: toolCalls === "collapsed" ? "Show Tool Calls Expanded" : "Show Tool Calls Collapsed",
-      run: () => setToolCalls(toolCalls === "collapsed" ? "expanded" : "collapsed"),
-    },
+  const sessions = browse.state.status === "ready" ? browse.state.items : [];
+
+  // Every action, its shortcut, and every view choice (spec 9.8, 11). Reader actions and
+  // tabs appear while a session is open; folder actions while a folder is the scope.
+  const paletteCommands: Command[] = [
     ...(reading
       ? [
-          { id: "cmd-copy", group: "Action", label: "Copy as Markdown", hint: "⇧⌘C", run: () => actions.copyMarkdown(reading.id) },
-          { id: "cmd-save", group: "Action", label: "Save as File…", hint: "⌘S", run: () => actions.saveFile(reading.id) },
+          { id: "cmd-copy", label: "Copy as Markdown", icon: Copy, shortcut: "⇧⌘C", run: () => actions.copyMarkdown(reading.id) },
+          { id: "cmd-save", label: "Save as File…", icon: Download, shortcut: "⌘S", run: () => actions.saveFile(reading.id) },
           ...folders.map((f) => ({
             id: `cmd-file-${f.id}`,
-            group: "Action",
             label: `File in “${f.name}”`,
+            icon: FolderInput,
             run: () => actions.file(reading.id, f.id),
           })),
-          { id: "cmd-unfile", group: "Action", label: "Remove from Folder", run: () => actions.file(reading.id, null) },
-          { id: "cmd-forget", group: "Action", label: "Forget Session…", hint: "⌘⌫", run: () => actions.forget(reading.id, reading.title) },
+          { id: "cmd-unfile", label: "Remove from Folder", icon: FolderMinus, run: () => actions.file(reading.id, null) },
+          { id: "cmd-forget", label: "Forget Session…", icon: Trash2, shortcut: "⌘⌫", run: () => actions.forget(reading.id, reading.title) },
         ]
       : []),
-  ];
-  const paletteCommands: Command[] = [
-    ...commands,
-    ...readerCommands,
+    { id: "cmd-rescan", label: "Rescan", icon: RefreshCw, shortcut: "⌘R", run: () => void startScan() },
+    { id: "cmd-search", label: "Search Sessions", icon: Search, shortcut: "⌥⌘F", run: () => requestAnimationFrame(focusQuery) },
+    { id: "cmd-filters", label: "Filter Reference", icon: ListFilter, shortcut: "⌘/", run: () => setFilterReference(true) },
+    { id: "cmd-new-folder", label: "New Folder…", icon: FolderPlus, run: newFolder },
     ...(currentFolder
       ? [
-          { id: "cmd-rename-folder", group: "Action", label: `Rename “${currentFolder.name}”…`, run: () => renameFolderNamed(currentFolder) },
-          { id: "cmd-delete-folder", group: "Action", label: `Delete “${currentFolder.name}”…`, run: () => deleteFolderNamed(currentFolder) },
+          { id: "cmd-rename-folder", label: `Rename “${currentFolder.name}”…`, icon: Pencil, run: () => renameFolderNamed(currentFolder) },
+          { id: "cmd-delete-folder", label: `Delete “${currentFolder.name}”…`, icon: Trash2, run: () => deleteFolderNamed(currentFolder) },
         ]
       : []),
+    { id: "cmd-settings", label: "Settings…", icon: Settings, shortcut: "⌘,", run: () => overlay({ kind: "settings" }) },
+  ].map((command) => ({ ...command, group: "Actions" as const }));
+
+  const viewCommands: Command[] = [
+    ...(reading
+      ? READER_TABS.map((t) => ({
+          id: `cmd-tab-${t.id}`,
+          label: `Show ${t.label}`,
+          icon: TAB_ICONS[t.id],
+          shortcut: `⌘${t.key}`,
+          run: () => setReaderTab(t.id),
+        }))
+      : []),
+    { id: "cmd-all", label: "Show All Sessions", icon: Inbox, run: () => chooseSource(ALL) },
+    { id: "cmd-sidebar", label: sidebar.visible ? "Hide Sidebar" : "Show Sidebar", icon: PanelLeft, shortcut: "⌃⌘S", run: toggleSidebar },
+    ...SORTS.filter((s) => s.value !== ws.sort).map((s) => ({
+      id: `cmd-sort-${s.value}`,
+      label: `Sort by ${s.label}`,
+      icon: ArrowDownUp,
+      run: () => setSort(s.value),
+    })),
+    ...(Object.keys(PREFERENCES) as PreferenceName[]).flatMap((name) =>
+      PREFERENCES[name].choices
+        .filter((choice) => choice.value !== prefs[name])
+        .map((choice) => ({
+          id: `cmd-${name}-${choice.value}`,
+          label: choiceLabel(name, choice.label),
+          icon: CHOICE_ICONS[`${name}:${choice.value}`],
+          run: () => setPreference(name, choice.value),
+        })),
+    ),
+  ].map((command) => ({ ...command, group: "View" as const }));
+
+  const navigationCommands: Command[] = [
+    ...sessions.map((s) => ({
+      id: `cmd-session-${s.id}`,
+      group: "Sessions" as const,
+      label: s.title ?? "Untitled session",
+      icon: MessageSquare,
+      detail: formatMailDate(s.started_at),
+      run: () => openSession(s.id),
+    })),
+    ...repositories.map((r) => ({
+      id: `cmd-repo-${r.id}`,
+      group: "Repositories" as const,
+      label: r.display_name,
+      icon: FolderGit2,
+      detail: `${r.session_count} ${r.session_count === 1 ? "session" : "sessions"}`,
+      run: () => chooseSource({ kind: "repository", id: r.id }),
+    })),
+    ...folders.map((f) => ({
+      id: `cmd-folder-${f.id}`,
+      group: "Folders" as const,
+      label: f.name,
+      icon: Folder,
+      detail: `${f.session_count} ${f.session_count === 1 ? "session" : "sessions"}`,
+      run: () => chooseSource({ kind: "folder", id: f.id }),
+    })),
   ];
 
+  // Shortcuts act only on the window, never under a sheet, except ⌘K, which also closes the palette.
+  const overlayKind = ws.overlay.kind;
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       const mod = event.metaKey || event.ctrlKey;
-      const readerAction = reading && ws.overlay.kind === "none" && mod && !event.altKey ? readerKey(event) : null;
-      if (mod && event.key.toLowerCase() === "k") {
+      if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        dispatch({ type: "overlay", overlay: { kind: ws.overlay.kind === "palette" ? "none" : "palette" } });
-      } else if (mod && event.key === ",") {
+        dispatch({ type: "overlay", overlay: { kind: overlayKind === "palette" ? "none" : "palette" } });
+        return;
+      }
+      if (overlayKind !== "none") return;
+      const readerAction = reading && mod && !event.altKey ? readerKey(event) : null;
+      const tab = mod && !event.shiftKey && !event.altKey ? READER_TABS.find((t) => t.key === event.key) : undefined;
+      if (mod && event.key === ",") {
         event.preventDefault();
         dispatch({ type: "overlay", overlay: { kind: "settings" } });
       } else if (event.metaKey && event.ctrlKey && event.key.toLowerCase() === "s") {
@@ -455,6 +534,12 @@ export default function App() {
       } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "r") {
         event.preventDefault();
         if (scanPhase !== "running") void startScan();
+      } else if (mod && event.key === "/") {
+        event.preventDefault();
+        setFilterReference((shown) => !shown);
+      } else if (reading && tab) {
+        event.preventDefault();
+        setReaderTab(tab.id);
       } else if (reading && readerAction) {
         event.preventDefault();
         const run = actionsRef.current;
@@ -471,7 +556,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [reading, scanPhase, startScan, toggleSidebar, ws.overlay.kind]);
+  }, [overlayKind, reading, scanPhase, setReaderTab, startScan, toggleSidebar]);
 
   const scanning = ws.scan.phase === "running";
   const catalogState = catalog.state;
@@ -505,7 +590,6 @@ export default function App() {
         ? ""
         : plural(scopeCount);
   const title = searchTitled ? `Searching “${currentRepo?.display_name ?? "All Sessions"}”` : scopeLabel;
-  const setSort = (sort: SearchSort) => dispatch({ type: "sort", sort });
   const filterValues = useMemo<FilterValues>(
     () => ({
       "agent:": agents.map((a) => ({ value: a.id, count: a.session_count })),
@@ -519,20 +603,21 @@ export default function App() {
       <div className={clsx("grid h-full", sidebar.visible ? "grid-cols-window" : "grid-cols-window-collapsed")}>
         {sidebar.visible && (
           <Sidebar
-            sections={sections}
+            sections={archiveEmpty ? [] : sections}
             selected={selected}
             onChoose={(source) => chooseSource(source, "stay")}
             onToggle={sidebar.toggle}
-            folderActions={folderActions}
+            folderActions={archiveEmpty ? null : folderActions}
           />
         )}
         <div className="flex min-h-0 min-w-0 flex-col">
           <Toolbar
             insetForTrafficLights={!sidebar.visible}
+            split={!archiveEmpty}
             list={
               <>
                 {!sidebar.visible && <SidebarToggle visible={false} onToggle={sidebar.toggle} />}
-                {sidebar.visible ? (
+                {archiveEmpty ? null : sidebar.visible ? (
                   <ScopeTitle title={title} subtitle={subtitle} />
                 ) : (
                   <ScopeMenu
@@ -549,16 +634,24 @@ export default function App() {
             }
             reader={
               <>
-                <ReaderToolbar
-                  session={reading}
-                  folders={folders}
-                  actions={actions}
-                  note={actionNote}
-                  toolCalls={toolCalls}
-                  onToolCalls={setToolCalls}
-                />
+                {!archiveEmpty && (
+                  <ReaderToolbar
+                    session={reading}
+                    folders={folders}
+                    actions={actions}
+                    note={actionNote}
+                    toolCalls={toolCalls}
+                    onToolCalls={(mode) => setPreference("toolCalls", mode)}
+                  />
+                )}
                 <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
-                <ScanControl scan={ws.scan} lastScanAt={lastScanAt} onRescan={() => void startScan()} />
+                <ScanControl
+                  scan={ws.scan}
+                  lastScanAt={lastScanAt}
+                  onRescan={() => void startScan()}
+                  refreshError={refreshError}
+                  onRefresh={() => void refreshAll()}
+                />
                 <Tooltip label="Command Palette (⌘K)">
                   <Button
                     variant="toolbar"
@@ -569,19 +662,22 @@ export default function App() {
                     <CommandIcon className={ICON.toolbar} aria-hidden="true" />
                   </Button>
                 </Tooltip>
-                <SearchField
-                  value={ws.query}
-                  onChange={(query) => dispatch({ type: "query", query })}
-                  inputRef={queryRef}
-                  onLeaveDown={focusList}
-                  values={filterValues}
-                  sort={ws.sort}
-                  onSort={setSort}
-                />
+                {!archiveEmpty && (
+                  <SearchField
+                    value={ws.query}
+                    onChange={(query) => dispatch({ type: "query", query })}
+                    inputRef={queryRef}
+                    onLeaveDown={focusList}
+                    values={filterValues}
+                    sort={ws.sort}
+                    onSort={setSort}
+                    reference={filterReference}
+                    onReference={setFilterReference}
+                  />
+                )}
               </>
             }
           />
-          <MessageBar flash={ws.flash} onDismiss={() => dispatch({ type: "flash", flash: null })} />
           <main className="grid min-h-0 flex-1 grid-cols-panes">
             {catalogState.status === "failed" ? (
               <div className="placeholder placeholder--page col-all" role="alert">
@@ -593,15 +689,8 @@ export default function App() {
                 </button>
               </div>
             ) : archiveEmpty ? (
-              <div className="col-all min-h-0 overflow-auto">
-                <Onboarding
-                  agents={agents}
-                  scanning={scanning}
-                  busyAgent={busyAgent}
-                  onScan={() => void startScan()}
-                  onAddRoot={(agent) => void addRoot(agent)}
-                  onOpenSettings={() => overlay({ kind: "settings" })}
-                />
+              <div className="col-all flex min-h-0 overflow-auto bg-bg-content">
+                <Onboarding agents={agents} scanning={scanning} onScan={() => void startScan()} onAddRoot={addRoot} />
               </div>
             ) : (
               <>
@@ -634,6 +723,7 @@ export default function App() {
                       onExitTop={focusQuery}
                       onSearchAll={currentRepo ? () => chooseSource(ALL) : null}
                       onClearFilters={() => dispatch({ type: "query", query: withoutFilters(ws.query) })}
+                      sessionMenu={sessionMenu}
                     />
                   ) : (
                     <BrowsePane
@@ -652,6 +742,7 @@ export default function App() {
                             ? "No sessions are linked to this repository."
                             : "No sessions yet. Rescan to read your agent history."
                       }
+                      sessionMenu={sessionMenu}
                     />
                   )}
                 </div>
@@ -662,6 +753,8 @@ export default function App() {
                     terms={searching ? terms : []}
                     repositories={repositories}
                     toolCalls={toolCalls}
+                    tab={readerTab}
+                    onTab={setReaderTab}
                     onBack={focusList}
                     readerRef={readerRef}
                   />
@@ -673,37 +766,23 @@ export default function App() {
       </div>
 
       {ws.overlay.kind === "palette" && (
-        <CommandPalette commands={paletteCommands} searchArchive={searchArchive} onClose={closeOverlay} />
+        <CommandPalette commands={[...paletteCommands, ...viewCommands, ...navigationCommands]} searchArchive={searchArchive} onClose={closeOverlay} />
       )}
       {ws.overlay.kind === "settings" && (
         <SettingsDialog
+          prefs={prefs}
+          onPreference={setPreference}
+          sort={ws.sort}
+          onSort={setSort}
           agents={agents}
-          busyAgent={busyAgent}
-          onAddRoot={(agent) => void addRoot(agent)}
-          onRemoveRoot={(agent, path) => void removeRoot(agent, path)}
+          onAddRoot={addRoot}
+          onRemoveRoot={removeRoot}
           onForgetEverything={forgetAll}
           onClose={closeOverlay}
         />
       )}
-      {ws.overlay.kind === "confirm" && (
-        <ConfirmDialog
-          title={ws.overlay.title}
-          body={ws.overlay.body}
-          confirmLabel={ws.overlay.confirmLabel}
-          onConfirm={ws.overlay.onConfirm}
-          onClose={closeOverlay}
-        />
-      )}
-      {ws.overlay.kind === "name" && (
-        <NameDialog
-          title={ws.overlay.title}
-          label={ws.overlay.label}
-          initial={ws.overlay.initial}
-          confirmLabel={ws.overlay.confirmLabel}
-          onSubmit={ws.overlay.onSubmit}
-          onClose={closeOverlay}
-        />
-      )}
+      {ws.overlay.kind === "alert" && <Alert key={ws.overlay.alert.title} alert={ws.overlay.alert} onClose={closeOverlay} />}
+      {ws.overlay.kind === "name" && <NameSheet key={ws.overlay.sheet.title} sheet={ws.overlay.sheet} onClose={closeOverlay} />}
     </TooltipProvider>
   );
 }

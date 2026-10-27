@@ -1,4 +1,5 @@
 import type { ScanProgress, SearchSort } from "../ipc";
+import type { AlertSpec, NameSpec } from "../components/Sheets";
 import { agentFilter, agentQuery } from "./query";
 
 /** What the list pane browses when no query is typed. */
@@ -36,29 +37,13 @@ export type ScanState =
   | { phase: "done"; progress: ScanProgress }
   | { phase: "failed"; error: string };
 
-/** One transient message under the toolbar. Errors stay until dismissed or replaced. */
-export type Flash = { tone: "notice" | "error"; text: string } | null;
-
 /** At most one overlay is open; opening another replaces it. */
 export type Overlay =
   | { kind: "none" }
   | { kind: "palette" }
   | { kind: "settings" }
-  | {
-      kind: "confirm";
-      title: string;
-      body: string;
-      confirmLabel: string;
-      onConfirm: () => void;
-    }
-  | {
-      kind: "name";
-      title: string;
-      label: string;
-      initial: string;
-      confirmLabel: string;
-      onSubmit: (name: string) => void;
-    };
+  | { kind: "alert"; alert: AlertSpec }
+  | { kind: "name"; sheet: NameSpec };
 
 export interface Workspace {
   scope: Scope;
@@ -67,7 +52,6 @@ export interface Workspace {
   /** The session open in the reader. */
   openId: string | null;
   overlay: Overlay;
-  flash: Flash;
   scan: ScanState;
 }
 
@@ -77,7 +61,6 @@ export const initialWorkspace: Workspace = {
   sort: "relevance",
   openId: null,
   overlay: { kind: "none" },
-  flash: null,
   scan: { phase: "idle" },
 };
 
@@ -87,10 +70,10 @@ export type Action =
   | { type: "sort"; sort: SearchSort }
   | { type: "open"; id: string | null }
   | { type: "overlay"; overlay: Overlay }
-  | { type: "flash"; flash: Flash }
   | { type: "scan-requested" }
   | { type: "scan-progress"; progress: ScanProgress }
   | { type: "scan-failed"; error: string }
+  | { type: "forgot"; id: string }
   | { type: "forgot-everything" };
 
 export function workspaceReducer(state: Workspace, action: Action): Workspace {
@@ -110,8 +93,6 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       return { ...state, openId: action.id };
     case "overlay":
       return { ...state, overlay: action.overlay };
-    case "flash":
-      return { ...state, flash: action.flash };
     case "scan-requested":
       return { ...state, scan: { phase: "running", progress: null } };
     case "scan-progress":
@@ -123,8 +104,11 @@ export function workspaceReducer(state: Workspace, action: Action): Workspace {
       };
     case "scan-failed":
       return { ...state, scan: { phase: "failed", error: action.error } };
+    case "forgot":
+      return state.openId === action.id ? { ...state, openId: null } : state;
+    // Settings, which asked, stays open to say what was removed.
     case "forgot-everything":
-      return { ...initialWorkspace, scan: state.scan };
+      return { ...initialWorkspace, scan: state.scan, overlay: state.overlay };
   }
 }
 

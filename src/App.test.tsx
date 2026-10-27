@@ -152,6 +152,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllMocks();
   events.scan = null;
+  delete document.documentElement.dataset.theme;
+  delete document.documentElement.dataset.density;
 });
 
 async function renderLoaded() {
@@ -493,12 +495,12 @@ describe("keyboard", () => {
   it("opens the palette with ⌘K and jumps to a session", async () => {
     await renderLoaded();
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    const input = await screen.findByRole("combobox", { name: /Jump to a session/ });
+    const input = await screen.findByRole("combobox", { name: "Search sessions and actions" });
     fireEvent.change(input, { target: { value: "dotfiles" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(await screen.findByRole("article", { name: "Port dotfiles to nix" })).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "Command palette" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Command Palette" })).toBeNull();
   });
 });
 
@@ -582,16 +584,29 @@ describe("states", () => {
     expect(await screen.findByRole("option", { name: /Fix flaky retry backoff/ })).toBeTruthy();
   });
 
-  it("offers first-run setup for a truly empty archive", async () => {
+  it("offers first-run setup for a truly empty archive, with search and scopes hidden", async () => {
+    const user = userEvent.setup();
     m.listDetectedAgents.mockResolvedValue([{ ...agents[0], session_count: 0 }]);
     m.listRepositories.mockResolvedValue([]);
     m.listSessionsPage.mockResolvedValue({ sessions: [], next_cursor: null });
+    m.chooseAgentRootDirectory.mockResolvedValue("/Volumes/old/claude");
+    m.addAgentRoot.mockResolvedValue(undefined);
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "Every agent session you have run, in one searchable place." })).toBeTruthy();
-    expect(screen.getByText("~/.claude/projects")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Scan agent history" }));
-    expect(await screen.findByRole("button", { name: "Scanning agent history…" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Welcome to Lore" })).toBeTruthy();
+    const folders = screen.getByRole("group", { name: "Agent folders" });
+    expect(within(folders).getByText("~/.claude/projects")).toBeTruthy();
+    expect(within(folders).getByText("~/.codex/sessions")).toBeTruthy();
+    expect(within(folders).getAllByText(/^(Found|Not found)$/).map((s) => s.textContent)).toEqual(["Found", "Not found"]);
+    expect(screen.queryByRole("combobox", { name: "Search sessions" })).toBeNull();
+    expect(within(screen.getByRole("navigation", { name: "Sidebar" })).queryAllByRole("button", { name: /All Sessions|New Folder/ })).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: "Add Folder…" }));
+    await user.click(screen.getByRole("menuitem", { name: "Claude Code Folder…" }));
+    await waitFor(() => expect(m.addAgentRoot).toHaveBeenCalledWith("claude-code", "/Volumes/old/claude"));
+
+    await user.click(screen.getByRole("button", { name: "Start Scanning" }));
+    expect(await screen.findByRole("button", { name: "Scanning…" })).toBeTruthy();
     expect(m.rescan).toHaveBeenCalledTimes(1);
   });
 
@@ -994,42 +1009,356 @@ describe("window shell", () => {
 
     fireEvent.click(within(sidebar()).getByRole("button", { name: /Release prep/ }));
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    const input = await screen.findByRole("combobox", { name: /Jump to a session/ });
+    const input = await screen.findByRole("combobox", { name: "Search sessions and actions" });
     fireEvent.change(input, { target: { value: "Delete “Release prep”" } });
     fireEvent.keyDown(input, { key: "Enter" });
+    m.listFolders.mockResolvedValue([]);
     fireEvent.click(within(screen.getByRole("alertdialog", { name: "Delete “Release prep”?" })).getByRole("button", { name: "Delete Folder" }));
     await waitFor(() => expect(m.deleteFolder).toHaveBeenCalledWith("f1"));
-    expect(await screen.findByText("Deleted folder “Release prep”.")).toBeTruthy();
+    await waitFor(() => expect(within(sidebar()).queryByRole("button", { name: /Release prep/ })).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("creates a folder from the sidebar", async () => {
+  it("creates a folder from the sidebar, and it appears there", async () => {
     m.createFolder.mockResolvedValue({ id: "f2", name: "Ideas", session_count: 0, position: 1 });
     await renderLoaded();
     fireEvent.click(within(sidebar()).getByRole("button", { name: "New Folder" }));
     const dialog = screen.getByRole("dialog", { name: "New Folder" });
-    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "Ideas" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create folder" }));
+    expect(within(dialog).getByRole("button", { name: "Create" }).hasAttribute("disabled")).toBe(true);
+    m.listFolders.mockResolvedValue([
+      { id: "f1", name: "Release prep", session_count: 0, position: 0 },
+      { id: "f2", name: "Ideas", session_count: 0, position: 1 },
+    ]);
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Name:" }), { target: { value: "Ideas" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(m.createFolder).toHaveBeenCalledWith("Ideas"));
+    expect(await within(sidebar()).findByRole("button", { name: /Ideas/ })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "New Folder" })).toBeNull();
+  });
+
+  it("keeps the New Folder sheet open with the error when creating fails, and has no notices line", async () => {
+    m.createFolder.mockRejectedValue("a folder named Ideas already exists");
+    await renderLoaded();
+    fireEvent.click(within(sidebar()).getByRole("button", { name: "New Folder" }));
+    const dialog = screen.getByRole("dialog", { name: "New Folder" });
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "Ideas" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe("a folder named Ideas already exists");
+    expect(screen.getByRole("dialog", { name: "New Folder" })).toBe(dialog);
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 
   it("reaches Settings by mouse through the palette button", async () => {
     await renderLoaded();
     fireEvent.click(screen.getByRole("button", { name: "Command Palette" }));
-    const input = await screen.findByRole("combobox", { name: /Jump to a session/ });
+    const input = await screen.findByRole("combobox", { name: "Search sessions and actions" });
     fireEvent.change(input, { target: { value: "Settings" } });
     fireEvent.click(screen.getByRole("option", { name: /^Settings/ }));
     expect(await screen.findByRole("dialog", { name: /Settings/ })).toBeTruthy();
   });
 
-  it("shows a notice under the toolbar until it is dismissed", async () => {
-    m.createFolder.mockResolvedValue({ id: "f2", name: "Ideas", session_count: 0, position: 1 });
+  it("says on the Rescan control when reloading the archive fails, and tries again from there", async () => {
+    const user = userEvent.setup();
     await renderLoaded();
-    fireEvent.click(within(sidebar()).getByRole("button", { name: "New Folder" }));
-    const dialog = screen.getByRole("dialog", { name: "New Folder" });
-    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "Ideas" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create folder" }));
-    expect((await screen.findByText("Created folder “Ideas”.")).getAttribute("role")).toBe("status");
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByText("Created folder “Ideas”.")).toBeNull();
+    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+    m.listFolders.mockRejectedValueOnce("database is locked");
+    m.setSessionFolder.mockResolvedValue(undefined);
+    await user.click(screen.getByRole("button", { name: "File in Folder" }));
+    await user.click(screen.getByRole("menuitem", { name: "Release prep" }));
+
+    await user.click(await screen.findByRole("button", { name: "Archive not updated" }));
+    const popover = screen.getByRole("dialog", { name: "Archive not updated" });
+    expect(within(popover).getByText("Lore could not reload the archive.")).toBeTruthy();
+    expect(within(popover).getByText("database is locked")).toBeTruthy();
+    const loads = m.listFolders.mock.calls.length;
+    await user.click(within(popover).getByRole("button", { name: "Try Again" }));
+    await waitFor(() => expect(m.listFolders.mock.calls.length).toBe(loads + 1));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Archive not updated" })).toBeNull());
+  });
+});
+
+describe("settings", () => {
+  async function openSettings() {
+    await renderLoaded();
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    return screen.findByRole("dialog", { name: "Settings" });
+  }
+
+  it("opens with ⌘, on General and moves between panes by click and arrow keys", async () => {
+    const user = userEvent.setup();
+    const settings = await openSettings();
+    expect(within(settings).getAllByRole("tab").map((t) => t.textContent)).toEqual(["General", "Sources", "Search", "Backups", "Privacy"]);
+    expect(within(settings).getByRole("tabpanel", { name: "General" })).toBeTruthy();
+
+    await user.click(within(settings).getByRole("tab", { name: "Backups" }));
+    expect(within(settings).getByRole("heading", { name: "Backups" })).toBeTruthy();
+    fireEvent.keyDown(within(settings).getByRole("tab", { name: "Backups" }), { key: "ArrowDown" });
+    expect(within(settings).getByRole("tabpanel", { name: "Privacy" })).toBeTruthy();
+    expect(document.activeElement).toBe(within(settings).getByRole("tab", { name: "Privacy" }));
+
+    await user.click(within(settings).getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+  });
+
+  it("sets the appearance and density on the window, and remembers them", async () => {
+    const user = userEvent.setup();
+    const settings = await openSettings();
+    await user.click(within(settings).getByRole("combobox", { name: "Appearance" }));
+    await user.click(screen.getByRole("option", { name: "Dark" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(m.setSetting).toHaveBeenCalledWith("theme", '"dark"');
+
+    await user.click(within(settings).getByRole("combobox", { name: "Density" }));
+    await user.click(screen.getByRole("option", { name: "Compact" }));
+    expect(document.documentElement.dataset.density).toBe("compact");
+    expect(m.setSetting).toHaveBeenCalledWith("ui.density", '"compact"');
+
+    await user.click(within(settings).getByRole("combobox", { name: "Appearance" }));
+    await user.click(screen.getByRole("option", { name: "System" }));
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+  });
+
+  it("applies the stored appearance and density at launch", async () => {
+    m.getJsonSetting.mockImplementation(async (key: string) => (key === "theme" ? "light" : key === "ui.density" ? "spacious" : null));
+    await renderLoaded();
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    expect(document.documentElement.dataset.density).toBe("spacious");
+  });
+
+  it("adds and removes agent folders in Sources and says so in place", async () => {
+    const user = userEvent.setup();
+    m.listDetectedAgents.mockResolvedValue([
+      { ...agents[0], roots: ["~/.claude/projects", "/Volumes/old/claude"], custom_roots: ["/Volumes/old/claude"] },
+    ]);
+    m.chooseAgentRootDirectory.mockResolvedValue("/Volumes/new/claude");
+    m.addAgentRoot.mockResolvedValue(undefined);
+    m.removeAgentRoot.mockResolvedValue(undefined);
+    const settings = await openSettings();
+    await user.click(within(settings).getByRole("tab", { name: "Sources" }));
+    const claude = within(settings).getByRole("region", { name: "Claude Code" });
+    expect(within(claude).getByText("Default")).toBeTruthy();
+    expect(within(claude).getByText("Added by you")).toBeTruthy();
+
+    await user.click(within(claude).getByRole("button", { name: "Add a Claude Code Folder…" }));
+    expect((await within(claude).findByRole("status")).textContent).toBe("Lore is scanning /Volumes/new/claude now.");
+    expect(m.addAgentRoot).toHaveBeenCalledWith("claude-code", "/Volumes/new/claude");
+
+    await user.click(within(claude).getByRole("button", { name: "Remove /Volumes/old/claude from Claude Code" }));
+    await waitFor(() =>
+      expect(within(claude).getByRole("status").textContent).toBe("Lore no longer reads /Volumes/old/claude. Sessions already archived stay."),
+    );
+    expect(m.removeAgentRoot).toHaveBeenCalledWith("claude-code", "/Volumes/old/claude");
+  });
+
+  it("schedules backups and backs up now from Backups", async () => {
+    const user = userEvent.setup();
+    m.setBackupSchedule.mockResolvedValue(undefined);
+    m.backupNow.mockResolvedValue(undefined);
+    const settings = await openSettings();
+    await user.click(within(settings).getByRole("tab", { name: "Backups" }));
+    const keep = within(settings).getByRole("spinbutton", { name: "Copies to keep" });
+    expect(keep.hasAttribute("disabled")).toBe(true);
+
+    await user.click(within(settings).getByRole("combobox", { name: "Automatic backups" }));
+    await user.click(screen.getByRole("option", { name: "Weekly" }));
+    expect(m.setBackupSchedule).toHaveBeenCalledWith("weekly", 7);
+    expect(keep.hasAttribute("disabled")).toBe(false);
+
+    await user.click(within(settings).getByRole("button", { name: "Back Up Now" }));
+    expect((await within(settings).findByRole("status")).textContent).toBe("Backup created.");
+  });
+
+  it("sets the search order from the Search pane", async () => {
+    const user = userEvent.setup();
+    const settings = await openSettings();
+    await user.click(within(settings).getByRole("tab", { name: "Search" }));
+    await user.click(within(settings).getByRole("combobox", { name: "Sort results by" }));
+    await user.click(screen.getByRole("option", { name: "Oldest" }));
+    await user.click(within(settings).getByRole("button", { name: "Done" }));
+    typeQuery("retry");
+    expect(await screen.findByRole("button", { name: "Sort results, Oldest" })).toBeTruthy();
+  });
+
+  it("forgets everything only after an alert, and says what it removed", async () => {
+    const user = userEvent.setup();
+    m.forgetEverything.mockResolvedValue({ blobs_removed: 12, source_paths: [] });
+    const settings = await openSettings();
+    await user.click(within(settings).getByRole("tab", { name: "Privacy" }));
+    expect(within(settings).getByText(/The archive stays on this Mac/)).toBeTruthy();
+
+    await user.click(within(settings).getByRole("button", { name: "Forget Everything…" }));
+    const alert = screen.getByRole("alertdialog", { name: "Forget everything in Lore?" });
+    expect(document.activeElement).toBe(within(alert).getByRole("button", { name: "Cancel" }));
+    await user.click(within(alert).getByRole("button", { name: "Cancel" }));
+    expect(m.forgetEverything).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBe(settings);
+
+    m.listDetectedAgents.mockResolvedValue([{ ...agents[0], session_count: 0 }]);
+    m.listRepositories.mockResolvedValue([]);
+    m.listSessionsPage.mockResolvedValue({ sessions: [], next_cursor: null });
+    await user.click(within(settings).getByRole("button", { name: "Forget Everything…" }));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Forget Everything" }));
+    expect((await within(settings).findByRole("status")).textContent).toBe("Lore forgot everything and removed 12 stored files.");
+    await user.click(within(settings).getByRole("button", { name: "Done" }));
+    expect(await screen.findByRole("heading", { name: "Welcome to Lore" })).toBeTruthy();
+  });
+});
+
+describe("alerts and menus", () => {
+  it("starts an alert on Cancel, keeps Tab inside it, and keeps it open with the error when forgetting fails", async () => {
+    const user = userEvent.setup();
+    m.forgetSession.mockRejectedValueOnce("the archive is read-only");
+    await renderLoaded();
+    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+    fireEvent.keyDown(document.body, { key: "Backspace", metaKey: true });
+
+    const alert = screen.getByRole("alertdialog", { name: "Forget “Fix flaky retry backoff”?" });
+    expect(within(alert).getByText(/The original agent log on this Mac is not changed\./)).toBeTruthy();
+    const cancel = within(alert).getByRole("button", { name: "Cancel" });
+    const forget = within(alert).getByRole("button", { name: "Forget Session" });
+    expect(document.activeElement).toBe(cancel);
+    await user.tab();
+    expect(document.activeElement).toBe(forget);
+    await user.tab();
+    expect(document.activeElement).toBe(cancel);
+
+    await user.click(forget);
+    expect((await within(alert).findByRole("alert")).textContent).toBe("the archive is read-only");
+    expect(screen.getByRole("alertdialog")).toBe(alert);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("article", { name: "Fix flaky retry backoff" })).toBeTruthy();
+  });
+
+  it("acts on a right-clicked session row without opening it", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    m.exportSessionMarkdown.mockResolvedValue("# Port dotfiles to nix");
+    try {
+      await renderLoaded();
+      await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+      const row = screen.getByRole("option", { name: /Port dotfiles to nix/ });
+
+      await user.pointer({ keys: "[MouseRight]", target: row });
+      expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+        "Copy as Markdown",
+        "Save as File…",
+        "File in Folder",
+        "Forget Session…",
+      ]);
+      await user.click(screen.getByRole("menuitem", { name: "Copy as Markdown" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("# Port dotfiles to nix"));
+      expect(m.exportSessionMarkdown).toHaveBeenCalledWith("b", false);
+
+      await user.pointer({ keys: "[MouseRight]", target: row });
+      await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowRight}");
+      expect(document.activeElement?.textContent).toBe("Release prep");
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(m.setSessionFolder).toHaveBeenCalledWith("b", "f1"));
+      expect(row.getAttribute("aria-selected")).toBe("false");
+
+      await user.pointer({ keys: "[MouseRight]", target: row });
+      await user.click(screen.getByRole("menuitem", { name: "Forget Session…" }));
+      await user.click(within(screen.getByRole("alertdialog", { name: "Forget “Port dotfiles to nix”?" })).getByRole("button", { name: "Forget Session" }));
+      await waitFor(() => expect(m.forgetSession).toHaveBeenCalledWith("b"));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(screen.getByRole("article", { name: "Fix flaky retry backoff" })).toBeTruthy();
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+});
+
+describe("palette", () => {
+  async function openPalette() {
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    return screen.findByRole("combobox", { name: "Search sessions and actions" });
+  }
+  const rows = (group: string) =>
+    within(screen.getByRole("group", { name: group }))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+
+  it("lists every action with its shortcut in Apple glyphs, then the view choices and places", async () => {
+    await renderLoaded();
+    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+    await openPalette();
+    expect(rows("Actions")).toEqual([
+      "Copy as Markdown⇧⌘C",
+      "Save as File…⌘S",
+      "File in “Release prep”",
+      "Remove from Folder",
+      "Forget Session…⌘⌫",
+      "Rescan⌘R",
+      "Search Sessions⌥⌘F",
+      "Filter Reference⌘/",
+      "New Folder…",
+      "Settings…⌘,",
+    ]);
+    expect(rows("View")).toEqual([
+      "Show Conversation⌘1",
+      "Show Files⌘2",
+      "Show Git⌘3",
+      "Show All Sessions",
+      "Hide Sidebar⌃⌘S",
+      "Sort by Newest",
+      "Sort by Oldest",
+      "Use Light Appearance",
+      "Use Dark Appearance",
+      "Use Compact Density",
+      "Use Spacious Density",
+      "Show Tool Calls Expanded",
+    ]);
+    expect(rows("Sessions")).toEqual(["Fix flaky retry backoff", "Port dotfiles to nix"]);
+    expect(rows("Repositories")).toEqual(["lore1 session"]);
+    expect(rows("Folders")).toEqual(["Release prep0 sessions"]);
+  });
+
+  it("changes the appearance, the reader tab, the sort and the scope, and opens the filter reference", async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+
+    await user.type(await openPalette(), "dark");
+    await user.keyboard("{Enter}");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(m.setSetting).toHaveBeenCalledWith("theme", '"dark"');
+
+    await user.type(await openPalette(), "show files");
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("tab", { name: /^Files/ }).getAttribute("aria-selected")).toBe("true");
+
+    await user.type(await openPalette(), "filter reference");
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog", { name: "Search filters" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+
+    await user.type(await openPalette(), "lore");
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("heading", { name: "lore", level: 1 })).toBeTruthy();
+
+    await user.type(await openPalette(), "newest");
+    await user.keyboard("{Enter}");
+    typeQuery("retry");
+    expect(await screen.findByRole("button", { name: "Sort results, Newest" })).toBeTruthy();
+  });
+});
+
+describe("shortcuts", () => {
+  it("opens the filter reference with ⌘/ and ignores window shortcuts while a sheet is open", async () => {
+    await renderLoaded();
+    fireEvent.keyDown(window, { key: "/", metaKey: true });
+    expect(await screen.findByRole("dialog", { name: "Search filters" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "/", metaKey: true });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search filters" })).toBeNull());
+
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    const settings = await screen.findByRole("dialog", { name: "Settings" });
+    fireEvent.keyDown(window, { key: "r", metaKey: true });
+    expect(m.rescan).toHaveBeenCalledTimes(0);
+    fireEvent.click(within(settings).getByRole("button", { name: "Done" }));
+    fireEvent.keyDown(window, { key: "r", metaKey: true });
+    await waitFor(() => expect(m.rescan).toHaveBeenCalledTimes(1));
   });
 });

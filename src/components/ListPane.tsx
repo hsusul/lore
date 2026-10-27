@@ -21,6 +21,9 @@ import { Tooltip } from "./ui/tooltip";
 
 const PARSE_NOTES: Record<string, string> = { partial: "Partially parsed", failed: "Not parsed" };
 
+/** A row's context menu items, for the session it shows. */
+export type SessionMenu = (session: { id: string; title: string }) => ReactNode;
+
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -151,6 +154,7 @@ export function BrowsePane({
   listRef,
   onExitTop,
   emptyHint,
+  sessionMenu,
 }: {
   label: string;
   state: PagedState<SessionSummary>;
@@ -161,6 +165,7 @@ export function BrowsePane({
   listRef: RefObject<HTMLUListElement>;
   onExitTop: () => void;
   emptyHint: string;
+  sessionMenu: SessionMenu;
 }) {
   return (
     <section className="pane" aria-label={label}>
@@ -189,6 +194,7 @@ export function BrowsePane({
           onExitTop={onExitTop}
           onReachEnd={onMore}
           more={moreState(state, "Load older sessions")}
+          rowMenu={(session) => sessionMenu({ id: session.id, title: session.title ?? "Untitled session" })}
         />
       )}
     </section>
@@ -280,6 +286,7 @@ export function SearchPane({
   onExitTop,
   onSearchAll,
   onClearFilters,
+  sessionMenu,
 }: {
   query: string;
   terms: string[];
@@ -295,6 +302,7 @@ export function SearchPane({
   /** Widen a scoped search to every session; null when the search is not scoped. */
   onSearchAll: (() => void) | null;
   onClearFilters: () => void;
+  sessionMenu: SessionMenu;
 }) {
   const filterOnly = terms.length === 0;
   const groups = state.status === "ready" ? groupHits(state.items) : [];
@@ -337,6 +345,7 @@ export function SearchPane({
           onExitTop={onExitTop}
           onReachEnd={onMore}
           more={moreState(state, "Load more results")}
+          rowMenu={(group) => sessionMenu({ id: group.hit.session_id, title: group.hit.title ?? "Untitled session" })}
         />
       )}
     </section>

@@ -1,10 +1,10 @@
 import { Info } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type RefObject } from "react";
+import { useCallback, useMemo, useState, type RefObject } from "react";
 
 import { agentLabel, formatDayAndTime, formatDuration, formatTime, plural } from "../format";
 import { listSessionMessagesPage, type MessageDto, type RepositorySummary } from "../ipc";
 import type { OpenSession, OpenSessionState } from "../hooks/useOpenSession";
-import type { ToolCallMode } from "../hooks/useToolCallMode";
+import type { ToolCallMode } from "../hooks/usePreferences";
 import ErrorBoundary from "./ErrorBoundary";
 import FileChanges from "./FileChanges";
 import GitEvidence from "./GitEvidence";
@@ -17,8 +17,13 @@ import { Tooltip } from "./ui/tooltip";
 
 const PAGE = 200;
 
-type Tab = "conversation" | "files" | "git";
-const TAB_KEYS: Record<string, Tab> = { "1": "conversation", "2": "files", "3": "git" };
+/** The reader's views, in segment order; ⌘1 to ⌘3 pick them (spec 9.3). */
+export const READER_TABS = [
+  { id: "conversation", label: "Conversation", key: "1" },
+  { id: "files", label: "Files", key: "2" },
+  { id: "git", label: "Git", key: "3" },
+] as const;
+export type ReaderTab = (typeof READER_TABS)[number]["id"];
 
 /** The metadata line under the title (spec 9.3, 10): one run of clauses joined with " · ". */
 function metadata(session: OpenSession, repositories: RepositorySummary[]): string {
@@ -106,6 +111,8 @@ function SessionReader({
   terms,
   repositories,
   toolCalls,
+  tab,
+  onTab,
   onBack,
   readerRef,
 }: {
@@ -113,12 +120,13 @@ function SessionReader({
   terms: string[];
   repositories: RepositorySummary[];
   toolCalls: ToolCallMode;
+  tab: ReaderTab;
+  onTab: (tab: ReaderTab) => void;
   onBack: () => void;
   readerRef: RefObject<HTMLElement>;
 }) {
   const { summary, segments, file_events } = session.detail;
   const title = summary.title ?? "Untitled session";
-  const [tab, setTab] = useState<Tab>("conversation");
   const [reveal, setReveal] = useState<string | null>(null);
   const [log, setLog] = useState<MessageLog>({
     messages: session.detail.messages,
@@ -144,22 +152,7 @@ function SessionReader({
     }
   }
 
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      const next = TAB_KEYS[event.key];
-      if (!next || !(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
-      event.preventDefault();
-      setTab(next);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  const tabs: { id: Tab; label: string; count: number }[] = [
-    { id: "conversation", label: "Conversation", count: 0 },
-    { id: "files", label: "Files", count: file_events.length },
-    { id: "git", label: "Git", count: 0 },
-  ];
+  const counts: Record<ReaderTab, number> = { conversation: 0, files: file_events.length, git: 0 };
 
   return (
     <article
@@ -174,7 +167,7 @@ function SessionReader({
         }
       }}
     >
-      <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)}>
+      <Tabs value={tab} onValueChange={(value) => onTab(value as ReaderTab)}>
         <div>
           <h2 id="reader-title" className="line-clamp-2 max-w-measure text-title2 text-label">
             {title}
@@ -186,12 +179,15 @@ function SessionReader({
             <Details session={session} loaded={log.messages.length} />
           </div>
           <TabsList aria-label="Session views" className="mt-3">
-            {tabs.map((t, index) => (
-              <TabsTrigger key={t.id} value={t.id} aria-keyshortcuts={`Meta+${index + 1}`}>
-                {t.label}
-                {t.count > 0 && <span className="font-regular tabular-nums text-label-2">{` ${t.count}`}</span>}
-              </TabsTrigger>
-            ))}
+            {READER_TABS.map((t) => {
+              const count = counts[t.id];
+              return (
+                <TabsTrigger key={t.id} value={t.id} aria-keyshortcuts={`Meta+${t.key}`}>
+                  {t.label}
+                  {count > 0 && <span className="font-regular tabular-nums text-label-2">{` ${count}`}</span>}
+                </TabsTrigger>
+              );
+            })}
           </TabsList>
         </div>
         <ErrorBoundary>
@@ -214,7 +210,7 @@ function SessionReader({
               callsByFile={byFile}
               onShowCall={(key) => {
                 setReveal(key);
-                setTab("conversation");
+                onTab("conversation");
               }}
             />
           </TabsContent>
@@ -245,6 +241,8 @@ export default function Reader({
   terms: string[];
   repositories: RepositorySummary[];
   toolCalls: ToolCallMode;
+  tab: ReaderTab;
+  onTab: (tab: ReaderTab) => void;
   onBack: () => void;
   readerRef: RefObject<HTMLElement>;
 }) {

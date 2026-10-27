@@ -63,7 +63,7 @@ export const CommandItem = forwardRef<ElementRef<typeof Cmdk.Item>, ComponentPro
       <Cmdk.Item
         ref={ref}
         className={clsx(
-          "group flex h-source-row items-center gap-2 rounded-control px-2.5 outline-none aria-selected:bg-selected aria-selected:text-on-selected aria-disabled:text-label-3",
+          "group flex h-nav-row items-center gap-2 rounded-control px-2.5 outline-none aria-selected:bg-selected aria-selected:text-on-selected aria-disabled:text-label-3",
           className,
         )}
         {...props}

@@ -18,7 +18,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { agentLabel, formatClock, formatTime } from "../format";
 import type { FileEventDto } from "../ipc";
-import type { ToolCallMode } from "../hooks/useToolCallMode";
+import type { ToolCallMode } from "../hooks/usePreferences";
 import { CodeFrame, CopyButton, Counts, PathText } from "./code";
 import Diff from "./Diff";
 import { StoredPatch } from "./FileChanges";
