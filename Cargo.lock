@@ -2879,7 +2879,9 @@ name = "lore-memory"
 version = "0.0.0"
 dependencies = [
  "dirs",
+ "lore-core",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "thiserror 1.0.69",
  "time",
