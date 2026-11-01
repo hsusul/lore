@@ -20,6 +20,7 @@ mod hook;
 mod mcp;
 mod mem;
 mod query;
+mod review;
 mod scan;
 mod status;
 
