@@ -20,6 +20,8 @@ use lore_core::lock::LockError;
 use lore_core::paths::PathError;
 use lore_core::source_roots::SourceRootError;
 use lore_core::storage::StorageError;
+use lore_memory::inbox::InboxError;
+use lore_memory::review::ReviewError;
 use lore_memory::vault::VaultError;
 
 /// The command did what it was asked to do.
@@ -93,6 +95,9 @@ pub enum CliError {
     /// A `mem` command failed.
     #[error(transparent)]
     Memory(#[from] VaultError),
+    /// A `mem` proposal or review command failed.
+    #[error(transparent)]
+    Review(#[from] ReviewError),
 }
 
 impl CliError {
@@ -117,6 +122,12 @@ impl CliError {
             CliError::Memory(VaultError::Conflict(_)) => {
                 Some("edit that file by hand, or give the new note another title")
             }
+            CliError::Review(ReviewError::Dirty(_)) => {
+                Some("commit or discard your edit to that note, then run it again")
+            }
+            CliError::Review(ReviewError::Vault(VaultError::Conflict(_))) => {
+                Some("accept it under another name with `--as <slug>`")
+            }
             _ => None,
         }
     }
@@ -139,6 +150,23 @@ pub fn exit_code(error: &CliError) -> u8 {
         CliError::SourceRoots(SourceRootError::Storage(error)) => storage_exit_code(error),
         CliError::SourceRoots(_) => ARCHIVE_UNREADABLE,
         CliError::Memory(error) => memory_exit_code(error),
+        CliError::Review(error) => review_exit_code(error),
+    }
+}
+
+/// Map a proposal or review failure onto the taxonomy. Every refusal writes
+/// nothing, so it shares the note-refused code.
+fn review_exit_code(error: &ReviewError) -> u8 {
+    match error {
+        ReviewError::NoProposal(_) | ReviewError::BadSlug(_) => USAGE,
+        ReviewError::Decided(..) | ReviewError::DuplicateProposal(_) | ReviewError::Dirty(_) => {
+            NOTE_REFUSED
+        }
+        ReviewError::Inbox(InboxError::Field { .. } | InboxError::ScanFailed) => NOTE_REFUSED,
+        ReviewError::Inbox(InboxError::Io(..)) => ARCHIVE_UNREADABLE,
+        ReviewError::Inbox(InboxError::Vault(error)) | ReviewError::Vault(error) => {
+            memory_exit_code(error)
+        }
     }
 }
 

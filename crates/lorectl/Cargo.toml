@@ -40,6 +40,8 @@ lore-ipc = { path = "../lore-ipc" }
 # be nameable here. Already in the graph via lore-core (same version, so no
 # second copy is built); the features are lore-core's to choose.
 rusqlite = "0.32"
+# A proposal's `proposed_at`, the type `lore-memory` names. Already in the graph.
+time = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
