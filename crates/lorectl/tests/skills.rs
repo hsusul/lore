@@ -68,16 +68,27 @@ fn doctor_reports_and_still_exits_zero() {
          2 bad frontmatter, 1 codex budget; 21 findings; 12 skills found"
     );
     assert!(text.starts_with("bad-yaml\n  bad-frontmatter"), "{text}");
-    assert!(text.contains("\n  hint            Managed by codex."), "{text}");
+    assert!(
+        text.contains("\n  hint            Managed by codex."),
+        "{text}"
+    );
 }
 
 #[test]
 fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
     let home = fixture_home();
     let h = home.display().to_string();
-    assert!(!h.contains('\''), "the expected strings below assume no quote");
+    assert!(
+        !h.contains('\''),
+        "the expected strings below assume no quote"
+    );
     let cmd = |kind: &str, skill: &str, fix: String| {
-        (kind.to_string(), skill.to_string(), "command".to_string(), fix)
+        (
+            kind.to_string(),
+            skill.to_string(),
+            "command".to_string(),
+            fix,
+        )
     };
     let hint = |kind: &str, skill: &str, fix: String| {
         (kind.to_string(), skill.to_string(), "hint".to_string(), fix)
@@ -119,7 +130,11 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
     );
 
     let expected = vec![
-        cmd("bad-frontmatter", "bad-yaml", edit(".agents/skills/bad-yaml")),
+        cmd(
+            "bad-frontmatter",
+            "bad-yaml",
+            edit(".agents/skills/bad-yaml"),
+        ),
         unknown("bad-yaml", ".agents/skills/bad-yaml"),
         hint(
             "bad-frontmatter",
@@ -130,7 +145,11 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
                  edit the managed copy."
             ),
         ),
-        cmd("name-mismatch", "mislabeled", edit(".agents/skills/mislabeled")),
+        cmd(
+            "name-mismatch",
+            "mislabeled",
+            edit(".agents/skills/mislabeled"),
+        ),
         unknown("mislabeled", ".agents/skills/mislabeled"),
         link.clone(),
         link,
@@ -277,7 +296,10 @@ fn claude_config_dir_and_codex_home_move_the_agent_roots() {
     // Ignored: these sit where the defaults would look, not where the
     // overrides point.
     write(&home.join(".claude/skills/stale/SKILL.md"), &skill("stale"));
-    write(&home.join(".codex/skills/stale2/SKILL.md"), &skill("stale2"));
+    write(
+        &home.join(".codex/skills/stale2/SKILL.md"),
+        &skill("stale2"),
+    );
 
     let output = command(&home, &["--json", "skills", "ls"])
         .env("CLAUDE_CONFIG_DIR", &claude)
@@ -319,12 +341,19 @@ fn hashing_stays_inside_the_skill_folder() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let skill = home.join(".claude/skills/s");
-    write(&skill.join("SKILL.md"), "---\nname: s\ndescription: d\n---\n");
+    write(
+        &skill.join("SKILL.md"),
+        "---\nname: s\ndescription: d\n---\n",
+    );
     write(&dir.path().join("outside/secret.txt"), "one");
     std::os::unix::fs::symlink(dir.path().join("outside"), skill.join("out")).unwrap();
     let before = only_hash(&home);
     write(&dir.path().join("outside/secret.txt"), "two, longer");
-    assert_eq!(only_hash(&home), before, "a link out of the folder was read");
+    assert_eq!(
+        only_hash(&home),
+        before,
+        "a link out of the folder was read"
+    );
 }
 
 #[test]
@@ -332,7 +361,10 @@ fn hashing_reads_a_bounded_prefix_of_large_files() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let skill = home.join(".claude/skills/s");
-    write(&skill.join("SKILL.md"), "---\nname: s\ndescription: d\n---\n");
+    write(
+        &skill.join("SKILL.md"),
+        "---\nname: s\ndescription: d\n---\n",
+    );
     let mut bytes = vec![0_u8; 4 << 20];
     fs::write(skill.join("big.bin"), &bytes).unwrap();
     let before = only_hash(&home);

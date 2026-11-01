@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lore_skills::{Agent, DriftCopy, Finding, Inventory, CODEX_BUDGET_CHARS};
+use lore_skills::{Agent, DriftCopy, Finding, Inventory, Roots, CODEX_BUDGET_CHARS};
 
 fn home() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/home")
@@ -23,7 +23,7 @@ fn hash_of(inventory: &Inventory, path: &Path) -> lore_skills::ContentHash {
 #[test]
 fn the_fixture_home_yields_exactly_these_findings_worst_first() {
     let home = home();
-    let inventory = lore_skills::inventory(&home);
+    let inventory = lore_skills::inventory(&Roots::from_home(&home));
     let at = |p: &str| home.join(p);
     let agents_cgc = at(".agents/skills/clean-git-commit");
     let claude_cgc = at(".claude/skills/clean-git-commit");
@@ -119,7 +119,7 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
 
 #[test]
 fn a_link_to_one_folder_is_one_copy_not_a_duplicate() {
-    let inventory = lore_skills::inventory(&home());
+    let inventory = lore_skills::inventory(&Roots::from_home(&home()));
     let linked: Vec<_> = inventory
         .records
         .iter()
@@ -137,7 +137,7 @@ fn a_link_to_one_folder_is_one_copy_not_a_duplicate() {
 
 #[test]
 fn skills_no_agent_loads_are_known_but_not_reported() {
-    let inventory = lore_skills::inventory(&home());
+    let inventory = lore_skills::inventory(&Roots::from_home(&home()));
     assert!(inventory.elsewhere.contains_key("off-skill"));
     assert!(inventory.elsewhere.contains_key("linked"));
     assert!(inventory.records.iter().all(|r| r.name != "off-skill"));
@@ -145,7 +145,9 @@ fn skills_no_agent_loads_are_known_but_not_reported() {
 
 #[test]
 fn a_missing_home_is_an_empty_report_not_an_error() {
-    let inventory = lore_skills::inventory(Path::new("/nonexistent/lore-skills-home"));
+    let inventory = lore_skills::inventory(&Roots::from_home(Path::new(
+        "/nonexistent/lore-skills-home",
+    )));
     assert!(inventory.records.is_empty());
     assert!(lore_skills::doctor(&inventory).is_empty());
 }

@@ -3,10 +3,10 @@
 use std::path::Path;
 
 use lore_skills::lockfiles;
-use lore_skills::Source;
+use lore_skills::{Roots, Source};
 
-fn home() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/home")
+fn home() -> Roots {
+    Roots::from_home(&Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/home"))
 }
 
 #[test]
@@ -65,6 +65,8 @@ fn lockfiles_plugin_manifests_name_what_is_installed_or_enabled() {
 
 #[test]
 fn lockfiles_that_are_missing_or_malformed_record_nothing() {
-    let locks = lockfiles::read(Path::new("/nonexistent/lore-skills-home"));
+    let locks = lockfiles::read(&Roots::from_home(Path::new(
+        "/nonexistent/lore-skills-home",
+    )));
     assert_eq!(locks, lockfiles::Lockfiles::default());
 }

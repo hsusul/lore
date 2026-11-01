@@ -2,11 +2,12 @@
 //! nothing here opens a file for writing.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use crate::frontmatter;
-use crate::locations::{Layout, Location, Provenance, LOCATIONS};
+use crate::locations::{Layout, Location, Provenance, Roots, LOCATIONS};
 use crate::lockfiles::{self, Lockfiles};
 use crate::model::{ContentHash, Install, Mode, SkillName, SkillRecord, Source};
 
@@ -14,11 +15,14 @@ use crate::model::{ContentHash, Install, Mode, SkillName, SkillRecord, Source};
 const MAX_SEARCH_DEPTH: usize = 6;
 /// Bounds a symlink cycle inside a skill folder.
 const MAX_HASH_DEPTH: usize = 8;
+/// Bytes of each file read for hashing and for SKILL.md. A file's full length
+/// is hashed too, so growth past the cap still changes the hash.
+pub const MAX_READ_BYTES: u64 = 1 << 20;
 
-/// Everything found under one home root.
+/// Everything found under one set of roots.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Inventory {
-    pub home: PathBuf,
+    pub roots: Roots,
     /// Sorted by name, then by first install location.
     pub records: Vec<SkillRecord>,
     /// Skills that exist on the machine but no agent loads: vendored copies
@@ -32,18 +36,18 @@ struct Found {
     source: Source,
 }
 
-/// Scan every location in [`LOCATIONS`] under `home`. Missing locations and
+/// Scan every location in [`LOCATIONS`] under `roots`. Missing locations and
 /// unreadable entries are skipped.
 #[must_use]
-pub fn inventory(home: &Path) -> Inventory {
-    let locks = lockfiles::read(home);
-    let agents_dir = fs::canonicalize(home.join(".agents/skills")).ok();
+pub fn inventory(roots: &Roots) -> Inventory {
+    let locks = lockfiles::read(roots);
+    let agents_dir = fs::canonicalize(roots.home.join(".agents/skills")).ok();
     let mut hashes: HashMap<PathBuf, ContentHash> = HashMap::new();
     let mut found = Vec::new();
     let mut elsewhere = BTreeMap::new();
 
     for location in LOCATIONS {
-        let root = home.join(location.dir);
+        let root = roots.dir(location);
         for skills_dir in skills_dirs(&root, location.layout) {
             for (name, path) in skill_folders(&skills_dir) {
                 let relative = path.strip_prefix(&root).unwrap_or(&path);
@@ -104,7 +108,7 @@ pub fn inventory(home: &Path) -> Inventory {
         .collect();
 
     Inventory {
-        home: home.to_path_buf(),
+        roots: roots.clone(),
         records,
         elsewhere,
     }
@@ -188,7 +192,9 @@ fn group(found: Vec<Found>) -> Vec<SkillRecord> {
 }
 
 fn new_record(name: SkillName, install: Install, source: Source) -> SkillRecord {
-    let bytes = fs::read(install.real_path.join("SKILL.md")).unwrap_or_default();
+    let bytes = read_capped(&install.real_path.join("SKILL.md"))
+        .map(|(_, bytes)| bytes)
+        .unwrap_or_default();
     let text = String::from_utf8_lossy(&bytes);
     let (parsed, body) = frontmatter::parse(&text);
     let refs = frontmatter::mentions(body);
@@ -265,30 +271,61 @@ fn children(dir: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
-/// blake3 over every non-hidden file below `root`: relative path, length, and
-/// bytes, in sorted order. Hidden files (`.DS_Store`, editor state) are not
-/// content an agent reads.
+/// A file's full length and at most [`MAX_READ_BYTES`] of its bytes.
+fn read_capped(path: &Path) -> io::Result<(u64, Vec<u8>)> {
+    let file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut bytes = Vec::new();
+    file.take(MAX_READ_BYTES).read_to_end(&mut bytes)?;
+    Ok((len, bytes))
+}
+
+/// One entry [`hash_dir`] covers.
+enum Entry {
+    /// A regular file inside the skill folder.
+    File,
+    /// A link that leaves the skill folder: its target text is hashed, never
+    /// what it points at.
+    Outside(PathBuf),
+}
+
+/// blake3 over every non-hidden file below `root`: relative path, full
+/// length, and the first [`MAX_READ_BYTES`] bytes, in sorted order. Hidden
+/// files (`.DS_Store`, editor state) are not content an agent reads. Links are
+/// followed only while they stay inside `root`, which is already resolved.
 fn hash_dir(root: &Path) -> ContentHash {
     let mut files = Vec::new();
-    collect_files(root, "", 0, &mut files);
+    collect_files(root, root, "", 0, &mut files);
     let mut hasher = blake3::Hasher::new();
-    for relative in files {
+    for (relative, entry) in files {
         hasher.update(relative.as_bytes());
         hasher.update(&[0]);
-        match fs::read(root.join(&relative)) {
-            Ok(bytes) => {
-                hasher.update(&(bytes.len() as u64).to_le_bytes());
-                hasher.update(&bytes);
+        match entry {
+            Entry::Outside(target) => {
+                hasher.update(b"\xfelink");
+                hasher.update(target.as_os_str().as_encoded_bytes());
             }
-            Err(_) => {
-                hasher.update(b"\xffunreadable");
-            }
+            Entry::File => match read_capped(&root.join(&relative)) {
+                Ok((len, bytes)) => {
+                    hasher.update(&len.to_le_bytes());
+                    hasher.update(&bytes);
+                }
+                Err(_) => {
+                    hasher.update(b"\xffunreadable");
+                }
+            },
         }
     }
     ContentHash(hasher.finalize().to_hex().to_string())
 }
 
-fn collect_files(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<String>) {
+fn collect_files(
+    root: &Path,
+    dir: &Path,
+    prefix: &str,
+    depth: usize,
+    out: &mut Vec<(String, Entry)>,
+) {
     if depth > MAX_HASH_DEPTH {
         return;
     }
@@ -298,9 +335,18 @@ fn collect_files(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<String>) 
         } else {
             format!("{prefix}/{name}")
         };
+        // A linked top-level SKILL.md is still the file the agent reads.
+        let entry_point = relative == "SKILL.md";
+        if let Some(target) = fs::read_link(&path).ok().filter(|_| !entry_point) {
+            let inside = fs::canonicalize(&path).is_ok_and(|real| real.starts_with(root));
+            if !inside {
+                out.push((relative, Entry::Outside(target)));
+                continue;
+            }
+        }
         match fs::metadata(&path) {
-            Ok(meta) if meta.is_dir() => collect_files(&path, &relative, depth + 1, out),
-            Ok(meta) if meta.is_file() => out.push(relative),
+            Ok(meta) if meta.is_dir() => collect_files(root, &path, &relative, depth + 1, out),
+            Ok(meta) if meta.is_file() => out.push((relative, Entry::File)),
             _ => {}
         }
     }

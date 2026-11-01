@@ -8,12 +8,19 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::locations::Roots;
 use crate::model::{SkillName, Source};
 
+/// Relative to the home root.
 pub const SKILL_LOCK: &str = ".agents/.skill-lock.json";
+/// Relative to the home root.
 pub const OPIK_SKILLS: &str = ".agents/skills/.opik-skills.json";
-pub const CLAUDE_PLUGINS: &str = ".claude/plugins/installed_plugins.json";
-pub const CODEX_CONFIG: &str = ".codex/config.toml";
+/// Relative to Claude Code's config root.
+pub const CLAUDE_PLUGINS: &str = "plugins/installed_plugins.json";
+/// Relative to Claude Code's config root.
+pub const CLAUDE_PLUGIN_CACHE: &str = "plugins/cache";
+/// Relative to Codex's home.
+pub const CODEX_CONFIG: &str = "config.toml";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Lockfiles {
@@ -27,7 +34,8 @@ pub struct Lockfiles {
 }
 
 #[must_use]
-pub fn read(home: &Path) -> Lockfiles {
+pub fn read(roots: &Roots) -> Lockfiles {
+    let home = &roots.home;
     let mut tracked = BTreeMap::new();
     // The skills CLI lock wins over the opik manifest if both name a skill:
     // it records a per-skill folder hash, the opik manifest does not.
@@ -36,8 +44,8 @@ pub fn read(home: &Path) -> Lockfiles {
     }
     Lockfiles {
         tracked,
-        claude_plugins: claude_plugins(home),
-        codex_enabled: codex_enabled(home),
+        claude_plugins: claude_plugins(&roots.claude),
+        codex_enabled: codex_enabled(&roots.codex),
     }
 }
 
@@ -102,9 +110,10 @@ fn opik(home: &Path) -> Vec<(SkillName, Source)> {
         .collect()
 }
 
-/// `~/.claude/plugins/installed_plugins.json`, keyed `<plugin>@<marketplace>`.
-fn claude_plugins(home: &Path) -> Vec<(PathBuf, Source)> {
-    let Some(manifest) = json(&home.join(CLAUDE_PLUGINS)) else {
+/// `<claude>/plugins/installed_plugins.json`, keyed `<plugin>@<marketplace>`.
+fn claude_plugins(claude: &Path) -> Vec<(PathBuf, Source)> {
+    let cache = claude.join(CLAUDE_PLUGIN_CACHE);
+    let Some(manifest) = json(&claude.join(CLAUDE_PLUGINS)) else {
         return Vec::new();
     };
     let Some(plugins) = manifest.get("plugins").and_then(Value::as_object) else {
@@ -114,13 +123,10 @@ fn claude_plugins(home: &Path) -> Vec<(PathBuf, Source)> {
     for (key, installs) in plugins {
         let (plugin, marketplace) = key.split_once('@').unwrap_or((key, ""));
         for install in installs.as_array().into_iter().flatten() {
-            // Stored absolute; matched relative to the cache so a home that
-            // was copied or moved still resolves.
             let path = text(install, "installPath");
-            let Some((_, relative)) = path.split_once("/.claude/plugins/cache/") else {
+            let Some(path) = cache_relative(Path::new(&path), &cache) else {
                 continue;
             };
-            let path = PathBuf::from(relative);
             let source = Source::Plugin {
                 marketplace: marketplace.to_string(),
                 plugin: plugin.to_string(),
@@ -132,11 +138,25 @@ fn claude_plugins(home: &Path) -> Vec<(PathBuf, Source)> {
     out
 }
 
-/// The `[plugins."<key>"]` tables in `~/.codex/config.toml` whose `enabled` is
+/// An `installPath` relative to the plugin cache. Stored absolute, so a config
+/// root that was copied or moved keeps its old prefix: then the part after the
+/// last `plugins/cache` pair of components is used.
+fn cache_relative(install: &Path, cache: &Path) -> Option<PathBuf> {
+    if let Ok(rest) = install.strip_prefix(cache) {
+        return Some(rest.to_path_buf());
+    }
+    let parts: Vec<_> = install.components().collect();
+    let at = parts.windows(2).rposition(
+        |w| matches!(w, [a, b] if a.as_os_str() == "plugins" && b.as_os_str() == "cache"),
+    )?;
+    Some(parts.get(at + 2..)?.iter().collect())
+}
+
+/// The `[plugins."<key>"]` tables in `<codex>/config.toml` whose `enabled` is
 /// true. A line scan, not a TOML parser: those tables are flat, and a parse
 /// this narrow cannot misread the rest of the file into an answer.
-fn codex_enabled(home: &Path) -> BTreeSet<String> {
-    let Ok(config) = fs::read_to_string(home.join(CODEX_CONFIG)) else {
+fn codex_enabled(codex: &Path) -> BTreeSet<String> {
+    let Ok(config) = fs::read_to_string(codex.join(CODEX_CONFIG)) else {
         return BTreeSet::new();
     };
     let mut enabled = BTreeSet::new();

@@ -7,7 +7,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use lore_skills::{Finding, Inventory, SkillRecord, Source};
+use lore_skills::{Finding, Inventory, Roots, SkillRecord, Source};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
@@ -23,25 +23,31 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             SUBCOMMANDS.join(", ")
         )));
     }
-    let home = home()?;
-    let inventory = lore_skills::inventory(&home);
+    let inventory = lore_skills::inventory(&roots()?);
     let out = match (subcommand, invocation.json) {
         ("ls", true) => serde_json::to_string(&inventory.records).unwrap_or_default(),
         ("ls", false) => ls_text(&inventory),
-        (_, true) => doctor_json(&lore_skills::doctor(&inventory)),
+        (_, true) => doctor_json(&inventory, &lore_skills::doctor(&inventory)),
         (_, false) => doctor_text(&inventory, &lore_skills::doctor(&inventory)),
     };
     let _ = writeln!(std::io::stdout().lock(), "{out}");
     Ok(exit::OK)
 }
 
-/// The home root to scan. `HOME`, so a test or a live lane can point it at a
+/// The roots to scan: `HOME`, with Claude Code's and Codex's folders moved by
+/// `CLAUDE_CONFIG_DIR` and `CODEX_HOME` the way the session adapters move
+/// them. From the environment, so a test or a live lane can point them at a
 /// fixture without a flag that would exist only for them.
-fn home() -> Result<PathBuf, CliError> {
-    std::env::var_os("HOME")
+fn roots() -> Result<Roots, CliError> {
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .ok_or_else(|| CliError::Usage("HOME must be set to an absolute path".into()))
+        .ok_or_else(|| CliError::Usage("HOME must be set to an absolute path".into()))?;
+    Ok(Roots::resolve(
+        &home,
+        std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from),
+        std::env::var_os("CODEX_HOME").map(PathBuf::from),
+    ))
 }
 
 fn distinct_names(inventory: &Inventory) -> usize {
@@ -86,14 +92,17 @@ fn source_label(record: &SkillRecord) -> String {
     }
 }
 
-/// The findings as one JSON array, each with its `fix`.
-fn doctor_json(findings: &[Finding]) -> String {
+/// The findings as one JSON array, each with its `fix` and whether that fix
+/// is a `command` or a `hint`.
+fn doctor_json(inventory: &Inventory, findings: &[Finding]) -> String {
     let records: Vec<serde_json::Value> = findings
         .iter()
         .map(|f| {
             let mut value = serde_json::to_value(f).unwrap_or_default();
             if let Some(object) = value.as_object_mut() {
-                object.insert("fix".into(), f.fix().into());
+                let fix = f.fix(&inventory.roots);
+                object.insert("fix".into(), fix.text().into());
+                object.insert("fix_kind".into(), fix.kind().into());
             }
             value
         })
@@ -102,7 +111,7 @@ fn doctor_json(findings: &[Finding]) -> String {
 }
 
 fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
-    let show = |path: &Path| match path.strip_prefix(&inventory.home) {
+    let show = |path: &Path| match path.strip_prefix(&inventory.roots.home) {
         Ok(rest) => format!("~/{}", rest.display()),
         Err(_) => path.display().to_string(),
     };
@@ -117,12 +126,17 @@ fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
             out.push_str(finding.skill().unwrap_or("(codex skill list)"));
             out.push('\n');
         }
+        let fix = finding.fix(&inventory.roots);
+        let label = match fix.kind() {
+            "command" => "fix",
+            other => other,
+        };
         out.push_str(&format!(
             "  {:<15} {}\n  {:<15} {}\n",
             finding.kind(),
             describe(finding, &show),
-            "fix",
-            finding.fix()
+            label,
+            fix.text()
         ));
     }
     if !out.is_empty() {

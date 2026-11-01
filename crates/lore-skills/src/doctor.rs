@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::locations;
-use crate::model::{Agent, DriftCopy, Finding, SkillRecord, Source};
+use crate::locations::{self, Roots};
+use crate::model::{Agent, DriftCopy, Finding, Install, SkillRecord, Source};
 use crate::scan::Inventory;
 
 /// Codex's budget for the skill list it puts in context: names plus
@@ -38,7 +38,7 @@ pub fn doctor(inventory: &Inventory) -> Vec<Finding> {
             });
         }
         for record in records {
-            findings.extend(per_record(record));
+            findings.extend(per_record(record, &inventory.roots));
             findings.extend(broken_refs(record, &reach, &by_name, inventory));
         }
     }
@@ -82,21 +82,42 @@ fn duplicate(name: &str, records: &[&SkillRecord]) -> Option<Finding> {
     })
 }
 
-fn per_record(record: &SkillRecord) -> Vec<Finding> {
+/// Whether an agent writes this copy: it sits in a managed location, or links
+/// into one.
+fn managed(install: &Install, roots: &Roots) -> bool {
+    locations::LOCATIONS
+        .iter()
+        .any(|l| l.id == install.location && l.managed_by.is_some())
+        || roots.manager(&install.real_path).is_some()
+}
+
+fn per_record(record: &SkillRecord, roots: &Roots) -> Vec<Finding> {
     let mut out = Vec::new();
     let path = first_path(record);
+    // The copy a fix may point at: the first one the user owns.
+    let owned = record
+        .installs
+        .iter()
+        .find(|i| !managed(i, roots))
+        .map(|i| i.path.clone());
     if let Some(reason) = &record.frontmatter_error {
         out.push(Finding::BadFrontmatter {
             skill: record.name.clone(),
-            path: path.clone(),
+            path: owned.unwrap_or_else(|| path.clone()),
             reason: reason.clone(),
         });
     } else if let Some(declared) = record.declared_name.as_ref().filter(|d| **d != record.name) {
-        out.push(Finding::NameMismatch {
-            skill: record.name.clone(),
-            declared: declared.clone(),
-            path: path.clone(),
-        });
+        // A vendor that names a skill apart from its folder in a copy its
+        // agent manages (Hugging Face's `cli` declares `hf-cli`) chose that
+        // name, and the agent loads it as declared. Only a copy the user owns
+        // is theirs to rename.
+        if let Some(owned) = owned {
+            out.push(Finding::NameMismatch {
+                skill: record.name.clone(),
+                declared: declared.clone(),
+                path: owned,
+            });
+        }
     }
     if record.source == Source::Unknown {
         out.push(Finding::UnknownSource {
