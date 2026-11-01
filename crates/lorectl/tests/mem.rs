@@ -173,6 +173,89 @@ fn mem_rejects_a_relative_vault_as_usage() {
     assert_eq!(code(&out), 1, "{}", stderr(&out));
 }
 
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=T", "-c", "user.email=t@localhost"])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn mem_recall_labels_notes_against_the_repo_at_cwd() {
+    let (dir, vault) = init();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:hsusul/lore.git"],
+    );
+    std::fs::write(repo.join("src/a.rs"), "fn retry() {}\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "a"]);
+    let repo_note = "---\ntype: pitfall\ntitle: Retry the migration\nscope: repo:81444c90f1ff44ac\nanchors:\n  - path: src/a.rs\n    lines: 1\n---\nRetry a failed migration once.\n";
+    let global_note =
+        "---\ntype: fact\ntitle: Migrations are global\n---\nEvery migration is logged.\n";
+    let cwd = repo.to_str().unwrap();
+    let added = lorectl(
+        &vault,
+        &[
+            "add",
+            &note_file(dir.path(), "r.md", repo_note),
+            "--cwd",
+            cwd,
+        ],
+    );
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    let stored =
+        std::fs::read_to_string(vault.join("repos/81444c90f1ff44ac/retry-the-migration.md"))
+            .unwrap();
+    assert!(stored.contains("    hash: b3:"), "{stored}");
+    lorectl(
+        &vault,
+        &["add", &note_file(dir.path(), "g.md", global_note)],
+    );
+
+    std::fs::write(repo.join("src/a.rs"), "fn retry_twice() {}\n").unwrap();
+    let out = lorectl(&vault, &["recall", "migration", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "unanchored  migrations-are-global  global                 Every migration is logged.\n\
+         changed     retry-the-migration    repo:81444c90f1ff44ac  Retry a failed migration once.\n"
+    );
+    assert_eq!(stderr(&out), "");
+
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let out = lorectl(
+        &vault,
+        &[
+            "recall",
+            "migration",
+            "--json",
+            "--cwd",
+            elsewhere.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stderr(&out).matches("recalling global notes only").count(),
+        1
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(json["repo"]["state"], "no_repo");
+    assert_eq!(json["notes"].as_array().unwrap().len(), 1);
+    assert_eq!(json["notes"][0]["freshness"], "unanchored");
+    assert_eq!(status(&vault), "");
+}
+
 #[test]
 fn mem_reindex_reports_skipped_files() {
     let (dir, vault) = init();

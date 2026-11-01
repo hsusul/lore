@@ -7,7 +7,11 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use lexopt::prelude::*;
+use lore_memory::anchor::{Freshness, WorkTree};
+use lore_memory::recall::{self, Recall};
+use lore_memory::repo::RepoContext;
 use lore_memory::vault::{self, Added, Init, Vault};
+use serde_json::json;
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
@@ -18,9 +22,13 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     init              Create the vault, a git repository
     add <FILE>        Add a note file (`-` reads stdin); id, created, status,
                       and scope may be left out. The same file twice is one
-                      note and one commit
+                      note and one commit. --cwd <DIR> fills each anchor's
+                      missing hash and commit from the repository at DIR
     show <NOTE>       Print a note by id, slug, or vault path
     search <QUERY>    Rank notes by BM25 [--limit N, default 10]
+    recall <QUERY>    Global notes and the notes of the repository at --cwd
+                      (default: here), each labeled fresh, moved, changed,
+                      gone, or unanchored [--limit N] [--json]
     reindex           Rebuild the index from the vault files alone
     --vault <DIR>     Vault directory. Must be absolute
 ";
@@ -33,6 +41,7 @@ enum Sub {
     Add(String),
     Show(String),
     Search(String),
+    Recall(String),
     Reindex,
 }
 
@@ -41,6 +50,8 @@ struct MemArgs {
     sub: Option<Sub>,
     vault: Option<PathBuf>,
     limit: usize,
+    cwd: Option<PathBuf>,
+    json: bool,
 }
 
 fn usage(message: impl Into<String>) -> CliError {
@@ -51,6 +62,8 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
     let mut parser = lexopt::Parser::from_args(rest);
     let mut vault = None;
     let mut limit = None;
+    let mut cwd = None;
+    let mut json = false;
     let mut help = false;
     let mut operand: Option<String> = None;
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
@@ -61,7 +74,13 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
                     parser.value().map_err(|e| usage(e.to_string()))?,
                 ));
             }
-            Long("limit") if sub == "search" => {
+            Long("cwd") if sub == "recall" || sub == "add" => {
+                cwd = Some(PathBuf::from(
+                    parser.value().map_err(|e| usage(e.to_string()))?,
+                ));
+            }
+            Long("json") if sub == "recall" => json = true,
+            Long("limit") if sub == "search" || sub == "recall" => {
                 let value = parser.value().map_err(|e| usage(e.to_string()))?;
                 let value = value.to_string_lossy();
                 limit = Some(
@@ -85,6 +104,8 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
             sub: None,
             vault,
             limit: DEFAULT_LIMIT,
+            cwd,
+            json,
         });
     }
     let needs = |name: &str| {
@@ -101,12 +122,15 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
         "add" => Sub::Add(needs("FILE")?),
         "show" => Sub::Show(needs("NOTE")?),
         "search" => Sub::Search(needs("QUERY")?),
+        "recall" => Sub::Recall(needs("QUERY")?),
         other => return Err(usage(format!("unknown mem subcommand `{other}`"))),
     };
     Ok(MemArgs {
         sub: Some(parsed),
         vault,
         limit: limit.unwrap_or(DEFAULT_LIMIT),
+        cwd,
+        json,
     })
 }
 
@@ -132,7 +156,25 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         Sub::Add(file) => {
             let text = read_input(&file)?;
             let vault = Vault::open(&dir)?;
-            let (note, added) = vault.add(&text)?;
+            let (note, added) = match &args.cwd {
+                None => vault.add(&text)?,
+                Some(cwd) => {
+                    let context = RepoContext::discover(cwd);
+                    let root = context.root().ok_or_else(|| {
+                        usage(format!(
+                            "--cwd `{}` is not in a git repository",
+                            cwd.display()
+                        ))
+                    })?;
+                    let tree = WorkTree::new(root);
+                    vault.add_with(&text, |note| {
+                        for anchor in &mut note.anchors {
+                            *anchor = tree.pin(anchor)?;
+                        }
+                        Ok(())
+                    })?
+                }
+            };
             let verb = match added {
                 Added::Committed => "added",
                 Added::Unchanged => "unchanged",
@@ -160,6 +202,34 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
                 );
             }
         }
+        Sub::Recall(query) => {
+            let vault = Vault::open(&dir)?;
+            let cwd = match args.cwd {
+                Some(cwd) => cwd,
+                None => std::env::current_dir()
+                    .map_err(|e| usage(format!("cannot read the current directory: {e}")))?,
+            };
+            let found = recall::recall(&vault, &query, &cwd, args.limit)?;
+            match &found.context {
+                RepoContext::NoRepo => eprintln!(
+                    "lorectl: {} is not in a git repository; recalling global notes only",
+                    cwd.display()
+                ),
+                RepoContext::NoRemote { root } => eprintln!(
+                    "lorectl: {} has no origin remote; recalling global notes only",
+                    root.display()
+                ),
+                RepoContext::Repo { .. } => {}
+            }
+            if found.notes.is_empty() {
+                eprintln!("lorectl: no notes match `{query}`");
+            }
+            if args.json {
+                let _ = writeln!(out, "{}", recall_json(&found));
+            } else {
+                print_recall(&mut out, &found);
+            }
+        }
         Sub::Reindex => {
             let vault = Vault::open(&dir)?;
             let report = vault.reindex()?;
@@ -175,6 +245,83 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         }
     }
     Ok(exit::OK)
+}
+
+/// One line per note: the label, slug, scope, and excerpt, then where each
+/// moved anchor is now.
+fn print_recall(out: &mut impl Write, found: &Recall) {
+    let slugs: Vec<String> = found.notes.iter().map(|r| r.note.slug()).collect();
+    let scopes: Vec<String> = found
+        .notes
+        .iter()
+        .map(|r| r.note.scope.to_string())
+        .collect();
+    let width = slugs.iter().map(String::len).max().unwrap_or(0);
+    let scope_width = scopes.iter().map(String::len).max().unwrap_or(0);
+    for ((recalled, slug), scope) in found.notes.iter().zip(&slugs).zip(&scopes) {
+        let _ = writeln!(
+            out,
+            "{:<10}  {slug:<width$}  {scope:<scope_width$}  {}",
+            recalled.freshness.label(),
+            recalled.excerpt
+        );
+        for located in &recalled.anchors {
+            if let Freshness::Moved { lines } = located.freshness {
+                let _ = writeln!(out, "{:<10}  -> {}:{lines}", "", located.path.as_str());
+            }
+        }
+    }
+}
+
+fn recall_json(found: &Recall) -> serde_json::Value {
+    let repo = match &found.context {
+        RepoContext::NoRepo => json!({ "state": "no_repo" }),
+        RepoContext::NoRemote { root } => {
+            json!({ "state": "no_remote", "root": root.to_string_lossy() })
+        }
+        RepoContext::Repo { root, key } => json!({
+            "state": "repo",
+            "root": root.to_string_lossy(),
+            "scope": format!("repo:{}", key.as_str()),
+        }),
+    };
+    let lines = |freshness: Freshness| match freshness {
+        Freshness::Moved { lines } => Some(lines.to_string()),
+        _ => None,
+    };
+    let notes: Vec<serde_json::Value> = found
+        .notes
+        .iter()
+        .map(|r| {
+            let anchors: Vec<serde_json::Value> = r
+                .note
+                .anchors
+                .iter()
+                .zip(&r.anchors)
+                .map(|(anchor, located)| {
+                    json!({
+                        "path": anchor.path.as_str(),
+                        "lines": anchor.lines.map(|l| l.to_string()),
+                        "freshness": located.freshness.label(),
+                        "now_path": located.path.as_str(),
+                        "now_lines": lines(located.freshness),
+                    })
+                })
+                .collect();
+            json!({
+                "id": r.note.id.as_str(),
+                "path": r.path,
+                "title": r.note.title,
+                "type": r.note.note_type.as_str(),
+                "scope": r.note.scope.to_string(),
+                "freshness": r.freshness.label(),
+                "anchors": anchors,
+                "excerpt": r.excerpt,
+                "score": r.score,
+            })
+        })
+        .collect();
+    json!({ "repo": repo, "notes": notes })
 }
 
 fn read_input(file: &str) -> Result<String, CliError> {
@@ -212,6 +359,14 @@ mod tests {
         let search = args("search", &["two words", "--limit", "3", "--vault", "/v"]).unwrap();
         assert_eq!(search.sub, Some(Sub::Search("two words".into())));
         assert_eq!((search.limit, search.vault), (3, Some(PathBuf::from("/v"))));
+        let recall = args("recall", &["q", "--cwd", "/r", "--json", "--limit", "4"]).unwrap();
+        assert_eq!(recall.sub, Some(Sub::Recall("q".into())));
+        assert_eq!(
+            (recall.cwd, recall.json, recall.limit),
+            (Some(PathBuf::from("/r")), true, 4)
+        );
+        let add = args("add", &["n.md", "--cwd", "/r"]).unwrap();
+        assert_eq!(add.cwd, Some(PathBuf::from("/r")));
     }
 
     #[test]
@@ -224,6 +379,10 @@ mod tests {
             ("search", &["q", "--limit", "0"][..]),
             ("show", &["x", "--limit", "3"][..]),
             ("add", &["x", "--wat"][..]),
+            ("recall", &[][..]),
+            ("search", &["q", "--json"][..]),
+            ("show", &["x", "--cwd", "/r"][..]),
+            ("add", &["x", "--json"][..]),
         ] {
             let error = args(sub, rest).unwrap_err();
             assert_eq!(exit::exit_code(&error), exit::USAGE, "{sub} {rest:?}");
