@@ -6,7 +6,9 @@
       "basic_text.jsonl": "1.2.3",
       "tool_use.jsonl": "1.2.3",
       "segments.jsonl": "1.2.3",
-      "v2.1.0_sample.jsonl": "2.1.0"
+      "v2.1.0_sample.jsonl": "2.1.0",
+      "subagent_fold/cccccccc-0000-4000-8000-000000000001.jsonl": "2.1.309",
+      "subagent_fold/cccccccc-0000-4000-8000-000000000001/subagents/agent-a0000000000000001.jsonl": "2.1.309"
     }
   },
   "codex": {
