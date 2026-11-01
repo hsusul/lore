@@ -14,6 +14,7 @@ use std::process::{Command, Stdio};
 
 use thiserror::Error;
 
+use crate::index::{Hit, Index, IndexError};
 use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
 
 /// Environment variable that overrides the vault location.
@@ -47,6 +48,8 @@ pub enum VaultError {
     Io(String, #[source] io::Error),
     #[error("`git {0}` failed: {1}")]
     Git(String, String),
+    #[error(transparent)]
+    Index(#[from] IndexError),
 }
 
 fn io_error(what: impl Into<String>) -> impl FnOnce(io::Error) -> VaultError {
@@ -85,6 +88,14 @@ pub enum Added {
     Committed,
     /// The same note was already in the vault. Nothing was written.
     Unchanged,
+}
+
+/// What `reindex` read.
+#[derive(Debug)]
+pub struct Reindexed {
+    pub indexed: usize,
+    /// Markdown files that are not valid notes, with the reason.
+    pub skipped: Vec<(String, NoteError)>,
 }
 
 /// A markdown file found in the vault, and whether it is a valid note.
@@ -212,6 +223,9 @@ impl Vault {
                 return Err(VaultError::Conflict(rel));
             }
             if self.is_committed(&rel)? {
+                if let Some(index) = Index::open(&self.lore_dir())? {
+                    index.upsert(&rel, &note)?;
+                }
                 return Ok((note, Added::Unchanged));
             }
         } else {
@@ -223,7 +237,70 @@ impl Vault {
         let message = format!("mem: add {}", note.slug());
         self.git(&["add", "--", &rel])?;
         self.git(&["commit", "-q", "-m", &message, "--", &rel])?;
+        if let Some(index) = Index::open(&self.lore_dir())? {
+            index.upsert(&rel, &note)?;
+        }
         Ok((note, Added::Committed))
+    }
+
+    /// Rebuild the index from the vault files alone.
+    pub fn reindex(&self) -> Result<Reindexed, VaultError> {
+        let _lock = self.lock()?;
+        self.reindex_locked()
+    }
+
+    fn reindex_locked(&self) -> Result<Reindexed, VaultError> {
+        let mut notes = Vec::new();
+        let mut skipped = Vec::new();
+        for file in self.notes()? {
+            match file.note {
+                Ok(note) => notes.push((file.rel, note)),
+                Err(error) => skipped.push((file.rel, error)),
+            }
+        }
+        let indexed = Index::build(
+            &self.lore_dir(),
+            notes.iter().map(|(rel, note)| (rel.as_str(), note)),
+        )?;
+        Ok(Reindexed { indexed, skipped })
+    }
+
+    /// The index, rebuilt first when it is missing.
+    pub fn index(&self) -> Result<Index, VaultError> {
+        if let Some(index) = Index::open(&self.lore_dir())? {
+            return Ok(index);
+        }
+        let _lock = self.lock()?;
+        if Index::open(&self.lore_dir())?.is_none() {
+            self.reindex_locked()?;
+        }
+        Index::open(&self.lore_dir())?
+            .ok_or_else(|| VaultError::Missing(self.lore_dir().join(crate::index::INDEX_FILE)))
+    }
+
+    /// Notes matching every word of `query`, best first.
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>, VaultError> {
+        Ok(self.index()?.search(query, limit)?)
+    }
+
+    /// The vault-relative path of the note named by `key`: a path, an id, or a
+    /// slug that only one note has.
+    pub fn find(&self, key: &str) -> Result<String, VaultError> {
+        if key.contains('/') || key.ends_with(".md") {
+            let rel =
+                RelPath::parse(key).map_err(|e| VaultError::BadPath(key.into(), e.to_string()))?;
+            return if self.root.join(rel.as_str()).is_file() {
+                Ok(rel.as_str().to_string())
+            } else {
+                Err(VaultError::NotFound(key.into()))
+            };
+        }
+        let mut paths = self.index()?.lookup(key)?;
+        match paths.len() {
+            0 => Err(VaultError::NotFound(key.into())),
+            1 => Ok(paths.remove(0)),
+            _ => Err(VaultError::Ambiguous(key.into(), paths.join(", "))),
+        }
     }
 
     /// Read a note file by its vault-relative path.

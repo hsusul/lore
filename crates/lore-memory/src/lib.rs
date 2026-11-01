@@ -8,5 +8,6 @@
 //! This crate has no network capability (`tests/no_network_in_memory.rs`,
 //! `scripts/egress-check.sh`). It spawns the `git` binary and nothing else.
 
+pub mod index;
 pub mod note;
 pub mod vault;
