@@ -4,6 +4,9 @@
 //! every clone and worktree of one repository shares one [`RepoKey`]. The
 //! normalization is `lore-core`'s, which drops credentials and makes SSH and
 //! HTTPS forms of one remote equal.
+//!
+//! Discovery reads the repository in process with `gix`, because recall runs on
+//! every query and a `git` spawn costs about as much as the search itself.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -35,15 +38,28 @@ pub enum RepoContext {
 }
 
 impl RepoContext {
-    /// Resolve the repository that contains `dir`.
+    /// Resolve the working tree that contains `dir`. A bare repository has
+    /// none, so it is `NoRepo`.
     #[must_use]
     pub fn discover(dir: &Path) -> Self {
-        let Some(root) = git(dir, ["rev-parse", "--show-toplevel"]) else {
+        let Ok(repo) = gix::discover(dir) else {
             return RepoContext::NoRepo;
         };
-        let root = PathBuf::from(root.trim_end_matches(['\n', '\r']));
-        let key = git(&root, ["config", "--get", "remote.origin.url"])
-            .and_then(|url| repo_key(url.trim()));
+        let Some(workdir) = repo.workdir() else {
+            return RepoContext::NoRepo;
+        };
+        let root = workdir
+            .canonicalize()
+            .unwrap_or_else(|_| workdir.to_path_buf());
+        let key = repo
+            .find_remote("origin")
+            .ok()
+            .and_then(|remote| {
+                remote
+                    .url(gix::remote::Direction::Fetch)
+                    .map(|url| url.to_bstring().to_string())
+            })
+            .and_then(|url| repo_key(&url));
         match key {
             Some(key) => RepoContext::Repo { root, key },
             None => RepoContext::NoRemote { root },
