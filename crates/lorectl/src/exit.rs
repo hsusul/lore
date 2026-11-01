@@ -145,7 +145,10 @@ pub fn exit_code(error: &CliError) -> u8 {
 /// Map a `mem` failure onto the taxonomy. Exhaustive, like the others.
 fn memory_exit_code(error: &VaultError) -> u8 {
     match error {
-        VaultError::Note(_) | VaultError::BadPath(..) | VaultError::Conflict(_) => NOTE_REFUSED,
+        VaultError::Note(_)
+        | VaultError::BadPath(..)
+        | VaultError::Conflict(_)
+        | VaultError::Pin(_) => NOTE_REFUSED,
         VaultError::Missing(_) => NO_ARCHIVE,
         VaultError::RelativeDir(_)
         | VaultError::NoHome
