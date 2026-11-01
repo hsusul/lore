@@ -9,3 +9,4 @@
 //! `scripts/egress-check.sh`). It spawns the `git` binary and nothing else.
 
 pub mod note;
+pub mod vault;
