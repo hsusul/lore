@@ -1,0 +1,26 @@
+[package]
+name = "lore-memory"
+description = "Lore memory: markdown notes in a git vault with a rebuildable full-text index."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The index. Same version and features as lore-core, so one bundled SQLite with
+# FTS5 is built for the whole workspace.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Calendar validation for `created` and `forget_after`. Already in the graph.
+time = "0.3"
+thiserror = "1"
+# The default vault lives under the home directory. Already in the graph.
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"

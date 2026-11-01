@@ -2875,6 +2875,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-memory"
+version = "0.0.0"
+dependencies = [
+ "dirs",
+ "rusqlite",
+ "tempfile",
+ "thiserror 1.0.69",
+ "time",
+]
+
+[[package]]
 name = "lorectl"
 version = "0.0.0"
 dependencies = [
