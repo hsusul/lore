@@ -164,11 +164,14 @@ const INSERT: &str = "INSERT INTO notes
     (path, id, slug, scope, note_type, status, title, body)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 
+/// The slug is the file name stem, which is the title's slug unless the note
+/// was accepted under another name with `mem accept --as`.
 fn row<'a>(rel: &'a str, note: &'a Note) -> impl rusqlite::Params + 'a {
+    let stem = rel.rsplit('/').next().and_then(|n| n.strip_suffix(".md"));
     (
         rel,
         note.id.as_str(),
-        note.slug(),
+        stem.map_or_else(|| note.slug(), str::to_string),
         note.scope.to_string(),
         note.note_type.as_str(),
         note.status.as_str(),

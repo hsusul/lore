@@ -12,5 +12,5 @@
 pub mod inbox;
 pub mod index;
 pub mod note;
-
+pub mod review;
 pub mod vault;
