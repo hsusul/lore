@@ -2878,7 +2878,9 @@ dependencies = [
 name = "lore-memory"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "dirs",
+ "lore-core",
  "rusqlite",
  "tempfile",
  "thiserror 1.0.69",

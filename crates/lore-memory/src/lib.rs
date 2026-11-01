@@ -10,4 +10,5 @@
 
 pub mod index;
 pub mod note;
+pub mod repo;
 pub mod vault;
