@@ -312,6 +312,8 @@ fn stamp_row(s: &FileStamp) -> impl rusqlite::Params + '_ {
     )
 }
 
+/// The slug is the file name stem, which is the title's slug unless the note
+/// was accepted under another name with `mem accept --as`.
 fn row<'a>(rel: &'a str, note: &'a Note) -> impl rusqlite::Params + 'a {
     let file = rel.rsplit('/').next().unwrap_or(rel);
     let slug = file.strip_suffix(".md").unwrap_or(file);

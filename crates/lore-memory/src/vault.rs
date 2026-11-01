@@ -499,12 +499,12 @@ impl Vault {
             .collect()
     }
 
-    fn is_committed(&self, rel: &str) -> Result<bool, VaultError> {
+    pub(crate) fn is_committed(&self, rel: &str) -> Result<bool, VaultError> {
         let status = self.git(&["status", "--porcelain", "--", rel])?;
         Ok(status.trim().is_empty())
     }
 
-    fn git(&self, args: &[&str]) -> Result<String, VaultError> {
+    pub(crate) fn git(&self, args: &[&str]) -> Result<String, VaultError> {
         let mut command = Command::new("git");
         command.arg("-C").arg(&self.root).args(GIT_SAFE);
         let (has_name, has_email) = self.identity();
@@ -609,7 +609,7 @@ fn collect_markdown(dir: &Path, root: &Path, out: &mut Vec<FileStamp>) -> Result
 
 /// Write through a dot-prefixed temporary file and a rename, so a reader never
 /// sees half a note.
-fn write_atomically(path: &Path, text: &str) -> Result<(), VaultError> {
+pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<(), VaultError> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

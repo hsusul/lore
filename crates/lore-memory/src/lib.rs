@@ -18,4 +18,5 @@ pub mod index;
 pub mod note;
 pub mod recall;
 pub mod repo;
+pub mod review;
 pub mod vault;
