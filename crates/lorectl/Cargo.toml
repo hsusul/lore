@@ -20,6 +20,8 @@ workspace = true
 # The archive itself. `lorectl` adds a second surface over the same core the
 # desktop shell uses; it must never grow its own copy of archive logic.
 lore-core = { path = "../lore-core" }
+# Memory notes in a git vault, behind `lorectl mem`.
+lore-memory = { path = "../lore-memory" }
 # Argument parsing. `lexopt` is a zero-dependency pull parser, deliberately
 # chosen over `clap`: this binary is subject to the same no-network guarantee as
 # the archive, and the egress dependency audit (scripts/egress-check.sh) is only

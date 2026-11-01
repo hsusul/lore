@@ -20,6 +20,7 @@ use lore_core::lock::LockError;
 use lore_core::paths::PathError;
 use lore_core::source_roots::SourceRootError;
 use lore_core::storage::StorageError;
+use lore_memory::vault::VaultError;
 
 /// The command did what it was asked to do.
 pub const OK: u8 = 0;
@@ -47,6 +48,12 @@ pub const ARCHIVE_BUSY: u8 = 5;
 /// Distinct from [`ARCHIVE_UNREADABLE`]: nothing is wrong with the archive's
 /// shape, so "upgrade Lore" would be the wrong advice.
 pub const SCAN_FAILED: u8 = 6;
+/// `mem` refused a note, a path, or a date, and wrote nothing.
+///
+/// Shares its number with [`NO_ARCHIVE`] on purpose: `mem` never opens the
+/// archive, so within `mem` the code cannot be read two ways, and a missing
+/// vault is the same condition as a missing archive.
+pub const NOTE_REFUSED: u8 = 2;
 
 /// Everything `lorectl` can fail with.
 ///
@@ -83,6 +90,9 @@ pub enum CliError {
     /// one.
     #[error("not inside a Git repository")]
     NotARepository,
+    /// A `mem` command failed.
+    #[error(transparent)]
+    Memory(#[from] VaultError),
 }
 
 impl CliError {
@@ -101,6 +111,12 @@ impl CliError {
                 Some("wait for the other process to finish, then run it again")
             }
             CliError::NotARepository => Some("run it from inside a Git repository"),
+            CliError::Memory(VaultError::Missing(_)) => {
+                Some("run `lorectl mem init` to create one")
+            }
+            CliError::Memory(VaultError::Conflict(_)) => {
+                Some("edit that file by hand, or give the new note another title")
+            }
             _ => None,
         }
     }
@@ -122,6 +138,20 @@ pub fn exit_code(error: &CliError) -> u8 {
         // being flattened into a generic "unreadable".
         CliError::SourceRoots(SourceRootError::Storage(error)) => storage_exit_code(error),
         CliError::SourceRoots(_) => ARCHIVE_UNREADABLE,
+        CliError::Memory(error) => memory_exit_code(error),
+    }
+}
+
+/// Map a `mem` failure onto the taxonomy. Exhaustive, like the others.
+fn memory_exit_code(error: &VaultError) -> u8 {
+    match error {
+        VaultError::Note(_) | VaultError::BadPath(..) | VaultError::Conflict(_) => NOTE_REFUSED,
+        VaultError::Missing(_) => NO_ARCHIVE,
+        VaultError::RelativeDir(_)
+        | VaultError::NoHome
+        | VaultError::NotFound(_)
+        | VaultError::Ambiguous(..) => USAGE,
+        VaultError::Io(..) | VaultError::Git(..) | VaultError::Index(_) => ARCHIVE_UNREADABLE,
     }
 }
 
@@ -317,6 +347,24 @@ mod tests {
             NO_ARCHIVE,
             "a missing archive must not be flattened by the wrapper"
         );
+    }
+
+    #[test]
+    fn a_refused_note_exits_2_and_a_broken_vault_does_not() {
+        use lore_memory::note::NoteError;
+        let refused = [
+            VaultError::Note(NoteError::Missing("title")),
+            VaultError::BadPath("../x".into(), "`..` is not allowed".into()),
+            VaultError::Conflict("global/x.md".into()),
+        ];
+        for error in refused {
+            assert_eq!(exit_code(&CliError::Memory(error)), 2);
+        }
+        let missing = CliError::Memory(VaultError::Missing("/tmp/v".into()));
+        assert_eq!(exit_code(&missing), NO_ARCHIVE);
+        assert!(missing.advice().is_some_and(|a| a.contains("mem init")));
+        let git = CliError::Memory(VaultError::Git("commit".into(), "boom".into()));
+        assert_eq!(exit_code(&git), ARCHIVE_UNREADABLE);
     }
 
     #[test]

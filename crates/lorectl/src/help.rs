@@ -58,6 +58,7 @@ Options may appear before or after the command.
 
 Commands:
 {commands}
+{memory}
 Options:
     --archive <DIR>   Archive directory to use. Must be absolute; it names the
                       directory, not the database file.
@@ -67,6 +68,8 @@ Options:
     -V, --version     Print the version.
 
 Environment:
+    LORE_VAULT_DIR    Vault directory (absolute) for `mem` when --vault is
+                      absent. Otherwise ~/Lore.
     LORE_ARCHIVE_DIR  Archive directory (absolute) used when --archive is
                       absent. Otherwise the platform data directory is used.
 
@@ -74,7 +77,9 @@ Exit codes:
     {ok}  ok
     {usage}  usage: unknown flag or command, a relative --archive, or a command
        this build does not implement
-    {no_archive}  no archive at that location (run `lorectl scan` to build one)
+    {no_archive}  no archive at that location (run `lorectl scan` to build one); for
+       `mem`, no vault there, or a note, path, or date was refused and nothing
+       was written
     {not_a_repo}  not inside a Git repository
     {unreadable}  archive present but unreadable: not a Lore archive, a schema
        from a newer or older build, an inconsistent migration ledger, or an
@@ -86,6 +91,7 @@ Exit codes:
 ",
         version = lore_core::version(),
         commands = commands,
+        memory = crate::mem::USAGE,
         ok = exit::OK,
         usage = exit::USAGE,
         no_archive = exit::NO_ARCHIVE,

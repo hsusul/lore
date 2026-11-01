@@ -35,6 +35,8 @@ pub enum Command {
     Report,
     /// MCP server over stdio, so agents can search the archive.
     Mcp,
+    /// Memory notes in a git vault.
+    Mem,
 }
 
 /// Every command, in the order `--help` lists them.
@@ -45,6 +47,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Search,
     Command::Hook,
     Command::Mcp,
+    Command::Mem,
     Command::Report,
 ];
 
@@ -60,6 +63,7 @@ impl Command {
             Command::Hook => "hook",
             Command::Report => "report",
             Command::Mcp => "mcp",
+            Command::Mem => "mem",
         }
     }
 
@@ -74,6 +78,7 @@ impl Command {
             Command::Hook => "Agent hook entry point; run by an agent, not a person",
             Command::Report => "Longer-form summary of archived work",
             Command::Mcp => "MCP server on stdin/stdout; run by an agent, not a person",
+            Command::Mem => "Memory notes in a git vault; see Memory below",
         }
     }
 
@@ -87,7 +92,8 @@ impl Command {
             | Command::Inspect
             | Command::Status
             | Command::Hook
-            | Command::Mcp => true,
+            | Command::Mcp
+            | Command::Mem => true,
             Command::Report => false,
         }
     }
@@ -103,6 +109,7 @@ impl Command {
             Command::Search => Some("QUERY"),
             Command::Inspect => Some("SESSION_ID"),
             Command::Hook => Some("EVENT"),
+            Command::Mem => Some("SUBCOMMAND"),
             Command::Scan | Command::Status | Command::Report | Command::Mcp => None,
         }
     }
@@ -140,6 +147,8 @@ pub struct Invocation {
     pub patch: bool,
     /// The command's operand, when it takes one (a search query, a session id).
     pub operand: Option<String>,
+    /// Everything after `mem <SUBCOMMAND>`, parsed by the `mem` command itself.
+    pub rest: Vec<String>,
     /// What to do.
     pub action: Action,
 }
@@ -173,6 +182,7 @@ where
     let mut version = false;
     let mut command: Option<Command> = None;
     let mut operand: Option<String> = None;
+    let mut rest = Vec::new();
 
     while let Some(arg) = parser.next().map_err(usage)? {
         match arg {
@@ -193,6 +203,13 @@ where
             // search for two words quietly searches for one.
             Value(value) if operand.is_none() && command.is_some() => {
                 operand = Some(value.to_string_lossy().into_owned());
+                if command == Some(Command::Mem) {
+                    rest = parser
+                        .raw_args()
+                        .map_err(usage)?
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect();
+                }
             }
             other => return Err(usage(other.unexpected())),
         }
@@ -235,6 +252,7 @@ where
         json,
         patch,
         operand,
+        rest,
         action,
     })
 }
@@ -292,7 +310,7 @@ mod tests {
             .collect();
         assert_eq!(
             implemented,
-            ["scan", "status", "inspect", "search", "hook", "mcp"]
+            ["scan", "status", "inspect", "search", "hook", "mcp", "mem"]
         );
     }
 
@@ -336,6 +354,14 @@ mod tests {
     fn an_operand_is_captured_verbatim() {
         let invocation = parsed(&["search", "needle in haystack"]);
         assert_eq!(invocation.operand.as_deref(), Some("needle in haystack"));
+    }
+
+    #[test]
+    fn mem_hands_everything_after_its_subcommand_to_itself() {
+        let invocation = parsed(&["mem", "search", "two words", "--limit", "3"]);
+        assert_eq!(invocation.action, Action::Run(Command::Mem));
+        assert_eq!(invocation.operand.as_deref(), Some("search"));
+        assert_eq!(invocation.rest, ["two words", "--limit", "3"]);
     }
 
     #[test]
