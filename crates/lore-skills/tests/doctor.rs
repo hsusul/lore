@@ -40,20 +40,31 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
     };
     let off = ".codex/plugins/cache/mkt/off/1.0/skills/off-skill";
     let plugin = ".claude/plugins/cache/market/demo/1.0.0/skills/plugin-skill";
+    let claude_only = ".claude/skills/claude-only";
+    let unclosed = "frontmatter `description` has an unclosed `\"`";
 
+    // No NameMismatch for hf-style: a vendor's name in a managed cache is
+    // the vendor's choice, and nothing the user runs can change it.
     let expected = vec![
         Finding::BadFrontmatter {
             skill: "bad-yaml".into(),
             path: at(".agents/skills/bad-yaml"),
-            reason: "frontmatter `description` has an unclosed `\"`".into(),
+            reason: unclosed.into(),
         },
         unknown("bad-yaml", ".agents/skills/bad-yaml"),
+        Finding::BadFrontmatter {
+            skill: "sys-bad".into(),
+            path: at(".codex/skills/.system/sys-bad"),
+            reason: unclosed.into(),
+        },
         Finding::NameMismatch {
             skill: "mislabeled".into(),
             declared: "other-name".into(),
             path: at(".agents/skills/mislabeled"),
         },
         unknown("mislabeled", ".agents/skills/mislabeled"),
+        broken("claude-only", Agent::Codex, claude_only),
+        broken("claude-only", Agent::Cursor, claude_only),
         broken("off-skill", Agent::Codex, off),
         broken("off-skill", Agent::Cursor, off),
         broken("plugin-skill", Agent::Codex, plugin),
@@ -81,9 +92,9 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
         unknown("clean-git-commit", ".agents/skills/clean-git-commit"),
         unknown("clean-git-commit", ".claude/skills/clean-git-commit"),
         Finding::CodexBudget {
-            chars: 8260,
+            chars: 8349,
             limit: CODEX_BUDGET_CHARS,
-            skills: 8,
+            skills: 10,
             largest: at(".codex/skills/big"),
         },
         Finding::Duplicate {
@@ -93,7 +104,15 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
                 at(".claude/skills/gpt-taste"),
             ],
         },
+        Finding::Duplicate {
+            skill: "tool-skill".into(),
+            paths: vec![
+                at(".claude/skills/tool-skill"),
+                at(".codex/plugins/cache/mkt/tool/1.0/skills/tool-skill"),
+            ],
+        },
         unknown("big", ".codex/skills/big"),
+        unknown("claude-only", claude_only),
     ];
     assert_eq!(lore_skills::doctor(&inventory), expected);
 }

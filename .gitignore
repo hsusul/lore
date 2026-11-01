@@ -45,7 +45,7 @@ dist-ssr/
 *.md
 !README.md
 # Test data, not documentation: the skills doctor's fixture home.
-!crates/lore-skills/fixtures/**/SKILL.md
+!crates/lore-skills/fixtures/**/*.md
 /docs/
 
 # Local agent instructions and design previews
