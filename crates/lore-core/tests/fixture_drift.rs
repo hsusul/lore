@@ -20,6 +20,7 @@ const CLAUDE_KEYS: &[&str] = &[
     "uuid",
     "parentUuid",
     "sessionId",
+    "agentId",
     "timestamp",
     "cwd",
     "gitBranch",

@@ -94,8 +94,8 @@ fn parse_from(
         let event_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
 
         // Session-level metadata.
-        if session.native_session_id.is_none() {
-            session.native_session_id = str_field(&obj, "sessionId");
+        if let Some(id) = transcript_id(&obj) {
+            session.native_session_id = Some(id);
         }
         if session.agent_version.is_none() {
             session.agent_version = str_field(&obj, "version");
@@ -146,6 +146,19 @@ fn parse_from(
         restates_session: false,
     };
     finish_parse(from, session, end, archived)
+}
+
+/// The session a line belongs to. Ingest replaces a session with each file it
+/// parses, so two transcripts must never share an id. A subagent transcript
+/// repeats its parent's `sessionId`, so its lines are qualified by `agentId`.
+/// A resumed transcript opens with lines copied from the session it resumed, so
+/// the caller keeps the newest id.
+fn transcript_id(obj: &Value) -> Option<String> {
+    let session_id = str_field(obj, "sessionId")?;
+    Some(match str_field(obj, "agentId") {
+        Some(agent_id) => format!("{session_id}/agent-{agent_id}"),
+        None => session_id,
+    })
 }
 
 /// Tool-call pairing state: calls parsed in this run, and results for calls
