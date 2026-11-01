@@ -16,18 +16,21 @@ workspace = true
 # The index. Same version and features as lore-core, so one bundled SQLite with
 # FTS5 is built for the whole workspace.
 rusqlite = { version = "0.32", features = ["bundled"] }
-# Calendar validation for `created` and `forget_after`. Already in the graph.
-time = "0.3"
+# Calendar validation for `created` and `forget_after`, and RFC 3339 for a
+# proposal's `proposed_at`. Already in the graph.
+time = { version = "0.3", features = ["formatting", "parsing"] }
 thiserror = "1"
 # The default vault lives under the home directory. Already in the graph.
 dirs = "6"
-# Repo identity reuses the archive's credential-free remote normalization.
+# Repo identity and secret redaction reuse the archive's implementation.
 lore-core = { path = "../lore-core" }
 # Anchor line hashes and repo keys. Already in the graph via lore-core.
 blake3 = "1"
 # Repo discovery and the origin URL, read in process. Same version as lore-core
 # with default features off, so no network transport and no new crates.
 gix = { version = "0.86", default-features = false, features = ["sha1"] }
+# Inbox and decision lines. Already in the graph via lore-core.
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
