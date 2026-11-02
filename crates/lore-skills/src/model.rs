@@ -58,8 +58,17 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Source {
-    Local { path: PathBuf },
-    Builtin { agent: Agent },
+    Git {
+        url: String,
+        rev: String,
+        subpath: String,
+    },
+    Local {
+        path: PathBuf,
+    },
+    Builtin {
+        agent: Agent,
+    },
     Unknown,
 }
 
@@ -69,6 +78,7 @@ impl Source {
     #[must_use]
     pub fn specificity(&self) -> u8 {
         match self {
+            Source::Git { .. } => 4,
             Source::Builtin { .. } => 2,
             Source::Local { .. } => 1,
             Source::Unknown => 0,

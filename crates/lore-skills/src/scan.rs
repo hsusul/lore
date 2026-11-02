@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::frontmatter;
 use crate::locations::{Layout, Location, Provenance, Roots, LOCATIONS};
+use crate::lockfiles::{self, Lockfiles};
 use crate::model::{ContentHash, Install, Mode, SkillName, SkillRecord, Source};
 
 /// Deep enough for `cache/<marketplace>/<plugin>/<version>/skills`, with room.
@@ -33,6 +34,8 @@ struct Found {
 /// unreadable entries are skipped.
 #[must_use]
 pub fn inventory(roots: &Roots) -> Inventory {
+    let locks = lockfiles::read(roots);
+    let agents_dir = fs::canonicalize(roots.home.join(".agents/skills")).ok();
     let mut hashes: HashMap<PathBuf, ContentHash> = HashMap::new();
     let mut found = Vec::new();
     let mut elsewhere = BTreeMap::new();
@@ -57,7 +60,14 @@ pub fn inventory(roots: &Roots) -> Inventory {
                     Ok(target) => Mode::Symlink { target },
                     Err(_) => Mode::Copy,
                 };
-                let source = source(location, &real_path, &mode);
+                let source = source(
+                    location,
+                    &name,
+                    &real_path,
+                    &mode,
+                    &locks,
+                    agents_dir.as_deref(),
+                );
                 let install = Install {
                     location: location.id,
                     agents: location.agents.to_vec(),
@@ -82,7 +92,20 @@ pub fn inventory(roots: &Roots) -> Inventory {
     }
 }
 
-fn source(location: &Location, real_path: &Path, mode: &Mode) -> Source {
+fn source(
+    location: &Location,
+    name: &str,
+    real_path: &Path,
+    mode: &Mode,
+    locks: &Lockfiles,
+    agents_dir: Option<&Path>,
+) -> Source {
+    // The skills CLI installs into ~/.agents/skills and links other agents'
+    // folders to it, so a lock entry covers any install that resolves there.
+    let in_agents_dir = agents_dir.is_some_and(|dir| real_path.parent() == Some(dir));
+    if let Some(tracked) = locks.tracked.get(name).filter(|_| in_agents_dir) {
+        return tracked.clone();
+    }
     if let Provenance::Builtin(agent) = location.provenance {
         return Source::Builtin { agent };
     }

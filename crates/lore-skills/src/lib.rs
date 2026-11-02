@@ -6,6 +6,7 @@
 
 pub mod frontmatter;
 pub mod locations;
+pub mod lockfiles;
 pub mod model;
 pub mod scan;
 
