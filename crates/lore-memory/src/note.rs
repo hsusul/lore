@@ -651,6 +651,40 @@ impl Frontmatter {
     fn has(&self, key: Key) -> bool {
         self.slots.iter().any(|slot| slot.key() == Some(key))
     }
+
+    /// Insert `key` where a new note would put it relative to the keys present.
+    fn insert(&mut self, key: Key) {
+        if self.has(key) {
+            return;
+        }
+        let after = |slot: &Slot| slot.key().is_some_and(|k| k > key);
+        let at = match self.slots.iter().position(after) {
+            Some(at) => at,
+            None => self
+                .slots
+                .iter()
+                .rposition(|s| s.key().is_some())
+                .map_or(0, |last| last + 1),
+        };
+        self.slots.insert(at, Slot::Known(key));
+    }
+
+    /// The names of the frontmatter keys Lore does not own, in file order.
+    #[must_use]
+    pub fn unknown_keys(&self) -> Vec<&str> {
+        self.slots
+            .iter()
+            .filter_map(|slot| match slot {
+                Slot::Raw(text) => {
+                    let first = text.lines().next()?;
+                    let starts_key = !first.starts_with([' ', '\t', '-', '#']);
+                    let (key, _) = first.split_once(':')?;
+                    starts_key.then_some(key.trim())
+                }
+                Slot::Known(_) | Slot::Empty(_) => None,
+            })
+            .collect()
+    }
 }
 
 impl Note {
@@ -658,6 +692,142 @@ impl Note {
     pub fn parse(text: &str) -> Result<Note, NoteError> {
         parse_note(text)
     }
+
+    /// Render the note as a file. `Note::parse(s)?.render() == s` for every
+    /// file whose Lore-owned keys are in Lore's own formatting.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut layout = self.extra.clone();
+        for key in Key::ALL {
+            if self.has_value(key) {
+                layout.insert(key);
+            }
+        }
+        let mut out = String::from("---\n");
+        for slot in &layout.slots {
+            match slot {
+                Slot::Empty(key) if !self.has_value(*key) => {
+                    out.push_str(key.name());
+                    out.push_str(":\n");
+                }
+                Slot::Known(key) | Slot::Empty(key) => self.render_key(*key, &mut out),
+                Slot::Raw(text) => out.push_str(text),
+            }
+        }
+        out.push_str("---\n");
+        out.push_str(&self.body);
+        out
+    }
+
+    fn has_value(&self, key: Key) -> bool {
+        match key {
+            Key::Anchors => !self.anchors.is_empty(),
+            Key::Relations => !self.relations.is_empty(),
+            Key::Sources => !self.sources.is_empty(),
+            Key::ForgetAfter => self.forget_after.is_some(),
+            Key::Repo => self.repo.is_some(),
+            Key::Id | Key::Type | Key::Title | Key::Scope | Key::Status | Key::Created => true,
+        }
+    }
+
+    fn render_key(&self, key: Key, out: &mut String) {
+        let name = key.name();
+        let line = |out: &mut String, value: &str| {
+            out.push_str(name);
+            out.push_str(": ");
+            out.push_str(value);
+            out.push('\n');
+        };
+        match key {
+            Key::Id => line(out, self.id.as_str()),
+            Key::Type => line(out, self.note_type.as_str()),
+            Key::Title => line(out, &render_scalar(&self.title)),
+            Key::Scope => line(out, &self.scope.to_string()),
+            Key::Repo => {
+                if let Some(repo) = &self.repo {
+                    line(out, &render_scalar(repo.as_str()));
+                }
+            }
+            Key::Status => line(out, self.status.as_str()),
+            Key::Created => line(out, &self.created.to_string()),
+            Key::ForgetAfter => {
+                if let Some(date) = self.forget_after {
+                    line(out, &date.to_string());
+                }
+            }
+            Key::Anchors | Key::Relations | Key::Sources => {
+                let items: Vec<String> = match key {
+                    Key::Anchors => self.anchors.iter().map(render_anchor).collect(),
+                    Key::Relations => self
+                        .relations
+                        .iter()
+                        .map(|r| format!("{}: {}", r.kind(), r.target().as_str()))
+                        .collect(),
+                    _ => self.sources.iter().map(ToString::to_string).collect(),
+                };
+                if items.is_empty() {
+                    line(out, "[]");
+                    return;
+                }
+                out.push_str(name);
+                out.push_str(":\n");
+                for item in items {
+                    out.push_str("  - ");
+                    out.push_str(&item);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+}
+
+fn render_anchor(anchor: &Anchor) -> String {
+    let mut text = format!("path: {}", render_scalar(anchor.path.as_str()));
+    if let Some(lines) = anchor.lines {
+        text.push_str(&format!("\n    lines: {lines}"));
+    }
+    if let Some(hash) = &anchor.hash {
+        text.push_str(&format!("\n    hash: {}", hash.as_str()));
+    }
+    if let Some(commit) = &anchor.commit {
+        text.push_str(&format!("\n    commit: {}", commit.as_str()));
+    }
+    text
+}
+
+/// Plain when every YAML reader would read the text back as the same string,
+/// double-quoted otherwise. Anything that starts with a digit (a number, a
+/// date, a time: `2026-11-01`, `0x10`, `12:30`), anything Rust reads as a
+/// float (`+1`, `.5`, `inf`), `.inf` and `.nan`, and the YAML 1.1 booleans and
+/// nulls are quoted, so Obsidian and other tools never retype a title.
+fn render_scalar(text: &str) -> String {
+    const RESERVED: &[&str] = &[
+        "true", "false", "yes", "no", "on", "off", "y", "n", "null", "~", ".inf", "-.inf", "+.inf",
+        ".nan",
+    ];
+    let plain = !text.is_empty()
+        && text.trim() == text
+        && !text.starts_with(|c: char| c.is_ascii_digit() || "-?:,[]{}#&*!|>'\"%@`".contains(c))
+        && !text.contains(": ")
+        && !text.contains(" #")
+        && !text.ends_with(':')
+        && !text.chars().any(char::is_control)
+        && !RESERVED.contains(&text.to_ascii_lowercase().as_str())
+        && text.parse::<f64>().is_err();
+    if plain {
+        return text.to_string();
+    }
+    let mut quoted = String::from('"');
+    for c in text.chars() {
+        match c {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\t' => quoted.push_str("\\t"),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 const NO_COMMENT: &str =
