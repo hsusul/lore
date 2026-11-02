@@ -44,6 +44,8 @@ dist-ssr/
 # README.md is the sole exception — it is the repo's public front page.
 *.md
 !README.md
+# Test data, not documentation: the skills doctor's fixture home.
+!crates/lore-skills/fixtures/**/*.md
 # Memory fixture notes are test data, not documentation.
 !/crates/lore-memory/fixtures/**/*.md
 /docs/
