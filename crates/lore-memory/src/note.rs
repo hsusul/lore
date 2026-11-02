@@ -162,6 +162,9 @@ enum Key {
     Scope,
     Repo,
     Status,
+    Anchors,
+    Relations,
+    Sources,
     Created,
     ForgetAfter,
 }
@@ -609,13 +612,16 @@ impl fmt::Display for NoteDate {
 }
 
 impl Key {
-    const ALL: [Key; 8] = [
+    const ALL: [Key; 11] = [
         Key::Id,
         Key::Type,
         Key::Title,
         Key::Scope,
         Key::Repo,
         Key::Status,
+        Key::Anchors,
+        Key::Relations,
+        Key::Sources,
         Key::Created,
         Key::ForgetAfter,
     ];
@@ -628,6 +634,9 @@ impl Key {
             Key::Scope => "scope",
             Key::Repo => "repo",
             Key::Status => "status",
+            Key::Anchors => "anchors",
+            Key::Relations => "relations",
+            Key::Sources => "sources",
             Key::Created => "created",
             Key::ForgetAfter => "forget_after",
         }
@@ -734,6 +743,51 @@ enum Piece<'a> {
     Block(Block<'a>),
 }
 
+/// One `- ` list item: the text after the dash, then its indented lines.
+struct Item<'a> {
+    head: &'a str,
+    more: Vec<&'a str>,
+}
+
+fn list_items<'a>(field: &str, lines: &[&'a str]) -> Result<Vec<Item<'a>>, NoteError> {
+    let mut items: Vec<Item<'a>> = Vec::new();
+    let mut dash_indent = None;
+    for line in lines.iter().filter(|l| !l.trim().is_empty()) {
+        let text = line.trim_start();
+        let indent = line.len() - text.len();
+        if text == "-" || text.starts_with("- ") {
+            if dash_indent.is_some_and(|d| d != indent) {
+                return Err(field_error(field, "list items are indented unevenly"));
+            }
+            dash_indent = Some(indent);
+            items.push(Item {
+                head: text.get(1..).unwrap_or_default().trim(),
+                more: Vec::new(),
+            });
+            continue;
+        }
+        match (dash_indent, items.last_mut()) {
+            (Some(d), Some(item)) if indent > d => item.more.push(text),
+            _ => return Err(field_error(field, "expected one `- ` item per line")),
+        }
+    }
+    Ok(items)
+}
+
+/// The `key: value` pairs of a map-shaped list item.
+fn item_pairs<'a>(field: &str, item: &Item<'a>) -> Result<Vec<(&'a str, String)>, NoteError> {
+    std::iter::once(item.head)
+        .chain(item.more.iter().copied())
+        .map(|line| {
+            let (key, value) = line.split_once(':').ok_or_else(|| {
+                field_error(field, format!("expected `key: value`, got `{line}`"))
+            })?;
+            let value = parse_scalar(value).map_err(|e| field_error(field, e))?;
+            Ok((key.trim(), value))
+        })
+        .collect()
+}
+
 fn split_document(text: &str) -> Result<(&str, &str), NoteError> {
     let rest = text.strip_prefix("---\n").ok_or(NoteError::NotANote(
         "the file does not start with a `---` line",
@@ -824,6 +878,47 @@ fn typed<T>(
     parse(value).map_err(|e| field_error(key.name(), e))
 }
 
+fn list_field<'a>(key: Key, block: &Block<'a>) -> Result<Vec<Item<'a>>, NoteError> {
+    match parse_scalar(block.value).map_err(|e| field_error(key.name(), e)) {
+        Ok(inline) if inline.is_empty() => list_items(key.name(), &block.lines),
+        _ if block.value.trim() == "[]" && block.lines.iter().all(|l| l.trim().is_empty()) => {
+            Ok(Vec::new())
+        }
+        _ => Err(field_error(
+            key.name(),
+            "write the list one `- ` item per line",
+        )),
+    }
+}
+
+fn read_anchor(index: usize, item: &Item<'_>) -> Result<Anchor, NoteError> {
+    let field = format!("anchors[{index}]");
+    let (mut path, mut lines, mut hash, mut commit) = (None, None, None, None);
+    for (key, value) in item_pairs(&field, item)? {
+        let named = |e: InvalidValue| field_error(format!("{field}.{key}"), e);
+        match key {
+            "path" if path.is_none() => path = Some(RelPath::parse(&value).map_err(named)?),
+            "lines" if lines.is_none() => lines = Some(LineRange::parse(&value).map_err(named)?),
+            "hash" if hash.is_none() => hash = Some(LineHash::parse(&value).map_err(named)?),
+            "commit" if commit.is_none() => {
+                commit = Some(CommitId::parse(&value).map_err(named)?);
+            }
+            _ => {
+                return Err(field_error(
+                    &field,
+                    format!("unexpected or repeated key `{key}`"),
+                ))
+            }
+        }
+    }
+    Ok(Anchor {
+        path: path.ok_or_else(|| field_error(&field, "needs a `path`"))?,
+        lines,
+        hash,
+        commit,
+    })
+}
+
 fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), NoteError> {
     match key {
         Key::Id => fields.id = Some(typed(key, &scalar_field(key, block)?, NoteId::parse)?),
@@ -855,6 +950,35 @@ fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), No
             let value = scalar_field(key, block)?;
             if !value.is_empty() {
                 fields.forget_after = Some(typed(key, &value, NoteDate::parse)?);
+            }
+        }
+        Key::Anchors => {
+            for (index, item) in list_field(key, block)?.iter().enumerate() {
+                fields.anchors.push(read_anchor(index, item)?);
+            }
+        }
+        Key::Relations => {
+            for (index, item) in list_field(key, block)?.iter().enumerate() {
+                let field = format!("relations[{index}]");
+                let pairs = item_pairs(&field, item)?;
+                let [(kind, id)] = pairs.as_slice() else {
+                    return Err(field_error(&field, "expected one `kind: id` pair"));
+                };
+                fields
+                    .relations
+                    .push(Relation::parse(kind, id).map_err(|e| field_error(&field, e))?);
+            }
+        }
+        Key::Sources => {
+            for (index, item) in list_field(key, block)?.iter().enumerate() {
+                let field = format!("sources[{index}]");
+                if !item.more.is_empty() {
+                    return Err(field_error(&field, "expected `agent:session`"));
+                }
+                let value = parse_scalar(item.head).map_err(|e| field_error(&field, e))?;
+                fields
+                    .sources
+                    .push(SourceRef::parse(&value).map_err(|e| field_error(&field, e))?);
             }
         }
     }
