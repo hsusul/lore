@@ -19,20 +19,31 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     add <FILE>        Add a note file (`-` reads stdin); id, created, status,
                       and scope may be left out. The same file twice is one
                       note and one commit. An id another note has is refused
+    show <NOTE>       Print a note by id, file name, or vault path
+    search <QUERY>    Rank notes by BM25 [--limit N, default 10]
+    reindex           Rebuild the index from the vault files alone, and name
+                      any id that two files share (exit 7)
     --vault <DIR>     Vault directory. Must be absolute
+    Search and show pick up notes edited, renamed, or deleted by hand.
     Exit codes: 2 no vault, 5 vault busy, 7 note refused, 4 other failure.
 ";
+
+const DEFAULT_LIMIT: usize = 10;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Sub {
     Init,
     Add(String),
+    Show(String),
+    Search(String),
+    Reindex,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct MemArgs {
     sub: Sub,
     vault: Option<PathBuf>,
+    limit: usize,
 }
 
 fn usage(message: impl Into<String>) -> CliError {
@@ -42,6 +53,7 @@ fn usage(message: impl Into<String>) -> CliError {
 fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
     let mut parser = lexopt::Parser::from_args(rest);
     let mut vault = None;
+    let mut limit = None;
     let mut operand: Option<String> = None;
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
@@ -49,6 +61,19 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
                 vault = Some(PathBuf::from(
                     parser.value().map_err(|e| usage(e.to_string()))?,
                 ));
+            }
+            Long("limit") if sub == "search" => {
+                let value = parser.value().map_err(|e| usage(e.to_string()))?;
+                let value = value.to_string_lossy();
+                limit = Some(
+                    value
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| {
+                            usage(format!("--limit needs a positive number, got `{value}`"))
+                        })?,
+                );
             }
             Value(value) if operand.is_none() => {
                 operand = Some(value.to_string_lossy().into_owned());
@@ -62,14 +87,21 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
             .ok_or_else(|| usage(format!("`lorectl mem {sub}` needs a {name}")))
     };
     let parsed = match sub {
-        "init" if operand.is_some() => {
+        "init" | "reindex" if operand.is_some() => {
             return Err(usage(format!("`lorectl mem {sub}` takes no argument")))
         }
         "init" => Sub::Init,
+        "reindex" => Sub::Reindex,
         "add" => Sub::Add(needs("FILE")?),
+        "show" => Sub::Show(needs("NOTE")?),
+        "search" => Sub::Search(needs("QUERY")?),
         other => return Err(usage(format!("unknown mem subcommand `{other}`"))),
     };
-    Ok(MemArgs { sub: parsed, vault })
+    Ok(MemArgs {
+        sub: parsed,
+        vault,
+        limit: limit.unwrap_or(DEFAULT_LIMIT),
+    })
 }
 
 /// Run `lorectl mem`.
@@ -96,6 +128,51 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
                 Added::Unchanged => "unchanged",
             };
             let _ = writeln!(out, "{verb} {} {}", note.rel_path(), note.id.as_str());
+        }
+        Sub::Show(key) => {
+            let vault = Vault::open(&dir)?;
+            let text = vault.read(&vault.find(&key)?)?;
+            let _ = out.write_all(text.as_bytes());
+        }
+        Sub::Search(query) => {
+            let vault = Vault::open(&dir)?;
+            let hits = vault.search(&query, args.limit)?;
+            if hits.is_empty() {
+                eprintln!("lorectl: no notes match `{query}`");
+            }
+            let width = hits.iter().map(|h| h.slug.len()).max().unwrap_or(0);
+            let scope_width = hits.iter().map(|h| h.scope.len()).max().unwrap_or(0);
+            for hit in hits {
+                let _ = writeln!(
+                    out,
+                    "{:<width$}  {:<scope_width$}  {}",
+                    hit.slug, hit.scope, hit.excerpt
+                );
+            }
+        }
+        Sub::Reindex => {
+            let vault = Vault::open(&dir)?;
+            let report = vault.reindex()?;
+            for (rel, error) in &report.skipped {
+                eprintln!("lorectl: skipped {rel}: {error}");
+            }
+            for duplicate in &report.duplicates {
+                eprintln!(
+                    "lorectl: id {} is in more than one note: {}",
+                    duplicate.id.as_str(),
+                    duplicate.paths.join(", ")
+                );
+            }
+            let _ = writeln!(
+                out,
+                "indexed {} notes, skipped {} files",
+                report.indexed,
+                report.skipped.len()
+            );
+            if !report.duplicates.is_empty() {
+                eprintln!("  give all but one of them a new id, then run `lorectl mem reindex`");
+                return Ok(exit::NOTE_REFUSED);
+            }
         }
     }
     Ok(exit::OK)
@@ -124,9 +201,12 @@ mod tests {
     #[test]
     fn every_subcommand_parses() {
         assert_eq!(args("init", &[]).unwrap().sub, Sub::Init);
-        let add = args("add", &["n.md", "--vault", "/v"]).unwrap();
-        assert_eq!(add.sub, Sub::Add("n.md".into()));
-        assert_eq!(add.vault, Some(PathBuf::from("/v")));
+        assert_eq!(args("reindex", &[]).unwrap().sub, Sub::Reindex);
+        assert_eq!(args("add", &["n.md"]).unwrap().sub, Sub::Add("n.md".into()));
+        assert_eq!(args("show", &["x"]).unwrap().sub, Sub::Show("x".into()));
+        let search = args("search", &["two words", "--limit", "3", "--vault", "/v"]).unwrap();
+        assert_eq!(search.sub, Sub::Search("two words".into()));
+        assert_eq!((search.limit, search.vault), (3, Some(PathBuf::from("/v"))));
     }
 
     #[test]
@@ -135,6 +215,9 @@ mod tests {
             ("frob", &[][..]),
             ("add", &[][..]),
             ("init", &["x"][..]),
+            ("search", &["q", "extra"][..]),
+            ("search", &["q", "--limit", "0"][..]),
+            ("show", &["x", "--limit", "3"][..]),
             ("add", &["x", "--wat"][..]),
         ] {
             let error = args(sub, rest).unwrap_err();
