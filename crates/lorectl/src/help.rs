@@ -72,7 +72,9 @@ Skills:
 Environment:
     LORE_ARCHIVE_DIR  Archive directory (absolute) used when --archive is
                       absent. Otherwise the platform data directory is used.
-    HOME              Home root `skills` scans.
+    HOME              Home root `skills` scans (~/.agents, ~/.cursor).
+    CLAUDE_CONFIG_DIR Claude Code's folder for `skills`; else ~/.claude.
+    CODEX_HOME        Codex's folder for `skills`; else ~/.codex.
 
 Exit codes:
     {ok}  ok

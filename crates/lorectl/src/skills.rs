@@ -30,15 +30,20 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     Ok(exit::OK)
 }
 
-/// The home root to scan, from `HOME`. From the environment, so a test or a
-/// live lane can point it at a fixture without a flag that would exist only
-/// for them.
+/// The roots to scan: `HOME`, with Claude Code's and Codex's folders moved by
+/// `CLAUDE_CONFIG_DIR` and `CODEX_HOME` the way the session adapters move
+/// them. From the environment, so a test or a live lane can point them at a
+/// fixture without a flag that would exist only for them.
 fn roots() -> Result<Roots, CliError> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .ok_or_else(|| CliError::Usage("HOME must be set to an absolute path".into()))?;
-    Ok(Roots::from_home(&home))
+    Ok(Roots::resolve(
+        &home,
+        std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from),
+        std::env::var_os("CODEX_HOME").map(PathBuf::from),
+    ))
 }
 
 fn distinct_names(inventory: &Inventory) -> usize {
