@@ -500,3 +500,27 @@ fn an_update_converges_when_its_decision_line_is_lost() {
     assert_eq!(subjects(dir.path()).len(), 3);
     assert_eq!(decision_lines(dir.path(), P2), 1);
 }
+
+#[test]
+fn an_update_is_not_applied_again_after_a_lost_decision_and_a_retire() {
+    let (dir, vault) = new_vault();
+    let (target, _) = vault.add(TARGET).unwrap();
+    inbox::propose(&vault, update_of(&target)).unwrap();
+    let first = review::accept(&vault, P2, None).unwrap();
+    lose_decisions(dir.path());
+    review::retire(&vault, &first.rel, "superseded").unwrap();
+    let retired = vault.read(&first.rel).unwrap();
+    let again = review::accept(&vault, P2, None).unwrap();
+    assert_eq!((again.outcome, again.updated), (Added::Unchanged, true));
+    assert_eq!(vault.read(&first.rel).unwrap(), retired);
+    assert_eq!(
+        subjects(dir.path()),
+        [
+            "mem: retire worktrees-share-refs",
+            "mem: update worktrees-share-refs",
+            "mem: add worktrees-share-refs",
+            "mem: init vault"
+        ]
+    );
+    assert_eq!(decision_lines(dir.path(), P2), 1);
+}

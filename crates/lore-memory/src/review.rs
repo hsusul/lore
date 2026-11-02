@@ -278,7 +278,7 @@ fn update_locked(
     let text = vault.read(&rel)?;
     let note = if vault.is_committed(&rel)? {
         let current = Note::parse(&text).map_err(VaultError::from)?;
-        if last_commit_names(vault, &rel, &proposal.id)? {
+        if history_names(vault, &rel, &proposal.id)? {
             let accepted = Accepted {
                 rel,
                 id: current.id.clone(),
@@ -324,11 +324,13 @@ fn commit(vault: &Vault, rel: &str, message: &str) -> Result<(), VaultError> {
     Ok(())
 }
 
-/// Whether the newest commit that touched `rel` came from proposal `id`.
-fn last_commit_names(vault: &Vault, rel: &str, id: &NoteId) -> Result<bool, VaultError> {
-    let body = vault.git(&["log", "-1", "--format=%B", "--", rel])?;
+/// Whether any commit that touched `rel` came from proposal `id`. Not only the
+/// newest: a retire or a later update may have landed after it.
+fn history_names(vault: &Vault, rel: &str, id: &NoteId) -> Result<bool, VaultError> {
     let trailer = format!("Lore-Proposal: {}", id.as_str());
-    Ok(body.lines().any(|line| line == trailer))
+    let grep = format!("--grep={trailer}");
+    let bodies = vault.git(&["log", "-F", &grep, "--format=%B", "--", rel])?;
+    Ok(bodies.lines().any(|line| line == trailer))
 }
 
 /// The committed text of `rel`, or `None` when it was never committed.
