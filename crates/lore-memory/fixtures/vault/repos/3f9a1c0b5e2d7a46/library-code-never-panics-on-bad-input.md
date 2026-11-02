@@ -2,7 +2,7 @@
 id: 01JC9V6Q4M8K2T7X3N5R0B1H03
 type: convention
 title: Library code never panics on bad input
-scope: repo:3f9a1c0b
+scope: repo:3f9a1c0b5e2d7a46
 status: active
 anchors:
   - path: Cargo.toml

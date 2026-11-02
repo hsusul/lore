@@ -159,7 +159,7 @@ fn index_sees_an_added_note_without_a_reindex() {
 #[test]
 fn index_find_resolves_ids_slugs_and_paths() {
     let (_dir, vault) = fixture_vault();
-    let rel = "repos/3f9a1c0b/reference-id-panics-on-symbolic-refs.md";
+    let rel = "repos/3f9a1c0b5e2d7a46/reference-id-panics-on-symbolic-refs.md";
     assert_eq!(vault.find("01JC9V6Q4M8K2T7X3N5R0B1H17").unwrap(), rel);
     assert_eq!(
         vault.find("reference-id-panics-on-symbolic-refs").unwrap(),
@@ -190,16 +190,17 @@ fn index_slug_is_the_file_name_so_a_renamed_file_is_found_by_it() {
     let (dir, vault) = fixture_vault();
     let old = dir
         .path()
-        .join("repos/3f9a1c0b/reference-id-panics-on-symbolic-refs.md");
+        .join("repos/3f9a1c0b5e2d7a46/reference-id-panics-on-symbolic-refs.md");
     std::fs::rename(
         &old,
-        dir.path().join("repos/3f9a1c0b/peel-symbolic-refs.md"),
+        dir.path()
+            .join("repos/3f9a1c0b5e2d7a46/peel-symbolic-refs.md"),
     )
     .unwrap();
     vault.reindex().unwrap();
     assert_eq!(
         vault.find("peel-symbolic-refs").unwrap(),
-        "repos/3f9a1c0b/peel-symbolic-refs.md"
+        "repos/3f9a1c0b5e2d7a46/peel-symbolic-refs.md"
     );
     assert_eq!(top3(&vault, "Reference::id")[0], "peel-symbolic-refs");
 }
@@ -212,6 +213,6 @@ fn index_search_treats_punctuation_as_text() {
     }
     let hits = vault.search("Reference::id", 5).unwrap();
     assert_eq!(hits[0].slug, "reference-id-panics-on-symbolic-refs");
-    assert_eq!(hits[0].scope, "repo:3f9a1c0b");
+    assert_eq!(hits[0].scope, "repo:3f9a1c0b5e2d7a46");
     assert!(!hits[0].excerpt.contains('\n'));
 }

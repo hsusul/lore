@@ -12,9 +12,6 @@ use std::path::{Path, PathBuf};
 
 use crate::note::{RepoKey, RepoName};
 
-/// Hex characters of the remote hash kept in a [`RepoKey`].
-const KEY_LEN: usize = 16;
-
 /// What a directory is, as far as note scope is concerned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoContext {
@@ -95,5 +92,5 @@ impl RepoContext {
 pub fn repo_key(remote_url: &str) -> Option<RepoKey> {
     let normalized = lore_core::git::normalize_remote_url(remote_url)?;
     let hex = blake3::hash(normalized.as_bytes()).to_hex();
-    RepoKey::parse(&hex[..KEY_LEN]).ok()
+    RepoKey::parse(&hex[..RepoKey::LEN]).ok()
 }
