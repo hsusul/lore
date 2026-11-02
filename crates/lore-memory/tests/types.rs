@@ -80,6 +80,7 @@ fn types_a_note_holds_anchors_relations_and_sources() {
         created: NoteDate::parse("2026-11-01").unwrap(),
         forget_after: None,
         body: String::new(),
+        extra: Default::default(),
     };
     assert_eq!(
         note.anchors[0].hash.as_ref().unwrap().as_str(),
