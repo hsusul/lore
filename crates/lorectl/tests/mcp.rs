@@ -1294,3 +1294,181 @@ fn two_servers_proposing_at_once_write_two_whole_files() {
     }
     assert_eq!(git_status(&vault), "");
 }
+
+/// Scan the one Claude Code session from [`plant_session`] into
+/// `<home>/archive`, where [`session`] points the server. Returns its archive id.
+/// Reading the id opens the archive read-only, which leaves the WAL sidecars a
+/// server read would, so a later [`snapshot`] compares every byte after that.
+fn archive_in(home: &Path) -> String {
+    let homes = common::empty_homes();
+    plant_session(homes.path(), 1);
+    let archive = home.join("archive");
+    let out = lorectl(&archive, homes.path(), &["scan"]);
+    assert_eq!(out.status.code(), Some(0), "seeding scan failed");
+    only_session_id(&archive)
+}
+
+/// Every file under `dir`, with its bytes, sorted by path.
+fn snapshot(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                files.push((path, bytes));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+fn global_note(session_id: &str) -> Value {
+    json!({
+        "title": "T", "body": "B", "type": "fact", "scope": "global",
+        "session_id": session_id,
+    })
+}
+
+#[test]
+fn propose_memory_verifies_a_session_of_the_calling_agent() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let archive_id = archive_in(home.path());
+    let before = snapshot(&home.path().join("archive"));
+    assert!(archive_id.starts_with("s_"), "{archive_id}");
+    for given in [SESSION_UUID, archive_id.as_str()] {
+        let replies = session(
+            home.path(),
+            &vault,
+            &[],
+            Some("claude-code"),
+            &[propose(1, global_note(given))],
+        );
+        let reply = structured(&replies[0]);
+        let id = reply["proposal_id"].as_str().unwrap();
+        assert_eq!(
+            reply,
+            &json!({
+                "proposal_id": id,
+                "inbox": format!("_inbox/claude-code-{archive_id}.jsonl"),
+                "session": archive_id,
+                "source_verified": true,
+            }),
+            "{given}"
+        );
+    }
+    let file = format!("claude-code-{archive_id}.jsonl");
+    assert_eq!(inbox_files(&vault), vec![file.clone()]);
+    let text = std::fs::read_to_string(vault.join("_inbox").join(file)).unwrap();
+    let sessions: Vec<Value> = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap()["session"].clone())
+        .collect();
+    assert_eq!(sessions, vec![json!(archive_id), json!(archive_id)]);
+    assert_eq!(
+        snapshot(&home.path().join("archive")),
+        before,
+        "archive unchanged"
+    );
+}
+
+#[test]
+fn propose_memory_refuses_a_session_of_another_agent_and_writes_nothing() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    archive_in(home.path());
+    let before = snapshot(&home.path().join("archive"));
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("codex"),
+        &[propose(1, global_note(SESSION_UUID))],
+    );
+    assert_eq!(replies[0]["result"]["isError"], true);
+    assert_eq!(
+        replies[0]["result"]["structuredContent"],
+        json!({
+            "code": "session_mismatch",
+            "message": format!("session `{SESSION_UUID}` was recorded by claude-code"),
+            "fix": "That session belongs to another agent. Omit session_id.",
+        })
+    );
+    assert_eq!(inbox_files(&vault), Vec::<String>::new());
+    assert_eq!(git_status(&vault), "");
+    assert_eq!(
+        snapshot(&home.path().join("archive")),
+        before,
+        "archive unchanged"
+    );
+}
+
+#[test]
+fn propose_memory_stores_an_unknown_session_as_given_and_unverified() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    archive_in(home.path());
+    let before = snapshot(&home.path().join("archive"));
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[propose(1, global_note("Not-Archived-1"))],
+    );
+    let reply = structured(&replies[0]);
+    assert_eq!(
+        reply,
+        &json!({
+            "proposal_id": reply["proposal_id"].as_str().unwrap(),
+            "inbox": "_inbox/claude-code-not-archived-1.jsonl",
+            "session": "Not-Archived-1",
+            "source_verified": false,
+        })
+    );
+    assert_eq!(
+        inbox_files(&vault),
+        vec!["claude-code-not-archived-1.jsonl"]
+    );
+    assert_eq!(
+        snapshot(&home.path().join("archive")),
+        before,
+        "archive unchanged"
+    );
+}
+
+#[test]
+fn propose_memory_without_an_archive_stores_the_session_unverified() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[propose(1, global_note(SESSION_UUID))],
+    );
+    let reply = structured(&replies[0]);
+    assert_eq!(
+        reply,
+        &json!({
+            "proposal_id": reply["proposal_id"].as_str().unwrap(),
+            "inbox": format!("_inbox/claude-code-{SESSION_UUID}.jsonl"),
+            "session": SESSION_UUID,
+            "source_verified": false,
+        })
+    );
+    assert_eq!(
+        inbox_files(&vault),
+        vec![format!("claude-code-{SESSION_UUID}.jsonl")]
+    );
+    assert!(
+        !home.path().join("archive").exists(),
+        "the server created an archive"
+    );
+}
