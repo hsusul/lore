@@ -180,6 +180,24 @@ fn vault_concurrent_adds_all_land_and_fsck_is_clean() {
     assert!(git(&root, &["status", "--porcelain"]).is_empty());
 }
 
+const ID: &str = "01JC9V6Q4M8K2T7X3N5R0B1H6D";
+
+#[test]
+fn vault_reindex_reports_duplicate_ids_with_both_paths_and_indexes_the_rest() {
+    let (dir, vault) = new_vault();
+    vault.add(NOTE).unwrap();
+    let text = |title: &str| {
+        format!("---\nid: {ID}\ntype: fact\ntitle: {title}\nscope: global\nstatus: active\ncreated: 2026-11-01\n---\nB.\n")
+    };
+    std::fs::write(dir.path().join("global/a.md"), text("A")).unwrap();
+    std::fs::write(dir.path().join("global/b.md"), text("B")).unwrap();
+    let report = vault.reindex().unwrap();
+    assert_eq!(report.indexed, 3);
+    assert_eq!(report.duplicates.len(), 1);
+    assert_eq!(report.duplicates[0].id.as_str(), ID);
+    assert_eq!(report.duplicates[0].paths, ["global/a.md", "global/b.md"]);
+}
+
 /// Hooks and signing configured in the vault's own git config, the way a
 /// person's global config would carry them. Either one would block or fail a
 /// commit if Lore inherited it.
