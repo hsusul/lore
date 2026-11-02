@@ -54,7 +54,7 @@ fn propose(vault: &Path, session: &str, title: &str) -> String {
             "--title",
             title,
             "--scope",
-            "repo:3f9a1c0b",
+            "repo:3f9a1c0b01234567",
             "--anchor",
             "src/main.rs:4-8",
         ],
@@ -74,23 +74,26 @@ fn mem_propose_then_accept_writes_one_note() {
     let listed = ok(&lorectl(&vault, &["inbox"], ""));
     assert_eq!(
         listed,
-        format!("{id}  codex:s1  howto  repo:3f9a1c0b  Prune worktrees\n")
+        format!("{id}  codex:s1  howto  repo:3f9a1c0b01234567  Prune worktrees\n")
     );
     let json = ok(&lorectl(&vault, &["inbox", "--json"], ""));
     let items: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(items[0]["anchors"][0]["lines"], "4-8");
 
     let accepted = ok(&lorectl(&vault, &["accept", &id], ""));
-    assert!(accepted.starts_with("accepted repos/3f9a1c0b/prune-worktrees.md "));
+    assert!(accepted.starts_with("accepted repos/3f9a1c0b01234567/prune-worktrees.md "));
     let again = ok(&lorectl(&vault, &["accept", &id], ""));
-    assert!(again.starts_with("unchanged repos/3f9a1c0b/prune-worktrees.md "));
+    assert!(again.starts_with("unchanged repos/3f9a1c0b01234567/prune-worktrees.md "));
     assert_eq!(ok(&lorectl(&vault, &["inbox"], "")), "");
     let retired = ok(&lorectl(
         &vault,
         &["retire", "prune-worktrees", "--reason", "git does it now"],
         "",
     ));
-    assert_eq!(retired, "retired repos/3f9a1c0b/prune-worktrees.md\n");
+    assert_eq!(
+        retired,
+        "retired repos/3f9a1c0b01234567/prune-worktrees.md\n"
+    );
     let shown = ok(&lorectl(&vault, &["show", "prune-worktrees"], ""));
     assert!(shown.contains("status: retired\n"));
 }
@@ -106,7 +109,7 @@ fn mem_reject_and_refusals_have_exit_codes() {
         format!("rejected {id}\n")
     );
     let accept = lorectl(&vault, &["accept", &id], "");
-    assert_eq!(accept.status.code(), Some(2));
+    assert_eq!(accept.status.code(), Some(7));
     let missing = lorectl(&vault, &["accept", "01JC9V6Q4M8K2T7X3N5R0B1H6D"], "");
     assert_eq!(missing.status.code(), Some(1));
     let empty = lorectl(
@@ -124,7 +127,7 @@ fn mem_reject_and_refusals_have_exit_codes() {
         ],
         "",
     );
-    assert_eq!(empty.status.code(), Some(2));
+    assert_eq!(empty.status.code(), Some(7));
     let no_reason = lorectl(&vault, &["reject", &id], "");
     assert_eq!(no_reason.status.code(), Some(1));
 }
