@@ -31,7 +31,11 @@ use crate::storage::{Result, StorageError};
 /// so sources ingested at v2 must be parsed again — without this bump the
 /// landing feature can never turn on for an existing archive, because
 /// unchanged v2 sources are skipped.
-pub const PARSER_VERSION: &str = "3";
+///
+/// v4: a Claude subagent or resumed transcript gets its own session id, so
+/// sources whose rows replaced another transcript's session at v3 must be
+/// parsed again.
+pub const PARSER_VERSION: &str = "4";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
