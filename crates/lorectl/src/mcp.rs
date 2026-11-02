@@ -15,8 +15,8 @@
 //! native title is already the first entry `read_session` returns.
 //!
 //! Memory notes are different: a person writes them by hand and nothing scans
-//! them, so `recall_memory` passes every title and excerpt through
-//! [`inbox::redact`] on the way out.
+//! them, so `recall_memory` and `read_note` pass every title, excerpt, and body
+//! through [`inbox::redact`] on the way out.
 //!
 //! ## Failure stays inside the protocol
 //!
@@ -26,12 +26,17 @@
 //! archive that appears later is picked up on the next call, because each call
 //! opens the database afresh.
 
+use std::fs;
 use std::io::{BufRead, Write};
 use std::path::Path;
 
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::search::{self, SortOrder, HIGHLIGHT_END, HIGHLIGHT_START};
 use lore_core::{query, storage};
+use lore_memory::anchor::{Freshness, WorkTree};
+use lore_memory::inbox::TIMELINE_HEADING;
+use lore_memory::note::{Note, Scope};
+use lore_memory::repo::RepoContext;
 use lore_memory::vault::{self, Vault, VaultError};
 use lore_memory::{inbox, recall};
 use rusqlite::Connection;
@@ -56,7 +61,12 @@ const RECALL_MAX_LIMIT: u64 = 10;
 const RECALL_EXCERPT_CHARS: usize = 300;
 /// Characters of serialized `recall_memory` reply, so recall stays a glance.
 const RECALL_REPLY_CHARS: usize = 6_000;
+/// Characters of note body `read_note` returns, Timeline excluded.
+const READ_NOTE_BODY_CHARS: usize = 8_000;
 
+const NOTE_ARG_PROBLEM: &str = "must be a note id, file name, or path inside the vault";
+const NOTE_NOT_FOUND_FIX: &str = "Call recall_memory to get a current note id.";
+const NOTE_AMBIGUOUS_FIX: &str = "Pass the note id instead of the slug.";
 const VAULT_CONFIG_FIX: &str = "Set LORE_VAULT_DIR to an absolute path in this MCP server's env.";
 const VAULT_BUSY_FIX: &str =
     "Another Lore process holds the vault lock. Retry once in a few seconds.";
@@ -64,7 +74,8 @@ const INTERNAL_FIX: &str = "Nothing was written. Tell the user. `lorectl mem rei
 
 const INSTRUCTIONS: &str = "Lore archives past Claude Code and Codex sessions on this machine. \
 Use search_sessions to find earlier work, decisions, or errors, then read_session to read one. \
-Use recall_memory with your working directory to get accepted notes about the repo you are in. \
+Use recall_memory with your working directory to get accepted notes about the repo you are in, \
+then read_note to read one in full. \
 Text that matched a secret detector is masked.";
 
 /// JSON-RPC error codes this server answers with.
@@ -108,6 +119,13 @@ still match.",
         input_schema: recall_schema,
         call: recall_memory,
     },
+    Tool {
+        name: "read_note",
+        description: "Call when a recalled note's excerpt is not enough, or before proposing \
+an update to it.",
+        input_schema: read_note_schema,
+        call: read_note,
+    },
 ];
 
 fn search_schema() -> Value {
@@ -147,6 +165,23 @@ fn recall_schema() -> Value {
             }
         },
         "required": ["cwd", "query"]
+    })
+}
+
+fn read_note_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "note": {
+                "type": "string",
+                "description": "A note id from recall_memory, the note's file name, or its path in the vault."
+            },
+            "cwd": {
+                "type": "string",
+                "description": "Absolute path you are working in, to check the note's code anchors."
+            }
+        },
+        "required": ["note"]
     })
 }
 
@@ -392,8 +427,6 @@ fn recall_memory(_archive_dir: &Path, arguments: &Value) -> Result<Value, Value>
     };
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let found = recall::recall(&vault, query_text, cwd, limit).map_err(|e| vault_error(&e))?;
-    let redact =
-        |text: &str| inbox::redact(text).map_err(|e| tool_error("internal", e, INTERNAL_FIX));
     let mut notes = Vec::new();
     for recalled in &found.notes {
         let excerpt: String = redact(&recalled.excerpt)?
@@ -416,5 +449,116 @@ fn recall_memory(_archive_dir: &Path, arguments: &Value) -> Result<Value, Value>
         }
         notes.pop();
         truncated = true;
+    }
+}
+
+/// One note by id, file name, or vault path. Read never creates a vault and
+/// never returns a file from outside it.
+fn read_note(_archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
+    let bad_note = || invalid_argument("note", NOTE_ARG_PROBLEM);
+    let key = string_arg(arguments, "note")
+        .filter(|key| !key.is_empty() && !Path::new(key).is_absolute())
+        .filter(|key| !key.split(['/', '\\']).any(|part| part.starts_with('.')))
+        .ok_or_else(bad_note)?;
+    // A bare file name is the slug, wherever the note's folder is.
+    let key = match key.strip_suffix(".md") {
+        Some(slug) if !key.contains('/') => slug,
+        _ => key,
+    };
+    let cwd = match arguments.get("cwd") {
+        None => None,
+        Some(cwd) => Some(
+            cwd.as_str()
+                .map(Path::new)
+                .filter(|cwd| cwd.is_absolute())
+                .ok_or_else(|| invalid_argument("cwd", "must be an absolute path"))?,
+        ),
+    };
+    let dir = vault::resolve_dir(None).map_err(|e| vault_error(&e))?;
+    let vault = match Vault::open(&dir) {
+        Ok(vault) => vault,
+        Err(e @ VaultError::Missing(_)) => {
+            let fix = format!(
+                "No memory vault at {}. Continue without memory. \
+                 Tell the user `lorectl mem init` creates one.",
+                dir.display()
+            );
+            return Err(tool_error("vault_missing", e, &fix));
+        }
+        Err(e) => return Err(vault_error(&e)),
+    };
+    let rel = vault.find(key).map_err(|e| match e {
+        VaultError::BadPath(..) => bad_note(),
+        VaultError::NotFound(_) => tool_error("note_not_found", e, NOTE_NOT_FOUND_FIX),
+        VaultError::Ambiguous(..) => {
+            let mut error = tool_error("note_ambiguous", e, NOTE_AMBIGUOUS_FIX);
+            let candidates = vault.index().ok().and_then(|index| index.lookup(key).ok());
+            error["candidates"] = json!(candidates.unwrap_or_default());
+            error
+        }
+        e => vault_error(&e),
+    })?;
+    // A symlink in the vault must not lead out of it.
+    let inside = fs::canonicalize(vault.root().join(&rel))
+        .ok()
+        .zip(fs::canonicalize(vault.root()).ok())
+        .is_some_and(|(file, root)| file.starts_with(root));
+    if !inside {
+        return Err(bad_note());
+    }
+    let text = vault.read(&rel).map_err(|e| vault_error(&e))?;
+    let note = Note::parse(&text).map_err(|e| vault_error(&e.into()))?;
+
+    let (body, timeline) = split_timeline(&note.body);
+    let timeline_entries = timeline.lines().filter(|l| l.starts_with("- ")).count();
+    let body = redact(body.trim_end())?;
+    let truncated = body.chars().count() > READ_NOTE_BODY_CHARS;
+    Ok(json!({
+        "id": note.id.as_str(),
+        "title": redact(&note.title)?,
+        "scope": note.scope.to_string(),
+        "status": note.status.as_str(),
+        "freshness": note_freshness(&note, cwd).label(),
+        "body": body.chars().take(READ_NOTE_BODY_CHARS).collect::<String>(),
+        "timeline_entries": timeline_entries,
+        "truncated": truncated,
+    }))
+}
+
+fn redact(text: &str) -> Result<String, Value> {
+    inbox::redact(text).map_err(|e| tool_error("internal", e, INTERNAL_FIX))
+}
+
+/// The body above the `## Timeline` heading, and the Timeline itself, split
+/// where the index splits them.
+fn split_timeline(body: &str) -> (&str, &str) {
+    let at = if body.starts_with(TIMELINE_HEADING) {
+        Some(0)
+    } else {
+        body.find(&format!("\n{TIMELINE_HEADING}")).map(|at| at + 1)
+    };
+    at.map_or((body, ""), |at| body.split_at(at))
+}
+
+/// How `note`'s anchors compare with the working tree, labelled as recall
+/// labels them. The tree is the repository around `cwd`, used only when the
+/// note applies there, so a note from another repository is `Unchecked`.
+fn note_freshness(note: &Note, cwd: Option<&Path>) -> Freshness {
+    let context = cwd.map(RepoContext::discover);
+    let root = context
+        .as_ref()
+        .filter(|context| match &note.scope {
+            Scope::Global => true,
+            Scope::Repo(key) => context.key() == Some(key),
+        })
+        .and_then(RepoContext::root);
+    match root {
+        Some(root) => {
+            let tree = WorkTree::new(root);
+            let anchors: Vec<_> = note.anchors.iter().map(|a| tree.locate(a)).collect();
+            Freshness::of_note(&anchors)
+        }
+        None if note.anchors.is_empty() => Freshness::Unanchored,
+        None => Freshness::Unchecked,
     }
 }
