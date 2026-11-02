@@ -2877,6 +2877,10 @@ dependencies = [
 [[package]]
 name = "lore-memory"
 version = "0.0.0"
+dependencies = [
+ "thiserror 1.0.69",
+ "time",
+]
 
 [[package]]
 name = "lorectl"

@@ -11,3 +11,8 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# Calendar validation for `created` and `forget_after`. Already in the graph.
+time = "0.3"
+thiserror = "1"
