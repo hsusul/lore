@@ -4,3 +4,4 @@
 //! `scripts/egress-check.sh`).
 
 pub mod note;
+pub mod vault;
