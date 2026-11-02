@@ -124,3 +124,17 @@ fn a_filed_session_keeps_its_folder_across_reingest_and_a_parser_bump() {
     assert_eq!(kept_added_at, added_at);
     assert!(archive.path().exists());
 }
+
+#[test]
+fn a_forgotten_session_stays_gone_after_a_parser_bump() {
+    let archive = Archive::new();
+    let session = archive.session_id().unwrap();
+    lore_core::forget::forget_session(&archive.conn, &archive.blobs, &session).unwrap();
+    assert!(archive.path().exists(), "forget never deletes the agent log");
+
+    archive.age_parser_version();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None, "a forgotten session came back");
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None);
+}
