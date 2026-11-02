@@ -227,14 +227,21 @@ pub fn run(sub: &str, rest: &[String], json: bool, usage_text: &str) -> Result<u
                 let _ = writeln!(out, "{}", Value::Array(items));
             } else {
                 for p in &pending.proposals {
+                    // An update keeps its target's title, so name the target.
+                    let what = match &p.relation {
+                        Some(Relation::Updates(target)) => match vault.find(target.as_str()) {
+                            Ok(rel) => format!("updates -> {rel}"),
+                            Err(_) => format!("updates -> {} (not found)", target.as_str()),
+                        },
+                        _ => p.title.clone(),
+                    };
                     let _ = writeln!(
                         out,
-                        "{}  {}  {}  {}  {}",
+                        "{}  {}  {}  {}  {what}",
                         p.id.as_str(),
                         p.source(),
                         p.note_type.as_str(),
                         p.scope,
-                        p.title
                     );
                 }
             }

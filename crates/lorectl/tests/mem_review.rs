@@ -190,6 +190,8 @@ fn mem_accept_refuses_a_hand_edited_target_with_exit_7() {
             "fact",
             "--title",
             "Update",
+            "--scope",
+            "repo:3f9a1c0b01234567",
             "--updates",
             note_id,
         ],
@@ -204,6 +206,64 @@ fn mem_accept_refuses_a_hand_edited_target_with_exit_7() {
         String::from_utf8_lossy(&refused.stderr)
     );
     assert_eq!(std::fs::read_to_string(path).unwrap(), edited);
+}
+
+fn propose_update(vault: &Path, session: &str, scope: &str, target: &str) -> String {
+    let out = ok(&lorectl(
+        vault,
+        &[
+            "propose",
+            "--agent",
+            "codex",
+            "--session",
+            session,
+            "--type",
+            "fact",
+            "--title",
+            "Unused on update",
+            "--scope",
+            scope,
+            "--updates",
+            target,
+        ],
+        "New statement.\n",
+    ));
+    out.split_whitespace().nth(1).unwrap().to_string()
+}
+
+#[test]
+fn mem_inbox_names_an_update_target_and_accept_refuses_another_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    ok(&lorectl(&vault, &["init"], ""));
+    let id = propose(&vault, "s1", "Prune worktrees");
+    let accepted = ok(&lorectl(&vault, &["accept", &id], ""));
+    let note_id = accepted.split_whitespace().nth(2).unwrap();
+    let same = propose_update(&vault, "s2", "repo:3f9a1c0b01234567", note_id);
+    let global = propose_update(&vault, "s3", "global", note_id);
+    let listed = ok(&lorectl(&vault, &["inbox"], ""));
+    let target = "updates -> repos/3f9a1c0b01234567/prune-worktrees.md";
+    assert!(
+        listed.contains(&format!(
+            "{same}  codex:s2  fact  repo:3f9a1c0b01234567  {target}\n"
+        )),
+        "{listed}"
+    );
+    assert!(
+        listed.contains(&format!("{global}  codex:s3  fact  global  {target}\n")),
+        "{listed}"
+    );
+    let before = head(&vault);
+    let refused = lorectl(&vault, &["accept", &global], "");
+    assert_eq!(
+        refused.status.code(),
+        Some(7),
+        "{}",
+        String::from_utf8_lossy(&refused.stdout)
+    );
+    assert_eq!(head(&vault), before);
+    let done = ok(&lorectl(&vault, &["accept", &same], ""));
+    assert!(done.starts_with("updated repos/3f9a1c0b01234567/prune-worktrees.md "));
 }
 
 fn head(vault: &Path) -> String {

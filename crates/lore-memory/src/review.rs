@@ -311,9 +311,20 @@ fn update_locked(
     rel: String,
     today: NoteDate,
 ) -> Result<(Accepted, Note), ReviewError> {
+    let same_scope = |target: &Note| {
+        if target.scope == proposal.scope {
+            Ok(())
+        } else {
+            Err(InboxError::Field {
+                field: "scope".into(),
+                problem: format!("the target {rel} is in scope {}", target.scope),
+            })
+        }
+    };
     let text = vault.read(&rel)?;
     let note = if vault.is_committed(&rel)? {
         let current = Note::parse(&text).map_err(VaultError::from)?;
+        same_scope(&current)?;
         if history_names(vault, &rel, &proposal.id)? {
             let accepted = Accepted {
                 rel,
@@ -329,6 +340,7 @@ fn update_locked(
     } else {
         let head = committed_text(vault, &rel)?.ok_or_else(|| ReviewError::Dirty(rel.clone()))?;
         let base = Note::parse(&head).map_err(|_| ReviewError::Dirty(rel.clone()))?;
+        same_scope(&base)?;
         let note = apply_update(base, proposal, last_timeline_date(&text, today));
         if note.render() != text {
             return Err(ReviewError::Dirty(rel));
