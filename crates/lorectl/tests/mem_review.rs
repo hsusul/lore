@@ -131,3 +131,77 @@ fn mem_reject_and_refusals_have_exit_codes() {
     let no_reason = lorectl(&vault, &["reject", &id], "");
     assert_eq!(no_reason.status.code(), Some(1));
 }
+
+#[test]
+fn mem_propose_refuses_noncanonical_repo_keys_with_exit_7() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    ok(&lorectl(&vault, &["init"], ""));
+    for key in ["3f9a1c0b", "3F9A1C0B01234567", "3f9a1c0b012345678"] {
+        let out = lorectl(
+            &vault,
+            &[
+                "propose",
+                "--agent",
+                "codex",
+                "--session",
+                "s",
+                "--type",
+                "fact",
+                "--title",
+                "T",
+                "--scope",
+                &format!("repo:{key}"),
+            ],
+            "Statement.\n",
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(7),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!vault.join("_inbox").exists());
+    }
+}
+
+#[test]
+fn mem_accept_refuses_a_hand_edited_target_with_exit_7() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    ok(&lorectl(&vault, &["init"], ""));
+    let id = propose(&vault, "s1", "Prune worktrees");
+    let accepted = ok(&lorectl(&vault, &["accept", &id], ""));
+    let note_id = accepted.split_whitespace().nth(2).unwrap();
+    let path = vault.join("repos/3f9a1c0b01234567/prune-worktrees.md");
+    let edited = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("Run `git worktree prune`.", "My edited statement.");
+    std::fs::write(&path, &edited).unwrap();
+    let out = ok(&lorectl(
+        &vault,
+        &[
+            "propose",
+            "--agent",
+            "codex",
+            "--session",
+            "s2",
+            "--type",
+            "fact",
+            "--title",
+            "Update",
+            "--updates",
+            note_id,
+        ],
+        "New statement.\n",
+    ));
+    let update = out.split_whitespace().nth(1).unwrap();
+    let refused = lorectl(&vault, &["accept", update], "");
+    assert_eq!(
+        refused.status.code(),
+        Some(7),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), edited);
+}
