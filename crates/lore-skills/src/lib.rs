@@ -4,3 +4,8 @@
 //! (`tests/no_network_in_skills.rs`, `scripts/egress-check.sh`).
 
 pub mod frontmatter;
+pub mod locations;
+pub mod model;
+
+pub use locations::Roots;
+pub use model::Agent;

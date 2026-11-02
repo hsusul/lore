@@ -11,3 +11,8 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# Already in the graph via lore-core and lore-ipc, so this crate adds no new
+# dependency to the egress audit (scripts/egress-check.sh).
+serde = { version = "1", features = ["derive"] }
