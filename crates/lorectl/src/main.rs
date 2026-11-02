@@ -18,6 +18,7 @@ mod exit;
 mod help;
 mod hook;
 mod mcp;
+mod mem;
 mod query;
 mod scan;
 mod status;
@@ -60,6 +61,7 @@ fn run() -> Result<u8, CliError> {
         Action::Run(cli::Command::Status) => status::run(&invocation),
         Action::Run(cli::Command::Hook) => hook::run(&invocation),
         Action::Run(cli::Command::Mcp) => mcp::run(&invocation),
+        Action::Run(cli::Command::Mem) => mem::run(&invocation),
         Action::Run(cli::Command::Search) => query::search(&invocation),
         Action::Run(cli::Command::Inspect) => query::inspect(&invocation),
         Action::Run(command) => {

@@ -19,6 +19,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Calendar validation for `created` and `forget_after`. Already in the graph.
 time = "0.3"
 thiserror = "1"
+# The default vault lives under the home directory. Already in the graph.
+dirs = "6"
 
 [dev-dependencies]
 tempfile = "3"
