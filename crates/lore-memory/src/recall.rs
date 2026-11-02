@@ -19,7 +19,7 @@ use std::path::Path;
 
 use crate::anchor::{Freshness, Located, WorkTree};
 use crate::index::has_words;
-use crate::note::{Note, NoteError};
+use crate::note::{Note, NoteError, Scope};
 use crate::repo::RepoContext;
 use crate::vault::{Vault, VaultError};
 
@@ -95,15 +95,7 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
             }
             None => continue,
         };
-        let (anchors, freshness) = match &tree {
-            Some(tree) => {
-                let anchors: Vec<Located> = note.anchors.iter().map(|a| tree.locate(a)).collect();
-                let freshness = Freshness::of_note(&anchors);
-                (anchors, freshness)
-            }
-            None if note.anchors.is_empty() => (Vec::new(), Freshness::Unanchored),
-            None => (Vec::new(), Freshness::Unchecked),
-        };
+        let (anchors, freshness) = check_note(&note, &context, tree.as_ref());
         notes.push(Recalled {
             freshness,
             anchors,
@@ -122,6 +114,30 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
         notes,
         skipped,
     })
+}
+
+/// Each of `note`'s anchors checked against `tree`, the working tree of
+/// `context`, and the worst of them. The tree is used only when the note
+/// applies in `context`, so a note from another repository is `Unchecked`.
+/// Recall and the MCP `read_note` tool both label notes with this.
+pub fn check_note(
+    note: &Note,
+    context: &RepoContext,
+    tree: Option<&WorkTree>,
+) -> (Vec<Located>, Freshness) {
+    let applies = match &note.scope {
+        Scope::Global => true,
+        Scope::Repo(key) => context.key() == Some(key),
+    };
+    match tree.filter(|_| applies) {
+        Some(tree) => {
+            let anchors: Vec<Located> = note.anchors.iter().map(|a| tree.locate(a)).collect();
+            let freshness = Freshness::of_note(&anchors);
+            (anchors, freshness)
+        }
+        None if note.anchors.is_empty() => (Vec::new(), Freshness::Unanchored),
+        None => (Vec::new(), Freshness::Unchecked),
+    }
 }
 
 /// Read and parse one vault file the way `Vault::reindex` does: a file that
