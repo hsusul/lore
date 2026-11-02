@@ -2883,12 +2883,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-skills"
+version = "0.0.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lorectl"
 version = "0.0.0"
 dependencies = [
  "lexopt",
  "lore-core",
  "lore-ipc",
+ "lore-skills",
  "rusqlite",
  "serde_json",
  "tempfile",
