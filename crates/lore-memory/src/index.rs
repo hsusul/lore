@@ -247,6 +247,17 @@ impl Index {
         Ok(paths)
     }
 
+    /// Paths of the notes with this id, sorted.
+    pub fn paths_with_id(&self, id: &str) -> Result<Vec<String>, IndexError> {
+        let mut statement = self
+            .conn
+            .prepare_cached("SELECT path FROM notes WHERE id = ?1 ORDER BY path")?;
+        let paths = statement
+            .query_map(params![id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(paths)
+    }
+
     /// How many notes the index holds.
     pub fn len(&self) -> Result<usize, IndexError> {
         let count: i64 = self
