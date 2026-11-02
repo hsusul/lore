@@ -54,6 +54,10 @@ pub enum VaultError {
     Conflict(String),
     #[error("another Lore process is writing to the vault at {}", .0.display())]
     Busy(PathBuf),
+    #[error("no note matches `{0}`")]
+    NotFound(String),
+    #[error("`{0}` matches more than one note: {1}")]
+    Ambiguous(String, String),
     #[error("{0}: {1}")]
     Io(String, #[source] io::Error),
     #[error("`git {0}` failed: {1}")]
@@ -305,6 +309,26 @@ impl Vault {
     /// Notes matching every word of `query`, best first.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>, VaultError> {
         Ok(self.index()?.search(query, limit)?)
+    }
+
+    /// The vault-relative path of the note named by `key`: a path, an id, or a
+    /// slug that only one note has.
+    pub fn find(&self, key: &str) -> Result<String, VaultError> {
+        if key.contains('/') || key.ends_with(".md") {
+            let rel =
+                RelPath::parse(key).map_err(|e| VaultError::BadPath(key.into(), e.to_string()))?;
+            return if self.root.join(rel.as_str()).is_file() {
+                Ok(rel.as_str().to_string())
+            } else {
+                Err(VaultError::NotFound(key.into()))
+            };
+        }
+        let mut paths = self.index()?.lookup(key)?;
+        match paths.len() {
+            0 => Err(VaultError::NotFound(key.into())),
+            1 => Ok(paths.remove(0)),
+            _ => Err(VaultError::Ambiguous(key.into(), paths.join(", "))),
+        }
     }
 
     /// Read a note file by its vault-relative path.

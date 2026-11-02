@@ -117,6 +117,21 @@ fn index_rebuilt_after_deletion_ranks_the_same() {
 }
 
 #[test]
+fn index_holds_nothing_the_vault_lacks() {
+    let (dir, vault) = fixture_vault();
+    assert_eq!(vault.index().unwrap().len().unwrap(), 21);
+    std::fs::remove_file(dir.path().join("global/remove-a-stale-worktree.md")).unwrap();
+    std::fs::write(dir.path().join("README.md"), "# not a note\n").unwrap();
+    let report = vault.reindex().unwrap();
+    assert_eq!(report.indexed, 20);
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(report.skipped[0].0, "README.md");
+    let index = vault.index().unwrap();
+    assert_eq!(index.len().unwrap(), 20);
+    assert!(index.lookup("remove-a-stale-worktree").unwrap().is_empty());
+}
+
+#[test]
 fn index_finds_a_hand_edit_after_reindex() {
     let (dir, vault) = fixture_vault();
     let path = dir.path().join("global/agents-propose-people-accept.md");
@@ -142,6 +157,20 @@ fn index_sees_an_added_note_without_a_reindex() {
 }
 
 #[test]
+fn index_find_resolves_ids_slugs_and_paths() {
+    let (_dir, vault) = fixture_vault();
+    let rel = "repos/3f9a1c0b/reference-id-panics-on-symbolic-refs.md";
+    assert_eq!(vault.find("01JC9V6Q4M8K2T7X3N5R0B1H17").unwrap(), rel);
+    assert_eq!(
+        vault.find("reference-id-panics-on-symbolic-refs").unwrap(),
+        rel
+    );
+    assert_eq!(vault.find(rel).unwrap(), rel);
+    assert!(vault.find("no-such-note").is_err());
+    assert!(vault.find("../outside.md").is_err());
+}
+
+#[test]
 fn index_excerpts_leave_out_the_timeline_but_it_stays_searchable() {
     let (_dir, vault) = fixture_vault();
     vault
@@ -154,6 +183,25 @@ fn index_excerpts_leave_out_the_timeline_but_it_stays_searchable() {
         assert!(!hits[0].excerpt.contains("2026"), "{}", hits[0].excerpt);
     }
     assert_eq!(top3(&vault, "codex noted"), ["herons-wait"]);
+}
+
+#[test]
+fn index_slug_is_the_file_name_so_a_renamed_file_is_found_by_it() {
+    let (dir, vault) = fixture_vault();
+    let old = dir
+        .path()
+        .join("repos/3f9a1c0b/reference-id-panics-on-symbolic-refs.md");
+    std::fs::rename(
+        &old,
+        dir.path().join("repos/3f9a1c0b/peel-symbolic-refs.md"),
+    )
+    .unwrap();
+    vault.reindex().unwrap();
+    assert_eq!(
+        vault.find("peel-symbolic-refs").unwrap(),
+        "repos/3f9a1c0b/peel-symbolic-refs.md"
+    );
+    assert_eq!(top3(&vault, "Reference::id")[0], "peel-symbolic-refs");
 }
 
 #[test]

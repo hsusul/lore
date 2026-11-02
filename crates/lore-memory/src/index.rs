@@ -138,6 +138,17 @@ impl Index {
         Ok(hits)
     }
 
+    /// Paths of the notes whose id, slug (file name), or path is exactly `key`.
+    pub fn lookup(&self, key: &str) -> Result<Vec<String>, IndexError> {
+        let mut statement = self.conn.prepare_cached(
+            "SELECT path FROM notes WHERE id = ?1 OR slug = ?1 OR path = ?1 ORDER BY path",
+        )?;
+        let paths = statement
+            .query_map(params![key], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(paths)
+    }
+
     /// How many notes the index holds.
     pub fn len(&self) -> Result<usize, IndexError> {
         let count: i64 = self
