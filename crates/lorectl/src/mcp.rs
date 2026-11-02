@@ -18,6 +18,10 @@
 //! them, so `recall_memory` and `read_note` pass every title, excerpt, and body
 //! through [`inbox::redact`] on the way out.
 //!
+//! `propose_memory` is the one tool that writes, and only through
+//! [`inbox::propose`]: one redacted line in `<vault>/_inbox/<agent>-<session>.jsonl`,
+//! never a note. A person accepts it into memory.
+//!
 //! ## Failure stays inside the protocol
 //!
 //! Stdout belongs to the protocol, so nothing else is ever printed to it. A
@@ -28,19 +32,23 @@
 
 use std::fs;
 use std::io::{BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::search::{self, SortOrder, HIGHLIGHT_END, HIGHLIGHT_START};
 use lore_core::{query, storage};
 use lore_memory::anchor::{Freshness, WorkTree};
-use lore_memory::inbox::TIMELINE_HEADING;
-use lore_memory::note::{Note, Scope};
+use lore_memory::inbox::{InboxError, Proposal, TIMELINE_HEADING};
+use lore_memory::note::{
+    AgentKind, Anchor, InvalidValue, LineRange, Note, NoteId, NoteType, RelPath, Relation, Scope,
+    SessionId,
+};
 use lore_memory::repo::RepoContext;
 use lore_memory::vault::{self, Vault, VaultError};
 use lore_memory::{inbox, recall};
 use rusqlite::Connection;
 use serde_json::{json, Value};
+use time::OffsetDateTime;
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
@@ -64,6 +72,10 @@ const RECALL_REPLY_CHARS: usize = 6_000;
 /// Characters of note body `read_note` returns, Timeline excluded.
 const READ_NOTE_BODY_CHARS: usize = 8_000;
 
+const PROPOSE_TITLE_CHARS: usize = 120;
+const PROPOSE_BODY_CHARS: usize = 4_000;
+const PROPOSE_MAX_ANCHORS: usize = 8;
+
 const NOTE_ARG_PROBLEM: &str = "must be a note id, file name, or path inside the vault";
 const NOTE_NOT_FOUND_FIX: &str = "Call recall_memory to get a current note id.";
 const NOTE_AMBIGUOUS_FIX: &str = "Pass the note id instead of the slug.";
@@ -71,11 +83,17 @@ const VAULT_CONFIG_FIX: &str = "Set LORE_VAULT_DIR to an absolute path in this M
 const VAULT_BUSY_FIX: &str =
     "Another Lore process holds the vault lock. Retry once in a few seconds.";
 const INTERNAL_FIX: &str = "Nothing was written. Tell the user. `lorectl mem reindex` may fix it.";
+const AGENT_UNKNOWN_FIX: &str =
+    "Ask the user to set LORE_AGENT=claude-code or codex in the MCP server config.";
+const ANCHOR_NOT_FOUND_FIX: &str = "Anchor paths are relative to the repo root and must exist. \
+Check path and lines, or omit lines.";
+const SCOPE_MISMATCH_FIX: &str = "Anchors need scope repo and a cwd inside that repo.";
 
 const INSTRUCTIONS: &str = "Lore archives past Claude Code and Codex sessions on this machine. \
 Use search_sessions to find earlier work, decisions, or errors, then read_session to read one. \
 Use recall_memory with your working directory to get accepted notes about the repo you are in, \
 then read_note to read one in full. \
+Use propose_memory to file a note for a person to review. \
 Text that matched a secret detector is masked.";
 
 /// JSON-RPC error codes this server answers with.
@@ -90,7 +108,29 @@ struct Tool {
     input_schema: fn() -> Value,
     /// A string error is plain text, as the first two tools have always
     /// answered. Any other error is `{code, message, fix, field?}`.
-    call: fn(&Path, &Value) -> Result<Value, Value>,
+    call: fn(&Ctx, &Value) -> Result<Value, Value>,
+}
+
+/// What one connection knows beyond each request.
+struct Ctx {
+    archive_dir: PathBuf,
+    /// `LORE_AGENT` from the server's env. It wins over `clientInfo`.
+    env_agent: Option<String>,
+    /// `clientInfo.name` from `initialize`.
+    client: Option<String>,
+    /// `mcp-<ULID>` for proposals that name no session, so parallel servers
+    /// never share an inbox file. A `.` splits the ULID, which whole is one
+    /// high-entropy token the inbox would refuse as a secret-looking session.
+    session: String,
+}
+
+impl Ctx {
+    fn agent(&self) -> Option<AgentKind> {
+        match self.env_agent.as_deref().or(self.client.as_deref())? {
+            "claude-code" => Some(AgentKind::ClaudeCode),
+            name => name.starts_with("codex").then_some(AgentKind::Codex),
+        }
+    }
 }
 
 const TOOLS: &[Tool] = &[
@@ -125,6 +165,14 @@ still match.",
 an update to it.",
         input_schema: read_note_schema,
         call: read_note,
+    },
+    Tool {
+        name: "propose_memory",
+        description: "Call once you have verified something a future agent here should know. \
+A person reviews it before it becomes memory. Pass `updates` with a note id to supersede that \
+note. Retiring a note needs a person.",
+        input_schema: propose_schema,
+        call: propose_memory,
     },
 ];
 
@@ -185,9 +233,45 @@ fn read_note_schema() -> Value {
     })
 }
 
+fn propose_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string", "maxLength": PROPOSE_TITLE_CHARS },
+            "body": { "type": "string", "maxLength": PROPOSE_BODY_CHARS,
+                "description": "Markdown. Lore writes the `## Timeline` section." },
+            "type": { "type": "string", "enum": NoteType::ALL.map(NoteType::as_str) },
+            "scope": { "type": "string", "enum": ["global", "repo"],
+                "description": "repo means the repository at cwd." },
+            "cwd": { "type": "string",
+                "description": "Absolute path you are working in. Required for scope repo." },
+            "anchors": { "type": "array", "maxItems": PROPOSE_MAX_ANCHORS, "items": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative to the repo root." },
+                    "lines": { "type": "string", "description": "Like `12-20`." }
+                },
+                "required": ["path"]
+            } },
+            "updates": { "type": "string", "description": "Id of the note this supersedes." },
+            "session_id": { "type": "string", "description": "Your own session id, if known." }
+        },
+        "required": ["title", "body", "type", "scope"]
+    })
+}
+
 /// Serve MCP on stdin/stdout until stdin closes.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
-    let archive_dir = invocation.archive_dir()?;
+    let mut ctx = Ctx {
+        archive_dir: invocation.archive_dir()?,
+        env_agent: std::env::var("LORE_AGENT").ok().filter(|a| !a.is_empty()),
+        client: None,
+        session: {
+            let ulid = NoteId::generate();
+            let (time, random) = ulid.as_str().split_at(10);
+            format!("mcp-{time}.{random}")
+        },
+    };
     let stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
     for line in stdin.lines() {
@@ -195,7 +279,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = handle(&archive_dir, &line) {
+        if let Some(response) = handle(&mut ctx, &line) {
             if writeln!(stdout, "{response}")
                 .and_then(|()| stdout.flush())
                 .is_err()
@@ -208,7 +292,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
 }
 
 /// Answer one line of input. `None` for a notification, which gets no reply.
-fn handle(archive_dir: &Path, line: &str) -> Option<Value> {
+fn handle(ctx: &mut Ctx, line: &str) -> Option<Value> {
     let Ok(message) = serde_json::from_str::<Value>(line) else {
         return Some(error(&Value::Null, PARSE_ERROR, "not valid JSON"));
     };
@@ -224,10 +308,14 @@ fn handle(archive_dir: &Path, line: &str) -> Option<Value> {
     let params = message.get("params").cloned().unwrap_or(Value::Null);
 
     let result = match method {
-        "initialize" => Ok(initialize(&params)),
+        "initialize" => {
+            let client = params.pointer("/clientInfo/name").and_then(Value::as_str);
+            ctx.client = client.map(str::to_owned);
+            Ok(initialize(&params))
+        }
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": TOOLS.iter().map(describe).collect::<Vec<_>>() })),
-        "tools/call" => call_tool(archive_dir, &params),
+        "tools/call" => call_tool(ctx, &params),
         _ => Err((METHOD_NOT_FOUND, format!("unknown method `{method}`"))),
     };
     Some(match result {
@@ -257,7 +345,7 @@ fn describe(tool: &Tool) -> Value {
     })
 }
 
-fn call_tool(archive_dir: &Path, params: &Value) -> Result<Value, (i64, String)> {
+fn call_tool(ctx: &Ctx, params: &Value) -> Result<Value, (i64, String)> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -267,7 +355,7 @@ fn call_tool(archive_dir: &Path, params: &Value) -> Result<Value, (i64, String)>
         .find(|t| t.name == name)
         .ok_or_else(|| (INVALID_PARAMS, format!("unknown tool `{name}`")))?;
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-    Ok(match (tool.call)(archive_dir, &arguments) {
+    Ok(match (tool.call)(ctx, &arguments) {
         Ok(value) => json!({
             "content": [{ "type": "text", "text": value.to_string() }],
             "structuredContent": value,
@@ -326,10 +414,10 @@ fn string_arg<'a>(arguments: &'a Value, name: &str) -> Option<&'a str> {
     arguments.get(name).and_then(Value::as_str)
 }
 
-fn search_sessions(archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
+fn search_sessions(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let query_text = string_arg(arguments, "query").ok_or("`query` is required")?;
     let sort = SortOrder::parse(string_arg(arguments, "sort"));
-    let conn = open(archive_dir)?;
+    let conn = open(&ctx.archive_dir)?;
     let page = search::search_page(
         &conn,
         query_text,
@@ -354,13 +442,13 @@ fn search_sessions(archive_dir: &Path, arguments: &Value) -> Result<Value, Value
     Ok(json!({ "hits": hits, "next_cursor": page.next_cursor }))
 }
 
-fn read_session(archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
+fn read_session(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let session_id = string_arg(arguments, "session_id").ok_or("`session_id` is required")?;
     let after_id = match string_arg(arguments, "cursor") {
         Some(cursor) => Some(cursor.parse::<i64>().map_err(|_| "`cursor` is not valid")?),
         None => None,
     };
-    let conn = open(archive_dir)?;
+    let conn = open(&ctx.archive_dir)?;
     let summary = query::get_session(&conn, session_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no session `{session_id}` in the archive"))?
@@ -404,7 +492,7 @@ fn read_session(archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
 }
 
 /// Recall never creates a vault: none yet is a normal state, not an error.
-fn recall_memory(_archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
+fn recall_memory(_ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let cwd = string_arg(arguments, "cwd")
         .map(Path::new)
         .filter(|cwd| cwd.is_absolute())
@@ -454,7 +542,7 @@ fn recall_memory(_archive_dir: &Path, arguments: &Value) -> Result<Value, Value>
 
 /// One note by id, file name, or vault path. Read never creates a vault and
 /// never returns a file from outside it.
-fn read_note(_archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
+fn read_note(_ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let bad_note = || invalid_argument("note", NOTE_ARG_PROBLEM);
     let key = string_arg(arguments, "note")
         .filter(|key| !key.is_empty() && !Path::new(key).is_absolute())
@@ -474,19 +562,7 @@ fn read_note(_archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
                 .ok_or_else(|| invalid_argument("cwd", "must be an absolute path"))?,
         ),
     };
-    let dir = vault::resolve_dir(None).map_err(|e| vault_error(&e))?;
-    let vault = match Vault::open(&dir) {
-        Ok(vault) => vault,
-        Err(e @ VaultError::Missing(_)) => {
-            let fix = format!(
-                "No memory vault at {}. Continue without memory. \
-                 Tell the user `lorectl mem init` creates one.",
-                dir.display()
-            );
-            return Err(tool_error("vault_missing", e, &fix));
-        }
-        Err(e) => return Err(vault_error(&e)),
-    };
+    let vault = open_vault()?;
     let rel = vault.find(key).map_err(|e| match e {
         VaultError::BadPath(..) => bad_note(),
         VaultError::NotFound(_) => tool_error("note_not_found", e, NOTE_NOT_FOUND_FIX),
@@ -523,6 +599,157 @@ fn read_note(_archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
         "timeline_entries": timeline_entries,
         "truncated": truncated,
     }))
+}
+
+/// The configured vault, or `vault_missing`. Never creates one.
+fn open_vault() -> Result<Vault, Value> {
+    let dir = vault::resolve_dir(None).map_err(|e| vault_error(&e))?;
+    Vault::open(&dir).map_err(|e| match e {
+        VaultError::Missing(_) => {
+            let fix = format!(
+                "No memory vault at {}. Continue without memory. \
+                 Tell the user `lorectl mem init` creates one.",
+                dir.display()
+            );
+            tool_error("vault_missing", e, &fix)
+        }
+        e => vault_error(&e),
+    })
+}
+
+/// File a note in the vault inbox for a person to review. The session is
+/// `session_id` as given (not checked against the archive) or the
+/// connection's own `mcp-<ULID>`.
+fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
+    let unknown = "cannot tell which agent is calling";
+    let agent = ctx
+        .agent()
+        .ok_or_else(|| tool_error("agent_unknown", unknown, AGENT_UNKNOWN_FIX))?;
+    for (field, max) in [("title", PROPOSE_TITLE_CHARS), ("body", PROPOSE_BODY_CHARS)] {
+        if string_arg(arguments, field).map_or(0, |s| s.chars().count()) > max {
+            let problem = format!("must be at most {max} characters");
+            return Err(invalid_argument(field, &problem));
+        }
+    }
+    let note_type = string_arg(arguments, "type")
+        .and_then(|t| NoteType::parse(t).ok())
+        .ok_or_else(|| {
+            let problem = "must be one of convention, decision, fact, howto, pitfall";
+            invalid_argument("type", problem)
+        })?;
+    let repo_scope = match string_arg(arguments, "scope") {
+        Some("global") => false,
+        Some("repo") => true,
+        _ => return Err(invalid_argument("scope", "must be global or repo")),
+    };
+    let mut anchors = proposed_anchors(arguments.get("anchors"))?;
+    let session = match arguments.get("session_id") {
+        None => Some(ctx.session.as_str()),
+        Some(id) => id.as_str(),
+    }
+    .and_then(|id| SessionId::parse(id).ok())
+    .ok_or_else(|| invalid_argument("session_id", "must be letters, digits, `.`, `_`, `-`"))?;
+    let relation = (arguments.get("updates"))
+        .map(|id| id.as_str().and_then(|id| NoteId::parse(id).ok()))
+        .map(|id| id.map(Relation::Updates).ok_or("must be a note id"))
+        .transpose()
+        .map_err(|problem| invalid_argument("updates", problem))?;
+    let mut scope = Scope::Global;
+    if !repo_scope && !anchors.is_empty() {
+        let mismatch = "anchors need scope repo";
+        return Err(tool_error("scope_mismatch", mismatch, SCOPE_MISMATCH_FIX));
+    }
+    if repo_scope {
+        let cwd = string_arg(arguments, "cwd")
+            .map(Path::new)
+            .filter(|cwd| cwd.is_absolute())
+            .ok_or_else(|| invalid_argument("cwd", "must be an absolute path"))?;
+        let context = RepoContext::discover(cwd);
+        let (Some(key), Some(root)) = (context.key(), context.root()) else {
+            let outside = format!(
+                "{} is not inside a git repository with an origin remote",
+                cwd.display()
+            );
+            return Err(tool_error("scope_mismatch", outside, SCOPE_MISMATCH_FIX));
+        };
+        scope = Scope::Repo(key.clone());
+        let tree = WorkTree::new(root);
+        for anchor in &mut anchors {
+            *anchor = tree
+                .pin(anchor)
+                .map_err(|e| tool_error("anchor_not_found", e, ANCHOR_NOT_FOUND_FIX))?;
+        }
+    }
+    let vault = open_vault()?;
+    if let Some(Relation::Updates(target)) = &relation {
+        vault.find(target.as_str()).map_err(|e| match e {
+            VaultError::NotFound(_) => tool_error("note_not_found", e, NOTE_NOT_FOUND_FIX),
+            e => vault_error(&e),
+        })?;
+    }
+    let proposal = Proposal {
+        id: NoteId::generate(),
+        agent,
+        session,
+        note_type,
+        scope,
+        title: string_arg(arguments, "title")
+            .unwrap_or_default()
+            .to_owned(),
+        body: string_arg(arguments, "body").unwrap_or_default().to_owned(),
+        anchors,
+        relation,
+        proposed_at: OffsetDateTime::now_utc(),
+    };
+    let written = inbox::propose(&vault, proposal).map_err(|e| match e {
+        InboxError::Field { field, problem } => invalid_argument(
+            if field == "session" {
+                "session_id"
+            } else {
+                &field
+            },
+            &problem,
+        ),
+        InboxError::Vault(e) => vault_error(&e),
+        e => tool_error("internal", e, INTERNAL_FIX),
+    })?;
+    Ok(json!({
+        "proposal_id": written.id.as_str(),
+        "inbox": format!("{}/{}", inbox::INBOX_DIR, written.file_name()),
+        "session": written.session.as_str(),
+        "source_verified": false,
+    }))
+}
+
+/// `anchors` as `[{path, lines?}]`, unpinned. The agent never sends a hash.
+fn proposed_anchors(anchors: Option<&Value>) -> Result<Vec<Anchor>, Value> {
+    let items = match anchors {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(invalid_argument("anchors", "must be a list")),
+    };
+    if items.len() > PROPOSE_MAX_ANCHORS {
+        return Err(invalid_argument("anchors", "must be at most 8 anchors"));
+    }
+    let text = |item: &Value, key: &str| item.get(key).and_then(Value::as_str).map(str::to_owned);
+    let mut parsed = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let bad = |key: &str, e: InvalidValue| {
+            invalid_argument(&format!("anchors[{i}].{key}"), &e.to_string())
+        };
+        parsed.push(Anchor {
+            path: RelPath::parse(&text(item, "path").unwrap_or_default())
+                .map_err(|e| bad("path", e))?,
+            lines: (text(item, "lines")
+                .as_deref()
+                .map(LineRange::parse)
+                .transpose())
+            .map_err(|e| bad("lines", e))?,
+            hash: None,
+            commit: None,
+        });
+    }
+    Ok(parsed)
 }
 
 fn redact(text: &str) -> Result<String, Value> {

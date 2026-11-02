@@ -40,6 +40,7 @@ fn converse_with(archive: &Path, envs: &[(&str, &str)], messages: &[Value]) -> V
         .arg("--archive")
         .arg(archive)
         .env_remove("LORE_ARCHIVE_DIR")
+        .env_remove("LORE_AGENT")
         .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -154,7 +155,8 @@ fn speaks_the_mcp_handshake() {
             "search_sessions",
             "read_session",
             "recall_memory",
-            "read_note"
+            "read_note",
+            "propose_memory"
         ]
     );
     assert_eq!(
@@ -325,7 +327,8 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// `lorectl mem <args>` against `<home>/vault`, with `HOME` at `home`.
-fn mem(home: &Path, args: &[&str]) {
+/// Returns stdout.
+fn mem(home: &Path, args: &[&str]) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
         .arg("mem")
         .args(args)
@@ -341,6 +344,7 @@ fn mem(home: &Path, args: &[&str]) {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+    String::from_utf8(out.stdout).unwrap()
 }
 
 /// A temporary `HOME` holding an initialized vault at `<home>/vault`.
@@ -781,4 +785,512 @@ fn read_note_checks_freshness_against_the_cwd_repo() {
         let reply = read_note(home.path(), &vault, arguments);
         assert_eq!(structured(&reply)["freshness"], freshness, "{reply}");
     }
+}
+
+/// `initialize` as `client` (no `clientInfo` when `None`), then `calls`, on
+/// one server with `HOME` at `home`, the vault at `vault`, and `extra` env.
+/// Returns the replies to `calls`.
+fn session(
+    home: &Path,
+    vault: &Path,
+    extra: &[(&str, &str)],
+    client: Option<&str>,
+    calls: &[Value],
+) -> Vec<Value> {
+    let mut envs = vec![
+        GIT_ENV[0],
+        GIT_ENV[1],
+        ("HOME", home.to_str().unwrap()),
+        ("LORE_VAULT_DIR", vault.to_str().unwrap()),
+    ];
+    envs.extend_from_slice(extra);
+    let mut params = json!({ "protocolVersion": "2025-06-18" });
+    if let Some(name) = client {
+        params["clientInfo"] = json!({ "name": name, "version": "1.0.0" });
+    }
+    let messages = [vec![request(0, "initialize", params)], calls.to_vec()].concat();
+    let mut replies = converse_with(&home.join("archive"), &envs, &messages);
+    assert_eq!(replies.remove(0)["id"], 0);
+    for reply in &replies {
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(text).unwrap(),
+            reply["result"]["structuredContent"],
+            "the text content carries the same JSON"
+        );
+    }
+    replies
+}
+
+fn propose(id: i64, arguments: Value) -> Value {
+    call(id, "propose_memory", arguments)
+}
+
+/// A git repository at `<home>/repo` whose key is `81444c90f1ff44ac`, with
+/// `src/a.rs` holding one line.
+fn lore_repo(home: &Path) -> String {
+    let repo = home.join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:hsusul/lore.git"],
+    );
+    std::fs::write(repo.join("src/a.rs"), "fn retry() {}\n").unwrap();
+    repo.to_str().unwrap().to_owned()
+}
+
+/// Sorted file names in `<vault>/_inbox`, none when it does not exist.
+fn inbox_files(vault: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(vault.join("_inbox"))
+        .map(|dir| {
+            dir.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+fn git_status(vault: &Path) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(vault)
+        .args(["status", "--porcelain"])
+        .envs(GIT_ENV)
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn propose_memory_files_into_the_connection_inbox_as_claude_code() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let cwd = lore_repo(home.path());
+    let arguments = json!({
+        "title": "Retry the migration once",
+        "body": "A failed migration succeeds on the second try.\n",
+        "type": "pitfall",
+        "scope": "repo",
+        "cwd": cwd,
+        "anchors": [{ "path": "src/a.rs", "lines": "1" }],
+    });
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[propose(1, arguments)],
+    );
+
+    let reply = structured(&replies[0]);
+    let session_id = reply["session"].as_str().unwrap();
+    // `mcp-<ULID>` with a `.` between the ULID's time and random parts.
+    let (time, random) = session_id
+        .strip_prefix("mcp-")
+        .and_then(|ulid| ulid.split_once('.'))
+        .unwrap();
+    let ulid = format!("{time}{random}");
+    assert_eq!((time.len(), ulid.len()), (10, 26), "{session_id}");
+    assert!(ulid
+        .bytes()
+        .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase()));
+    let id = reply["proposal_id"].as_str().unwrap();
+    let inbox = format!(
+        "_inbox/claude-code-{}.jsonl",
+        session_id.to_ascii_lowercase()
+    );
+    assert_eq!(
+        reply,
+        &json!({
+            "proposal_id": id,
+            "inbox": inbox,
+            "session": session_id,
+            "source_verified": false,
+        })
+    );
+
+    let text = std::fs::read_to_string(vault.join(&inbox)).unwrap();
+    assert_eq!(text.lines().count(), 1, "{text}");
+    let mut line: Value = serde_json::from_str(text.trim_end()).unwrap();
+    let listed: Value = serde_json::from_str(&mem(home.path(), &["inbox", "--json"])).unwrap();
+    assert_eq!(listed, json!([line.clone()]));
+    assert!(line["proposed_at"].take().is_string());
+    assert_eq!(
+        line,
+        json!({
+            "id": id,
+            "agent": "claude-code",
+            "session": session_id,
+            "type": "pitfall",
+            "scope": "repo:81444c90f1ff44ac",
+            "title": "Retry the migration once",
+            "body": "A failed migration succeeds on the second try.\n",
+            "anchors": [{ "path": "src/a.rs", "lines": "1", "hash": "b3:72208a5e4963e1b2" }],
+            "proposed_at": null,
+        })
+    );
+    assert_eq!(git_status(&vault), "", "the vault's git status is clean");
+}
+
+#[test]
+fn propose_memory_takes_the_agent_from_lore_agent_then_client_info() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let note = json!({ "title": "T", "body": "B", "type": "fact", "scope": "global" });
+    let cases = [
+        (Some("codex"), Some("claude-code"), "codex"),
+        (Some("claude-code"), Some("codex-tui"), "claude-code"),
+        (None, Some("codex-mcp-client"), "codex"),
+    ];
+    for (env, client, agent) in cases {
+        let extra: Vec<(&str, &str)> = env.map(|e| ("LORE_AGENT", e)).into_iter().collect();
+        let replies = session(
+            home.path(),
+            &vault,
+            &extra,
+            client,
+            &[propose(1, note.clone())],
+        );
+        let inbox = structured(&replies[0])["inbox"].as_str().unwrap();
+        assert!(
+            inbox.starts_with(&format!("_inbox/{agent}-mcp-")),
+            "{env:?} {client:?}: {inbox}"
+        );
+    }
+    assert_eq!(inbox_files(&vault).len(), 3);
+    assert_eq!(git_status(&vault), "");
+}
+
+#[test]
+fn propose_memory_from_an_unknown_agent_writes_nothing() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let note = json!({ "title": "T", "body": "B", "type": "fact", "scope": "global" });
+    for client in [None, Some("cursor")] {
+        let replies = session(
+            home.path(),
+            &vault,
+            &[],
+            client,
+            &[propose(1, note.clone())],
+        );
+        assert_eq!(replies[0]["result"]["isError"], true, "{client:?}");
+        assert_eq!(
+            replies[0]["result"]["structuredContent"],
+            json!({
+                "code": "agent_unknown",
+                "message": "cannot tell which agent is calling",
+                "fix": "Ask the user to set LORE_AGENT=claude-code or codex in the MCP server config.",
+            })
+        );
+    }
+    assert_eq!(inbox_files(&vault), Vec::<String>::new());
+}
+
+#[test]
+fn propose_memory_stores_a_secret_masked() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    // `AKIAIOSFODNN7EXAMPLE` is on the scanner's allowlist, so use another.
+    let key = format!("{}{}", "AKIA", "ABCDEFGHIJKLMNOP");
+    let note = json!({
+        "title": "Deploy key",
+        "body": format!("Deploy with {key} only."),
+        "type": "fact",
+        "scope": "global",
+        "session_id": "0199-native-session",
+    });
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[propose(1, note)],
+    );
+    let reply = structured(&replies[0]);
+    assert_eq!(reply["session"], "0199-native-session");
+    assert_eq!(reply["source_verified"], false);
+    assert_eq!(
+        reply["inbox"],
+        "_inbox/claude-code-0199-native-session.jsonl"
+    );
+    let text = std::fs::read_to_string(vault.join("_inbox/claude-code-0199-native-session.jsonl"))
+        .unwrap();
+    assert!(!text.contains(&key), "{text}");
+    let line: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(
+        line["body"],
+        "Deploy with «redacted:aws-access-key-id» only."
+    );
+    assert_eq!(git_status(&vault), "");
+}
+
+#[test]
+fn propose_memory_rejects_bad_arguments_with_a_code_and_a_fix() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let cwd = lore_repo(home.path());
+    let ok = json!({ "title": "T", "body": "B", "type": "fact", "scope": "repo", "cwd": cwd });
+    let with = |key: &str, value: Value| {
+        let mut arguments = ok.clone();
+        arguments[key] = value;
+        arguments
+    };
+    let nine: Vec<Value> = (0..9).map(|_| json!({ "path": "src/a.rs" })).collect();
+    let cases = [
+        (
+            with("body", json!("Do it.\n\n## Timeline\n- 2026-11-02 x\n")),
+            "body",
+            "the `## Timeline` section is Lore's to write",
+        ),
+        (
+            with("title", json!("two\nlines")),
+            "title",
+            "must be one line without control characters",
+        ),
+        (
+            with("title", json!("t".repeat(121))),
+            "title",
+            "must be at most 120 characters",
+        ),
+        (
+            with("body", json!("b".repeat(4_001))),
+            "body",
+            "must be at most 4000 characters",
+        ),
+        (
+            with("anchors", json!(nine)),
+            "anchors",
+            "must be at most 8 anchors",
+        ),
+        (
+            with("anchors", json!([{ "path": "/etc/passwd" }])),
+            "anchors[0].path",
+            "absolute paths are not allowed, got `/etc/passwd`",
+        ),
+        (
+            with("scope", json!("everywhere")),
+            "scope",
+            "must be global or repo",
+        ),
+        (
+            with("type", json!("rumor")),
+            "type",
+            "must be one of convention, decision, fact, howto, pitfall",
+        ),
+        (with("cwd", json!("src")), "cwd", "must be an absolute path"),
+        (
+            with("session_id", json!("a b")),
+            "session_id",
+            "must be letters, digits, `.`, `_`, `-`",
+        ),
+        (
+            with("updates", json!("nope")),
+            "updates",
+            "must be a note id",
+        ),
+    ];
+    for (arguments, field, problem) in cases {
+        let replies = session(
+            home.path(),
+            &vault,
+            &[],
+            Some("claude-code"),
+            &[propose(1, arguments)],
+        );
+        assert_eq!(replies[0]["result"]["isError"], true, "{field}");
+        assert_eq!(
+            replies[0]["result"]["structuredContent"],
+            json!({
+                "code": "invalid_argument",
+                "field": field,
+                "message": format!("`{field}` {problem}"),
+                "fix": format!("Fix `{field}`: {problem}, then call again."),
+            })
+        );
+    }
+    assert_eq!(inbox_files(&vault), Vec::<String>::new());
+}
+
+#[test]
+fn propose_memory_pins_anchors_only_inside_the_scope_repo() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let cwd = lore_repo(home.path());
+    let elsewhere = home.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let anchor_fix = "Anchor paths are relative to the repo root and must exist. \
+                      Check path and lines, or omit lines.";
+    let scope_fix = "Anchors need scope repo and a cwd inside that repo.";
+    let note = |scope: &str, cwd: &str, anchor: Value| {
+        json!({ "title": "T", "body": "B", "type": "fact", "scope": scope, "cwd": cwd,
+                "anchors": [anchor] })
+    };
+    let cases = [
+        (
+            note("repo", &cwd, json!({ "path": "src/missing.rs" })),
+            "anchor_not_found",
+            "anchor `src/missing.rs` is not a file in the repository".to_owned(),
+            anchor_fix,
+        ),
+        (
+            note("repo", &cwd, json!({ "path": "src/a.rs", "lines": "5-9" })),
+            "anchor_not_found",
+            "anchor `src/a.rs` has 1 lines, so lines 5-9 do not exist".to_owned(),
+            anchor_fix,
+        ),
+        (
+            note("global", &cwd, json!({ "path": "src/a.rs" })),
+            "scope_mismatch",
+            "anchors need scope repo".to_owned(),
+            scope_fix,
+        ),
+        (
+            note(
+                "repo",
+                elsewhere.to_str().unwrap(),
+                json!({ "path": "src/a.rs" }),
+            ),
+            "scope_mismatch",
+            format!(
+                "{} is not inside a git repository with an origin remote",
+                elsewhere.display()
+            ),
+            scope_fix,
+        ),
+    ];
+    for (arguments, code, message, fix) in cases {
+        let replies = session(
+            home.path(),
+            &vault,
+            &[],
+            Some("claude-code"),
+            &[propose(1, arguments)],
+        );
+        assert_eq!(replies[0]["result"]["isError"], true, "{code}");
+        assert_eq!(
+            replies[0]["result"]["structuredContent"],
+            json!({ "code": code, "message": message, "fix": fix })
+        );
+    }
+    assert_eq!(inbox_files(&vault), Vec::<String>::new());
+}
+
+#[test]
+fn propose_memory_updates_only_a_note_that_exists() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    add_note(home.path(), TIMELINE_NOTE, &[]);
+    let note = |target: &str| {
+        json!({ "title": "T", "body": "B", "type": "pitfall", "scope": "global",
+                "updates": target })
+    };
+    let unknown = "01JC9V6Q4M8K2T7X3N5R0B1H7Z";
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[
+            propose(1, note(unknown)),
+            propose(2, note(TIMELINE_NOTE_ID)),
+        ],
+    );
+    assert_eq!(replies[0]["result"]["isError"], true);
+    assert_eq!(
+        replies[0]["result"]["structuredContent"],
+        json!({
+            "code": "note_not_found",
+            "message": format!("no note matches `{unknown}`"),
+            "fix": "Call recall_memory to get a current note id.",
+        })
+    );
+    let inbox = structured(&replies[1])["inbox"].as_str().unwrap();
+    let text = std::fs::read_to_string(vault.join(inbox)).unwrap();
+    assert_eq!(text.lines().count(), 1, "only the update was written");
+    let line: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(line["relation"], json!({ "updates": TIMELINE_NOTE_ID }));
+    assert_eq!(git_status(&vault), "");
+}
+
+#[test]
+fn propose_memory_without_a_vault_is_vault_missing_and_creates_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let vault = home.path().join("none");
+    let note = json!({ "title": "T", "body": "B", "type": "fact", "scope": "global" });
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[propose(1, note)],
+    );
+    let dir = vault.display();
+    assert_eq!(
+        replies[0]["result"]["structuredContent"],
+        json!({
+            "code": "vault_missing",
+            "message": format!("no vault at {dir}"),
+            "fix": format!(
+                "No memory vault at {dir}. Continue without memory. \
+        Tell the user `lorectl mem init` creates one."
+            ),
+        })
+    );
+    assert!(!vault.exists(), "the server created a vault");
+    assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn two_servers_proposing_at_once_write_two_whole_files() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let calls = |server: usize| -> Vec<Value> {
+        (0..25)
+            .map(|i| {
+                let body = format!("Server {server} proposal {i}. {}", "x".repeat(3_000));
+                propose(
+                    i,
+                    json!({ "title": "T", "body": body, "type": "fact", "scope": "global" }),
+                )
+            })
+            .collect()
+    };
+    let sessions: Vec<String> = std::thread::scope(|scope| {
+        let servers: Vec<_> = (0..2)
+            .map(|server| {
+                let (home, vault, calls) = (home.path(), &vault, calls(server));
+                scope.spawn(move || session(home, vault, &[], Some("claude-code"), &calls))
+            })
+            .collect();
+        servers
+            .into_iter()
+            .map(|s| {
+                let replies = s.join().unwrap();
+                assert_eq!(replies.len(), 25);
+                structured(&replies[0])["session"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    });
+    assert_ne!(sessions[0], sessions[1]);
+    let files = inbox_files(&vault);
+    assert_eq!(files.len(), 2, "{files:?}");
+    for name in files {
+        let text = std::fs::read_to_string(vault.join("_inbox").join(&name)).unwrap();
+        let lines: Vec<Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("a whole line"))
+            .collect();
+        assert_eq!(lines.len(), 25, "{name}");
+        let server = &lines[0]["body"].as_str().unwrap()[..8];
+        assert!(lines
+            .iter()
+            .all(|l| l["body"].as_str().unwrap().starts_with(server)));
+    }
+    assert_eq!(git_status(&vault), "");
 }
