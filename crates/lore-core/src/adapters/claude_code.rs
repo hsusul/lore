@@ -8,7 +8,7 @@
 //! `partial` with a bounded, content-free note — never a panic.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -70,6 +70,10 @@ fn parse_from(
     archived: &dyn ArchivedSession,
 ) -> ParseRun {
     let mut session = resume_session(from, fallback_dedupe);
+    let file_id = file_session_id(fallback_dedupe);
+    if file_id.is_some() {
+        session.native_session_id = file_id.clone();
+    }
     // Per-message context (cwd, branch) used to build segments afterward.
     let mut contexts: Vec<(Option<String>, Option<String>)> = Vec::new();
     let mut offset = from.offset;
@@ -94,8 +98,8 @@ fn parse_from(
         let event_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
 
         // Session-level metadata.
-        if session.native_session_id.is_none() {
-            session.native_session_id = str_field(&obj, "sessionId");
+        if file_id.is_none() && session.native_session_id.is_none() {
+            session.native_session_id = transcript_id(&obj);
         }
         if session.agent_version.is_none() {
             session.agent_version = str_field(&obj, "version");
@@ -146,6 +150,27 @@ fn parse_from(
         restates_session: false,
     };
     finish_parse(from, session, end, archived)
+}
+
+/// The session id a transcript's file name gives it. Ingest replaces a session
+/// with each file it parses, so two transcripts must never share an id. Claude
+/// Code names a subagent transcript
+/// `<sessionId>/subagents/agent-<agentId>.jsonl`, whose key (`session_key`)
+/// is `<sessionId>/agent-<agentId>`. A subagent transcript repeats its
+/// parent's `sessionId`, so its lines cannot name the file. `None` for any
+/// other file, whose lines name it.
+fn file_session_id(key: &str) -> Option<String> {
+    key.contains('/').then(|| key.to_string())
+}
+
+/// The session a line names, for a file whose name does not give one: its
+/// `sessionId`, qualified by `agentId` on a subagent line. The first line wins.
+fn transcript_id(obj: &Value) -> Option<String> {
+    let session_id = str_field(obj, "sessionId")?;
+    Some(match str_field(obj, "agentId") {
+        Some(agent_id) => format!("{session_id}/agent-{agent_id}"),
+        None => session_id,
+    })
 }
 
 /// Tool-call pairing state: calls parsed in this run, and results for calls
@@ -547,6 +572,26 @@ impl AgentAdapter for ClaudeCodeAdapter {
             paths.push(claude_dir);
         }
         paths
+    }
+
+    /// The file stem, qualified by the session directory for a subagent
+    /// transcript (`<sessionId>/subagents/agent-<agentId>.jsonl` gives
+    /// `<sessionId>/agent-<agentId>`), whose stem alone repeats across sessions.
+    fn session_key(&self, path: &Path) -> String {
+        let name = |p: &Path| p.file_name().map(|s| s.to_string_lossy().into_owned());
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let parent = path.parent();
+        let session_dir = parent
+            .filter(|p| name(p).as_deref() == Some("subagents"))
+            .and_then(Path::parent)
+            .and_then(name);
+        match session_dir {
+            Some(dir) => format!("{dir}/{stem}"),
+            None => stem,
+        }
     }
 
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef> {
