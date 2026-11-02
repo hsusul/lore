@@ -2894,6 +2894,7 @@ dependencies = [
  "lexopt",
  "lore-core",
  "lore-ipc",
+ "lore-skills",
  "rusqlite",
  "serde_json",
  "tempfile",
