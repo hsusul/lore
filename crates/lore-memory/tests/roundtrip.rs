@@ -45,6 +45,20 @@ fn roundtrip_fixtures_cover_every_type_four_times() {
 }
 
 #[test]
+fn roundtrip_keeps_unknown_keys_in_place() {
+    let text = std::fs::read_to_string(
+        fixture_vault().join("global/obsidian-keys-survive-a-round-trip.md"),
+    )
+    .unwrap();
+    let note = Note::parse(&text).unwrap();
+    assert_eq!(
+        note.extra.unknown_keys(),
+        ["aliases", "cssclasses", "plugin", "publish", "tags"]
+    );
+    assert_eq!(note.render(), text);
+}
+
+#[test]
 fn roundtrip_reads_the_design_sample_fields() {
     let text = std::fs::read_to_string(
         fixture_vault().join("repos/3f9a1c0b/reference-id-panics-on-symbolic-refs.md"),
@@ -150,6 +164,83 @@ fn roundtrip_refuses_malformed_files_without_panicking() {
         let error = parse_error(text).to_string();
         assert!(error.contains(expected), "{text:?} gave {error}");
     }
+}
+
+const BASE: &str = "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6D\ntype: fact\ntitle: T\nscope: global\nstatus: active\ncreated: 2026-11-01\n";
+
+#[test]
+fn roundtrip_refuses_trailing_comments_on_lore_keys() {
+    for line in [
+        "type: fact # a comment",
+        "status: active  # retired soon",
+        "title: \"T\" # quoted then comment",
+        "created: 2026-11-01 # today",
+        "sources:\n  - codex:abc # from codex",
+    ] {
+        let text = BASE
+            .lines()
+            .filter(|l| !line.starts_with(l.split(':').next().unwrap()) || l.starts_with("---"))
+            .map(|l| format!("{l}\n"))
+            .collect::<String>()
+            + line
+            + "\n---\n";
+        let error = Note::parse(&text).unwrap_err().to_string();
+        assert!(error.contains("comment"), "{line:?} gave {error}");
+    }
+    // A comment on a key Lore does not own is that key's business.
+    let text = format!("{BASE}mood: calm # very\n---\n");
+    assert_eq!(Note::parse(&text).unwrap().render(), text);
+}
+
+#[test]
+fn roundtrip_keeps_empty_forget_after_and_empty_lists_as_written() {
+    for extra in ["forget_after:\n", "anchors:\n", "sources: []\n"] {
+        let text = format!("{BASE}{extra}---\nBody.\n");
+        let note = Note::parse(&text).unwrap();
+        assert_eq!(note.forget_after, None);
+        assert_eq!(note.render(), text, "{extra:?}");
+    }
+    let mut note = Note::parse(&format!("{BASE}forget_after:\n---\n")).unwrap();
+    note.forget_after = Some(NoteDate::parse("2027-05-01").unwrap());
+    assert_eq!(
+        note.render(),
+        format!("{BASE}forget_after: 2027-05-01\n---\n")
+    );
+}
+
+#[test]
+fn roundtrip_quotes_yaml_ambiguous_titles() {
+    for title in [
+        "2026-11-01",
+        "42",
+        "0x10",
+        "0o17",
+        ".inf",
+        "-.inf",
+        ".NaN",
+        "12:30",
+        "1_000",
+        "+1",
+        "yes",
+        "No",
+        "on",
+        "OFF",
+        "null",
+        "~",
+        "@mention",
+        "`code`",
+        "1e3",
+    ] {
+        let mut note = Note::parse(&format!("{BASE}---\n")).unwrap();
+        note.title = title.to_string();
+        let text = note.render();
+        let line = text.lines().find(|l| l.starts_with("title: ")).unwrap();
+        assert!(line.starts_with("title: \""), "{title} rendered as {line}");
+        assert_eq!(Note::parse(&text).unwrap().title, title);
+    }
+    let mut note = Note::parse(&format!("{BASE}---\n")).unwrap();
+    note.title = "Plain words stay plain".into();
+    assert!(note.render().contains("\ntitle: Plain words stay plain\n"));
 }
 
 #[test]
