@@ -108,7 +108,7 @@ impl Archive {
             .append(true)
             .open(&self.path)
             .unwrap();
-        file.write_all(line(uuid, "user", "one more line").as_bytes())
+        file.write_all(line_at(NO_REPO, uuid, "user", "one more line").as_bytes())
             .unwrap();
     }
 
