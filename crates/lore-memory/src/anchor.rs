@@ -217,8 +217,31 @@ impl WorkTree {
         let moved = small
             .then(|| fs::read(&file).ok())
             .flatten()
-            .and_then(|bytes| find_lines(&bytes, lines.end() - lines.start() + 1, hash));
+            .and_then(|bytes| match self.original_lines(anchor, lines, hash) {
+                Some(run) => find_run(&bytes, &run),
+                None => find_lines(&bytes, lines.end() - lines.start() + 1, hash),
+            });
         Some(moved.map_or(Freshness::Changed, |lines| Freshness::Moved { lines }))
+    }
+
+    /// The anchored lines as they were at the anchor's commit, with any
+    /// trailing CR removed. `None` unless that commit has the file and those
+    /// lines there still match `hash`, as they do when the anchor was pinned
+    /// from a clean tree.
+    fn original_lines(
+        &self,
+        anchor: &Anchor,
+        lines: LineRange,
+        hash: &LineHash,
+    ) -> Option<Vec<Vec<u8>>> {
+        let commit = anchor.commit.as_ref()?;
+        let spec = format!("{}:{}", commit.as_str(), anchor.path.as_str());
+        let blob = git(&self.root, ["cat-file", "blob", spec.as_str()])?;
+        let all = split_lines(blob.as_bytes());
+        let first = usize::try_from(lines.start()).ok()?.checked_sub(1)?;
+        let run = all.get(first..usize::try_from(lines.end()).ok()?)?;
+        hash_matches(hash, &hash_lines(run.iter().copied()))
+            .then(|| run.iter().map(|line| strip_cr(line).to_vec()).collect())
     }
 
     /// The file at `path`, when it is a regular file inside the working tree.
@@ -288,7 +311,7 @@ fn rename_map(root: &Path, commit: &CommitId) -> HashMap<String, RelPath> {
 pub fn hash_lines<'a>(lines: impl IntoIterator<Item = &'a [u8]>) -> String {
     let mut hasher = blake3::Hasher::new();
     for line in lines {
-        hasher.update(line.strip_suffix(b"\r").unwrap_or(line));
+        hasher.update(strip_cr(line));
         hasher.update(b"\n");
     }
     hasher.finalize().to_hex().to_string()
@@ -319,6 +342,10 @@ fn range_digest(file: &Path, lines: LineRange) -> io::Result<Option<String>> {
     Ok(Some(hash_lines(taken.iter().map(Vec::as_slice))))
 }
 
+fn strip_cr(line: &[u8]) -> &[u8] {
+    line.strip_suffix(b"\r").unwrap_or(line)
+}
+
 fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
     let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
     if body.is_empty() && bytes.is_empty() {
@@ -337,6 +364,60 @@ fn find_lines(bytes: &[u8], len: u32, hash: &LineHash) -> Option<LineRange> {
     let start = (0..=lines.len() - len).find(|&start| {
         hash_matches(hash, &hash_lines(lines[start..start + len].iter().copied()))
     })?;
+    line_range(start, len)
+}
+
+/// The first run of lines in `bytes` equal to `run`, ignoring a trailing CR on
+/// each line, so the first run whose hash matches the hash of `run`.
+///
+/// Each line is mapped to a small id once, then the id sequence is searched
+/// with Knuth-Morris-Pratt, so the cost is linear in the file and the run.
+fn find_run(bytes: &[u8], run: &[Vec<u8>]) -> Option<LineRange> {
+    if run.is_empty() {
+        return None;
+    }
+    let mut ids: HashMap<&[u8], usize> = HashMap::new();
+    let pattern: Vec<usize> = run
+        .iter()
+        .map(|line| {
+            let next = ids.len();
+            *ids.entry(line.as_slice()).or_insert(next)
+        })
+        .collect();
+    // fallback[i] is the length of the longest proper prefix of
+    // pattern[..=i] that is also a suffix of it.
+    let mut fallback = vec![0; pattern.len()];
+    let mut matched = 0;
+    for i in 1..pattern.len() {
+        while matched > 0 && pattern[i] != pattern[matched] {
+            matched = fallback[matched - 1];
+        }
+        if pattern[i] == pattern[matched] {
+            matched += 1;
+        }
+        fallback[i] = matched;
+    }
+    let mut matched = 0;
+    for (i, line) in split_lines(bytes).into_iter().enumerate() {
+        let Some(&id) = ids.get(strip_cr(line)) else {
+            matched = 0;
+            continue;
+        };
+        while matched > 0 && id != pattern[matched] {
+            matched = fallback[matched - 1];
+        }
+        if id == pattern[matched] {
+            matched += 1;
+        }
+        if matched == pattern.len() {
+            return line_range(i + 1 - pattern.len(), pattern.len());
+        }
+    }
+    None
+}
+
+/// Lines `start + 1` to `start + len`, from a zero-based start.
+fn line_range(start: usize, len: usize) -> Option<LineRange> {
     let first = u32::try_from(start + 1).ok()?;
     let last = u32::try_from(start + len).ok()?;
     LineRange::new(first, last).ok()
@@ -374,6 +455,26 @@ mod tests {
             Some(LineRange::new(3, 4).unwrap())
         );
         assert_eq!(find_lines(b"a\nb\n", 2, &hash), None);
+    }
+
+    #[test]
+    fn find_run_reports_the_first_exact_run() {
+        let run = |lines: &[&str]| -> Vec<Vec<u8>> {
+            lines.iter().map(|l| l.as_bytes().to_vec()).collect()
+        };
+        let aab = run(&["a", "a", "b"]);
+        assert_eq!(
+            find_run(b"a\na\na\nb\na\na\nb\n", &aab),
+            Some(LineRange::new(2, 4).unwrap()),
+            "a partial match falls back without skipping the real start"
+        );
+        assert_eq!(
+            find_run(b"x\r\ny\r\n", &run(&["x", "y"])),
+            Some(LineRange::new(1, 2).unwrap()),
+            "a trailing CR is ignored as the hash ignores it"
+        );
+        assert_eq!(find_run(b"a\nc\nb\n", &aab), None);
+        assert_eq!(find_run(b"a\n", &[]), None);
     }
 
     #[test]
