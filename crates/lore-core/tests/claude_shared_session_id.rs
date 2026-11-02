@@ -120,3 +120,136 @@ fn resumed_transcript_does_not_replace_the_session_it_resumed() {
         assert_eq!(hit_sessions(&conn, "birch"), vec![resumed_session]);
     }
 }
+
+fn native_ids(conn: &Connection) -> Vec<String> {
+    let mut stmt = conn
+        .prepare("SELECT native_session_id FROM agent_session ORDER BY native_session_id")
+        .unwrap();
+    stmt.query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap()
+}
+
+fn message_count(conn: &Connection, session_id: &str) -> i64 {
+    conn.query_row(
+        "SELECT count(*) FROM message WHERE session_id = ?1",
+        [session_id],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn subagent_session_id_is_the_parent_id_and_agent_file_name() {
+    let parent = fixture_dir().join(format!("{PARENT_ID}.jsonl"));
+    let subagent = fixture_dir().join(format!(
+        "{PARENT_ID}/subagents/agent-a0000000000000001.jsonl"
+    ));
+    let conn = ingest_in_order(&[parent, subagent]);
+    assert_eq!(
+        native_ids(&conn),
+        vec![
+            PARENT_ID.to_string(),
+            format!("{PARENT_ID}/agent-a0000000000000001"),
+        ]
+    );
+}
+
+#[test]
+fn subagent_without_agent_id_keeps_its_own_session() {
+    let parent_id = "eeeeeeee-0000-4000-8000-000000000001";
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join(format!("{parent_id}.jsonl"));
+    let sub_dir = dir.path().join(parent_id).join("subagents");
+    std::fs::create_dir_all(&sub_dir).unwrap();
+    let subagent = sub_dir.join("agent-a0000000000000002.jsonl");
+    std::fs::write(
+        &parent,
+        line(parent_id, "e1", "user", "parent question")
+            + &line(parent_id, "e2", "assistant", "parent answer names the maple"),
+    )
+    .unwrap();
+    // No agentId on any line: the id must come from the file name.
+    std::fs::write(
+        &subagent,
+        line(parent_id, "e3", "user", "subagent prompt"),
+    )
+    .unwrap();
+
+    for order in [
+        [parent.clone(), subagent.clone()],
+        [subagent.clone(), parent.clone()],
+    ] {
+        let conn = ingest_in_order(&order);
+        assert_eq!(
+            native_ids(&conn),
+            vec![
+                parent_id.to_string(),
+                format!("{parent_id}/agent-a0000000000000002"),
+            ]
+        );
+        let (parent_session, _) = session_for(&conn, parent_id);
+        assert_eq!(message_count(&conn, &parent_session), 2);
+    }
+}
+
+#[test]
+fn one_stray_session_id_line_does_not_move_the_file() {
+    let own_id = "ffffffff-0000-4000-8000-000000000001";
+    let stray_id = "ffffffff-0000-4000-8000-000000000099";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("{own_id}.jsonl"));
+    let stray = format!(
+        r#"{{"type":"last-prompt","sessionId":"{stray_id}","lastPrompt":"x"}}"#
+    ) + "\n";
+    std::fs::write(
+        &path,
+        line(own_id, "f1", "user", "question")
+            + &line(own_id, "f2", "assistant", "answer names the spruce")
+            + &stray,
+    )
+    .unwrap();
+    let conn = ingest_in_order(&[path]);
+    assert_eq!(native_ids(&conn), vec![own_id.to_string()]);
+}
+
+/// A resumed transcript scanned while it still holds only lines copied from
+/// the session it resumed must not take over that session.
+#[test]
+fn resumed_transcript_with_only_copied_lines_leaves_the_original_whole() {
+    let old_id = "abababab-0000-4000-8000-000000000001";
+    let new_id = "abababab-0000-4000-8000-000000000002";
+    let copied = line(old_id, "g1", "user", "first question")
+        + &line(old_id, "g2", "assistant", "first answer names the walnut");
+    let original = copied.clone()
+        + &line(old_id, "g3", "user", "second question")
+        + &line(old_id, "g4", "assistant", "second answer names the juniper");
+    let dir = tempfile::tempdir().unwrap();
+    let original_path = dir.path().join(format!("{old_id}.jsonl"));
+    let resumed_path = dir.path().join(format!("{new_id}.jsonl"));
+    std::fs::write(&original_path, original).unwrap();
+    std::fs::write(&resumed_path, &copied).unwrap();
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(blob_dir.path()).unwrap();
+    let adapter = ClaudeCodeAdapter::new();
+    ingest_file(&conn, &adapter, &original_path, &blobs).unwrap();
+    ingest_file(&conn, &adapter, &resumed_path, &blobs).unwrap();
+    let (original_session, _) = session_for(&conn, old_id);
+    assert_eq!(message_count(&conn, &original_session), 4);
+    assert_eq!(hit_sessions(&conn, "juniper"), vec![original_session.clone()]);
+
+    // The resumed file then gains its own lines.
+    std::fs::write(
+        &resumed_path,
+        copied + &line(new_id, "g5", "assistant", "resumed answer names the sequoia"),
+    )
+    .unwrap();
+    ingest_file(&conn, &adapter, &resumed_path, &blobs).unwrap();
+    assert_eq!(message_count(&conn, &original_session), 4);
+    let (resumed_session, _) = session_for(&conn, new_id);
+    assert_eq!(message_count(&conn, &resumed_session), 3);
+    assert_eq!(native_ids(&conn), vec![old_id.to_string(), new_id.to_string()]);
+}
