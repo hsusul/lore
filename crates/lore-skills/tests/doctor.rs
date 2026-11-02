@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lore_skills::{DriftCopy, Finding, Inventory, Roots, CODEX_BUDGET_CHARS};
+use lore_skills::{Agent, DriftCopy, Finding, Inventory, Roots, CODEX_BUDGET_CHARS};
 
 fn home() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/home")
@@ -27,10 +27,20 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
     let at = |p: &str| home.join(p);
     let agents_cgc = at(".agents/skills/clean-git-commit");
     let claude_cgc = at(".claude/skills/clean-git-commit");
+    let broken = |missing: &str, agent, found: &str| Finding::BrokenRef {
+        skill: "referrer".into(),
+        missing: missing.into(),
+        agent,
+        path: at(".agents/skills/referrer"),
+        found_at: at(found),
+    };
     let unknown = |skill: &str, path: &str| Finding::UnknownSource {
         skill: skill.into(),
         path: at(path),
     };
+    let off = ".codex/plugins/cache/mkt/off/1.0/skills/off-skill";
+    let plugin = ".claude/plugins/cache/market/demo/1.0.0/skills/plugin-skill";
+    let claude_only = ".claude/skills/claude-only";
     let unclosed = "frontmatter `description` has an unclosed `\"`";
 
     // No NameMismatch for hf-style: a vendor's name in a managed cache is
@@ -53,6 +63,13 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
             path: at(".agents/skills/mislabeled"),
         },
         unknown("mislabeled", ".agents/skills/mislabeled"),
+        broken("claude-only", Agent::Codex, claude_only),
+        broken("claude-only", Agent::Cursor, claude_only),
+        broken("off-skill", Agent::Codex, off),
+        broken("off-skill", Agent::Cursor, off),
+        broken("plugin-skill", Agent::Codex, plugin),
+        broken("plugin-skill", Agent::Cursor, plugin),
+        unknown("referrer", ".agents/skills/referrer"),
         Finding::Drift {
             skill: "clean-git-commit".into(),
             copies: vec![
@@ -95,8 +112,7 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
             ],
         },
         unknown("big", ".codex/skills/big"),
-        unknown("claude-only", ".claude/skills/claude-only"),
-        unknown("referrer", ".agents/skills/referrer"),
+        unknown("claude-only", claude_only),
     ];
     assert_eq!(lore_skills::doctor(&inventory), expected);
 }

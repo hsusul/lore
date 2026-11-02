@@ -64,8 +64,8 @@ fn doctor_reports_and_still_exits_zero() {
     let summary = text.lines().last().unwrap();
     assert_eq!(
         summary,
-        "3 duplicates, 1 drift, 7 unknown sources, 1 name mismatches, \
-         2 bad frontmatter, 1 codex budget; 15 findings; 12 skills found"
+        "3 duplicates, 1 drift, 7 unknown sources, 6 broken refs, 1 name mismatches, \
+         2 bad frontmatter, 1 codex budget; 21 findings; 12 skills found"
     );
     assert!(text.starts_with("bad-yaml\n  bad-frontmatter"), "{text}");
     assert!(
@@ -105,6 +105,28 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
             ),
         )
     };
+    let link = cmd(
+        "broken-ref",
+        "referrer",
+        format!(
+            "[ -e '{h}/.agents/skills/claude-only' ] || \
+             ln -s '{h}/.claude/skills/claude-only' '{h}/.agents/skills/claude-only'"
+        ),
+    );
+
+    let managed_ref = |agent: &str, missing: &str, rel: &str, manager: &str| {
+        hint(
+            "broken-ref",
+            "referrer",
+            format!(
+                "{agent} cannot load '{missing}'. A copy is at '{h}/{rel}', managed by \
+                 {manager}. Install it where {agent} loads skills. Do not link the \
+                 managed copy, since its path changes on update."
+            ),
+        )
+    };
+    let off = ".codex/plugins/cache/mkt/off/1.0/skills/off-skill";
+    let plugin = ".claude/plugins/cache/market/demo/1.0.0/skills/plugin-skill";
     let diff = |a: &str, b: &str| format!("diff -ru '{h}/{a}' '{h}/{b}'");
     let cgc = diff(
         ".agents/skills/clean-git-commit",
@@ -133,6 +155,13 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
             edit(".agents/skills/mislabeled"),
         ),
         unknown("mislabeled", ".agents/skills/mislabeled"),
+        link.clone(),
+        link,
+        managed_ref("codex", "off-skill", off, "codex"),
+        managed_ref("cursor", "off-skill", off, "codex"),
+        managed_ref("codex", "plugin-skill", plugin, "claude-code"),
+        managed_ref("cursor", "plugin-skill", plugin, "claude-code"),
+        unknown("referrer", ".agents/skills/referrer"),
         cmd("drift", "clean-git-commit", cgc.clone()),
         cmd("duplicate", "clean-git-commit", cgc),
         unknown("clean-git-commit", ".agents/skills/clean-git-commit"),
@@ -153,7 +182,6 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
         ),
         unknown("big", ".codex/skills/big"),
         unknown("claude-only", ".claude/skills/claude-only"),
-        unknown("referrer", ".agents/skills/referrer"),
     ];
     let output = lorectl(&home, &["skills", "doctor", "--json"]);
     assert_eq!(output.status.code(), Some(0));
@@ -359,7 +387,7 @@ fn doctor_json_is_the_same_findings_each_with_a_fix() {
     let output = lorectl(&fixture_home(), &["skills", "doctor", "--json"]);
     assert_eq!(output.status.code(), Some(0));
     let findings = json(&output);
-    assert_eq!(findings.len(), 15);
+    assert_eq!(findings.len(), 21);
     assert_eq!(findings[0]["kind"], "bad-frontmatter");
 }
 

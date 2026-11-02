@@ -153,6 +153,15 @@ pub enum Finding {
         declared: String,
         path: PathBuf,
     },
+    /// A skill names another skill that exists on this machine but is not
+    /// reachable from an agent that loads the referencing skill.
+    BrokenRef {
+        skill: SkillName,
+        missing: SkillName,
+        agent: Agent,
+        path: PathBuf,
+        found_at: PathBuf,
+    },
     /// One name with two or more different contents.
     Drift {
         skill: SkillName,
@@ -181,6 +190,7 @@ impl Finding {
         match self {
             Finding::BadFrontmatter { .. } => 0,
             Finding::NameMismatch { .. } => 1,
+            Finding::BrokenRef { .. } => 2,
             Finding::Drift { .. } => 3,
             Finding::CodexBudget { .. } => 4,
             Finding::Duplicate { .. } => 5,
@@ -194,6 +204,7 @@ impl Finding {
         match self {
             Finding::BadFrontmatter { skill, .. }
             | Finding::NameMismatch { skill, .. }
+            | Finding::BrokenRef { skill, .. }
             | Finding::Drift { skill, .. }
             | Finding::Duplicate { skill, .. }
             | Finding::UnknownSource { skill, .. } => Some(skill),
@@ -207,6 +218,7 @@ impl Finding {
         match self {
             Finding::BadFrontmatter { .. } => "bad-frontmatter",
             Finding::NameMismatch { .. } => "name-mismatch",
+            Finding::BrokenRef { .. } => "broken-ref",
             Finding::Drift { .. } => "drift",
             Finding::CodexBudget { .. } => "codex-budget",
             Finding::Duplicate { .. } => "duplicate",
@@ -215,8 +227,8 @@ impl Finding {
     }
 
     /// What a person can do about it. Suggested, never run. A command only
-    /// reads or opens an editor; it never edits, moves, or deletes a copy an
-    /// agent manages.
+    /// reads, opens an editor, or links into a folder the user owns; it never
+    /// edits, moves, deletes, or links to a copy an agent manages.
     #[must_use]
     pub fn fix(&self, roots: &Roots) -> Fix {
         match self {
@@ -224,6 +236,31 @@ impl Finding {
                 edit_or_report(roots, path, "the bad frontmatter")
             }
             Finding::NameMismatch { path, .. } => edit_or_report(roots, path, "the name mismatch"),
+            Finding::BrokenRef {
+                missing,
+                agent,
+                found_at,
+                ..
+            } => match roots.manager(found_at) {
+                // A cache path carries a version, and a disabled plugin is off
+                // on purpose: a link to either is wrong now or after an update.
+                Some(manager) => Fix::Hint(format!(
+                    "{agent} cannot load {}. A copy is at {}, managed by {manager}. \
+                     Install it where {agent} loads skills. Do not link the managed \
+                     copy, since its path changes on update.",
+                    shell_quote(missing),
+                    quote_path(found_at),
+                )),
+                // Guarded: a second `ln -s` onto a link to a folder would
+                // put a link inside the user's own copy.
+                None => {
+                    let dest = quote_path(&roots.primary_dir(*agent).join(missing));
+                    Fix::Command(format!(
+                        "[ -e {dest} ] || ln -s {} {dest}",
+                        quote_path(found_at)
+                    ))
+                }
+            },
             Finding::Drift { copies, .. } => {
                 let paths: Vec<String> =
                     copies.iter().take(2).map(|c| quote_path(&c.path)).collect();
@@ -349,6 +386,13 @@ mod tests {
                 skill: "s".into(),
                 path: system.clone(),
                 reason: "r".into(),
+            },
+            Finding::BrokenRef {
+                skill: "r".into(),
+                missing: "s".into(),
+                agent: Agent::Codex,
+                path: PathBuf::from("/h/.agents/skills/r"),
+                found_at: cache.clone(),
             },
             Finding::CodexBudget {
                 chars: 9000,
