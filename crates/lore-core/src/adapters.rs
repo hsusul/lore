@@ -6,7 +6,7 @@
 //! [`crate::model::ParsedSession`]. Adapters never touch the network, never
 //! mutate agent files, and never hard-fail on unknown input.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::model::{ParseCheckpoint, ParsedAppend, ParsedSession};
@@ -128,6 +128,15 @@ pub trait AgentAdapter: Send + Sync {
         self.roots(overrides)
     }
 
+    /// The key a session file is parsed under (`fallback_dedupe`): its file
+    /// stem by default, or the whole path when it has none. An adapter whose
+    /// file names alone collide overrides it.
+    fn session_key(&self, path: &Path) -> String {
+        path.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned())
+    }
+
     /// Enumerate candidate session files. Idempotent and cheap; no parsing.
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef>;
 
@@ -171,11 +180,7 @@ pub trait AgentAdapter: Send + Sync {
     /// not override it.
     fn parse_session(&self, source: &SessionRef) -> Result<ParsedSession, AdapterError> {
         let content = std::fs::read_to_string(&source.path).map_err(|_| AdapterError::Io)?;
-        let fallback = source
-            .native_id
-            .clone()
-            .unwrap_or_else(|| source.path.to_string_lossy().into_owned());
-        Ok(self.parse_content(&content, &fallback))
+        Ok(self.parse_content(&content, &self.session_key(&source.path)))
     }
 }
 
