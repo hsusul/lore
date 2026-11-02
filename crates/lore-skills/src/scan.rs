@@ -1,7 +1,7 @@
 //! Walk every location under a home root into [`SkillRecord`]s. Read-only:
 //! nothing here opens a file for writing.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -13,8 +13,6 @@ use crate::model::{ContentHash, Install, Mode, SkillName, SkillRecord, Source};
 
 /// Deep enough for `cache/<marketplace>/<plugin>/<version>/skills`, with room.
 const MAX_SEARCH_DEPTH: usize = 6;
-/// Bounds a symlink cycle inside a skill folder.
-const MAX_HASH_DEPTH: usize = 8;
 /// Bytes of each file read for hashing and for SKILL.md. A file's full length
 /// is hashed too, so growth past the cap still changes the hash.
 pub const MAX_READ_BYTES: u64 = 1 << 20;
@@ -217,7 +215,7 @@ fn find_skills_dirs(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     if depth > MAX_SEARCH_DEPTH {
         return;
     }
-    for (name, path) in children(dir) {
+    for (name, path) in children(dir).unwrap_or_default() {
         // Not followed: a link here could loop or leave the cache entirely.
         let is_dir = fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir());
         if !is_dir {
@@ -234,17 +232,15 @@ fn find_skills_dirs(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 /// Child folders holding a SKILL.md, by name. Symlinks are followed.
 fn skill_folders(dir: &Path) -> Vec<(SkillName, PathBuf)> {
     children(dir)
+        .unwrap_or_default()
         .into_iter()
         .filter(|(_, path)| path.join("SKILL.md").is_file())
         .collect()
 }
 
 /// Sorted, non-hidden, UTF-8-named entries of a directory.
-fn children(dir: &Path) -> Vec<(String, PathBuf)> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut out: Vec<(String, PathBuf)> = entries
+fn children(dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
+    let mut out: Vec<(String, PathBuf)> = fs::read_dir(dir)?
         .filter_map(Result::ok)
         .filter_map(|e| {
             let name = e.file_name().into_string().ok()?;
@@ -252,7 +248,7 @@ fn children(dir: &Path) -> Vec<(String, PathBuf)> {
         })
         .collect();
     out.sort();
-    out
+    Ok(out)
 }
 
 /// A file's full length and at most [`MAX_READ_BYTES`] of its bytes.
@@ -271,15 +267,22 @@ enum Entry {
     /// A link that leaves the skill folder: its target text is hashed, never
     /// what it points at.
     Outside(PathBuf),
+    /// A directory already walked under another path, by its path relative to
+    /// the skill folder. Not walked again, so a link back up costs one entry.
+    Walked(PathBuf),
+    /// A directory whose entries could not be listed.
+    Unlistable,
 }
 
 /// blake3 over every non-hidden file below `root`: relative path, full
 /// length, and the first [`MAX_READ_BYTES`] bytes, in sorted order. Hidden
 /// files (`.DS_Store`, editor state) are not content an agent reads. Links are
-/// followed only while they stay inside `root`, which is already resolved.
+/// followed only while they stay inside `root`, which is already resolved, and
+/// each real directory is walked once.
 fn hash_dir(root: &Path) -> ContentHash {
     let mut files = Vec::new();
-    collect_files(root, root, "", 0, &mut files);
+    let mut walked = HashSet::from([root.to_path_buf()]);
+    collect_files(root, root, "", &mut walked, &mut files);
     let mut hasher = blake3::Hasher::new();
     for (relative, entry) in files {
         hasher.update(relative.as_bytes());
@@ -288,6 +291,13 @@ fn hash_dir(root: &Path) -> ContentHash {
             Entry::Outside(target) => {
                 hasher.update(b"\xfelink");
                 hasher.update(target.as_os_str().as_encoded_bytes());
+            }
+            Entry::Walked(real) => {
+                hasher.update(b"\xfewalked");
+                hasher.update(real.as_os_str().as_encoded_bytes());
+            }
+            Entry::Unlistable => {
+                hasher.update(b"\xffunlistable");
             }
             Entry::File => match read_capped(&root.join(&relative)) {
                 Ok((len, bytes)) => {
@@ -307,13 +317,14 @@ fn collect_files(
     root: &Path,
     dir: &Path,
     prefix: &str,
-    depth: usize,
+    walked: &mut HashSet<PathBuf>,
     out: &mut Vec<(String, Entry)>,
 ) {
-    if depth > MAX_HASH_DEPTH {
+    let Ok(children) = children(dir) else {
+        out.push((prefix.to_string(), Entry::Unlistable));
         return;
-    }
-    for (name, path) in children(dir) {
+    };
+    for (name, path) in children {
         let relative = if prefix.is_empty() {
             name
         } else {
@@ -329,7 +340,16 @@ fn collect_files(
             }
         }
         match fs::metadata(&path) {
-            Ok(meta) if meta.is_dir() => collect_files(root, &path, &relative, depth + 1, out),
+            Ok(meta) if meta.is_dir() => match fs::canonicalize(&path) {
+                Ok(real) if walked.insert(real.clone()) => {
+                    collect_files(root, &path, &relative, walked, out);
+                }
+                Ok(real) => {
+                    let inner = real.strip_prefix(root).unwrap_or(&real).to_path_buf();
+                    out.push((relative, Entry::Walked(inner)));
+                }
+                Err(_) => out.push((relative, Entry::Unlistable)),
+            },
             Ok(meta) if meta.is_file() => out.push((relative, Entry::File)),
             _ => {}
         }
