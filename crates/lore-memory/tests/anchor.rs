@@ -1,5 +1,5 @@
 //! One anchor checked against each commit of a three-commit fixture repo, and
-//! against the working tree after a delete.
+//! against the working tree after a delete and after a `git mv`.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod common;
@@ -97,6 +97,28 @@ fn anchor_freshness_at_each_fixture_commit() {
     git(root, &["checkout", "-q", &third]);
     fs::remove_file(root.join("src/lib.rs")).unwrap();
     assert_eq!(anchor.check(root), Freshness::Gone);
+}
+
+#[test]
+fn a_git_mv_reports_moved_at_the_new_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let ([first, ..], anchor) = fixture(root);
+    git(root, &["checkout", "-q", &first]);
+    git(root, &["mv", "--", "src/lib.rs", "src/core.rs"]);
+
+    let located = WorkTree::new(root).locate(&anchor);
+    assert_eq!(
+        located.freshness,
+        Freshness::Moved {
+            lines: lines("3-5")
+        }
+    );
+    assert_eq!(located.path.as_str(), "src/core.rs");
+    assert!(
+        git(root, &["status", "--porcelain"]).starts_with("R  src/lib.rs -> src/core.rs"),
+        "the check left the rename staged and nothing else"
+    );
 }
 
 #[test]
