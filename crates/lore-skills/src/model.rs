@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::locations::Roots;
+
 /// A skill's name: its folder name, which every agent uses to address it.
 pub type SkillName = String;
 
@@ -136,6 +138,18 @@ pub struct DriftCopy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Finding {
+    /// SKILL.md frontmatter that an agent's YAML reader would reject.
+    BadFrontmatter {
+        skill: SkillName,
+        path: PathBuf,
+        reason: String,
+    },
+    /// Frontmatter `name` differs from the folder name.
+    NameMismatch {
+        skill: SkillName,
+        declared: String,
+        path: PathBuf,
+    },
     /// One name with two or more different contents.
     Drift {
         skill: SkillName,
@@ -155,6 +169,8 @@ impl Finding {
     #[must_use]
     pub fn rank(&self) -> u8 {
         match self {
+            Finding::BadFrontmatter { .. } => 0,
+            Finding::NameMismatch { .. } => 1,
             Finding::Drift { .. } => 3,
             Finding::Duplicate { .. } => 5,
             Finding::UnknownSource { .. } => 6,
@@ -165,7 +181,9 @@ impl Finding {
     #[must_use]
     pub fn skill(&self) -> Option<&str> {
         match self {
-            Finding::Drift { skill, .. }
+            Finding::BadFrontmatter { skill, .. }
+            | Finding::NameMismatch { skill, .. }
+            | Finding::Drift { skill, .. }
             | Finding::Duplicate { skill, .. }
             | Finding::UnknownSource { skill, .. } => Some(skill),
         }
@@ -175,6 +193,8 @@ impl Finding {
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
+            Finding::BadFrontmatter { .. } => "bad-frontmatter",
+            Finding::NameMismatch { .. } => "name-mismatch",
             Finding::Drift { .. } => "drift",
             Finding::Duplicate { .. } => "duplicate",
             Finding::UnknownSource { .. } => "unknown-source",
@@ -182,10 +202,15 @@ impl Finding {
     }
 
     /// What a person can do about it. Suggested, never run. A command only
-    /// reads; it never edits, moves, or deletes a copy.
+    /// reads or opens an editor; it never edits, moves, or deletes a copy an
+    /// agent manages.
     #[must_use]
-    pub fn fix(&self) -> Fix {
+    pub fn fix(&self, roots: &Roots) -> Fix {
         match self {
+            Finding::BadFrontmatter { path, .. } => {
+                edit_or_report(roots, path, "the bad frontmatter")
+            }
+            Finding::NameMismatch { path, .. } => edit_or_report(roots, path, "the name mismatch"),
             Finding::Drift { copies, .. } => {
                 let paths: Vec<String> =
                     copies.iter().take(2).map(|c| quote_path(&c.path)).collect();
@@ -243,6 +268,27 @@ impl Fix {
     }
 }
 
+/// Open a user-owned SKILL.md in the editor, or say whom to tell when an agent
+/// manages it.
+fn edit_or_report(roots: &Roots, path: &Path, what: &str) -> Fix {
+    match roots.manager(path) {
+        Some(manager) => Fix::Hint(format!(
+            "Managed by {manager}. Report {what} in {} to its maintainer. Do not \
+             edit the managed copy.",
+            quote_path(&path.join("SKILL.md"))
+        )),
+        None => edit(path),
+    }
+}
+
+/// `vi` when `EDITOR` is unset, so the path is never run as the command.
+fn edit(path: &Path) -> Fix {
+    Fix::Command(format!(
+        "${{EDITOR:-vi}} {}",
+        quote_path(&path.join("SKILL.md"))
+    ))
+}
+
 /// The one quoting rule for every fix: wrap in single quotes, and write each
 /// single quote as `'\''`. Nothing inside single quotes is special to a POSIX
 /// shell, so `$`, backticks, `&`, `;`, and spaces stay literal.
@@ -268,7 +314,41 @@ mod tests {
     }
 
     #[test]
+    fn a_managed_copy_gets_a_hint_never_a_command() {
+        let roots = Roots::from_home(Path::new("/h"));
+        let cache = PathBuf::from("/h/.claude/plugins/cache/m/p/1.0/skills/s");
+        let system = PathBuf::from("/h/.codex/skills/.system/s");
+        for finding in [
+            Finding::NameMismatch {
+                skill: "s".into(),
+                declared: "t".into(),
+                path: cache.clone(),
+            },
+            Finding::BadFrontmatter {
+                skill: "s".into(),
+                path: system,
+                reason: "r".into(),
+            },
+        ] {
+            assert_eq!(finding.fix(&roots).kind(), "hint", "{finding:?}");
+        }
+        let fix = Finding::NameMismatch {
+            skill: "s".into(),
+            declared: "t".into(),
+            path: cache,
+        }
+        .fix(&roots);
+        assert_eq!(
+            fix.text(),
+            "Managed by claude-code. Report the name mismatch in \
+             '/h/.claude/plugins/cache/m/p/1.0/skills/s/SKILL.md' to its maintainer. \
+             Do not edit the managed copy."
+        );
+    }
+
+    #[test]
     fn a_duplicate_with_three_copies_diffs_each_against_the_first() {
+        let roots = Roots::from_home(Path::new("/h"));
         let fix = Finding::Duplicate {
             skill: "s".into(),
             paths: vec![
@@ -277,7 +357,7 @@ mod tests {
                 "/h/.codex/plugins/cache/c".into(),
             ],
         }
-        .fix();
+        .fix(&roots);
         assert_eq!(
             fix,
             Fix::Command(

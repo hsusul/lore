@@ -31,8 +31,28 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
         skill: skill.into(),
         path: at(path),
     };
+    let unclosed = "frontmatter `description` has an unclosed `\"`";
 
+    // No NameMismatch for hf-style: a vendor's name in a managed cache is
+    // the vendor's choice, and nothing the user runs can change it.
     let expected = vec![
+        Finding::BadFrontmatter {
+            skill: "bad-yaml".into(),
+            path: at(".agents/skills/bad-yaml"),
+            reason: unclosed.into(),
+        },
+        unknown("bad-yaml", ".agents/skills/bad-yaml"),
+        Finding::BadFrontmatter {
+            skill: "sys-bad".into(),
+            path: at(".codex/skills/.system/sys-bad"),
+            reason: unclosed.into(),
+        },
+        Finding::NameMismatch {
+            skill: "mislabeled".into(),
+            declared: "other-name".into(),
+            path: at(".agents/skills/mislabeled"),
+        },
+        unknown("mislabeled", ".agents/skills/mislabeled"),
         Finding::Drift {
             skill: "clean-git-commit".into(),
             copies: vec![
@@ -68,10 +88,8 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
                 at(".codex/plugins/cache/mkt/tool/1.0/skills/tool-skill"),
             ],
         },
-        unknown("bad-yaml", ".agents/skills/bad-yaml"),
         unknown("big", ".codex/skills/big"),
         unknown("claude-only", ".claude/skills/claude-only"),
-        unknown("mislabeled", ".agents/skills/mislabeled"),
         unknown("referrer", ".agents/skills/referrer"),
     ];
     assert_eq!(lore_skills::doctor(&inventory), expected);

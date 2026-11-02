@@ -27,7 +27,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let out = match (subcommand, invocation.json) {
         ("ls", true) => serde_json::to_string(&inventory.records).unwrap_or_default(),
         ("ls", false) => ls_text(&inventory),
-        (_, true) => doctor_json(&lore_skills::doctor(&inventory)),
+        (_, true) => doctor_json(&inventory, &lore_skills::doctor(&inventory)),
         (_, false) => doctor_text(&inventory, &lore_skills::doctor(&inventory)),
     };
     let _ = writeln!(std::io::stdout().lock(), "{out}");
@@ -94,8 +94,8 @@ fn source_label(record: &SkillRecord) -> String {
 
 /// The findings as one JSON array, each with its `fix` and whether that fix
 /// is a `command` or a `hint`.
-fn doctor_json(findings: &[Finding]) -> String {
-    let fixes: Vec<Fix> = findings.iter().map(Finding::fix).collect();
+fn doctor_json(inventory: &Inventory, findings: &[Finding]) -> String {
+    let fixes: Vec<Fix> = findings.iter().map(|f| f.fix(&inventory.roots)).collect();
     let records: Vec<serde_json::Value> = findings
         .iter()
         .zip(&fixes)
@@ -118,7 +118,7 @@ fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
     };
     let mut out = String::new();
     let mut group: Option<Option<&str>> = None;
-    let fixes: Vec<Fix> = findings.iter().map(Finding::fix).collect();
+    let fixes: Vec<Fix> = findings.iter().map(|f| f.fix(&inventory.roots)).collect();
     for (finding, fix) in findings.iter().zip(&fixes) {
         if group != Some(finding.skill()) {
             group = Some(finding.skill());
@@ -149,6 +149,12 @@ fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
 
 fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
     match finding {
+        Finding::BadFrontmatter { path, reason, .. } => {
+            format!("{}/SKILL.md {reason}", show(path))
+        }
+        Finding::NameMismatch { declared, path, .. } => {
+            format!("{} declares `name: {declared}`", show(path))
+        }
         Finding::Drift { copies, .. } => {
             let copies: Vec<String> = copies
                 .iter()
@@ -170,10 +176,13 @@ fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
 fn summary(findings: &[Finding], skills: usize) -> String {
     let count = |kind: &str| findings.iter().filter(|f| f.kind() == kind).count();
     format!(
-        "{} duplicates, {} drift, {} unknown sources; {} findings; {skills} skills found",
+        "{} duplicates, {} drift, {} unknown sources, {} name mismatches, \
+         {} bad frontmatter; {} findings; {skills} skills found",
         count("duplicate"),
         count("drift"),
         count("unknown-source"),
+        count("name-mismatch"),
+        count("bad-frontmatter"),
         findings.len(),
     )
 }

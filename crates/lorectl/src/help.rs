@@ -68,8 +68,10 @@ Options:
 
 Skills:
     skills ls         Every skill folder each agent loads, with its source.
-    skills doctor     Duplicates, drift, and unknown sources.
-                      Each gets a quoted command or a plain hint. Never
+    skills doctor     Duplicates, drift, unknown sources, name mismatches,
+                      and bad frontmatter.
+                      Each gets a quoted command or a plain hint; nothing
+                      is suggested for a copy an agent manages. Never
                       writes; exits 0.
 
 Environment:
