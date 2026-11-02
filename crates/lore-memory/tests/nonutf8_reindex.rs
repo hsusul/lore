@@ -7,10 +7,11 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
-use lore_memory::vault::{Init, Vault};
+use lore_memory::vault::{Init, Vault, VaultError};
 
 fn isolate_git() {
     std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
@@ -42,22 +43,59 @@ fn a_non_utf8_file_is_skipped_not_a_failed_rebuild() {
     fs::create_dir_all(&broken).unwrap();
     fs::write(broken.join("bad.md"), b"---\ntype: fact\n---\n\xff\xfe\n").unwrap();
     git(dir.path(), &["add", "-A"]);
-    git(dir.path(), &["commit", "-q", "-m", "a file another tool truncated"]);
+    git(
+        dir.path(),
+        &["commit", "-q", "-m", "a file another tool truncated"],
+    );
 
     let reindexed = vault
         .reindex()
         .expect("one unreadable file must not fail the whole rebuild");
-    assert!(
-        reindexed.indexed >= 1,
-        "the valid note was not indexed: {reindexed:?}"
+    assert_eq!(reindexed.indexed, 1, "{reindexed:?}");
+    let skipped: Vec<(&str, String)> = reindexed
+        .skipped
+        .iter()
+        .map(|(rel, error)| (rel.as_str(), error.to_string()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [(
+            "global/bad.md",
+            "not a note: the file is not valid UTF-8".to_string()
+        )]
     );
     assert!(
-        reindexed.skipped.iter().any(|(rel, _)| rel.contains("bad.md")),
-        "the unreadable file was not named in skipped: {:?}",
-        reindexed.skipped
-    );
-    assert!(
-        vault.search("findable", 10).unwrap().iter().any(|h| h.title.contains("Good")),
+        vault
+            .search("findable", 10)
+            .unwrap()
+            .iter()
+            .any(|h| h.title.contains("Good")),
         "a valid note stopped being searchable because of a neighbour"
     );
+}
+
+#[test]
+fn an_unreadable_note_file_still_fails_the_rebuild() {
+    isolate_git();
+    let dir = tempfile::tempdir().unwrap();
+    let (vault, _) = Vault::init(dir.path()).unwrap();
+    let locked = dir.path().join("global");
+    fs::create_dir_all(&locked).unwrap();
+    let file = locked.join("locked.md");
+    fs::write(&file, "---\ntype: fact\n---\nbody\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&file).is_ok() {
+        // Running as root, so permission bits do not deny the read.
+        return;
+    }
+
+    let result = vault.reindex();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+    match result {
+        Err(VaultError::Io(what, error)) => {
+            assert_eq!(what, "read global/locked.md");
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+        other => panic!("a permission error must still fail the rebuild: {other:?}"),
+    }
 }
