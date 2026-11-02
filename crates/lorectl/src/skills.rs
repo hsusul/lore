@@ -95,12 +95,13 @@ fn source_label(record: &SkillRecord) -> String {
 /// The findings as one JSON array, each with its `fix` and whether that fix
 /// is a `command` or a `hint`.
 fn doctor_json(inventory: &Inventory, findings: &[Finding]) -> String {
+    let fixes = lore_skills::fixes(findings, &inventory.roots);
     let records: Vec<serde_json::Value> = findings
         .iter()
-        .map(|f| {
+        .zip(&fixes)
+        .map(|(f, fix)| {
             let mut value = serde_json::to_value(f).unwrap_or_default();
             if let Some(object) = value.as_object_mut() {
-                let fix = f.fix(&inventory.roots);
                 object.insert("fix".into(), fix.text().into());
                 object.insert("fix_kind".into(), fix.kind().into());
             }
@@ -117,7 +118,8 @@ fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
     };
     let mut out = String::new();
     let mut group: Option<Option<&str>> = None;
-    for finding in findings {
+    let fixes = lore_skills::fixes(findings, &inventory.roots);
+    for (finding, fix) in findings.iter().zip(&fixes) {
         if group != Some(finding.skill()) {
             group = Some(finding.skill());
             if !out.is_empty() {
@@ -126,7 +128,6 @@ fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
             out.push_str(finding.skill().unwrap_or("(codex skill list)"));
             out.push('\n');
         }
-        let fix = finding.fix(&inventory.roots);
         let label = match fix.kind() {
             "command" => "fix",
             other => other,

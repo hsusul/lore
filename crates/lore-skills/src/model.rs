@@ -1,6 +1,7 @@
 //! The domain: what a skill is, where it is installed, where it came from, and
 //! what can be wrong with it.
 
+use std::collections::btree_map::{BTreeMap, Entry};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -251,11 +252,15 @@ impl Finding {
                     shell_quote(missing),
                     quote_path(found_at),
                 )),
-                None => Fix::Command(format!(
-                    "ln -s {} {}",
-                    quote_path(found_at),
-                    quote_path(&roots.primary_dir(*agent).join(missing))
-                )),
+                // Guarded: a second `ln -s` onto a link to a folder would
+                // put a link inside the user's own copy.
+                None => {
+                    let dest = quote_path(&roots.primary_dir(*agent).join(missing));
+                    Fix::Command(format!(
+                        "[ -e {dest} ] || ln -s {} {dest}",
+                        quote_path(found_at)
+                    ))
+                }
             },
             Finding::Drift { copies, .. } => {
                 let paths: Vec<String> =
@@ -291,6 +296,41 @@ impl Finding {
             )),
         }
     }
+}
+
+/// Each finding's [`Finding::fix`], in order, with at most one link command per
+/// destination. Codex and Cursor load the same folder, so a skill one cannot
+/// load is a broken ref for both; the later finding gets a hint pointing at
+/// the command above it.
+#[must_use]
+pub fn fixes(findings: &[Finding], roots: &Roots) -> Vec<Fix> {
+    let mut linked: BTreeMap<PathBuf, Agent> = BTreeMap::new();
+    findings
+        .iter()
+        .map(|finding| {
+            let fix = finding.fix(roots);
+            let (Fix::Command(_), Finding::BrokenRef { missing, agent, .. }) = (&fix, finding)
+            else {
+                return fix;
+            };
+            let dir = roots.primary_dir(*agent);
+            match linked.entry(dir.join(missing)) {
+                Entry::Vacant(slot) => {
+                    slot.insert(*agent);
+                    fix
+                }
+                Entry::Occupied(first) if first.get() == agent => Fix::Hint(format!(
+                    "The fix above already links {}.",
+                    quote_path(first.key())
+                )),
+                Entry::Occupied(first) => Fix::Hint(format!(
+                    "The fix for {} above covers {agent} too: both load skills from {}.",
+                    first.get(),
+                    quote_path(&dir)
+                )),
+            }
+        })
+        .collect()
 }
 
 /// A [`Finding`]'s suggested fix.
@@ -410,6 +450,29 @@ mod tests {
             "Managed by claude-code. Report the name mismatch in \
              '/h/.claude/plugins/cache/m/p/1.0/skills/s/SKILL.md' to its maintainer. \
              Do not edit the managed copy."
+        );
+    }
+
+    #[test]
+    fn a_second_referrer_to_the_same_missing_skill_gets_a_hint() {
+        let roots = Roots::from_home(Path::new("/h"));
+        let broken = |skill: &str| Finding::BrokenRef {
+            skill: skill.into(),
+            missing: "s".into(),
+            agent: Agent::Codex,
+            path: PathBuf::from("/h/.agents/skills").join(skill),
+            found_at: PathBuf::from("/h/.claude/skills/s"),
+        };
+        assert_eq!(
+            fixes(&[broken("a"), broken("b")], &roots),
+            vec![
+                Fix::Command(
+                    "[ -e '/h/.agents/skills/s' ] || ln -s '/h/.claude/skills/s' \
+                     '/h/.agents/skills/s'"
+                        .into()
+                ),
+                Fix::Hint("The fix above already links '/h/.agents/skills/s'.".into()),
+            ]
         );
     }
 
