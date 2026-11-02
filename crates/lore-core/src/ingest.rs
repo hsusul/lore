@@ -1195,6 +1195,7 @@ pub fn ingest_file(
     let tx = conn.unchecked_transaction()?;
     let target_session_id = session_id_for(agent_id, &parsed);
     let left_folder = if prev.is_some() {
+        save_left_captures(&tx, &artifact_id, &target_session_id)?;
         detach_reassigned_source(&tx, &artifact_id, &target_session_id)?
     } else {
         None
@@ -1215,6 +1216,9 @@ pub fn ingest_file(
              VALUES (?1,?2,?3)",
             params![session_id, folder_id, added_at],
         )?;
+    }
+    if prev.is_some() {
+        carry_left_captures(&tx, &session_id)?;
     }
 
     if prev.is_none() {
@@ -1409,6 +1413,69 @@ fn session_sources(tx: &Connection, session_id: &str) -> Result<Vec<SessionSourc
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Save Lore's git captures on the sessions a source is about to leave, with
+/// the cwd of the segment each one describes. Detaching can delete those
+/// sessions and their evidence.
+fn save_left_captures(
+    tx: &Connection,
+    source_artifact_id: &str,
+    target_session_id: &str,
+) -> Result<()> {
+    tx.execute_batch("DROP TABLE IF EXISTS temp.left_capture;")?;
+    tx.execute(
+        "CREATE TEMP TABLE left_capture AS
+         SELECT g.*, seg.cwd AS cwd FROM git_observation g
+         JOIN session_segment seg ON seg.id = g.segment_id
+         JOIN session_source ss ON ss.session_id = g.session_id
+         WHERE ss.source_artifact_id = ?1 AND ss.session_id <> ?2
+           AND g.source = 'lore_captured'",
+        params![source_artifact_id, target_session_id],
+    )?;
+    Ok(())
+}
+
+/// Carry a saved capture to each segment of `session_id` that runs in the same
+/// cwd and has no repository yet, under the id enrichment gives that segment.
+/// Enrichment then keeps its first `observed_at` while it finds the same
+/// branch and commit.
+fn carry_left_captures(tx: &Connection, session_id: &str) -> Result<()> {
+    let pairs = {
+        let mut stmt = tx.prepare(
+            "SELECT seg.id, k.id FROM session_segment seg
+             JOIN temp.left_capture k ON k.cwd = seg.cwd
+             WHERE seg.session_id = ?1 AND seg.repository_id IS NULL
+             ORDER BY k.observed_at, k.id",
+        )?;
+        let rows = stmt
+            .query_map([session_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<(String, String)>>>()?;
+        rows
+    };
+    for (segment_id, kept_id) in &pairs {
+        tx.execute(
+            "INSERT OR IGNORE INTO git_observation
+                (id, session_id, segment_id, source, observed_at, temporal_confidence,
+                 branch, commit_sha, commit_subject, is_dirty, ahead, behind,
+                 changed_files_json)
+             SELECT ?1, ?2, ?3, source, observed_at, temporal_confidence,
+                    branch, commit_sha, commit_subject, is_dirty, ahead, behind,
+                    changed_files_json
+             FROM temp.left_capture WHERE id = ?4",
+            params![
+                det_id("gc", &[session_id, segment_id]),
+                session_id,
+                segment_id,
+                kept_id
+            ],
+        )?;
+    }
+    tx.execute_batch("DROP TABLE temp.left_capture;")?;
+    if !pairs.is_empty() {
+        crate::search::project_session_git(tx, session_id)?;
+    }
+    Ok(())
 }
 
 /// If a physical source is rewritten into a different native session, detach
