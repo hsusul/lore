@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "plugins": {
+    "demo@market": [
+      {
+        "scope": "user",
+        "installPath": "/Users/redacted/.claude/plugins/cache/market/demo/1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-09-03T06:27:33.739Z",
+        "lastUpdated": "2026-09-03T06:27:33.739Z",
+        "gitCommitSha": "4912d93e5ac4746acf6415ca395413eabf0564f4"
+      }
+    ]
+  }
+}
