@@ -44,6 +44,26 @@ fn lockfiles_opik_manifest_tracks_its_listed_skills() {
 }
 
 #[test]
+fn lockfiles_plugin_manifests_name_what_is_installed_or_enabled() {
+    let locks = lockfiles::read(&home());
+    assert_eq!(
+        locks.claude_plugins,
+        vec![(
+            "market/demo/1.0.0".into(),
+            Source::Plugin {
+                marketplace: "market".into(),
+                plugin: "demo".into(),
+                version: "1.0.0".into(),
+            }
+        )]
+    );
+    assert_eq!(
+        locks.codex_enabled.into_iter().collect::<Vec<_>>(),
+        ["tool@mkt"]
+    );
+}
+
+#[test]
 fn lockfiles_that_are_missing_or_malformed_record_nothing() {
     let locks = lockfiles::read(&Roots::from_home(Path::new(
         "/nonexistent/lore-skills-home",

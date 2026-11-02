@@ -66,6 +66,11 @@ pub enum Source {
     Local {
         path: PathBuf,
     },
+    Plugin {
+        marketplace: String,
+        plugin: String,
+        version: String,
+    },
     Builtin {
         agent: Agent,
     },
@@ -79,6 +84,7 @@ impl Source {
     pub fn specificity(&self) -> u8 {
         match self {
             Source::Git { .. } => 4,
+            Source::Plugin { .. } => 3,
             Source::Builtin { .. } => 2,
             Source::Local { .. } => 1,
             Source::Unknown => 0,
