@@ -643,3 +643,47 @@ fn accept_without_as_after_a_lost_decision_line_keeps_the_as_note() {
     assert!(!dir.path().join("global/worktrees-share-refs.md").exists());
     assert_eq!(subjects(dir.path()).len(), 2);
 }
+
+/// Undo the last commit but keep its file, as if the process died after the
+/// write and before the commit, and move that write's Timeline date to
+/// `date`, as if it happened before midnight.
+fn uncommit_from(root: &Path, rel: &str, date: &str) {
+    git(root, &["reset", "-q", "--soft", "HEAD~1"]);
+    git(root, &["reset", "-q", "--", rel]);
+    let path = root.join(rel);
+    let text = fs::read_to_string(&path).unwrap();
+    let (head, last) = text.trim_end().rsplit_once('\n').unwrap();
+    let moved = last.replacen(&today(), date, 1);
+    fs::write(&path, format!("{head}\n{moved}\n")).unwrap();
+}
+
+#[test]
+fn an_update_written_before_midnight_commits_after_it() {
+    let (dir, vault) = new_vault();
+    let (target, _) = vault.add(TARGET).unwrap();
+    inbox::propose(&vault, update_of(&target)).unwrap();
+    let first = review::accept(&vault, P2, None).unwrap();
+    uncommit_from(dir.path(), &first.rel, "2020-01-01");
+    lose_decisions(dir.path());
+    let written = vault.read(&first.rel).unwrap();
+    assert!(written.ends_with("- 2020-01-01 accepted from codex:s2\n"));
+    let again = review::accept(&vault, P2, None).unwrap();
+    assert_eq!(again.outcome, Added::Committed);
+    assert_eq!(vault.read(&first.rel).unwrap(), written);
+    assert_eq!(subjects(dir.path()).len(), 3);
+}
+
+#[test]
+fn a_retire_written_before_midnight_commits_after_it() {
+    let (dir, vault) = new_vault();
+    let (note, _) = vault.add(TARGET).unwrap();
+    let rel = note.rel_path();
+    review::retire(&vault, &rel, "superseded").unwrap();
+    uncommit_from(dir.path(), &rel, "2020-01-01");
+    let written = vault.read(&rel).unwrap();
+    assert!(written.ends_with("- 2020-01-01 retired: superseded\n"));
+    let again = review::retire(&vault, &rel, "superseded").unwrap();
+    assert_eq!(again, (rel.clone(), Added::Committed));
+    assert_eq!(vault.read(&rel).unwrap(), written);
+    assert_eq!(subjects(dir.path()).len(), 3);
+}

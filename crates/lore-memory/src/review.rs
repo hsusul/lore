@@ -179,8 +179,8 @@ pub fn retire(vault: &Vault, key: &str, reason: &str) -> Result<(String, Added),
     let current = Note::parse(&text).map_err(VaultError::from)?;
     check_id_free(&vault.refresh_locked()?, &current.id, &rel)?;
     let committed = vault.is_committed(&rel)?;
-    let date = NoteDate::today();
-    let retired = |note: Note| {
+    let today = NoteDate::today();
+    let retired = |note: Note, date: NoteDate| {
         let mut note = note;
         note.status = Status::Retired;
         note.body = append_timeline(&note.body, &format!("- {date} retired: {reason}"));
@@ -192,7 +192,7 @@ pub fn retire(vault: &Vault, key: &str, reason: &str) -> Result<(String, Added),
             return Ok((rel, Added::Unchanged));
         }
         (Status::Active, true) => {
-            let note = retired(current);
+            let note = retired(current, today);
             write_atomically(&vault.root().join(&rel), &note.render())?;
             note
         }
@@ -200,7 +200,8 @@ pub fn retire(vault: &Vault, key: &str, reason: &str) -> Result<(String, Added),
             let head =
                 committed_text(vault, &rel)?.ok_or_else(|| ReviewError::Dirty(rel.clone()))?;
             let base = Note::parse(&head).map_err(|_| ReviewError::Dirty(rel.clone()))?;
-            if base.status != Status::Active || retired(base).render() != text {
+            let date = last_timeline_date(&text, today);
+            if base.status != Status::Active || retired(base, date).render() != text {
                 return Err(ReviewError::Dirty(rel));
             }
             current
@@ -328,7 +329,7 @@ fn update_locked(
     } else {
         let head = committed_text(vault, &rel)?.ok_or_else(|| ReviewError::Dirty(rel.clone()))?;
         let base = Note::parse(&head).map_err(|_| ReviewError::Dirty(rel.clone()))?;
-        let note = apply_update(base, proposal, today);
+        let note = apply_update(base, proposal, last_timeline_date(&text, today));
         if note.render() != text {
             return Err(ReviewError::Dirty(rel));
         }
@@ -342,6 +343,19 @@ fn update_locked(
         outcome: Added::Committed,
     };
     Ok((accepted, note))
+}
+
+/// The date of the last `- YYYY-MM-DD` line in `text`, which is the Timeline
+/// line an interrupted write added. A write from before midnight is then
+/// still recognised after it. `today` when there is none.
+fn last_timeline_date(text: &str, today: NoteDate) -> NoteDate {
+    text.lines()
+        .rev()
+        .find_map(|line| {
+            let date = line.strip_prefix("- ")?.get(..10)?;
+            NoteDate::parse(date).ok()
+        })
+        .unwrap_or(today)
 }
 
 fn commit_message(verb: &str, rel: &str, proposal: &Proposal) -> String {
