@@ -20,6 +20,7 @@ const CLAUDE_KEYS: &[&str] = &[
     "uuid",
     "parentUuid",
     "sessionId",
+    "agentId",
     "timestamp",
     "cwd",
     "gitBranch",
@@ -153,11 +154,13 @@ fn version_keyed_fixtures_parse_and_drift_is_warned_not_failed() {
     // The version-keyed fixtures each represent a specific agent version. The
     // hard assertion is that they parse into messages (no panic, no hard fail);
     // unknown keys are surfaced as eprintln warnings only.
-    check_fixture(
-        "claude_code",
+    for name in [
         "v2.1.0_sample.jsonl",
-        &ClaudeCodeAdapter::new(),
-    );
+        "subagent_fold/cccccccc-0000-4000-8000-000000000001.jsonl",
+        "subagent_fold/cccccccc-0000-4000-8000-000000000001/subagents/agent-a0000000000000001.jsonl",
+    ] {
+        check_fixture("claude_code", name, &ClaudeCodeAdapter::new());
+    }
     check_fixture("codex", "v0.136.0_sample.jsonl", &CodexAdapter::new());
 }
 
