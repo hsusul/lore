@@ -34,6 +34,13 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
                       gone, or unanchored [--limit N] [--json]
     reindex           Rebuild the index from the vault files alone, and name
                       any id that two files share (exit 7)
+    propose           File an agent proposal; the body is read from stdin.
+                      --agent, --session, --type, --title [--scope S]
+                      [--anchor PATH[:LINES]]... [--updates|--extends|--derives ID]
+    inbox             List pending proposals [--json]
+    accept <ID>       Write a proposal as a note, one commit [--as <slug>]
+    reject <ID>       Decline a proposal --reason <TEXT>; the vault is untouched
+    retire <NOTE>     Mark a note retired --reason <TEXT>, one commit
     --vault <DIR>     Vault directory. Must be absolute
     Search and show pick up notes edited, renamed, or deleted by hand.
     Exit codes: 2 no vault, 5 vault busy, 7 note refused, 4 other failure.
@@ -143,6 +150,9 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
 /// Run `lorectl mem`.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let sub = invocation.operand.as_deref().unwrap_or_default();
+    if crate::review::SUBCOMMANDS.contains(&sub) {
+        return crate::review::run(sub, &invocation.rest, invocation.json, USAGE);
+    }
     let args = parse(sub, &invocation.rest)?;
     let Some(sub) = args.sub else {
         print!("{USAGE}");

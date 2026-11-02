@@ -14,7 +14,7 @@
 
 use std::cell::OnceCell;
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -405,7 +405,7 @@ impl Vault {
     }
 
     /// [`Vault::index`] for a caller that holds the write lock.
-    fn refresh_locked(&self) -> Result<Index, VaultError> {
+    pub(crate) fn refresh_locked(&self) -> Result<Index, VaultError> {
         let stamps = self.stamps()?;
         let print = fingerprint(&stamps);
         let lore_dir = self.lore_dir();
@@ -499,12 +499,12 @@ impl Vault {
             .collect()
     }
 
-    fn is_committed(&self, rel: &str) -> Result<bool, VaultError> {
+    pub(crate) fn is_committed(&self, rel: &str) -> Result<bool, VaultError> {
         let status = self.git(&["status", "--porcelain", "--", rel])?;
         Ok(status.trim().is_empty())
     }
 
-    fn git(&self, args: &[&str]) -> Result<String, VaultError> {
+    pub(crate) fn git(&self, args: &[&str]) -> Result<String, VaultError> {
         let mut command = Command::new("git");
         command.arg("-C").arg(&self.root).args(GIT_SAFE);
         let (has_name, has_email) = self.identity();
@@ -518,6 +518,9 @@ impl Vault {
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_EDITOR", "true")
+            // A note path is a file name, never a glob: `global/[ab].md`
+            // must not match `global/a.md`.
+            .env("GIT_LITERAL_PATHSPECS", "1")
             .stdin(Stdio::null())
             .output()
             .map_err(io_error("run git"))?;
@@ -557,7 +560,7 @@ impl Vault {
 }
 
 /// Refuse `id` when a file other than `rel` already carries it.
-fn check_id_free(index: &Index, id: &NoteId, rel: &str) -> Result<(), VaultError> {
+pub(crate) fn check_id_free(index: &Index, id: &NoteId, rel: &str) -> Result<(), VaultError> {
     match index
         .paths_with_id(id.as_str())?
         .into_iter()
@@ -609,12 +612,25 @@ fn collect_markdown(dir: &Path, root: &Path, out: &mut Vec<FileStamp>) -> Result
 
 /// Write through a dot-prefixed temporary file and a rename, so a reader never
 /// sees half a note.
-fn write_atomically(path: &Path, text: &str) -> Result<(), VaultError> {
+pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<(), VaultError> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let temp = path.with_file_name(format!(".{name}.tmp"));
-    fs::write(&temp, text).map_err(io_error(format!("write {}", temp.display())))?;
+    let what = || format!("write {}", temp.display());
+    // A stale temp file may be a symlink, for example one a pulled commit
+    // checked out. Remove it and create a new file, never following a link.
+    match fs::remove_file(&temp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io_error(what())(e)),
+    }
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .and_then(|mut file| file.write_all(text.as_bytes()))
+        .map_err(io_error(what()))?;
     fs::rename(&temp, path).map_err(io_error(format!("write {}", path.display())))
 }

@@ -4,6 +4,7 @@
 //! called the vault ([`vault`]). The vault is the source of truth. The full-text
 //! index ([`index`]) lives in `<vault>/.lore/index.db`, is gitignored, and is
 //! rebuilt from the vault alone, so it can never hold anything the vault lacks.
+//! Agents only propose ([`inbox`]); a person accepts ([`review`]).
 //!
 //! Recall ([`recall`]) returns the notes for a directory's repository, each with
 //! a [`anchor::Freshness`] from checking its anchors against the working tree.
@@ -12,8 +13,10 @@
 //! `scripts/egress-check.sh`). It spawns the `git` binary and nothing else.
 
 pub mod anchor;
+pub mod inbox;
 pub mod index;
 pub mod note;
 pub mod recall;
 pub mod repo;
+pub mod review;
 pub mod vault;
