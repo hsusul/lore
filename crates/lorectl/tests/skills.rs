@@ -65,7 +65,7 @@ fn doctor_reports_and_still_exits_zero() {
     assert_eq!(
         summary,
         "3 duplicates, 1 drift, 7 unknown sources, 1 name mismatches, \
-         2 bad frontmatter; 14 findings; 12 skills found"
+         2 bad frontmatter, 1 codex budget; 15 findings; 12 skills found"
     );
     assert!(text.starts_with("bad-yaml\n  bad-frontmatter"), "{text}");
     assert!(
@@ -137,6 +137,7 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
         cmd("duplicate", "clean-git-commit", cgc),
         unknown("clean-git-commit", ".agents/skills/clean-git-commit"),
         unknown("clean-git-commit", ".claude/skills/clean-git-commit"),
+        cmd("codex-budget", "", edit(".codex/skills/big")),
         cmd(
             "duplicate",
             "gpt-taste",
@@ -407,7 +408,7 @@ fn doctor_json_is_the_same_findings_each_with_a_fix() {
     let output = lorectl(&fixture_home(), &["skills", "doctor", "--json"]);
     assert_eq!(output.status.code(), Some(0));
     let findings = json(&output);
-    assert_eq!(findings.len(), 14);
+    assert_eq!(findings.len(), 15);
     assert_eq!(findings[0]["kind"], "bad-frontmatter");
 }
 

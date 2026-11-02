@@ -162,6 +162,12 @@ fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
                 .collect();
             format!("{} copies differ: {}", copies.len(), copies.join(", "))
         }
+        Finding::CodexBudget {
+            chars,
+            limit,
+            skills,
+            ..
+        } => format!("{skills} skills Codex loads use {chars} characters of names and descriptions, over its {limit}"),
         Finding::Duplicate { paths, .. } => {
             let paths: Vec<String> = paths.iter().map(|p| show(p)).collect();
             format!("{} separate copies: {}", paths.len(), paths.join(", "))
@@ -177,12 +183,13 @@ fn summary(findings: &[Finding], skills: usize) -> String {
     let count = |kind: &str| findings.iter().filter(|f| f.kind() == kind).count();
     format!(
         "{} duplicates, {} drift, {} unknown sources, {} name mismatches, \
-         {} bad frontmatter; {} findings; {skills} skills found",
+         {} bad frontmatter, {} codex budget; {} findings; {skills} skills found",
         count("duplicate"),
         count("drift"),
         count("unknown-source"),
         count("name-mismatch"),
         count("bad-frontmatter"),
+        count("codex-budget"),
         findings.len(),
     )
 }

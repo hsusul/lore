@@ -12,7 +12,7 @@ pub mod lockfiles;
 pub mod model;
 pub mod scan;
 
-pub use doctor::doctor;
+pub use doctor::{doctor, CODEX_BUDGET_CHARS};
 pub use locations::Roots;
 pub use model::{
     shell_quote, Agent, ContentHash, DriftCopy, Finding, Fix, Install, Mode, SkillName,
