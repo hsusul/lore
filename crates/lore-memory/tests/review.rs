@@ -580,3 +580,29 @@ fn a_session_id_that_is_a_secret_is_refused() {
     let uuid = "0199f5c2-7a4e-7c31-9b6d-2f8e1a3c5d7b";
     inbox::propose(&vault, proposal(P2, AgentKind::Codex, uuid, BODY)).unwrap();
 }
+
+#[test]
+fn reject_after_an_accept_that_lost_its_decision_line_is_refused() {
+    let (dir, vault) = new_vault();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    let first = review::accept(&vault, P1, None).unwrap();
+    lose_decisions(dir.path());
+    assert!(review::inbox(&vault).unwrap().proposals.is_empty());
+    let error = review::reject(&vault, P1, "not a pitfall").unwrap_err();
+    assert!(
+        matches!(error, ReviewError::Decided(_, "accepted")),
+        "{error}"
+    );
+    assert_eq!(
+        review::decisions(&vault)
+            .unwrap()
+            .remove(&NoteId::parse(P1).unwrap()),
+        Some(review::Decision::Accepted {
+            note: first.rel.clone(),
+            id: first.id.clone(),
+        })
+    );
+    let again = review::accept(&vault, P1, None).unwrap();
+    assert_eq!((again.outcome, again.id), (Added::Unchanged, first.id));
+    assert_eq!(subjects(dir.path()).len(), 2);
+}

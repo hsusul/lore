@@ -86,6 +86,10 @@ pub fn inbox(vault: &Vault) -> Result<Pending, ReviewError> {
     let (mut proposals, skipped) = inbox::proposals(vault)?;
     let decisions = decisions(vault)?;
     proposals.retain(|p| !decisions.contains_key(&p.id));
+    if !proposals.is_empty() {
+        let committed = proposal_commits(vault, None)?;
+        proposals.retain(|p| !committed.iter().any(|(id, _)| *id == p.id));
+    }
     proposals.sort_by(|a, b| (a.proposed_at, &a.id).cmp(&(b.proposed_at, &b.id)));
     Ok(Pending { proposals, skipped })
 }
@@ -145,6 +149,14 @@ pub fn reject(vault: &Vault, id: &str, reason: &str) -> Result<bool, ReviewError
         Some(Decision::Rejected { .. }) => Ok(false),
         Some(Decision::Accepted { .. }) => Err(ReviewError::Decided(id.to_string(), "accepted")),
         None => {
+            if let Some((note, note_id)) = accepted_commit(vault, &proposal.id)? {
+                record(
+                    vault,
+                    &proposal.id,
+                    &Decision::Accepted { note, id: note_id },
+                )?;
+                return Err(ReviewError::Decided(id.to_string(), "accepted"));
+            }
             record(vault, &proposal.id, &Decision::Rejected { reason })?;
             Ok(true)
         }
@@ -337,6 +349,44 @@ fn history_names(vault: &Vault, rel: &str, id: &NoteId) -> Result<bool, VaultErr
     let grep = format!("--grep={trailer}");
     let bodies = vault.git(&["log", "-F", &grep, "--format=%B", "--", rel])?;
     Ok(bodies.lines().any(|line| line == trailer))
+}
+
+/// Each commit whose message carries a `Lore-Proposal:` trailer, oldest first:
+/// the proposal id and the commit. Only proposal `id` when it is given.
+fn proposal_commits(
+    vault: &Vault,
+    id: Option<&NoteId>,
+) -> Result<Vec<(NoteId, String)>, VaultError> {
+    const TRAILER: &str = "Lore-Proposal: ";
+    let grep = format!("--grep={TRAILER}{}", id.map_or("", NoteId::as_str));
+    let log = vault.git(&["log", "--reverse", "-F", &grep, "--format=%x1e%H%n%B"])?;
+    let mut out = Vec::new();
+    for record in log.split('\x1e') {
+        let Some((sha, body)) = record.split_once('\n') else {
+            continue;
+        };
+        for line in body.lines() {
+            let found = line
+                .strip_prefix(TRAILER)
+                .and_then(|v| NoteId::parse(v).ok());
+            if let Some(found) = found.filter(|f| id.is_none_or(|id| id == f)) {
+                out.push((found, sha.to_string()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The path and note id of the first commit that accepted proposal `id`, as
+/// that commit left them. `None` when no commit names it.
+fn accepted_commit(vault: &Vault, id: &NoteId) -> Result<Option<(String, NoteId)>, VaultError> {
+    let Some((_, sha)) = proposal_commits(vault, Some(id))?.into_iter().next() else {
+        return Ok(None);
+    };
+    let names = vault.git(&["show", "--name-only", "--format=", &sha])?;
+    let rel = names.lines().next().unwrap_or_default().to_string();
+    let note = Note::parse(&vault.git(&["show", &format!("{sha}:{rel}")])?)?;
+    Ok(Some((rel, note.id)))
 }
 
 /// The committed text of `rel`, or `None` when it was never committed.
