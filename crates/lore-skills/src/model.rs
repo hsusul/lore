@@ -146,6 +146,8 @@ pub enum Finding {
         skill: SkillName,
         paths: Vec<PathBuf>,
     },
+    /// No lockfile, plugin manifest, or symlink explains where it came from.
+    UnknownSource { skill: SkillName, path: PathBuf },
 }
 
 impl Finding {
@@ -155,6 +157,7 @@ impl Finding {
         match self {
             Finding::Drift { .. } => 3,
             Finding::Duplicate { .. } => 5,
+            Finding::UnknownSource { .. } => 6,
         }
     }
 
@@ -162,7 +165,9 @@ impl Finding {
     #[must_use]
     pub fn skill(&self) -> Option<&str> {
         match self {
-            Finding::Drift { skill, .. } | Finding::Duplicate { skill, .. } => Some(skill),
+            Finding::Drift { skill, .. }
+            | Finding::Duplicate { skill, .. }
+            | Finding::UnknownSource { skill, .. } => Some(skill),
         }
     }
 
@@ -172,6 +177,7 @@ impl Finding {
         match self {
             Finding::Drift { .. } => "drift",
             Finding::Duplicate { .. } => "duplicate",
+            Finding::UnknownSource { .. } => "unknown-source",
         }
     }
 
@@ -197,6 +203,13 @@ impl Finding {
                     .collect();
                 Fix::Command(diffs.join("; "))
             }
+            // Not a command: reinstalling over a hand-written skill loses it.
+            Finding::UnknownSource { path, .. } => Fix::Hint(format!(
+                "No lockfile or plugin records {}. If you wrote it, there is nothing \
+                 to do. If it came from a repo, back up any local edits, then \
+                 reinstall it with the skills CLI so a lockfile records it.",
+                quote_path(path)
+            )),
         }
     }
 }

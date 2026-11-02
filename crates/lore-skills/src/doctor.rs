@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::locations;
-use crate::model::{DriftCopy, Finding, SkillRecord};
+use crate::model::{DriftCopy, Finding, SkillRecord, Source};
 use crate::scan::Inventory;
 
 #[must_use]
@@ -31,6 +31,9 @@ pub fn doctor(inventory: &Inventory) -> Vec<Finding> {
                     })
                     .collect(),
             });
+        }
+        for record in records {
+            findings.extend(per_record(record));
         }
     }
     sort(&mut findings);
@@ -70,6 +73,18 @@ fn duplicate(name: &str, records: &[&SkillRecord]) -> Option<Finding> {
             .map(|(_, _, path)| path.to_path_buf())
             .collect(),
     })
+}
+
+fn per_record(record: &SkillRecord) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let path = first_path(record);
+    if record.source == Source::Unknown {
+        out.push(Finding::UnknownSource {
+            skill: record.name.clone(),
+            path,
+        });
+    }
+    out
 }
 
 /// Group by skill; groups ordered by their worst finding, then by name.
