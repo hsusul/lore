@@ -7,6 +7,7 @@ mod common;
 
 use std::fs;
 
+use lore_memory::anchor::Freshness;
 use lore_memory::recall::recall;
 use lore_memory::repo::RepoContext;
 use lore_memory::vault::Vault;
@@ -43,8 +44,8 @@ fn an_anchored_note_is_not_called_unanchored_without_a_working_tree() {
         anchored.anchors.is_empty(),
         "there is no working tree, so nothing was checked"
     );
-    assert_ne!(
-        anchored.freshness, unanchored.freshness,
-        "a note whose code is unchecked is labelled the same as a note with no code to check"
-    );
+    assert_eq!(anchored.freshness, Freshness::Unchecked);
+    assert_eq!(anchored.freshness.label(), "unchecked");
+    assert_eq!(unanchored.freshness, Freshness::Unanchored);
+    assert_eq!(unanchored.freshness.label(), "unanchored");
 }

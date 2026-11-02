@@ -367,6 +367,32 @@ fn mem_recall_labels_notes_against_the_repo_at_cwd() {
 }
 
 #[test]
+fn mem_recall_labels_anchors_it_cannot_check_as_unchecked() {
+    let (dir, vault) = init();
+    let anchored = "---\ntype: fact\ntitle: Migrations keep a log\n\
+anchors:\n  - path: src/db.rs\n    lines: 2-3\n    hash: b3:0123456789abcdef\n\
+---\nEvery migration writes a log line.\n";
+    let added = lorectl(&vault, &["add", &note_file(dir.path(), "a.md", anchored)]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let cwd = elsewhere.to_str().unwrap();
+
+    let out = lorectl(&vault, &["recall", "migration", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "unchecked   migrations-keep-a-log  global  Every migration writes a log line.\n"
+    );
+
+    let out = lorectl(&vault, &["recall", "migration", "--json", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(json["notes"][0]["freshness"], "unchecked");
+    assert_eq!(json["notes"][0]["anchors"], serde_json::json!([]));
+}
+
+#[test]
 fn mem_reindex_reports_skipped_files() {
     let (dir, vault) = init();
     lorectl(&vault, &["add", &note_file(dir.path(), "n.md", NOTE)]);
