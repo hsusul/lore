@@ -155,6 +155,31 @@ fn vault_open_reports_a_missing_vault() {
     ));
 }
 
+#[test]
+fn vault_concurrent_adds_all_land_and_fsck_is_clean() {
+    let (dir, _vault) = new_vault();
+    let root = dir.path().to_path_buf();
+    let workers: Vec<_> = (0..8)
+        .map(|i| {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                let vault = Vault::open(&root).unwrap();
+                let text = format!("---\ntype: fact\ntitle: Parallel note {i}\n---\nBody {i}.\n");
+                vault.add(&text).unwrap().1
+            })
+        })
+        .collect();
+    for worker in workers {
+        assert_eq!(worker.join().unwrap(), Added::Committed);
+    }
+    assert_eq!(subjects(&root).len(), 9);
+    for i in 0..8 {
+        assert!(root.join(format!("global/parallel-note-{i}.md")).exists());
+    }
+    git(&root, &["fsck", "--strict"]);
+    assert!(git(&root, &["status", "--porcelain"]).is_empty());
+}
+
 /// Hooks and signing configured in the vault's own git config, the way a
 /// person's global config would carry them. Either one would block or fail a
 /// commit if Lore inherited it.
@@ -179,4 +204,18 @@ fn vault_commits_skip_hooks_and_signing() {
     let (_, added) = vault.add(NOTE).unwrap();
     assert_eq!(added, Added::Committed);
     assert_eq!(subjects(dir.path()).len(), 2);
+}
+
+#[test]
+fn vault_lock_gives_up_with_busy_after_a_bounded_wait() {
+    let (dir, vault) = new_vault();
+    let held = vault.lock().unwrap();
+    let started = std::time::Instant::now();
+    let error = Vault::open(dir.path()).unwrap().add(NOTE).unwrap_err();
+    let waited = started.elapsed();
+    drop(held);
+    assert!(matches!(error, VaultError::Busy(_)), "{error:?}");
+    assert!(waited >= lore_memory::vault::LOCK_WAIT, "{waited:?}");
+    assert!(waited < lore_memory::vault::LOCK_WAIT * 3, "{waited:?}");
+    assert!(!dir.path().join("global").exists());
 }

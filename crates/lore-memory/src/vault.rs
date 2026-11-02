@@ -3,17 +3,20 @@
 //! Layout: `global/<slug>.md` and `repos/<repo name>-<repo key>/<slug>.md`
 //! (`repos/<repo key>/` when a note does not name its repository). `.lore/` is
 //! Lore's private directory, and is gitignored with `_inbox/` and the
-//! `.*.md.tmp` files of an interrupted write. Every write writes one file and
-//! commits only that file, so the history stays one note per commit.
+//! `.*.md.tmp` files of an interrupted write. Every write takes
+//! `.lore/write.lock` (waiting at most [`LOCK_WAIT`]), writes one file, and
+//! commits only that file, so two writers queue rather than interleave and the
+//! history stays one note per commit.
 //!
 //! Lore's commits skip the person's git hooks and commit signing and never
-//! prompt, so a hook or a pinentry can never hang a write.
+//! prompt, so a hook or a pinentry can never hold the lock forever.
 
 use std::cell::OnceCell;
-use std::fs;
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
@@ -21,7 +24,11 @@ use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
 
 /// Lore's private directory inside the vault. Gitignored.
 pub const LORE_DIR: &str = ".lore";
+const LOCK_FILE: &str = "write.lock";
 const IGNORED: [&str; 3] = [".lore/", "_inbox/", ".*.md.tmp"];
+/// How long a writer waits for another to release the vault lock before it
+/// gives up with [`VaultError::Busy`].
+pub const LOCK_WAIT: Duration = Duration::from_secs(5);
 /// Settings every git call carries: no hooks, no signing, no prompts.
 const GIT_SAFE: [&str; 8] = [
     "-c",
@@ -44,6 +51,8 @@ pub enum VaultError {
     BadPath(String, String),
     #[error("a different note already lives at {0}")]
     Conflict(String),
+    #[error("another Lore process is writing to the vault at {}", .0.display())]
+    Busy(PathBuf),
     #[error("{0}: {1}")]
     Io(String, #[source] io::Error),
     #[error("`git {0}` failed: {1}")]
@@ -71,6 +80,12 @@ pub enum Added {
     Unchanged,
 }
 
+/// An exclusive hold on the vault's write lock. Released on drop.
+#[derive(Debug)]
+pub struct WriteLock {
+    _file: File,
+}
+
 /// A vault on disk.
 #[derive(Debug)]
 pub struct Vault {
@@ -94,6 +109,7 @@ impl Vault {
     pub fn init(root: &Path) -> Result<(Self, Init), VaultError> {
         let vault = Self::at(root);
         fs::create_dir_all(vault.lore_dir()).map_err(io_error("create the vault"))?;
+        let _lock = vault.lock()?;
         let fresh_repo = !root.join(".git").exists();
         if fresh_repo {
             vault.git(&["init", "-q"])?;
@@ -136,10 +152,33 @@ impl Vault {
         &self.root
     }
 
-    /// `<vault>/.lore`, Lore's private directory.
+    /// `<vault>/.lore`, where the write lock lives.
     #[must_use]
     pub fn lore_dir(&self) -> PathBuf {
         self.root.join(LORE_DIR)
+    }
+
+    /// Hold the vault's write lock, waiting at most [`LOCK_WAIT`] for another
+    /// writer to release it.
+    pub fn lock(&self) -> Result<WriteLock, VaultError> {
+        fs::create_dir_all(self.lore_dir()).map_err(io_error("create .lore"))?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.lore_dir().join(LOCK_FILE))
+            .map_err(io_error("open the write lock"))?;
+        let deadline = Instant::now() + LOCK_WAIT;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(WriteLock { _file: file }),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(TryLockError::WouldBlock) => return Err(VaultError::Busy(self.root.clone())),
+                Err(TryLockError::Error(e)) => return Err(io_error("take the write lock")(e)),
+            }
+        }
     }
 
     /// Add a note from its file text. `id`, `created`, `status`, and `scope`
@@ -152,6 +191,7 @@ impl Vault {
         let mut note = draft.note;
         let rel = note.rel_path();
         let path = self.root.join(&rel);
+        let _lock = self.lock()?;
 
         let existing = match fs::read_to_string(&path) {
             Ok(text) => Some(text),
