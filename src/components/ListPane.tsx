@@ -5,6 +5,7 @@ import type { SearchHit, SearchSort, SessionSummary } from "../ipc";
 import type { PagedState } from "../hooks/usePagedList";
 import { Snippet } from "./Highlight";
 import ListBox, { type OpenVia } from "./ListBox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 const FIELD: Record<string, string> = {
   title: "title",
@@ -71,10 +72,9 @@ function MoreFooter({ cursor, more, onMore, label }: { cursor: string | null; mo
   );
 }
 
+/** The session list for a scope. Its title and count live in the toolbar above it. */
 export function BrowsePane({
-  heading,
-  count,
-  headerActions,
+  label,
   state,
   openId,
   onOpen,
@@ -84,9 +84,7 @@ export function BrowsePane({
   onExitTop,
   emptyHint,
 }: {
-  heading: string;
-  count: number | null;
-  headerActions?: ReactNode;
+  label: string;
   state: PagedState<SessionSummary>;
   openId: string | null;
   onOpen: (id: string, via: OpenVia) => void;
@@ -97,15 +95,7 @@ export function BrowsePane({
   emptyHint: ReactNode;
 }) {
   return (
-    <section className="pane" aria-labelledby="pane-heading">
-      <header className="pane__head">
-        <h2 id="pane-heading" className="pane__title">
-          {heading}
-        </h2>
-        {count !== null && <span className="count">{count}</span>}
-        <span className="pane__spacer" />
-        {headerActions}
-      </header>
+    <section className="pane" aria-label={label}>
       {state.status === "loading" || state.status === "idle" ? (
         <Placeholder>Loading sessions…</Placeholder>
       ) : state.status === "failed" ? (
@@ -121,7 +111,7 @@ export function BrowsePane({
       ) : (
         <ListBox
           id="sessions"
-          label={`Sessions in ${heading}`}
+          label={`Sessions in ${label}`}
           items={state.items}
           keyOf={(s) => s.id}
           isOpen={(session) => session.id === openId}
@@ -140,7 +130,6 @@ export function BrowsePane({
 export function SearchPane({
   query,
   pending,
-  needsTerm,
   scopeNote,
   sort,
   onSort,
@@ -153,7 +142,6 @@ export function SearchPane({
 }: {
   query: string;
   pending: boolean;
-  needsTerm: boolean;
   scopeNote: ReactNode;
   sort: SearchSort;
   onSort: (sort: SearchSort) => void;
@@ -168,35 +156,25 @@ export function SearchPane({
   const count = ready ? `${state.items.length}${state.cursor ? "+" : ""}` : null;
   return (
     <section className="pane" aria-labelledby="pane-heading">
-      <header className="pane__head">
-        <h2 id="pane-heading" className="pane__title">
+      <header className="flex flex-none items-center gap-2 py-1.5 pl-5 pr-2.5 shadow-hairline-b">
+        <h2 id="pane-heading" className="text-headline">
           Results
         </h2>
-        {count !== null && <span className="count">{count}</span>}
-        <span className="pane__spacer" />
-        <label className="sr-only" htmlFor="search-sort">
-          Sort results
-        </label>
-        <select
-          id="search-sort"
-          className="select select--bare"
-          value={sort}
-          onChange={(event) => onSort(event.target.value as SearchSort)}
-        >
-          <option value="relevance">Best match</option>
-          <option value="newest">Newest</option>
-          <option value="oldest">Oldest</option>
-        </select>
+        {count !== null && <span className="text-subheadline tabular-nums text-label-2">{count}</span>}
+        <span className="flex-1" />
+        <Select value={sort} onValueChange={(value) => onSort(value as SearchSort)}>
+          <SelectTrigger aria-label="Sort results">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="relevance">Best Match</SelectItem>
+            <SelectItem value="newest">Newest</SelectItem>
+            <SelectItem value="oldest">Oldest</SelectItem>
+          </SelectContent>
+        </Select>
       </header>
       {scopeNote && <p className="pane__note">{scopeNote}</p>}
-      {needsTerm ? (
-        <Placeholder>
-          <p>Filters narrow a search. Add a word to search for.</p>
-          <p className="quiet">
-            For example, <code>retry {query.trim()}</code>
-          </p>
-        </Placeholder>
-      ) : pending || state.status === "loading" || state.status === "idle" ? (
+      {pending || state.status === "loading" || state.status === "idle" ? (
         <Placeholder>Searching…</Placeholder>
       ) : state.status === "failed" ? (
         <Placeholder role="alert">

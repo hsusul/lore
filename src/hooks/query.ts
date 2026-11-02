@@ -2,8 +2,7 @@
  * The search-query grammar as the UI sees it. Mirrors `parse_query` in
  * `crates/lore-core/src/search.rs`: whitespace-separated tokens, where a known
  * `key:value` prefix (or a `has:` flag) is a filter and anything else is a term.
- * The backend returns nothing for a query with no terms, so the UI must know
- * the difference to explain an empty result honestly.
+ * A query of filters alone lists the matching sessions, newest first.
  */
 
 export interface FilterSpec {
@@ -59,4 +58,14 @@ export function queryTerms(raw: string): string[] {
   return tokenize(raw)
     .filter((t) => t.kind === "term")
     .map((t) => t.text);
+}
+
+/** The agent id when the whole query is one `agent:` filter, as the sidebar's agent rows write it. */
+export function agentFilter(raw: string): string | null {
+  const match = raw.trim().match(/^agent:(\S+)$/);
+  return match ? match[1] : null;
+}
+
+export function agentQuery(agentId: string): string {
+  return `agent:${agentId}`;
 }

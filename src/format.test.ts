@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { agentLabel, clamp, formatRelative, formatTime, formatTokens } from "./format";
+import { agentLabel, clamp, formatAgo, formatRelative, formatTime, formatTokens } from "./format";
 
 describe("format helpers", () => {
+  describe("formatAgo", () => {
+    const now = Date.UTC(2026, 9, 26, 12, 0, 0);
+
+    it("says how long ago in words", () => {
+      expect(formatAgo(now - 20_000, now)).toBe("just now");
+      expect(formatAgo(now - 2 * 60_000, now)).toBe("2 minutes ago");
+      expect(formatAgo(now - 3 * 3_600_000, now)).toBe("3 hours ago");
+      expect(formatAgo(now - 26 * 3_600_000, now)).toBe("yesterday");
+      expect(formatAgo(now - 15 * 86_400_000, now)).toBe("2 weeks ago");
+    });
+  });
+
   describe("agentLabel", () => {
     it("maps known agent ids to friendly display names", () => {
       expect(agentLabel("claude-code")).toBe("Claude");
