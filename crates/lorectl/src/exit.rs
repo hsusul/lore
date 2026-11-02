@@ -155,7 +155,8 @@ fn memory_exit_code(error: &VaultError) -> u8 {
         VaultError::Note(_)
         | VaultError::BadPath(..)
         | VaultError::Conflict(_)
-        | VaultError::DuplicateId { .. } => NOTE_REFUSED,
+        | VaultError::DuplicateId { .. }
+        | VaultError::Pin(_) => NOTE_REFUSED,
         VaultError::Missing(_) => NO_ARCHIVE,
         VaultError::Busy(_) => ARCHIVE_BUSY,
         VaultError::RelativeDir(_)

@@ -2,7 +2,7 @@
 id: 01JC9V6Q4M8K2T7X3N5R0B1H14
 type: howto
 title: Rebuild the memory index
-scope: repo:3f9a1c0b
+scope: repo:3f9a1c0b5e2d7a46
 status: active
 anchors:
   - path: crates/lore-memory/src/index.rs

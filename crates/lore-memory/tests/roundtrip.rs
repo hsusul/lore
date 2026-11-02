@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lore_memory::note::{Note, NoteDate, NoteError, NoteId, NoteType, RelPath};
+use lore_memory::note::{Note, NoteDate, NoteError, NoteId, NoteType, RelPath, Scope};
 
 fn fixture_vault() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault")
@@ -72,12 +72,12 @@ fn roundtrip_keeps_unknown_keys_in_place() {
 #[test]
 fn roundtrip_reads_the_design_sample_fields() {
     let text = std::fs::read_to_string(
-        fixture_vault().join("repos/3f9a1c0b/reference-id-panics-on-symbolic-refs.md"),
+        fixture_vault().join("repos/3f9a1c0b5e2d7a46/reference-id-panics-on-symbolic-refs.md"),
     )
     .unwrap();
     let note = Note::parse(&text).unwrap();
     assert_eq!(note.id.as_str(), "01JC9V6Q4M8K2T7X3N5R0B1H17");
-    assert_eq!(note.scope.to_string(), "repo:3f9a1c0b");
+    assert_eq!(note.scope.to_string(), "repo:3f9a1c0b5e2d7a46");
     let anchor = &note.anchors[0];
     assert_eq!(anchor.path.as_str(), "crates/lore-core/src/git.rs");
     let lines = anchor.lines.unwrap();
@@ -140,6 +140,23 @@ fn with(line: &str) -> String {
     format!(
         "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H01\ntype: fact\ntitle: T\nscope: global\nstatus: active\ncreated: 2026-11-01\n{line}\n---\nbody\n"
     )
+}
+
+#[test]
+fn roundtrip_a_repo_key_is_exactly_16_hex() {
+    let long = "3f9a1c0b5e2d7a46".repeat(4);
+    for key in [
+        "3f9a1c0b",
+        "3f9a1c0b5e2d7a4",
+        "3f9a1c0b5e2d7a461",
+        "3F9A1C0B5E2D7A46",
+        long.as_str(),
+    ] {
+        let error = Scope::parse(&format!("repo:{key}")).expect_err(key);
+        assert!(error.to_string().contains("16 lowercase hex"), "{error}");
+    }
+    let scope = Scope::parse("repo:3f9a1c0b5e2d7a46").unwrap();
+    assert_eq!(scope.to_string(), "repo:3f9a1c0b5e2d7a46");
 }
 
 #[test]
@@ -339,14 +356,14 @@ fn roundtrip_a_draft_gets_its_title_as_an_alias() {
 
 #[test]
 fn roundtrip_repo_notes_live_in_a_folder_named_for_people() {
-    let note = draft("---\ntype: fact\ntitle: T\nscope: repo:3f9a1c0b\nrepo: lore\n---\n");
+    let note = draft("---\ntype: fact\ntitle: T\nscope: repo:3f9a1c0b5e2d7a46\nrepo: lore\n---\n");
     assert_eq!(note.repo.as_ref().unwrap().as_str(), "lore");
-    assert_eq!(note.rel_path(), "repos/lore-3f9a1c0b/t.md");
+    assert_eq!(note.rel_path(), "repos/lore-3f9a1c0b5e2d7a46/t.md");
     assert!(note
         .render()
-        .contains("\nscope: repo:3f9a1c0b\nrepo: lore\n"));
-    let bare = draft("---\ntype: fact\ntitle: T\nscope: repo:3f9a1c0b\n---\n");
-    assert_eq!(bare.rel_path(), "repos/3f9a1c0b/t.md");
+        .contains("\nscope: repo:3f9a1c0b5e2d7a46\nrepo: lore\n"));
+    let bare = draft("---\ntype: fact\ntitle: T\nscope: repo:3f9a1c0b5e2d7a46\n---\n");
+    assert_eq!(bare.rel_path(), "repos/3f9a1c0b5e2d7a46/t.md");
     use lore_memory::note::RepoName;
     for (origin, name) in [
         ("git@github.com:hsusul/lore.git", "lore"),

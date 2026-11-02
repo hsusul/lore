@@ -22,7 +22,9 @@ pub enum NoteType {
     Pitfall,
 }
 
-/// A repository's identity: a lowercase hex hash of its normalized origin URL.
+/// A repository's identity: the first 16 lowercase hex characters of the
+/// BLAKE3 hash of its normalized origin URL. One form only, so one repository
+/// never has two keys.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RepoKey(String);
 
@@ -283,12 +285,16 @@ impl NoteType {
 }
 
 impl RepoKey {
+    /// How many hex characters a key has.
+    pub const LEN: usize = 16;
+
     pub fn parse(s: &str) -> Result<Self, InvalidValue> {
-        if (8..=64).contains(&s.len()) && is_lower_hex(s) {
+        if s.len() == Self::LEN && is_lower_hex(s) {
             Ok(Self(s.to_string()))
         } else {
             Err(invalid(format!(
-                "expected 8 to 64 lowercase hex characters, got `{s}`"
+                "expected {} lowercase hex characters, got `{s}`",
+                Self::LEN
             )))
         }
     }

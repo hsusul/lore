@@ -21,6 +21,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use thiserror::Error;
 
+use crate::anchor::PinError;
 use crate::index::{fingerprint, FileStamp, Hit, Index, IndexError};
 use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
 
@@ -75,6 +76,8 @@ pub enum VaultError {
     Git(String, String),
     #[error(transparent)]
     Index(#[from] IndexError),
+    #[error(transparent)]
+    Pin(#[from] PinError),
 }
 
 fn io_error(what: impl Into<String>) -> impl FnOnce(io::Error) -> VaultError {
@@ -248,8 +251,19 @@ impl Vault {
     /// Nothing is written unless the whole note is valid and its id is not
     /// already used by another file.
     pub fn add(&self, text: &str) -> Result<(Note, Added), VaultError> {
+        self.add_with(text, |_| Ok(()))
+    }
+
+    /// [`Vault::add`], with `prepare` run on the parsed note before it is
+    /// compared with the vault and written. A `prepare` error writes nothing.
+    pub fn add_with(
+        &self,
+        text: &str,
+        prepare: impl FnOnce(&mut Note) -> Result<(), VaultError>,
+    ) -> Result<(Note, Added), VaultError> {
         let draft = Note::parse_draft(text, NoteId::generate(), NoteDate::today())?;
         let mut note = draft.note;
+        prepare(&mut note)?;
         let rel = note.rel_path();
         let path = self.root.join(&rel);
         let _lock = self.lock()?;
