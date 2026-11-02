@@ -359,15 +359,7 @@ impl Vault {
         let mut notes = Vec::new();
         let mut skipped = Vec::new();
         for stamp in &stamps {
-            // A file that is not UTF-8 is not a note. Skip it like any other
-            // unparseable file, so one bad file does not fail the rebuild.
-            let parsed = match self.parse_file(&stamp.path) {
-                Err(VaultError::Io(_, error)) if error.kind() == io::ErrorKind::InvalidData => {
-                    Err(NoteError::NotANote("the file is not valid UTF-8"))
-                }
-                other => other?,
-            };
-            match parsed {
+            match self.parse_indexed(&stamp.path)? {
                 Ok(note) => notes.push((stamp.path.as_str(), note)),
                 Err(error) => skipped.push((stamp.path.clone(), error)),
             }
@@ -435,7 +427,7 @@ impl Vault {
                 .remove(&stamp.path)
                 .is_some_and(|old| old == (stamp.size, stamp.mtime_ns));
             if !same {
-                let note = self.parse_file(&stamp.path)?.ok();
+                let note = self.parse_indexed(&stamp.path)?.ok();
                 changed.push((stamp, note));
             }
         }
@@ -449,6 +441,18 @@ impl Vault {
         let text =
             fs::read_to_string(self.root.join(rel)).map_err(io_error(format!("read {rel}")))?;
         Ok(Note::parse(&text))
+    }
+
+    /// [`Vault::parse_file`] for the index. A file that is not UTF-8 is not a
+    /// note, so it is skipped like any other unparseable file and one bad file
+    /// does not fail a rebuild or a refresh. Other read errors still fail.
+    fn parse_indexed(&self, rel: &str) -> Result<Result<Note, NoteError>, VaultError> {
+        match self.parse_file(rel) {
+            Err(VaultError::Io(_, error)) if error.kind() == io::ErrorKind::InvalidData => {
+                Ok(Err(NoteError::NotANote("the file is not valid UTF-8")))
+            }
+            other => other,
+        }
     }
 
     /// A stamp for every markdown file [`Vault::notes`] would read, sorted.
