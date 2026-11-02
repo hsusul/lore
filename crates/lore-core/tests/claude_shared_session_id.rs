@@ -432,3 +432,36 @@ fn upgrading_a_v3_archive_matches_a_fresh_scan_and_keeps_the_folder() {
         .unwrap();
     assert_eq!(orphans, 0);
 }
+
+/// At v3 a session can hold only subagent rows, with no transcript of its
+/// own. At v4 it does not exist; the folder it was filed in follows the
+/// sessions that take its sources.
+#[test]
+fn a_folder_on_a_v3_session_follows_the_transcripts_it_held() {
+    let (_dir, _parent, subagent) = copy_fixture_tree();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(blob_dir.path()).unwrap();
+    let archive = lore_core::storage::open_in_memory().unwrap();
+    ingest_file(
+        &archive,
+        &V3Claude(ClaudeCodeAdapter::new()),
+        &subagent,
+        &blobs,
+    )
+    .unwrap();
+    archive
+        .execute("UPDATE ingest_state SET parser_version = '3'", [])
+        .unwrap();
+    let (v3_session, _) = session_for(&archive, PARENT_ID);
+    let folder = lore_core::folders::create_folder(&archive, "Kept").unwrap();
+    lore_core::folders::set_session_folder(&archive, &v3_session, Some(&folder.id)).unwrap();
+
+    ingest_file(&archive, &ClaudeCodeAdapter::new(), &subagent, &blobs).unwrap();
+    let sub_id = format!("{PARENT_ID}/agent-a0000000000000001");
+    assert_eq!(native_ids(&archive), vec![sub_id.clone()]);
+    let (sub_session, _) = session_for(&archive, &sub_id);
+    assert_eq!(
+        lore_core::folders::folder_of_session(&archive, &sub_session).unwrap(),
+        Some(folder.id)
+    );
+}
