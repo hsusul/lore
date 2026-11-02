@@ -21,6 +21,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use thiserror::Error;
 
+use crate::anchor::PinError;
 use crate::index::{fingerprint, FileStamp, Hit, Index, IndexError};
 use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
 
@@ -75,6 +76,8 @@ pub enum VaultError {
     Git(String, String),
     #[error(transparent)]
     Index(#[from] IndexError),
+    #[error(transparent)]
+    Pin(#[from] PinError),
 }
 
 fn io_error(what: impl Into<String>) -> impl FnOnce(io::Error) -> VaultError {

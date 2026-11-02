@@ -149,6 +149,22 @@ fn mem_add_refuses_a_bad_anchor_path_with_exit_7() {
 }
 
 #[test]
+fn mem_add_cwd_refuses_an_anchor_it_cannot_pin_with_exit_7() {
+    let (dir, vault) = init();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("a.rs"), "one line\n").unwrap();
+    let cwd = repo.to_str().unwrap();
+    for anchor in ["path: gone.rs", "path: a.rs\n    lines: 2-3"] {
+        let text = format!("---\ntype: fact\ntitle: T\nanchors:\n  - {anchor}\n---\n");
+        let file = note_file(dir.path(), "n.md", &text);
+        let out = lorectl(&vault, &["add", &file, "--cwd", cwd]);
+        assert_refused(&vault, &out, "anchor `");
+    }
+}
+
+#[test]
 fn mem_show_refuses_a_path_outside_the_vault_with_exit_7() {
     let (_dir, vault) = init();
     let out = lorectl(&vault, &["show", "../secret.md"]);
@@ -251,6 +267,54 @@ fn mem_rejects_a_relative_vault_as_usage() {
         .output()
         .unwrap();
     assert_eq!(code(&out), 1, "{}", stderr(&out));
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=T", "-c", "user.email=t@localhost"])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+const REPO_NOTE: &str = "---\ntype: pitfall\ntitle: Retry the migration\nscope: repo:81444c90f1ff44ac\nanchors:\n  - path: src/a.rs\n    lines: 1\n---\nRetry a failed migration once.\n";
+
+/// A repository whose origin is this project's, with `src/a.rs` committed.
+fn lore_repo(dir: &Path) -> std::path::PathBuf {
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:hsusul/lore.git"],
+    );
+    std::fs::write(repo.join("src/a.rs"), "fn retry() {}\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "a"]);
+    repo
+}
+
+#[test]
+fn mem_add_cwd_pins_anchors_and_names_the_repo() {
+    let (dir, vault) = init();
+    let repo = lore_repo(dir.path());
+    let file = note_file(dir.path(), "r.md", REPO_NOTE);
+    let added = lorectl(&vault, &["add", &file, "--cwd", repo.to_str().unwrap()]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    let stored =
+        std::fs::read_to_string(vault.join("repos/lore-81444c90f1ff44ac/retry-the-migration.md"))
+            .unwrap();
+    assert!(stored.contains("    hash: b3:"), "{stored}");
+    assert!(
+        stored.contains("\nscope: repo:81444c90f1ff44ac\nrepo: lore\n"),
+        "{stored}"
+    );
+    assert_eq!(status(&vault), "");
 }
 
 #[test]
