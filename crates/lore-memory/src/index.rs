@@ -246,6 +246,18 @@ impl Index {
         Ok(paths)
     }
 
+    /// Paths of the markdown files the index read but holds no note for,
+    /// because they did not parse, sorted.
+    pub fn unparsed(&self) -> Result<Vec<String>, IndexError> {
+        let mut statement = self.conn.prepare_cached(
+            "SELECT path FROM files WHERE path NOT IN (SELECT path FROM notes) ORDER BY path",
+        )?;
+        let paths = statement
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(paths)
+    }
+
     /// Paths of the notes with this id, sorted.
     pub fn paths_with_id(&self, id: &str) -> Result<Vec<String>, IndexError> {
         let mut statement = self

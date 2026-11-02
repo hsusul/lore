@@ -242,6 +242,9 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
                 ),
                 RepoContext::Repo { .. } => {}
             }
+            for (rel, error) in &found.skipped {
+                eprintln!("lorectl: skipped {rel}: {error}");
+            }
             if found.notes.is_empty() {
                 eprintln!("lorectl: no notes match `{query}`");
             }
@@ -353,7 +356,12 @@ fn recall_json(found: &Recall) -> serde_json::Value {
             })
         })
         .collect();
-    json!({ "repo": repo, "notes": notes })
+    let skipped: Vec<serde_json::Value> = found
+        .skipped
+        .iter()
+        .map(|(rel, error)| json!({ "path": rel, "error": error.to_string() }))
+        .collect();
+    json!({ "repo": repo, "notes": notes, "skipped": skipped })
 }
 
 fn read_input(file: &str) -> Result<String, CliError> {
