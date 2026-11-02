@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -442,13 +442,32 @@ fn record(vault: &Vault, id: &NoteId, decision: &Decision) -> Result<(), VaultEr
             "id": id.as_str(), "decision": "rejected", "reason": reason, "at": at,
         }),
     };
-    let mut line = value.to_string();
-    line.push('\n');
     let io = |e| VaultError::Io(format!("append to {DECISIONS_FILE}"), e);
-    OpenOptions::new()
+    let mut file = OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(vault.lore_dir().join(DECISIONS_FILE))
-        .and_then(|mut file| file.write_all(line.as_bytes()))
-        .map_err(io)
+        .map_err(io)?;
+    // A line torn by a crash has no newline. Start a fresh line after it, so
+    // this decision is not glued onto the torn one and lost with it.
+    let mut line = if ends_torn(&mut file).map_err(io)? {
+        String::from("\n")
+    } else {
+        String::new()
+    };
+    line.push_str(&value.to_string());
+    line.push('\n');
+    file.write_all(line.as_bytes()).map_err(io)
+}
+
+/// Whether the file is not empty and its last byte is not a newline.
+fn ends_torn(file: &mut fs::File) -> io::Result<bool> {
+    if file.metadata()?.len() == 0 {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8];
+    file.read_exact(&mut last)?;
+    Ok(last[0] != b'\n')
 }

@@ -524,3 +524,34 @@ fn an_update_is_not_applied_again_after_a_lost_decision_and_a_retire() {
     );
     assert_eq!(decision_lines(dir.path(), P2), 1);
 }
+
+#[test]
+fn a_decision_after_a_torn_line_is_still_read() {
+    let (dir, vault) = new_vault();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    let mut other = proposal(P2, AgentKind::Codex, "s2", BODY);
+    other.title = "Another note".into();
+    inbox::propose(&vault, other).unwrap();
+    // A reject of P2 killed halfway through its write.
+    fs::write(
+        dir.path().join(".lore/decisions.jsonl"),
+        format!("{{\"id\":\"{P2}\",\"decision\":\"rej"),
+    )
+    .unwrap();
+    let first = review::accept(&vault, P1, None).unwrap();
+    assert_eq!(first.outcome, Added::Committed);
+    assert!(review::decisions(&vault)
+        .unwrap()
+        .contains_key(&NoteId::parse(P1).unwrap()));
+    let pending: Vec<String> = review::inbox(&vault)
+        .unwrap()
+        .proposals
+        .iter()
+        .map(|p| p.id.as_str().to_string())
+        .collect();
+    assert_eq!(pending, [P2]);
+    let again = review::accept(&vault, P1, None).unwrap();
+    assert_eq!(again.outcome, Added::Unchanged);
+    assert_eq!(decision_lines(dir.path(), P1), 1);
+    assert_eq!(subjects(dir.path()).len(), 2);
+}
