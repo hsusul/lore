@@ -1,7 +1,8 @@
-//! The domain: what a skill is, where it is installed, and where it came from.
+//! The domain: what a skill is, where it is installed, where it came from, and
+//! what can be wrong with it.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -121,4 +122,127 @@ pub struct SkillRecord {
     pub frontmatter_error: Option<String>,
     /// Line count of SKILL.md.
     pub lines: usize,
+}
+
+/// One copy in a [`Finding::Drift`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DriftCopy {
+    pub path: PathBuf,
+    pub hash: ContentHash,
+    pub lines: usize,
+}
+
+/// One problem the doctor reports. Variants are declared worst first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Finding {
+    /// One name with two or more different contents.
+    Drift {
+        skill: SkillName,
+        copies: Vec<DriftCopy>,
+    },
+    /// One name in two or more locations as separate copies on disk.
+    Duplicate {
+        skill: SkillName,
+        paths: Vec<PathBuf>,
+    },
+}
+
+impl Finding {
+    /// Sort key, worst first.
+    #[must_use]
+    pub fn rank(&self) -> u8 {
+        match self {
+            Finding::Drift { .. } => 3,
+            Finding::Duplicate { .. } => 5,
+        }
+    }
+
+    /// The skill this finding is about.
+    #[must_use]
+    pub fn skill(&self) -> Option<&str> {
+        match self {
+            Finding::Drift { skill, .. } | Finding::Duplicate { skill, .. } => Some(skill),
+        }
+    }
+
+    /// What a person can do about it. Suggested, never run. A command only
+    /// reads; it never edits, moves, or deletes a copy.
+    #[must_use]
+    pub fn fix(&self) -> Fix {
+        match self {
+            Finding::Drift { copies, .. } => {
+                let paths: Vec<String> =
+                    copies.iter().take(2).map(|c| quote_path(&c.path)).collect();
+                Fix::Command(format!("diff -ru {}", paths.join(" ")))
+            }
+            // Which copy to keep is the user's call, and a managed copy is not
+            // theirs to move: show how the copies differ and stop there.
+            Finding::Duplicate { paths, .. } => {
+                let Some((first, rest)) = paths.split_first() else {
+                    return Fix::Hint(String::new());
+                };
+                let diffs: Vec<String> = rest
+                    .iter()
+                    .map(|other| format!("diff -ru {} {}", quote_path(first), quote_path(other)))
+                    .collect();
+                Fix::Command(diffs.join("; "))
+            }
+        }
+    }
+}
+
+/// A [`Finding`]'s suggested fix.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", content = "text", rename_all = "kebab-case")]
+pub enum Fix {
+    /// Safe to paste into a POSIX shell: every path and name in it went
+    /// through [`shell_quote`].
+    Command(String),
+    /// Advice for a person. Not a command.
+    Hint(String),
+}
+
+/// The one quoting rule for every fix: wrap in single quotes, and write each
+/// single quote as `'\''`. Nothing inside single quotes is special to a POSIX
+/// shell, so `$`, backticks, `&`, `;`, and spaces stay literal.
+#[must_use]
+pub fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+fn quote_path(path: &Path) -> String {
+    shell_quote(&path.to_string_lossy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_quote_keeps_metacharacters_literal() {
+        assert_eq!(shell_quote("a b"), "'a b'");
+        assert_eq!(shell_quote("x'; touch y; '"), r"'x'\''; touch y; '\'''");
+        assert_eq!(shell_quote("$(id)&`id`"), "'$(id)&`id`'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn a_duplicate_with_three_copies_diffs_each_against_the_first() {
+        let fix = Finding::Duplicate {
+            skill: "s".into(),
+            paths: vec![
+                "/h/a".into(),
+                "/h/b".into(),
+                "/h/.codex/plugins/cache/c".into(),
+            ],
+        }
+        .fix();
+        assert_eq!(
+            fix,
+            Fix::Command(
+                "diff -ru '/h/a' '/h/b'; diff -ru '/h/a' '/h/.codex/plugins/cache/c'".into()
+            )
+        );
+    }
 }
