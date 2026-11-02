@@ -2875,6 +2875,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-memory"
+version = "0.0.0"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+ "thiserror 1.0.69",
+ "time",
+]
+
+[[package]]
 name = "lore-skills"
 version = "0.0.0"
 dependencies = [
@@ -2890,6 +2900,7 @@ dependencies = [
  "lexopt",
  "lore-core",
  "lore-ipc",
+ "lore-memory",
  "lore-skills",
  "rusqlite",
  "serde_json",
