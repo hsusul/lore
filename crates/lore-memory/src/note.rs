@@ -12,6 +12,16 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NoteId(String);
 
+/// What kind of knowledge a note holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NoteType {
+    Convention,
+    Decision,
+    Fact,
+    Howto,
+    Pitfall,
+}
+
 /// A repository's identity: a lowercase hex hash of its normalized origin URL.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RepoKey(String);
@@ -21,6 +31,20 @@ pub struct RepoKey(String);
 /// key stays the identity.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RepoName(String);
+
+/// Where a note applies.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Scope {
+    Global,
+    Repo(RepoKey),
+}
+
+/// Whether a note is current.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Status {
+    Active,
+    Retired,
+}
 
 /// A repository-relative path with `/` separators. Never absolute, never `..`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -33,9 +57,73 @@ pub struct LineRange {
     end: u32,
 }
 
+/// A digest of the anchored lines, written `b3:<hex>`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LineHash(String);
+
+/// An abbreviated or full git commit id, lowercase hex.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CommitId(String);
+
+/// A place in a repository that a note is about. M2 checks it for freshness.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Anchor {
+    pub path: RelPath,
+    pub lines: Option<LineRange>,
+    pub hash: Option<LineHash>,
+    pub commit: Option<CommitId>,
+}
+
+/// How a note relates to an earlier one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Relation {
+    Updates(NoteId),
+    Extends(NoteId),
+    Derives(NoteId),
+}
+
+/// The agent that recorded an archived session, named as the archive names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AgentKind {
+    ClaudeCode,
+    Codex,
+}
+
+/// An archived session id, the same string `read_session` takes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SessionId(String);
+
+/// Provenance: the archived session a note came from. Written `agent:session`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SourceRef {
+    pub agent: AgentKind,
+    pub session: SessionId,
+}
+
 /// A calendar date, written `YYYY-MM-DD`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NoteDate(time::Date);
+
+/// A note.
+///
+/// `body` is everything after the closing `---` fence, kept byte for byte: the
+/// current statement first, then an append-only `## Timeline`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    pub id: NoteId,
+    pub note_type: NoteType,
+    pub title: String,
+    pub scope: Scope,
+    /// The repository's display name, written `repo:`. Names the folder.
+    pub repo: Option<RepoName>,
+    pub status: Status,
+    pub anchors: Vec<Anchor>,
+    pub relations: Vec<Relation>,
+    pub sources: Vec<SourceRef>,
+    pub created: NoteDate,
+    pub forget_after: Option<NoteDate>,
+    pub body: String,
+}
 
 /// A value that does not fit its type. The text says what was expected.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -98,6 +186,38 @@ impl NoteId {
     }
 }
 
+impl NoteType {
+    pub const ALL: [NoteType; 5] = [
+        NoteType::Convention,
+        NoteType::Decision,
+        NoteType::Fact,
+        NoteType::Howto,
+        NoteType::Pitfall,
+    ];
+
+    pub fn parse(s: &str) -> Result<Self, InvalidValue> {
+        Self::ALL
+            .into_iter()
+            .find(|t| t.as_str() == s)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "expected convention, decision, fact, howto, or pitfall, got `{s}`"
+                ))
+            })
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoteType::Convention => "convention",
+            NoteType::Decision => "decision",
+            NoteType::Fact => "fact",
+            NoteType::Howto => "howto",
+            NoteType::Pitfall => "pitfall",
+        }
+    }
+}
+
 impl RepoKey {
     pub fn parse(s: &str) -> Result<Self, InvalidValue> {
         if (8..=64).contains(&s.len()) && is_lower_hex(s) {
@@ -133,6 +253,47 @@ impl RepoName {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl Scope {
+    pub fn parse(s: &str) -> Result<Self, InvalidValue> {
+        if s == "global" {
+            return Ok(Scope::Global);
+        }
+        match s.strip_prefix("repo:") {
+            Some(key) => Ok(Scope::Repo(RepoKey::parse(key)?)),
+            None => Err(invalid(format!(
+                "expected `global` or `repo:<hex>`, got `{s}`"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for Scope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Scope::Global => f.write_str("global"),
+            Scope::Repo(key) => write!(f, "repo:{}", key.as_str()),
+        }
+    }
+}
+
+impl Status {
+    pub fn parse(s: &str) -> Result<Self, InvalidValue> {
+        match s {
+            "active" => Ok(Status::Active),
+            "retired" => Ok(Status::Retired),
+            _ => Err(invalid(format!("expected active or retired, got `{s}`"))),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Active => "active",
+            Status::Retired => "retired",
+        }
     }
 }
 
@@ -215,6 +376,127 @@ impl fmt::Display for LineRange {
         } else {
             write!(f, "{}-{}", self.start, self.end)
         }
+    }
+}
+
+impl LineHash {
+    pub fn parse(s: &str) -> Result<Self, InvalidValue> {
+        match s.strip_prefix("b3:") {
+            Some(hex) if (8..=64).contains(&hex.len()) && is_lower_hex(hex) => {
+                Ok(Self(s.to_string()))
+            }
+            _ => Err(invalid(format!(
+                "expected `b3:` and 8 to 64 lowercase hex characters, got `{s}`"
+            ))),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl CommitId {
+    pub fn parse(s: &str) -> Result<Self, InvalidValue> {
+        if (7..=64).contains(&s.len()) && is_lower_hex(s) {
+            Ok(Self(s.to_string()))
+        } else {
+            Err(invalid(format!(
+                "expected 7 to 64 lowercase hex characters, got `{s}`"
+            )))
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Relation {
+    pub fn parse(kind: &str, id: &str) -> Result<Self, InvalidValue> {
+        let id = NoteId::parse(id)?;
+        match kind {
+            "updates" => Ok(Relation::Updates(id)),
+            "extends" => Ok(Relation::Extends(id)),
+            "derives" => Ok(Relation::Derives(id)),
+            _ => Err(invalid(format!(
+                "expected updates, extends, or derives, got `{kind}`"
+            ))),
+        }
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Relation::Updates(_) => "updates",
+            Relation::Extends(_) => "extends",
+            Relation::Derives(_) => "derives",
+        }
+    }
+
+    #[must_use]
+    pub fn target(&self) -> &NoteId {
+        match self {
+            Relation::Updates(id) | Relation::Extends(id) | Relation::Derives(id) => id,
+        }
+    }
+}
+
+impl AgentKind {
+    pub fn parse(s: &str) -> Result<Self, InvalidValue> {
+        match s {
+            "claude-code" => Ok(AgentKind::ClaudeCode),
+            "codex" => Ok(AgentKind::Codex),
+            _ => Err(invalid(format!("expected claude-code or codex, got `{s}`"))),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentKind::ClaudeCode => "claude-code",
+            AgentKind::Codex => "codex",
+        }
+    }
+}
+
+impl SessionId {
+    pub fn parse(s: &str) -> Result<Self, InvalidValue> {
+        let ok = (1..=200).contains(&s.len())
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+        if ok {
+            Ok(Self(s.to_string()))
+        } else {
+            Err(invalid(format!(
+                "expected a session id of letters, digits, `.`, `_`, `-`, got `{s}`"
+            )))
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl SourceRef {
+    pub fn parse(s: &str) -> Result<Self, InvalidValue> {
+        let (agent, session) = s
+            .split_once(':')
+            .ok_or_else(|| invalid(format!("expected `agent:session`, got `{s}`")))?;
+        Ok(Self {
+            agent: AgentKind::parse(agent)?,
+            session: SessionId::parse(session)?,
+        })
+    }
+}
+
+impl fmt::Display for SourceRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.agent.as_str(), self.session.as_str())
     }
 }
 
