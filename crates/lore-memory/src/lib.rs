@@ -2,3 +2,5 @@
 //!
 //! This crate has no network capability (`tests/no_network_in_memory.rs`,
 //! `scripts/egress-check.sh`).
+
+pub mod note;
