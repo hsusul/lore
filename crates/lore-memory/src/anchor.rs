@@ -9,7 +9,8 @@
 //! Checks read the working tree, never write it, and never follow a path out
 //! of the repository.
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -27,11 +28,12 @@ const PINNED_HASH_LEN: usize = 16;
 pub enum Freshness {
     /// The anchored lines are where the note says.
     Fresh,
-    /// The anchored lines are unchanged but now at `lines`.
+    /// The anchored lines are unchanged but now at `lines`, in the same file or
+    /// in the file it was renamed to.
     Moved { lines: LineRange },
     /// The file is there but the anchored lines are not.
     Changed,
-    /// The file is not there.
+    /// The file is not there and no rename of it was found.
     Gone,
 }
 
@@ -46,6 +48,15 @@ impl Freshness {
             Freshness::Gone => "gone",
         }
     }
+}
+
+/// One anchor checked against a working tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Located {
+    pub freshness: Freshness,
+    /// Where the anchored file is now: the anchor's own path, or the path it
+    /// was renamed to.
+    pub path: RelPath,
 }
 
 /// Why an anchor cannot be pinned to the working tree.
@@ -65,18 +76,18 @@ impl Anchor {
     /// Check this anchor against the working tree at `repo`.
     #[must_use]
     pub fn check(&self, repo: &Path) -> Freshness {
-        WorkTree::new(repo)
-            .check_at(self, &self.path)
-            .unwrap_or(Freshness::Gone)
+        WorkTree::new(repo).locate(self).freshness
     }
 }
 
-/// A working tree that anchors are checked against.
+/// A working tree that anchors are checked against. Rename lookups are cached,
+/// one `git diff` per anchor commit, so check many anchors with one `WorkTree`.
 #[derive(Debug)]
 pub struct WorkTree {
     root: PathBuf,
     canonical_root: OnceCell<Option<PathBuf>>,
     head: OnceCell<Option<CommitId>>,
+    renames: RefCell<HashMap<String, HashMap<String, RelPath>>>,
 }
 
 impl WorkTree {
@@ -86,6 +97,36 @@ impl WorkTree {
             root: root.to_path_buf(),
             canonical_root: OnceCell::new(),
             head: OnceCell::new(),
+            renames: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Where `anchor` is now, and how it compares.
+    #[must_use]
+    pub fn locate(&self, anchor: &Anchor) -> Located {
+        if let Some(freshness) = self.check_at(anchor, &anchor.path) {
+            return Located {
+                freshness,
+                path: anchor.path.clone(),
+            };
+        }
+        let Some(new_path) = self.renamed(anchor) else {
+            return Located {
+                freshness: Freshness::Gone,
+                path: anchor.path.clone(),
+            };
+        };
+        let freshness = match self.check_at(anchor, &new_path) {
+            Some(Freshness::Fresh) => match anchor.lines.or_else(|| self.whole_file(&new_path)) {
+                Some(lines) => Freshness::Moved { lines },
+                None => Freshness::Changed,
+            },
+            Some(other) => other,
+            None => Freshness::Gone,
+        };
+        Located {
+            freshness,
+            path: new_path,
         }
     }
 
@@ -156,6 +197,56 @@ impl WorkTree {
             .as_ref()?;
         (resolved.starts_with(root) && resolved.is_file()).then_some(resolved)
     }
+
+    fn whole_file(&self, path: &RelPath) -> Option<LineRange> {
+        let bytes = fs::read(self.file(path)?).ok()?;
+        let count = u32::try_from(split_lines(&bytes).len()).ok()?;
+        LineRange::new(1, count.max(1)).ok()
+    }
+
+    /// The path `anchor`'s file was renamed to since the anchor's commit.
+    fn renamed(&self, anchor: &Anchor) -> Option<RelPath> {
+        let commit = anchor.commit.as_ref()?;
+        let mut cache = self.renames.borrow_mut();
+        let renames = cache
+            .entry(commit.as_str().to_string())
+            .or_insert_with(|| rename_map(&self.root, commit));
+        renames.get(anchor.path.as_str()).cloned()
+    }
+}
+
+/// Old path to new path for every rename between `commit` and the working
+/// tree. Empty when git cannot tell, for example when the commit is unknown.
+fn rename_map(root: &Path, commit: &CommitId) -> HashMap<String, RelPath> {
+    let Some(out) = git(
+        root,
+        [
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--find-renames",
+            "--diff-filter=R",
+            "--name-status",
+            "-z",
+            commit.as_str(),
+            "--",
+        ],
+    ) else {
+        return HashMap::new();
+    };
+    let mut fields = out.split('\0');
+    let mut renames = HashMap::new();
+    while let Some(status) = fields.next() {
+        if !status.starts_with('R') {
+            continue;
+        }
+        if let (Some(old), Some(new)) = (fields.next(), fields.next()) {
+            if let Ok(new) = RelPath::parse(new) {
+                renames.insert(old.to_string(), new);
+            }
+        }
+    }
+    renames
 }
 
 /// The line hash of `lines`, in full hex.
