@@ -76,11 +76,13 @@ impl Archive {
             .ok()
     }
 
-    /// Mark every source as parsed by the previous parser, as an archive
-    /// written before a `PARSER_VERSION` bump is.
+    /// Mark every source as parsed by an older parser, as an archive written
+    /// before a `PARSER_VERSION` bump is. `'old'` is never a real version, so
+    /// a bump never makes it current and the re-parse always happens.
     fn age_parser_version(&self) {
+        assert_ne!(lore_core::ingest::PARSER_VERSION, "old");
         self.conn
-            .execute("UPDATE ingest_state SET parser_version = '3'", [])
+            .execute("UPDATE ingest_state SET parser_version = 'old'", [])
             .unwrap();
     }
 
