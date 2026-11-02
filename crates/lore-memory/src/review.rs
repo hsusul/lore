@@ -249,6 +249,7 @@ fn create_locked(
         None => note.rel_path(),
     };
     let path = vault.root().join(&rel);
+    check_inside(vault, &rel)?;
     let outcome = match read_optional(vault, &rel)? {
         None => {
             if let Some(parent) = path.parent() {
@@ -450,6 +451,30 @@ fn committed_text(vault: &Vault, rel: &str) -> Result<Option<String>, VaultError
         return Ok(None);
     }
     vault.git(&["show", &format!("HEAD:{rel}")]).map(Some)
+}
+
+/// Refuse `rel` when its folder, through a symlink, leads outside the vault.
+/// The nearest folder that exists must resolve inside the vault's real root.
+fn check_inside(vault: &Vault, rel: &str) -> Result<(), VaultError> {
+    let real = |p: &std::path::Path| {
+        p.canonicalize()
+            .map_err(|e| VaultError::Io(format!("resolve {}", p.display()), e))
+    };
+    let root = real(vault.root())?;
+    let path = vault.root().join(rel);
+    let existing = path
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.exists())
+        .unwrap_or(vault.root());
+    if real(existing)?.starts_with(&root) {
+        Ok(())
+    } else {
+        Err(VaultError::BadPath(
+            rel.to_string(),
+            "its folder leads outside the vault".into(),
+        ))
+    }
 }
 
 fn read_optional(vault: &Vault, rel: &str) -> Result<Option<String>, VaultError> {

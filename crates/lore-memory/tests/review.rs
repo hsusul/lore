@@ -746,6 +746,22 @@ fn an_accepted_update_stays_accepted_after_its_target_is_deleted() {
     );
 }
 
+#[test]
+fn accept_refuses_a_scope_folder_that_links_outside_the_vault() {
+    let (dir, vault) = new_vault();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("global")).unwrap();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    let head = git(dir.path(), &["rev-parse", "HEAD"]);
+    let error = review::accept(&vault, P1, None).unwrap_err();
+    assert!(
+        matches!(error, ReviewError::Vault(VaultError::BadPath(..))),
+        "{error}"
+    );
+    assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+    assert_eq!(git(dir.path(), &["rev-parse", "HEAD"]), head);
+}
+
 /// Undo the last commit but keep its file, as if the process died after the
 /// write and before the commit, and move that write's Timeline date to
 /// `date`, as if it happened before midnight.
