@@ -4,8 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::locations::{self, Roots};
-use crate::model::{DriftCopy, Finding, Install, SkillRecord, Source};
+use crate::model::{Agent, DriftCopy, Finding, Install, SkillRecord, Source};
 use crate::scan::Inventory;
+
+/// Codex's budget for the skill list it puts in context: names plus
+/// descriptions, in characters.
+pub const CODEX_BUDGET_CHARS: usize = 8_000;
 
 #[must_use]
 pub fn doctor(inventory: &Inventory) -> Vec<Finding> {
@@ -36,6 +40,7 @@ pub fn doctor(inventory: &Inventory) -> Vec<Finding> {
             findings.extend(per_record(record, &inventory.roots));
         }
     }
+    findings.extend(codex_budget(&by_name));
     sort(&mut findings);
     findings
 }
@@ -121,7 +126,39 @@ fn per_record(record: &SkillRecord, roots: &Roots) -> Vec<Finding> {
     out
 }
 
-/// Group by skill; groups ordered by their worst finding, then by name.
+/// One entry per name Codex loads, measured from the copy it finds first.
+fn codex_budget(by_name: &BTreeMap<&str, Vec<&SkillRecord>>) -> Option<Finding> {
+    let mut chars = 0;
+    let mut skills = 0;
+    let mut largest: Option<(usize, PathBuf)> = None;
+    for records in by_name.values() {
+        let loaded = records
+            .iter()
+            .find(|r| r.installs.iter().any(|i| i.agents.contains(&Agent::Codex)));
+        let Some(record) = loaded else { continue };
+        let name = record.declared_name.as_deref().unwrap_or(&record.name);
+        let size = name.chars().count()
+            + record
+                .description
+                .as_deref()
+                .map_or(0, |d| d.chars().count());
+        chars += size;
+        skills += 1;
+        if largest.as_ref().is_none_or(|(most, _)| size > *most) {
+            largest = Some((size, first_path(record)));
+        }
+    }
+    let (_, largest) = largest?;
+    (chars > CODEX_BUDGET_CHARS).then_some(Finding::CodexBudget {
+        chars,
+        limit: CODEX_BUDGET_CHARS,
+        skills,
+        largest,
+    })
+}
+
+/// Group by skill; groups ordered by their worst finding, then by name; the
+/// agent-wide `CodexBudget` sorts as its own group.
 fn sort(findings: &mut [Finding]) {
     let mut worst: BTreeMap<Option<String>, u8> = BTreeMap::new();
     for finding in findings.iter() {

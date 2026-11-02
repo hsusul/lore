@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lore_skills::{DriftCopy, Finding, Inventory, Roots};
+use lore_skills::{DriftCopy, Finding, Inventory, Roots, CODEX_BUDGET_CHARS};
 
 fn home() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/home")
@@ -74,6 +74,12 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
         },
         unknown("clean-git-commit", ".agents/skills/clean-git-commit"),
         unknown("clean-git-commit", ".claude/skills/clean-git-commit"),
+        Finding::CodexBudget {
+            chars: 8349,
+            limit: CODEX_BUDGET_CHARS,
+            skills: 10,
+            largest: at(".codex/skills/big"),
+        },
         Finding::Duplicate {
             skill: "gpt-taste".into(),
             paths: vec![

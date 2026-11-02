@@ -155,6 +155,13 @@ pub enum Finding {
         skill: SkillName,
         copies: Vec<DriftCopy>,
     },
+    /// Codex's summed skill names and descriptions exceed its budget.
+    CodexBudget {
+        chars: usize,
+        limit: usize,
+        skills: usize,
+        largest: PathBuf,
+    },
     /// One name in two or more locations as separate copies on disk.
     Duplicate {
         skill: SkillName,
@@ -172,12 +179,13 @@ impl Finding {
             Finding::BadFrontmatter { .. } => 0,
             Finding::NameMismatch { .. } => 1,
             Finding::Drift { .. } => 3,
+            Finding::CodexBudget { .. } => 4,
             Finding::Duplicate { .. } => 5,
             Finding::UnknownSource { .. } => 6,
         }
     }
 
-    /// The skill this finding is about.
+    /// The skill this finding is about. `CodexBudget` is about a whole agent.
     #[must_use]
     pub fn skill(&self) -> Option<&str> {
         match self {
@@ -186,6 +194,7 @@ impl Finding {
             | Finding::Drift { skill, .. }
             | Finding::Duplicate { skill, .. }
             | Finding::UnknownSource { skill, .. } => Some(skill),
+            Finding::CodexBudget { .. } => None,
         }
     }
 
@@ -196,6 +205,7 @@ impl Finding {
             Finding::BadFrontmatter { .. } => "bad-frontmatter",
             Finding::NameMismatch { .. } => "name-mismatch",
             Finding::Drift { .. } => "drift",
+            Finding::CodexBudget { .. } => "codex-budget",
             Finding::Duplicate { .. } => "duplicate",
             Finding::UnknownSource { .. } => "unknown-source",
         }
@@ -216,6 +226,14 @@ impl Finding {
                     copies.iter().take(2).map(|c| quote_path(&c.path)).collect();
                 Fix::Command(format!("diff -ru {}", paths.join(" ")))
             }
+            Finding::CodexBudget { largest, .. } => match roots.manager(largest) {
+                Some(manager) => Fix::Hint(format!(
+                    "The largest entry is {}, managed by {manager}. Disable the skills \
+                     or plugins Codex does not need.",
+                    quote_path(&largest.join("SKILL.md"))
+                )),
+                None => edit(largest),
+            },
             // Which copy to keep is the user's call, and a managed copy is not
             // theirs to move: show how the copies differ and stop there.
             Finding::Duplicate { paths, .. } => {
@@ -326,8 +344,14 @@ mod tests {
             },
             Finding::BadFrontmatter {
                 skill: "s".into(),
-                path: system,
+                path: system.clone(),
                 reason: "r".into(),
+            },
+            Finding::CodexBudget {
+                chars: 9000,
+                limit: 8000,
+                skills: 1,
+                largest: system,
             },
         ] {
             assert_eq!(finding.fix(&roots).kind(), "hint", "{finding:?}");
