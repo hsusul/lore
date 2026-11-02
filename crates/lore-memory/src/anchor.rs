@@ -20,6 +20,10 @@ use thiserror::Error;
 use crate::note::{Anchor, CommitId, LineHash, LineRange, RelPath};
 use crate::repo::git;
 
+/// Files larger than this are not searched for anchored lines that moved
+/// within them; a mismatch there reports [`Freshness::Changed`].
+pub const MOVE_SEARCH_LIMIT: u64 = 1024 * 1024;
+
 /// Hex characters kept when Lore writes a line hash.
 const PINNED_HASH_LEN: usize = 16;
 
@@ -181,8 +185,10 @@ impl WorkTree {
         if digest.is_some_and(|d| hash_matches(hash, &d)) {
             return Some(Freshness::Fresh);
         }
-        let moved = fs::read(&file)
-            .ok()
+        let small = fs::metadata(&file).is_ok_and(|m| m.len() <= MOVE_SEARCH_LIMIT);
+        let moved = small
+            .then(|| fs::read(&file).ok())
+            .flatten()
             .and_then(|bytes| find_lines(&bytes, lines.end() - lines.start() + 1, hash));
         Some(moved.map_or(Freshness::Changed, |lines| Freshness::Moved { lines }))
     }
