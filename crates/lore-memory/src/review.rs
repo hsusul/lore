@@ -102,24 +102,33 @@ pub fn accept(vault: &Vault, id: &str, as_slug: Option<&str>) -> Result<Accepted
         check_slug(slug)?;
     }
     let proposal = find_proposal(vault, id)?;
+    let updates = matches!(proposal.relation, Some(Relation::Updates(_)));
+    // Check the log before looking for the target: an accepted update stays
+    // accepted even when its target was deleted by hand since.
+    let decided = |vault: &Vault| -> Result<Option<Accepted>, ReviewError> {
+        match decisions(vault)?.remove(&proposal.id) {
+            Some(Decision::Accepted { note, id: note_id }) => Ok(Some(Accepted {
+                rel: note,
+                id: note_id,
+                updated: updates,
+                outcome: Added::Unchanged,
+            })),
+            Some(Decision::Rejected { .. }) => {
+                Err(ReviewError::Decided(id.to_string(), "rejected"))
+            }
+            None => Ok(None),
+        }
+    };
+    if let Some(accepted) = decided(vault)? {
+        return Ok(accepted);
+    }
     let target = match &proposal.relation {
         Some(Relation::Updates(target)) => Some(vault.find(target.as_str())?),
         _ => None,
     };
     let _lock = vault.lock()?;
-    match decisions(vault)?.remove(&proposal.id) {
-        Some(Decision::Accepted { note, id: note_id }) => {
-            return Ok(Accepted {
-                rel: note,
-                id: note_id,
-                updated: target.is_some(),
-                outcome: Added::Unchanged,
-            })
-        }
-        Some(Decision::Rejected { .. }) => {
-            return Err(ReviewError::Decided(id.to_string(), "rejected"))
-        }
-        None => {}
+    if let Some(accepted) = decided(vault)? {
+        return Ok(accepted);
     }
     let today = NoteDate::today();
     let (accepted, note) = match target {

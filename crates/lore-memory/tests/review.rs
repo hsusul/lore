@@ -732,6 +732,20 @@ fn a_proposal_after_a_torn_inbox_line_is_still_read() {
     );
 }
 
+#[test]
+fn an_accepted_update_stays_accepted_after_its_target_is_deleted() {
+    let (dir, vault) = new_vault();
+    let (target, _) = vault.add(TARGET).unwrap();
+    inbox::propose(&vault, update_of(&target)).unwrap();
+    let first = review::accept(&vault, P2, None).unwrap();
+    fs::remove_file(dir.path().join(&first.rel)).unwrap();
+    let again = review::accept(&vault, P2, None).unwrap();
+    assert_eq!(
+        (again.outcome, again.updated, again.rel, again.id),
+        (Added::Unchanged, true, first.rel, first.id)
+    );
+}
+
 /// Undo the last commit but keep its file, as if the process died after the
 /// write and before the commit, and move that write's Timeline date to
 /// `date`, as if it happened before midnight.
