@@ -21,6 +21,7 @@ mod mcp;
 mod mem;
 mod query;
 mod scan;
+mod skills;
 mod status;
 
 use std::io::Write;
@@ -64,6 +65,7 @@ fn run() -> Result<u8, CliError> {
         Action::Run(cli::Command::Mem) => mem::run(&invocation),
         Action::Run(cli::Command::Search) => query::search(&invocation),
         Action::Run(cli::Command::Inspect) => query::inspect(&invocation),
+        Action::Run(cli::Command::Skills) => skills::run(&invocation),
         Action::Run(command) => {
             // Resolve the archive location before refusing the command, so a
             // bad `--archive` is reported as the bad `--archive` it is rather
