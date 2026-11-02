@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use common::{commit, git, repo};
-use lore_memory::anchor::{Freshness, PinError, WorkTree};
+use lore_memory::anchor::{hash_lines, Freshness, PinError, WorkTree, MOVE_SEARCH_LIMIT};
 use lore_memory::note::{Anchor, LineHash, LineRange, RelPath};
 
 const FIRST: &str = "\
@@ -140,6 +140,31 @@ fn anchors_without_a_hash_check_what_they_can() {
 }
 
 #[test]
+fn pinning_fills_the_hash_and_the_head_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    repo(root, None);
+    let head = commit(root, "a.txt", "one\ntwo\r\n", "a");
+    let tree = WorkTree::new(root);
+    let anchor = |range: Option<&str>| Anchor {
+        path: RelPath::parse("a.txt").unwrap(),
+        lines: range.map(lines),
+        hash: None,
+        commit: None,
+    };
+    let pinned = tree.pin(&anchor(Some("2"))).unwrap();
+    let digest = hash_lines([&b"two"[..]]);
+    assert_eq!(
+        pinned.hash,
+        Some(LineHash::parse(&format!("b3:{}", &digest[..16])).unwrap())
+    );
+    assert_eq!(pinned.commit.unwrap().as_str(), &head[..12]);
+    let path_only = tree.pin(&anchor(None)).unwrap();
+    assert_eq!(path_only.hash, None);
+    assert_eq!(path_only.commit.unwrap().as_str(), &head[..12]);
+}
+
+#[test]
 fn pinning_refuses_missing_files_and_lines() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -181,4 +206,30 @@ fn a_symlink_out_of_the_repo_is_gone() {
         commit: None,
     };
     assert_eq!(anchor.check(&root), Freshness::Gone);
+}
+
+#[test]
+fn lines_that_moved_in_a_file_over_1_mib_are_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    repo(root, None);
+    let padding = format!("{}\n", "x".repeat(99)).repeat(11_000);
+    commit(root, "big.txt", &format!("anchored\n{padding}"), "big");
+    commit(root, "small.txt", "anchored\nrest\n", "small");
+    let tree = WorkTree::new(root);
+    let pin = |path: &str| {
+        tree.pin(&Anchor {
+            path: RelPath::parse(path).unwrap(),
+            lines: Some(lines("1")),
+            hash: None,
+            commit: None,
+        })
+        .unwrap()
+    };
+    let (big, small) = (pin("big.txt"), pin("small.txt"));
+    fs::write(root.join("big.txt"), format!("new\nanchored\n{padding}")).unwrap();
+    fs::write(root.join("small.txt"), "new\nanchored\nrest\n").unwrap();
+    assert!(fs::metadata(root.join("big.txt")).unwrap().len() > MOVE_SEARCH_LIMIT);
+    assert_eq!(small.check(root), Freshness::Moved { lines: lines("2") });
+    assert_eq!(big.check(root), Freshness::Changed);
 }

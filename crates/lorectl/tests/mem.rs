@@ -282,10 +282,11 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "{}", stderr(&out));
 }
 
-#[test]
-fn mem_recall_labels_notes_against_the_repo_at_cwd() {
-    let (dir, vault) = init();
-    let repo = dir.path().join("repo");
+const REPO_NOTE: &str = "---\ntype: pitfall\ntitle: Retry the migration\nscope: repo:81444c90f1ff44ac\nanchors:\n  - path: src/a.rs\n    lines: 1\n---\nRetry a failed migration once.\n";
+
+/// A repository whose origin is this project's, with `src/a.rs` committed.
+fn lore_repo(dir: &Path) -> std::path::PathBuf {
+    let repo = dir.join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     git(&repo, &["init", "-q"]);
     git(
@@ -295,19 +296,15 @@ fn mem_recall_labels_notes_against_the_repo_at_cwd() {
     std::fs::write(repo.join("src/a.rs"), "fn retry() {}\n").unwrap();
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "a"]);
-    let repo_note = "---\ntype: pitfall\ntitle: Retry the migration\nscope: repo:81444c90f1ff44ac\nanchors:\n  - path: src/a.rs\n    lines: 1\n---\nRetry a failed migration once.\n";
-    let global_note =
-        "---\ntype: fact\ntitle: Migrations are global\n---\nEvery migration is logged.\n";
-    let cwd = repo.to_str().unwrap();
-    let added = lorectl(
-        &vault,
-        &[
-            "add",
-            &note_file(dir.path(), "r.md", repo_note),
-            "--cwd",
-            cwd,
-        ],
-    );
+    repo
+}
+
+#[test]
+fn mem_add_cwd_pins_anchors_and_names_the_repo() {
+    let (dir, vault) = init();
+    let repo = lore_repo(dir.path());
+    let file = note_file(dir.path(), "r.md", REPO_NOTE);
+    let added = lorectl(&vault, &["add", &file, "--cwd", repo.to_str().unwrap()]);
     assert_eq!(code(&added), 0, "{}", stderr(&added));
     let stored =
         std::fs::read_to_string(vault.join("repos/lore-81444c90f1ff44ac/retry-the-migration.md"))
@@ -317,6 +314,19 @@ fn mem_recall_labels_notes_against_the_repo_at_cwd() {
         stored.contains("\nscope: repo:81444c90f1ff44ac\nrepo: lore\n"),
         "{stored}"
     );
+    assert_eq!(status(&vault), "");
+}
+
+#[test]
+fn mem_recall_labels_notes_against_the_repo_at_cwd() {
+    let (dir, vault) = init();
+    let repo = lore_repo(dir.path());
+    let global_note =
+        "---\ntype: fact\ntitle: Migrations are global\n---\nEvery migration is logged.\n";
+    let cwd = repo.to_str().unwrap();
+    let file = note_file(dir.path(), "r.md", REPO_NOTE);
+    let added = lorectl(&vault, &["add", &file, "--cwd", cwd]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
     lorectl(
         &vault,
         &["add", &note_file(dir.path(), "g.md", global_note)],
