@@ -99,3 +99,32 @@ fn an_unreadable_note_file_still_fails_the_rebuild() {
         other => panic!("a permission error must still fail the rebuild: {other:?}"),
     }
 }
+
+#[test]
+fn an_unreadable_note_file_still_fails_the_refresh() {
+    isolate_git();
+    let dir = tempfile::tempdir().unwrap();
+    let (vault, _) = Vault::init(dir.path()).unwrap();
+    vault
+        .add("---\ntype: fact\ntitle: Good note\n---\nfindable body\n")
+        .unwrap();
+    let locked = dir.path().join("global");
+    fs::create_dir_all(&locked).unwrap();
+    let file = locked.join("locked.md");
+    fs::write(&file, "---\ntype: fact\n---\nbody\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&file).is_ok() {
+        // Running as root, so permission bits do not deny the read.
+        return;
+    }
+
+    let result = vault.search("findable", 10);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+    match result {
+        Err(VaultError::Io(what, error)) => {
+            assert_eq!(what, "read global/locked.md");
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+        other => panic!("a permission error must still fail the refresh: {other:?}"),
+    }
+}
