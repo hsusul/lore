@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "source": "comet-ml/opik-skills",
+  "ref": "main",
+  "contentHash": "21f179d397896a46f6555804f7392d2b5a528e19115556074679380c26dad776",
+  "installedAt": "2026-10-31T00:04:45.792838+00:00",
+  "skills": ["opik"],
+  "hosts": ["cursor"]
+}
