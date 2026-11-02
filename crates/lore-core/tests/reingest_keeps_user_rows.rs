@@ -1,6 +1,6 @@
 //! Re-ingesting a source replaces its session's parsed rows. What the user
 //! recorded about that session, and not the agent log, must survive: a folder
-//! assignment.
+//! assignment and a forget.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
@@ -135,4 +135,38 @@ fn a_filed_session_keeps_its_folder_across_reingest_and_a_parser_bump() {
         .unwrap();
     assert_eq!(kept_added_at, added_at);
     assert!(archive.path().exists());
+}
+
+#[test]
+fn a_forgotten_session_stays_gone_after_a_parser_bump() {
+    let archive = Archive::new();
+    let session = archive.session_id().unwrap();
+    lore_core::forget::forget_session(&archive.conn, &archive.blobs, &session).unwrap();
+    assert!(
+        archive.path().exists(),
+        "forget never deletes the agent log"
+    );
+
+    archive.age_parser_version();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None, "a forgotten session came back");
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None);
+}
+
+/// An archive written before forget marked sources: the source is still `ok`
+/// but supports no session.
+#[test]
+fn a_session_forgotten_by_an_older_lore_stays_gone_after_a_parser_bump() {
+    let archive = Archive::new();
+    let session = archive.session_id().unwrap();
+    lore_core::forget::forget_session(&archive.conn, &archive.blobs, &session).unwrap();
+    archive
+        .conn
+        .execute("UPDATE ingest_state SET state = 'ok'", [])
+        .unwrap();
+
+    archive.age_parser_version();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None, "a forgotten session came back");
 }
