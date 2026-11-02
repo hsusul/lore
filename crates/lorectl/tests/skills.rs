@@ -2,6 +2,7 @@
 //! always pointed at a fixture or a temp dir, never the real one.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::SystemTime;
@@ -27,6 +28,61 @@ fn stdout(output: &Output) -> String {
 fn json(output: &Output) -> Vec<serde_json::Value> {
     let value: serde_json::Value = serde_json::from_str(&stdout(output)).unwrap();
     value.as_array().unwrap().clone()
+}
+
+fn write(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+}
+
+/// The content hash `skills ls --json` reports for the one skill in `home`.
+fn only_hash(home: &Path) -> String {
+    let records = json(&lorectl(home, &["--json", "skills", "ls"]));
+    assert_eq!(records.len(), 1);
+    records[0]["hash"].as_str().unwrap().to_string()
+}
+
+#[cfg(unix)]
+#[test]
+fn hashing_stays_inside_the_skill_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let skill = home.join(".claude/skills/s");
+    write(
+        &skill.join("SKILL.md"),
+        "---\nname: s\ndescription: d\n---\n",
+    );
+    write(&dir.path().join("outside/secret.txt"), "one");
+    std::os::unix::fs::symlink(dir.path().join("outside"), skill.join("out")).unwrap();
+    let before = only_hash(&home);
+    write(&dir.path().join("outside/secret.txt"), "two, longer");
+    assert_eq!(
+        only_hash(&home),
+        before,
+        "a link out of the folder was read"
+    );
+}
+
+#[test]
+fn hashing_reads_a_bounded_prefix_of_large_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let skill = home.join(".claude/skills/s");
+    write(
+        &skill.join("SKILL.md"),
+        "---\nname: s\ndescription: d\n---\n",
+    );
+    let mut bytes = vec![0_u8; 4 << 20];
+    fs::write(skill.join("big.bin"), &bytes).unwrap();
+    let before = only_hash(&home);
+    // Same length, one byte changed past the cap: not read, so not seen.
+    *bytes.last_mut().unwrap() = 1;
+    fs::write(skill.join("big.bin"), &bytes).unwrap();
+    assert_eq!(only_hash(&home), before);
+    // A different length is seen.
+    bytes.push(0);
+    fs::write(skill.join("big.bin"), &bytes).unwrap();
+    assert_ne!(only_hash(&home), before);
 }
 
 #[test]

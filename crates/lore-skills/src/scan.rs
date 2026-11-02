@@ -2,7 +2,8 @@
 //! nothing here opens a file for writing.
 
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use crate::frontmatter;
@@ -12,6 +13,11 @@ use crate::model::{ContentHash, Install, Mode, SkillName, SkillRecord, Source};
 
 /// Deep enough for `cache/<marketplace>/<plugin>/<version>/skills`, with room.
 const MAX_SEARCH_DEPTH: usize = 6;
+/// Bounds a symlink cycle inside a skill folder.
+const MAX_HASH_DEPTH: usize = 8;
+/// Bytes of each file read for hashing and for SKILL.md. A file's full length
+/// is hashed too, so growth past the cap still changes the hash.
+pub const MAX_READ_BYTES: u64 = 1 << 20;
 
 /// Everything found under one set of roots.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -172,7 +178,9 @@ fn group(found: Vec<Found>) -> Vec<SkillRecord> {
 }
 
 fn new_record(name: SkillName, install: Install, source: Source) -> SkillRecord {
-    let bytes = fs::read(install.real_path.join("SKILL.md")).unwrap_or_default();
+    let bytes = read_capped(&install.real_path.join("SKILL.md"))
+        .map(|(_, bytes)| bytes)
+        .unwrap_or_default();
     let text = String::from_utf8_lossy(&bytes);
     let (parsed, _body) = frontmatter::parse(&text);
     let lines = text.lines().count();
@@ -247,8 +255,83 @@ fn children(dir: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
-/// blake3 over the folder's SKILL.md.
+/// A file's full length and at most [`MAX_READ_BYTES`] of its bytes.
+fn read_capped(path: &Path) -> io::Result<(u64, Vec<u8>)> {
+    let file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut bytes = Vec::new();
+    file.take(MAX_READ_BYTES).read_to_end(&mut bytes)?;
+    Ok((len, bytes))
+}
+
+/// One entry [`hash_dir`] covers.
+enum Entry {
+    /// A regular file inside the skill folder.
+    File,
+    /// A link that leaves the skill folder: its target text is hashed, never
+    /// what it points at.
+    Outside(PathBuf),
+}
+
+/// blake3 over every non-hidden file below `root`: relative path, full
+/// length, and the first [`MAX_READ_BYTES`] bytes, in sorted order. Hidden
+/// files (`.DS_Store`, editor state) are not content an agent reads. Links are
+/// followed only while they stay inside `root`, which is already resolved.
 fn hash_dir(root: &Path) -> ContentHash {
-    let bytes = fs::read(root.join("SKILL.md")).unwrap_or_default();
-    ContentHash(blake3::hash(&bytes).to_hex().to_string())
+    let mut files = Vec::new();
+    collect_files(root, root, "", 0, &mut files);
+    let mut hasher = blake3::Hasher::new();
+    for (relative, entry) in files {
+        hasher.update(relative.as_bytes());
+        hasher.update(&[0]);
+        match entry {
+            Entry::Outside(target) => {
+                hasher.update(b"\xfelink");
+                hasher.update(target.as_os_str().as_encoded_bytes());
+            }
+            Entry::File => match read_capped(&root.join(&relative)) {
+                Ok((len, bytes)) => {
+                    hasher.update(&len.to_le_bytes());
+                    hasher.update(&bytes);
+                }
+                Err(_) => {
+                    hasher.update(b"\xffunreadable");
+                }
+            },
+        }
+    }
+    ContentHash(hasher.finalize().to_hex().to_string())
+}
+
+fn collect_files(
+    root: &Path,
+    dir: &Path,
+    prefix: &str,
+    depth: usize,
+    out: &mut Vec<(String, Entry)>,
+) {
+    if depth > MAX_HASH_DEPTH {
+        return;
+    }
+    for (name, path) in children(dir) {
+        let relative = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
+        // A linked top-level SKILL.md is still the file the agent reads.
+        let entry_point = relative == "SKILL.md";
+        if let Some(target) = fs::read_link(&path).ok().filter(|_| !entry_point) {
+            let inside = fs::canonicalize(&path).is_ok_and(|real| real.starts_with(root));
+            if !inside {
+                out.push((relative, Entry::Outside(target)));
+                continue;
+            }
+        }
+        match fs::metadata(&path) {
+            Ok(meta) if meta.is_dir() => collect_files(root, &path, &relative, depth + 1, out),
+            Ok(meta) if meta.is_file() => out.push((relative, Entry::File)),
+            _ => {}
+        }
+    }
 }
