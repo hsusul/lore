@@ -55,7 +55,6 @@ pub enum VaultError {
     Conflict(String),
     #[error("id `{id}` is already used by {existing}")]
     DuplicateId { id: String, existing: String },
-
     #[error("another Lore process is writing to the vault at {}", .0.display())]
     Busy(PathBuf),
     #[error("no note matches `{0}`")]
@@ -261,6 +260,46 @@ impl Vault {
         drop(index);
         self.commit(&rel, &format!("mem: add {}", note.slug()))?;
         Ok((note, Added::Committed))
+    }
+
+    /// Write `note` over the note file at `rel` and commit it. The file must
+    /// exist and hold the same id; it stays where it is, even when a person
+    /// renamed or moved it. Writing what the file already holds is
+    /// [`Added::Unchanged`].
+    pub fn write(&self, rel: &str, note: &Note) -> Result<Added, VaultError> {
+        let rel = RelPath::parse(rel)
+            .ok()
+            .filter(|r| r.as_str().ends_with(".md"))
+            .ok_or_else(|| VaultError::BadPath(rel.into(), "expected a `.md` file".into()))?;
+        let rel = rel.as_str();
+        let path = self.root.join(rel);
+        let _lock = self.lock()?;
+        let existing = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(VaultError::NotFound(rel.into()))
+            }
+            Err(e) => return Err(io_error(format!("read {rel}"))(e)),
+        };
+        let current = Note::parse(&existing).map_err(|_| VaultError::Conflict(rel.into()))?;
+        if current.id != note.id {
+            return Err(VaultError::Conflict(rel.into()));
+        }
+        let index = self.refresh_locked()?;
+        check_id_free(&index, &note.id, rel)?;
+        drop(index);
+        let text = note.render();
+        if text == existing {
+            if self.is_committed(rel)? {
+                return Ok(Added::Unchanged);
+            }
+        } else {
+            write_atomically(&path, &text)?;
+        }
+        let stem = rel.rsplit('/').next().unwrap_or(rel);
+        let stem = stem.strip_suffix(".md").unwrap_or(stem);
+        self.commit(rel, &format!("mem: update {stem}"))?;
+        Ok(Added::Committed)
     }
 
     /// Stage and commit one file, then bring the index up to date.
