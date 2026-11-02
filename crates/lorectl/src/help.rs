@@ -59,7 +59,10 @@ pub fn usage() -> String {
 
     format!(
         "\
-lorectl {version} — a local ledger of coding-agent work, reconciled against Git.
+lorectl {version}
+
+Lore keeps a local, searchable archive of your Claude Code and Codex sessions.
+It gives coding agents long-term memory and checks the skills they load.
 
 Usage:
     lorectl [OPTIONS] <COMMAND>
