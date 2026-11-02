@@ -155,6 +155,17 @@ fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
         Finding::NameMismatch { declared, path, .. } => {
             format!("{} declares `name: {declared}`", show(path))
         }
+        Finding::BrokenRef {
+            missing,
+            agent,
+            path,
+            found_at,
+            ..
+        } => format!(
+            "{} names `{missing}`, which {agent} cannot load (it is at {})",
+            show(path),
+            show(found_at)
+        ),
         Finding::Drift { copies, .. } => {
             let copies: Vec<String> = copies
                 .iter()
@@ -182,11 +193,12 @@ fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
 fn summary(findings: &[Finding], skills: usize) -> String {
     let count = |kind: &str| findings.iter().filter(|f| f.kind() == kind).count();
     format!(
-        "{} duplicates, {} drift, {} unknown sources, {} name mismatches, \
+        "{} duplicates, {} drift, {} unknown sources, {} broken refs, {} name mismatches, \
          {} bad frontmatter, {} codex budget; {} findings; {skills} skills found",
         count("duplicate"),
         count("drift"),
         count("unknown-source"),
+        count("broken-ref"),
         count("name-mismatch"),
         count("bad-frontmatter"),
         count("codex-budget"),

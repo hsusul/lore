@@ -17,6 +17,7 @@ pub fn doctor(inventory: &Inventory) -> Vec<Finding> {
     for record in &inventory.records {
         by_name.entry(&record.name).or_default().push(record);
     }
+    let reach = reachable(&inventory.records);
 
     let mut findings = Vec::new();
     for (name, records) in &by_name {
@@ -38,6 +39,7 @@ pub fn doctor(inventory: &Inventory) -> Vec<Finding> {
         }
         for record in records {
             findings.extend(per_record(record, &inventory.roots));
+            findings.extend(broken_refs(record, &reach, &by_name, inventory));
         }
     }
     findings.extend(codex_budget(&by_name));
@@ -122,6 +124,55 @@ fn per_record(record: &SkillRecord, roots: &Roots) -> Vec<Finding> {
             skill: record.name.clone(),
             path,
         });
+    }
+    out
+}
+
+/// Every skill name each agent can load.
+fn reachable(records: &[SkillRecord]) -> BTreeMap<Agent, BTreeSet<&str>> {
+    let mut reach: BTreeMap<Agent, BTreeSet<&str>> = BTreeMap::new();
+    for record in records {
+        for agent in record.installs.iter().flat_map(|i| &i.agents) {
+            reach.entry(*agent).or_default().insert(&record.name);
+        }
+    }
+    reach
+}
+
+fn broken_refs(
+    record: &SkillRecord,
+    reach: &BTreeMap<Agent, BTreeSet<&str>>,
+    by_name: &BTreeMap<&str, Vec<&SkillRecord>>,
+    inventory: &Inventory,
+) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let mut agents: BTreeMap<Agent, &Path> = BTreeMap::new();
+    for install in &record.installs {
+        for agent in &install.agents {
+            agents.entry(*agent).or_insert(&install.path);
+        }
+    }
+    for missing in &record.refs {
+        let found_at = by_name
+            .get(missing.as_str())
+            .and_then(|rs| rs.first())
+            .map(|r| first_path(r))
+            .or_else(|| inventory.elsewhere.get(missing).cloned());
+        let Some(found_at) = found_at else { continue };
+        for (agent, path) in &agents {
+            let loads = reach
+                .get(agent)
+                .is_some_and(|names| names.contains(missing.as_str()));
+            if !loads {
+                out.push(Finding::BrokenRef {
+                    skill: record.name.clone(),
+                    missing: missing.clone(),
+                    agent: *agent,
+                    path: path.to_path_buf(),
+                    found_at: found_at.clone(),
+                });
+            }
+        }
     }
     out
 }
