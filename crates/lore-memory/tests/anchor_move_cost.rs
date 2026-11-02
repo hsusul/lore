@@ -13,7 +13,7 @@ use std::fs;
 use std::time::{Duration, Instant};
 
 use common::{commit, repo};
-use lore_memory::anchor::{WorkTree, MOVE_SEARCH_LIMIT};
+use lore_memory::anchor::{Freshness, WorkTree, MOVE_SEARCH_LIMIT};
 use lore_memory::note::{Anchor, LineRange, RelPath};
 
 /// 10,000 filler lines then 30,000 anchored lines, about 600 KB.
@@ -28,10 +28,9 @@ fn body() -> String {
     text
 }
 
-#[test]
-fn a_move_search_in_a_file_near_the_cap_finishes_in_two_seconds() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+/// A repo with `big.txt` committed and an anchor pinned to its 30,000
+/// anchored lines.
+fn pinned(root: &std::path::Path) -> (String, Anchor) {
     repo(root, None);
     let text = body();
     assert!(
@@ -50,10 +49,12 @@ fn a_move_search_in_a_file_near_the_cap_finishes_in_two_seconds() {
             commit: None,
         })
         .unwrap();
-    assert_eq!(anchor.check(root), lore_memory::anchor::Freshness::Fresh);
+    assert_eq!(anchor.check(root), Freshness::Fresh);
+    (text, anchor)
+}
 
-    // One line inserted at the top. The anchored block is intact at 10002-40001.
-    fs::write(root.join("big.txt"), format!("inserted\n{text}")).unwrap();
+/// Check `anchor`, print how long it took, and fail past two seconds.
+fn timed_check(root: &std::path::Path, anchor: &Anchor) -> Freshness {
     let started = Instant::now();
     let freshness = anchor.check(root);
     let elapsed = started.elapsed();
@@ -66,4 +67,33 @@ fn a_move_search_in_a_file_near_the_cap_finishes_in_two_seconds() {
         elapsed < Duration::from_secs(2),
         "a move search inside the 1 MiB cap took {elapsed:?}"
     );
+    freshness
+}
+
+#[test]
+fn a_move_search_in_a_file_near_the_cap_finishes_in_two_seconds() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let (text, anchor) = pinned(root);
+
+    // One line inserted at the top. The anchored block is intact at 10002-40001.
+    fs::write(root.join("big.txt"), format!("inserted\n{text}")).unwrap();
+    assert_eq!(
+        timed_check(root, &anchor),
+        Freshness::Moved {
+            lines: LineRange::parse("10002-40001").unwrap()
+        }
+    );
+}
+
+#[test]
+fn a_failed_search_in_a_file_near_the_cap_finishes_in_two_seconds() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let (text, anchor) = pinned(root);
+
+    // The last anchored line edited, so no run of the anchored lines is left.
+    let edited = text.replace("anchored-29999\n", "edited\n");
+    fs::write(root.join("big.txt"), edited).unwrap();
+    assert_eq!(timed_check(root, &anchor), Freshness::Changed);
 }
