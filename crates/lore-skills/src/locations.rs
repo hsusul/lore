@@ -221,6 +221,15 @@ impl Roots {
     }
 }
 
+/// Position in [`LOCATIONS`], for ordering.
+#[must_use]
+pub fn order(id: &str) -> usize {
+    LOCATIONS
+        .iter()
+        .position(|l| l.id == id)
+        .unwrap_or(LOCATIONS.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
