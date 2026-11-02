@@ -1,14 +1,14 @@
 {
   "claude_code": {
     "agent_version": "1.2.3",
-    "note": "Claude Code transcript JSONL, anonymized. The transcript format is internal and changes between releases; each fixture is tagged with the agent version whose shape it represents.",
+    "note": "Claude Code transcript JSONL, anonymized. The transcript format is internal and changes between releases; each fixture is tagged with the agent version whose shape it represents. A label marked synthetic is a handwritten placeholder, not a captured transcript; it names the version whose line shape it copies.",
     "fixtures": {
       "basic_text.jsonl": "1.2.3",
       "tool_use.jsonl": "1.2.3",
       "segments.jsonl": "1.2.3",
       "v2.1.0_sample.jsonl": "2.1.0",
-      "subagent_fold/cccccccc-0000-4000-8000-000000000001.jsonl": "2.1.309",
-      "subagent_fold/cccccccc-0000-4000-8000-000000000001/subagents/agent-a0000000000000001.jsonl": "2.1.309"
+      "subagent_fold/cccccccc-0000-4000-8000-000000000001.jsonl": "synthetic, shaped like 2.1.309",
+      "subagent_fold/cccccccc-0000-4000-8000-000000000001/subagents/agent-a0000000000000001.jsonl": "synthetic, shaped like 2.1.309"
     }
   },
   "codex": {
