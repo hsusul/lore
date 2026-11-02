@@ -31,7 +31,13 @@ use crate::storage::{Result, StorageError};
 /// so sources ingested at v2 must be parsed again — without this bump the
 /// landing feature can never turn on for an existing archive, because
 /// unchanged v2 sources are skipped.
-pub const PARSER_VERSION: &str = "3";
+///
+/// v4: a Claude subagent or resumed transcript gets its own session id, so
+/// sources whose rows replaced another transcript's session at v3 must be
+/// parsed again.
+pub const PARSER_VERSION: &str = "4";
+/// `ingest_state.state` of a source whose session the user forgot.
+pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
 const PREFIX_BYTES: usize = 4096;
 /// Media type recorded for agent-recorded patch/diff blobs.
@@ -98,6 +104,7 @@ fn persist_rows(
 
     let session_id = session_id_for(agent_id, parsed);
     let existing_sources = session_sources(tx, &session_id)?;
+    let kept = KeptRows::save(tx, &session_id)?;
 
     // Explicitly delete search projections first so the FTS external-content
     // delete trigger fires (an FK cascade would not fire it), then cascade-delete
@@ -165,8 +172,106 @@ fn persist_rows(
         patch_blobs,
         RowBase::default(),
     )?;
+    kept.restore(tx, &session_id)?;
     index_search_rows(tx, high_water)?;
     Ok(session_id)
+}
+
+/// Rows about a session that no source holds, so replacing the session's
+/// parsed rows must keep them: the folder the user filed it in (migration
+/// 0008 promises it survives a re-scan), and the git evidence Lore recorded,
+/// whose `observed_at` says when it was first observed and is never rewritten
+/// (`enrich::write_outcomes`). The evidence waits in temp tables, since
+/// `git_observation` rows are wide and restored whole.
+struct KeptRows {
+    folder: Option<(String, i64)>,
+}
+
+impl KeptRows {
+    fn save(tx: &Connection, session_id: &str) -> Result<Self> {
+        let folder = tx
+            .query_row(
+                "SELECT folder_id, added_at FROM session_folder WHERE session_id = ?1",
+                [session_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        tx.execute_batch(
+            "DROP TABLE IF EXISTS temp.kept_git_observation;
+             DROP TABLE IF EXISTS temp.kept_segment;",
+        )?;
+        tx.execute(
+            "CREATE TEMP TABLE kept_git_observation AS
+             SELECT * FROM git_observation WHERE session_id = ?1",
+            [session_id],
+        )?;
+        tx.execute(
+            "CREATE TEMP TABLE kept_segment AS
+             SELECT id, cwd, repository_id, worktree_id, resolution_confidence
+             FROM session_segment WHERE session_id = ?1",
+            [session_id],
+        )?;
+        Ok(Self { folder })
+    }
+
+    /// Restore after the parsed rows are inserted. A segment keeps its
+    /// resolved repository while its cwd is unchanged, so enrichment does not
+    /// capture it again. An agent-recorded observation the parse wrote again
+    /// keeps its first `observed_at` while it records the same branch and
+    /// commit. Lore's own observations come back whole while their segment's
+    /// cwd is unchanged. Segment ids are positional, so a segment whose cwd
+    /// changed may now describe another repository.
+    fn restore(&self, tx: &Connection, session_id: &str) -> Result<()> {
+        if let Some((folder_id, added_at)) = &self.folder {
+            tx.execute(
+                "INSERT INTO session_folder (session_id, folder_id, added_at) VALUES (?1,?2,?3)",
+                params![session_id, folder_id, added_at],
+            )?;
+        }
+        tx.execute(
+            "UPDATE session_segment SET
+                repository_id = (SELECT k.repository_id FROM temp.kept_segment k
+                                 WHERE k.id = session_segment.id),
+                worktree_id = (SELECT k.worktree_id FROM temp.kept_segment k
+                               WHERE k.id = session_segment.id),
+                resolution_confidence = (SELECT k.resolution_confidence
+                                         FROM temp.kept_segment k
+                                         WHERE k.id = session_segment.id)
+             WHERE session_id = ?1 AND EXISTS (
+                SELECT 1 FROM temp.kept_segment k
+                WHERE k.id = session_segment.id AND k.cwd IS session_segment.cwd
+                  AND k.repository_id IS NOT NULL)",
+            [session_id],
+        )?;
+        tx.execute(
+            "UPDATE git_observation SET observed_at = (
+                SELECT k.observed_at FROM temp.kept_git_observation k
+                WHERE k.id = git_observation.id)
+             WHERE session_id = ?1 AND EXISTS (
+                SELECT 1 FROM temp.kept_git_observation k
+                WHERE k.id = git_observation.id AND k.source = git_observation.source
+                  AND k.branch IS git_observation.branch
+                  AND k.commit_sha IS git_observation.commit_sha)",
+            [session_id],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO git_observation
+             SELECT * FROM temp.kept_git_observation k
+             WHERE k.source IN ('lore_captured', 'lore_reverified')
+               AND (k.segment_id IS NULL
+                    OR EXISTS (
+                        SELECT 1 FROM session_segment seg
+                        JOIN temp.kept_segment ks ON ks.id = seg.id
+                        WHERE seg.id = k.segment_id AND seg.session_id = ?1
+                          AND ks.cwd IS seg.cwd))",
+            [session_id],
+        )?;
+        tx.execute_batch(
+            "DROP TABLE temp.kept_git_observation;
+             DROP TABLE temp.kept_segment;",
+        )?;
+        crate::search::project_session_git(tx, session_id)
+    }
 }
 
 /// The highest search row id. Rows inserted after reading it get higher ids,
@@ -922,6 +1027,21 @@ struct SourceRow {
     parser_version: Option<String>,
     ingest_state: Option<String>,
     resume_json: Option<String>,
+    /// The source supports at least one session.
+    linked: bool,
+}
+
+impl SourceRow {
+    /// The user forgot the session this source supported. Forget marks the
+    /// source; an archive forgotten before it did shows an `ok` source that
+    /// supports no session, since ingest links every source it parses.
+    fn forgotten(&self) -> bool {
+        match self.ingest_state.as_deref() {
+            Some(FORGOTTEN) => true,
+            Some("ok") => !self.linked,
+            _ => false,
+        }
+    }
 }
 
 struct SourceSnapshot {
@@ -1010,12 +1130,16 @@ pub fn ingest_file(
             0,
             ChangeClass::New,
         ),
+        // A forgotten source stays skipped while it exists, at any parser
+        // version and whatever the agent writes to it after the forget
+        // (`forget::forget_session`). Skipping leaves its state forgotten.
         Some(row)
-            if row.full_hash.as_deref() == Some(snapshot.full_hash.as_str())
-                && row.parser_version.as_deref() == Some(PARSER_VERSION)
-                && row.ingest_state.as_deref() == Some("ok") =>
+            if row.forgotten()
+                || (row.full_hash.as_deref() == Some(snapshot.full_hash.as_str())
+                    && row.parser_version.as_deref() == Some(PARSER_VERSION)
+                    && row.ingest_state.as_deref() == Some("ok")) =>
         {
-            // Unchanged content: refresh stat/alias only, no re-parse.
+            // Forgotten or unchanged: refresh stat/alias only, no re-parse.
             let _write = crate::storage::write_lock();
             let tx = conn.unchecked_transaction()?;
             update_source(&tx, &row.id, &snapshot, row.generation)?;
@@ -1044,10 +1168,7 @@ pub fn ingest_file(
         }
     };
 
-    let fallback = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| snapshot.path.clone());
+    let fallback = adapter.session_key(path);
 
     if let (Some(row), ChangeClass::Appended, None) = (&prev, change, &oversized_note) {
         let source = AppendSource {
@@ -1081,9 +1202,12 @@ pub fn ingest_file(
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
     let target_session_id = session_id_for(agent_id, &parsed);
-    if prev.is_some() {
-        detach_reassigned_source(&tx, &artifact_id, &target_session_id)?;
-    }
+    let left_folder = if prev.is_some() {
+        save_left_captures(&tx, &artifact_id, &target_session_id)?;
+        detach_reassigned_source(&tx, &artifact_id, &target_session_id)?
+    } else {
+        None
+    };
     let session_id = persist_rows(
         &tx,
         agent_id,
@@ -1092,6 +1216,18 @@ pub fn ingest_file(
         Some(&artifact_id),
         &patch_blobs,
     )?;
+    // The session this source left is gone; keep what it held filed unless
+    // the session it moved to has a folder of its own.
+    if let Some((folder_id, added_at)) = left_folder {
+        tx.execute(
+            "INSERT OR IGNORE INTO session_folder (session_id, folder_id, added_at)
+             VALUES (?1,?2,?3)",
+            params![session_id, folder_id, added_at],
+        )?;
+    }
+    if prev.is_some() {
+        carry_left_captures(&tx, &session_id)?;
+    }
 
     if prev.is_none() {
         insert_source(&tx, &artifact_id, agent_id, &snapshot, generation)?;
@@ -1287,14 +1423,79 @@ fn session_sources(tx: &Connection, session_id: &str) -> Result<Vec<SessionSourc
     Ok(rows)
 }
 
-/// If a physical source is rewritten into a different native session, detach
-/// it from the old logical session and remove that session only when no other
-/// source still supports it.
-fn detach_reassigned_source(
+/// Save Lore's git captures on the sessions a source is about to leave, with
+/// the cwd of the segment each one describes. Detaching can delete those
+/// sessions and their evidence.
+fn save_left_captures(
     tx: &Connection,
     source_artifact_id: &str,
     target_session_id: &str,
 ) -> Result<()> {
+    tx.execute_batch("DROP TABLE IF EXISTS temp.left_capture;")?;
+    tx.execute(
+        "CREATE TEMP TABLE left_capture AS
+         SELECT g.*, seg.cwd AS cwd FROM git_observation g
+         JOIN session_segment seg ON seg.id = g.segment_id
+         JOIN session_source ss ON ss.session_id = g.session_id
+         WHERE ss.source_artifact_id = ?1 AND ss.session_id <> ?2
+           AND g.source = 'lore_captured'",
+        params![source_artifact_id, target_session_id],
+    )?;
+    Ok(())
+}
+
+/// Carry a saved capture to each segment of `session_id` that runs in the same
+/// cwd and has no repository yet, under the id enrichment gives that segment.
+/// Enrichment then keeps its first `observed_at` while it finds the same
+/// branch and commit.
+fn carry_left_captures(tx: &Connection, session_id: &str) -> Result<()> {
+    let pairs = {
+        let mut stmt = tx.prepare(
+            "SELECT seg.id, k.id FROM session_segment seg
+             JOIN temp.left_capture k ON k.cwd = seg.cwd
+             WHERE seg.session_id = ?1 AND seg.repository_id IS NULL
+             ORDER BY k.observed_at, k.id",
+        )?;
+        let rows = stmt
+            .query_map([session_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<(String, String)>>>()?;
+        rows
+    };
+    for (segment_id, kept_id) in &pairs {
+        tx.execute(
+            "INSERT OR IGNORE INTO git_observation
+                (id, session_id, segment_id, source, observed_at, temporal_confidence,
+                 branch, commit_sha, commit_subject, is_dirty, ahead, behind,
+                 changed_files_json)
+             SELECT ?1, ?2, ?3, source, observed_at, temporal_confidence,
+                    branch, commit_sha, commit_subject, is_dirty, ahead, behind,
+                    changed_files_json
+             FROM temp.left_capture WHERE id = ?4",
+            params![
+                det_id("gc", &[session_id, segment_id]),
+                session_id,
+                segment_id,
+                kept_id
+            ],
+        )?;
+    }
+    tx.execute_batch("DROP TABLE temp.left_capture;")?;
+    if !pairs.is_empty() {
+        crate::search::project_session_git(tx, session_id)?;
+    }
+    Ok(())
+}
+
+/// If a physical source is rewritten into a different native session, detach
+/// it from the old logical session and remove that session only when no other
+/// source still supports it. Returns the folder a removed session was filed
+/// in, for the session the source moves to. An old session that keeps another
+/// source keeps its folder.
+fn detach_reassigned_source(
+    tx: &Connection,
+    source_artifact_id: &str,
+    target_session_id: &str,
+) -> Result<Option<(String, i64)>> {
     let old_session_ids = {
         let mut statement = tx.prepare(
             "SELECT session_id FROM session_source
@@ -1308,6 +1509,7 @@ fn detach_reassigned_source(
         rows
     };
 
+    let mut folder = None;
     for old_session_id in old_session_ids {
         tx.execute(
             "DELETE FROM session_source WHERE session_id = ?1 AND source_artifact_id = ?2",
@@ -1319,10 +1521,19 @@ fn detach_reassigned_source(
             |row| row.get(0),
         )?;
         if remaining == 0 {
+            if folder.is_none() {
+                folder = tx
+                    .query_row(
+                        "SELECT folder_id, added_at FROM session_folder WHERE session_id = ?1",
+                        [&old_session_id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+            }
             tx.execute("DELETE FROM agent_session WHERE id = ?1", [&old_session_id])?;
         }
     }
-    Ok(())
+    Ok(folder)
 }
 
 fn source_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRow> {
@@ -1335,13 +1546,15 @@ fn source_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRow> {
         parser_version: r.get(5)?,
         ingest_state: r.get(6)?,
         resume_json: r.get(7)?,
+        linked: r.get(8)?,
     })
 }
 
 fn find_source_by_path(conn: &Connection, agent_id: &str, path: &str) -> Result<Option<SourceRow>> {
     conn.query_row(
         "SELECT sa.id, sa.size, sa.full_hash, sa.prefix_hash, sa.generation,
-                ist.parser_version, ist.state, ist.resume_json
+                ist.parser_version, ist.state, ist.resume_json,
+                EXISTS (SELECT 1 FROM session_source ss WHERE ss.source_artifact_id = sa.id)
          FROM source_artifact sa
          LEFT JOIN ingest_state ist ON ist.source_artifact_id = sa.id
          WHERE sa.agent_id = ?1 AND sa.current_path = ?2",
@@ -1364,7 +1577,8 @@ fn find_source_by_native_id(
     };
     conn.query_row(
         "SELECT sa.id, sa.size, sa.full_hash, sa.prefix_hash, sa.generation,
-                ist.parser_version, ist.state, ist.resume_json
+                ist.parser_version, ist.state, ist.resume_json,
+                EXISTS (SELECT 1 FROM session_source ss WHERE ss.source_artifact_id = sa.id)
          FROM source_artifact sa
          LEFT JOIN ingest_state ist ON ist.source_artifact_id = sa.id
          WHERE sa.agent_id = ?1 AND sa.native_file_id = ?2 AND sa.full_hash = ?3

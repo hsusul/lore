@@ -77,11 +77,22 @@ Options:
     -h, --help        Print this help.
     -V, --version     Print the version.
 
+Skills:
+    skills ls         Every skill folder each agent loads, with its source.
+    skills doctor     Duplicates, drift, unknown sources, broken references,
+                      name mismatches, bad frontmatter, and Codex's budget.
+                      Each gets a quoted command or a plain hint; nothing
+                      is suggested for a copy an agent manages. Never
+                      writes; exits 0.
+
 Environment:
     LORE_VAULT_DIR    Vault directory (absolute) for `mem` when --vault is
                       absent. Otherwise ~/Lore.
     LORE_ARCHIVE_DIR  Archive directory (absolute) used when --archive is
                       absent. Otherwise the platform data directory is used.
+    HOME              Home root `skills` scans (~/.agents, ~/.cursor).
+    CLAUDE_CONFIG_DIR Claude Code's folder for `skills`; else ~/.claude.
+    CODEX_HOME        Codex's folder for `skills`; else ~/.codex.
 
 Exit codes:
     {ok}  ok
