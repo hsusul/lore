@@ -107,6 +107,26 @@ fn help_hook_prints_the_hook_page() {
 }
 
 #[test]
+fn help_hook_describes_the_memory_block_and_the_hook_json() {
+    assert_eq!(
+        help_text(&["help", "hook"]),
+        "\
+Hooks (lorectl hook <EVENT> [--archive <DIR>]):
+    session-start     One line when files agents wrote in this repository are
+                      staged and not committed. Then up to 10 accepted
+                      memory notes for the repository, each with its
+                      freshness label, and how many more recall_memory
+                      lists. Prints nothing when there is neither.
+    Notes are for `cwd` in the hook JSON on stdin, else the current
+    directory. LORE_VAULT_DIR names the vault; otherwise ~/Lore.
+    Run by an agent, not a person. It never scans, and it writes nothing
+    but the vault's rebuildable index. Every failure, and any other EVENT,
+    exits 0 in silence, so a session never stalls on Lore.
+"
+    );
+}
+
+#[test]
 fn help_mem_is_still_the_memory_section_of_the_full_help() {
     let page = help_text(&["help", "mem"]);
     assert_eq!(page, help_text(&["mem", "--help"]));
