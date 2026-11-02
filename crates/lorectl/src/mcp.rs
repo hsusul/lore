@@ -88,6 +88,7 @@ const AGENT_UNKNOWN_FIX: &str =
 const ANCHOR_NOT_FOUND_FIX: &str = "Anchor paths are relative to the repo root and must exist. \
 Check path and lines, or omit lines.";
 const SCOPE_MISMATCH_FIX: &str = "Anchors need scope repo and a cwd inside that repo.";
+const SESSION_MISMATCH_FIX: &str = "That session belongs to another agent. Omit session_id.";
 
 const INSTRUCTIONS: &str = "Lore archives past Claude Code and Codex sessions on this machine. \
 Use search_sessions to find earlier work, decisions, or errors, then read_session to read one. \
@@ -617,9 +618,10 @@ fn open_vault() -> Result<Vault, Value> {
     })
 }
 
-/// File a note in the vault inbox for a person to review. The session is
-/// `session_id` as given (not checked against the archive) or the
-/// connection's own `mcp-<ULID>`.
+/// File a note in the vault inbox for a person to review. A `session_id` the
+/// archive holds for this agent is stored as its archive id and marked
+/// verified; one it holds for another agent is refused; any other is stored
+/// as given. Without `session_id`, the session is the connection's `mcp-<ULID>`.
 fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let unknown = "cannot tell which agent is calling";
     let agent = ctx
@@ -649,6 +651,23 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }
     .and_then(|id| SessionId::parse(id).ok())
     .ok_or_else(|| invalid_argument("session_id", "must be letters, digits, `.`, `_`, `-`"))?;
+    let owner = (arguments.get("session_id"))
+        .and_then(|_| archived_session(&ctx.archive_dir, session.as_str()));
+    let source_verified = owner.is_some();
+    let session = match owner {
+        None => session,
+        Some(owner) if owner.agent_id == agent.as_str() => SessionId::parse(&owner.archive_id)
+            .map_err(|e| tool_error("internal", e, INTERNAL_FIX))?,
+        Some(owner) => {
+            let given = session.as_str();
+            let mismatch = format!("session `{given}` was recorded by {}", owner.agent_id);
+            return Err(tool_error(
+                "session_mismatch",
+                mismatch,
+                SESSION_MISMATCH_FIX,
+            ));
+        }
+    };
     let relation = (arguments.get("updates"))
         .map(|id| id.as_str().and_then(|id| NoteId::parse(id).ok()))
         .map(|id| id.map(Relation::Updates).ok_or("must be a note id"))
@@ -717,8 +736,16 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         "proposal_id": written.id.as_str(),
         "inbox": format!("{}/{}", inbox::INBOX_DIR, written.file_name()),
         "session": written.session.as_str(),
-        "source_verified": false,
+        "source_verified": source_verified,
     }))
+}
+
+/// The archived session `id` names, as an archive or native session id. Read
+/// only. A missing or unreadable archive counts as not found, so proposing
+/// never depends on the archive.
+fn archived_session(archive_dir: &Path, id: &str) -> Option<query::SessionOwner> {
+    let conn = open(archive_dir).ok()?;
+    query::find_session(&conn, id).ok().flatten()
 }
 
 /// `anchors` as `[{path, lines?}]`, unpinned. The agent never sends a hash.
