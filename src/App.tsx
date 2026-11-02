@@ -1,22 +1,31 @@
+import { clsx } from "clsx";
+import { Command as CommandIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import CommandPalette, { type Command } from "./components/CommandPalette";
-import { BrowsePane, SearchPane } from "./components/ListPane";
+import { BrowsePane, groupHits, ScopeBar, SearchPane } from "./components/ListPane";
 import type { OpenVia } from "./components/ListBox";
+import MessageBar from "./components/MessageBar";
 import { ConfirmDialog, NameDialog } from "./components/Modal";
 import Onboarding from "./components/Onboarding";
-import QueryLine from "./components/QueryLine";
 import Reader, { type ReaderActions } from "./components/Reader";
-import ScopePicker from "./components/ScopePicker";
+import ScanControl from "./components/ScanControl";
+import SearchField, { type FilterValues } from "./components/SearchField";
 import SettingsDialog from "./components/SettingsDialog";
-import StatusBar from "./components/StatusBar";
+import Sidebar, { SidebarToggle } from "./components/Sidebar";
+import { sourceRow, sourceSections } from "./components/sources";
+import Toolbar, { ScopeMenu, ScopeTitle } from "./components/Toolbar";
+import { Button, ICON } from "./components/ui/button";
+import { Tooltip, TooltipProvider } from "./components/ui/tooltip";
 import { agentLabel } from "./format";
-import { queryTerms } from "./hooks/query";
+import { isRunnable, queryFilters, queryTerms, withoutFilters } from "./hooks/query";
 import { useCatalog, type Catalog } from "./hooks/useCatalog";
 import { useDebounced } from "./hooks/useDebounced";
+import { useLastScan } from "./hooks/useLastScan";
 import { useOpenSession } from "./hooks/useOpenSession";
 import { usePagedList, type FetchPage } from "./hooks/usePagedList";
-import { ALL, initialWorkspace, workspaceReducer, type Overlay, type Scope } from "./hooks/workspace";
+import { useSidebar } from "./hooks/useSidebar";
+import { ALL, currentSource, initialWorkspace, workspaceReducer, type Overlay, type Source } from "./hooks/workspace";
 import {
   addAgentRoot,
   chooseAgentRootDirectory,
@@ -36,7 +45,9 @@ import {
   searchPage,
   setSessionFolder,
   type DetectedAgent,
+  type FolderSummary,
   type SearchHit,
+  type SearchSort,
   type SessionSummary,
 } from "./ipc";
 
@@ -53,24 +64,15 @@ function isTyping(target: EventTarget | null): boolean {
   return !!el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
 }
 
-function Mark() {
-  return (
-    <svg className="bar__mark" viewBox="0 0 140 96" fill="none" aria-hidden="true">
-      <circle cx="90" cy="48" r="30" stroke="currentColor" strokeWidth="9" strokeLinecap="round" strokeDasharray="176.98 11.52" transform="rotate(191 90 48)" />
-      <circle cx="64" cy="48" r="20" stroke="currentColor" strokeWidth="9" strokeLinecap="round" strokeDasharray="117.98 7.68" transform="rotate(191 64 48)" />
-      <circle cx="28" cy="48" r="8" fill="currentColor" />
-    </svg>
-  );
-}
-
 export default function App() {
   const [ws, dispatch] = useReducer(workspaceReducer, initialWorkspace);
   const catalog = useCatalog();
   const { agents, repositories, folders } = catalog.state.status === "ready" ? catalog.state.catalog : EMPTY;
   const [busyAgent, setBusyAgent] = useState<string | null>(null);
+  const sidebar = useSidebar();
+  const lastScanAt = useLastScan(ws.scan);
 
   const queryRef = useRef<HTMLInputElement>(null);
-  const scopeButtonRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const readerRef = useRef<HTMLElement>(null);
   const focusReaderOnLoad = useRef(false);
@@ -95,21 +97,23 @@ export default function App() {
   );
   const browse = usePagedList(fetchBrowse, SESSION_PAGE, sessionKey);
 
-  const searching = ws.query.trim() !== "";
+  // A bare `agent:` waiting for a value searches nothing yet, so the list stays put.
+  const searching = isRunnable(ws.query);
   const settledQuery = useDebounced(ws.query, SEARCH_DEBOUNCE_MS);
   const terms = useMemo(() => queryTerms(settledQuery), [settledQuery]);
   // The backend scopes a search to a repository by id; a folder cannot narrow
-  // a search yet, so the pane says so rather than pretending.
-  const backendQuery = scope.kind === "repository" ? `${settledQuery} repo:${scope.id}` : settledQuery;
+  // a search yet, so the scope bar says so rather than pretending.
+  const backendQuery = scope.kind === "repository" ? `${settledQuery.trim()} repo:${scope.id}` : settledQuery.trim();
+  const hasQuery = isRunnable(settledQuery);
   const fetchSearch = useMemo<FetchPage<SearchHit> | null>(
     () =>
-      terms.length === 0
+      !hasQuery
         ? null
         : async (limit, cursor) => {
             const page = await searchPage(backendQuery, limit, cursor, ws.sort);
             return { items: page.hits, cursor: page.next_cursor };
           },
-    [backendQuery, terms.length, ws.sort],
+    [backendQuery, hasQuery, ws.sort],
   );
   const search = usePagedList(fetchSearch, SEARCH_PAGE, hitKey);
   const searchPending = ws.query !== settledQuery;
@@ -148,21 +152,25 @@ export default function App() {
   const focusQuery = useCallback(() => queryRef.current?.focus(), []);
   const focusList = useCallback(() => listRef.current?.focus(), []);
 
+  // Arrow keys open sessions in place, so Enter often lands on a session that is
+  // already open; the request count lets that Enter still move focus.
+  const [focusRequests, setFocusRequests] = useState(0);
   const openSession = useCallback((id: string, via: OpenVia = "pointer") => {
     focusReaderOnLoad.current = via === "keyboard";
+    if (via === "keyboard") setFocusRequests((n) => n + 1);
     dispatch({ type: "open", id });
   }, []);
 
   useEffect(() => {
-    if (open.state.status === "ready" && focusReaderOnLoad.current) {
+    if (open.state.status === "ready" && open.state.id === ws.openId && focusReaderOnLoad.current) {
       focusReaderOnLoad.current = false;
       readerRef.current?.focus();
     }
-  }, [open.state]);
+  }, [open.state, ws.openId, focusRequests]);
 
-  const chooseScope = useCallback((next: Scope) => {
-    dispatch({ type: "scope", scope: next });
-    requestAnimationFrame(() => listRef.current?.focus());
+  const chooseSource = useCallback((source: Source, focus: "list" | "stay" = "list") => {
+    dispatch({ type: "source", source });
+    if (focus === "list") requestAnimationFrame(() => listRef.current?.focus());
   }, []);
 
   const startScan = useCallback(async () => {
@@ -212,7 +220,7 @@ export default function App() {
     () =>
       overlay({
         kind: "name",
-        title: "New folder",
+        title: "New Folder",
         label: "Folder name",
         initial: "",
         confirmLabel: "Create folder",
@@ -247,37 +255,35 @@ export default function App() {
 
   const currentFolder = scope.kind === "folder" ? folders.find((f) => f.id === scope.id) ?? null : null;
   const currentRepo = scope.kind === "repository" ? repositories.find((r) => r.id === scope.id) ?? null : null;
-  const archiveTotal = agents.reduce((sum, a) => sum + a.session_count, 0);
-  const scopeLabel = currentFolder?.name ?? currentRepo?.display_name ?? "All sessions";
-  const scopeCount = currentFolder?.session_count ?? currentRepo?.session_count ?? (agents.length > 0 ? archiveTotal : null);
+  const sections = useMemo(() => sourceSections({ agents, repositories, folders }), [agents, folders, repositories]);
+  const selected = currentSource(ws);
+  const selectedRow = sourceRow(sections, selected);
+  const scopeLabel = selectedRow?.label ?? "All Sessions";
 
-  const renameCurrentFolder = () => {
-    if (!currentFolder) return;
+  const renameFolderNamed = (folder: FolderSummary) =>
     overlay({
       kind: "name",
-      title: "Rename folder",
+      title: "Rename Folder",
       label: "Folder name",
-      initial: currentFolder.name,
+      initial: folder.name,
       confirmLabel: "Rename",
-      onSubmit: (name) => void renameFolder(currentFolder.id, name).then(refreshAll, fail),
+      onSubmit: (name) => void renameFolder(folder.id, name).then(refreshAll, fail),
     });
-  };
 
-  const deleteCurrentFolder = () => {
-    if (!currentFolder) return;
+  const deleteFolderNamed = (folder: FolderSummary) =>
     overlay({
       kind: "confirm",
-      title: `Delete “${currentFolder.name}”?`,
+      title: `Delete “${folder.name}”?`,
       body: "The folder goes away. Its sessions stay in Lore, just not filed.",
-      confirmLabel: "Delete folder",
+      confirmLabel: "Delete Folder",
       onConfirm: () =>
-        void deleteFolder(currentFolder.id).then(async () => {
-          dispatch({ type: "scope", scope: ALL });
+        void deleteFolder(folder.id).then(async () => {
+          if (scope.kind === "folder" && scope.id === folder.id) dispatch({ type: "source", source: ALL });
           await refreshAll();
-          notice(`Deleted folder “${currentFolder.name}”.`);
+          notice(`Deleted folder “${folder.name}”.`);
         }, fail),
     });
-  };
+  const folderActions = { onNewFolder: newFolder, onRenameFolder: renameFolderNamed, onDeleteFolder: deleteFolderNamed };
 
   const actions: ReaderActions = {
     copyMarkdown: (id) =>
@@ -333,27 +339,30 @@ export default function App() {
       }));
   }, [openSession]);
 
+  const toggleSidebar = sidebar.toggle;
+  const scanPhase = ws.scan.phase;
   const browseState = browse.state;
   const commands = useMemo<Command[]>(
     () => [
-      { id: "cmd-rescan", group: "Action", label: "Rescan archive", run: () => void startScan() },
+      { id: "cmd-rescan", group: "Action", label: "Rescan archive", hint: "⌘R", run: () => void startScan() },
       { id: "cmd-search", group: "Action", label: "Search sessions", hint: "/", run: () => requestAnimationFrame(focusQuery) },
-      { id: "cmd-all", group: "Action", label: "Browse all sessions", run: () => chooseScope(ALL) },
+      { id: "cmd-all", group: "Action", label: "Browse all sessions", run: () => chooseSource(ALL) },
       { id: "cmd-folder", group: "Action", label: "New folder…", run: newFolder },
+      { id: "cmd-sidebar", group: "Action", label: "Show or hide the sidebar", hint: "⌃⌘S", run: sidebar.toggle },
       { id: "cmd-settings", group: "Action", label: "Settings", hint: "Sources, backups, privacy", run: () => overlay({ kind: "settings" }) },
       ...repositories.map((r) => ({
         id: `cmd-repo-${r.id}`,
         group: "Repository",
         label: r.display_name,
         hint: `${r.session_count} sessions`,
-        run: () => chooseScope({ kind: "repository", id: r.id }),
+        run: () => chooseSource({ kind: "repository", id: r.id }),
       })),
       ...folders.map((f) => ({
         id: `cmd-folder-${f.id}`,
         group: "Folder",
         label: f.name,
         hint: `${f.session_count} sessions`,
-        run: () => chooseScope({ kind: "folder", id: f.id }),
+        run: () => chooseSource({ kind: "folder", id: f.id }),
       })),
       ...(browseState.status === "ready" ? browseState.items : []).map((s) => ({
         id: `cmd-session-${s.id}`,
@@ -363,8 +372,15 @@ export default function App() {
         run: () => openSession(s.id),
       })),
     ],
-    [browseState, chooseScope, focusQuery, folders, newFolder, openSession, overlay, repositories, startScan],
+    [browseState, chooseSource, focusQuery, folders, newFolder, openSession, overlay, repositories, sidebar.toggle, startScan],
   );
+  const paletteCommands: Command[] = currentFolder
+    ? [
+        ...commands,
+        { id: "cmd-rename-folder", group: "Action", label: `Rename “${currentFolder.name}”…`, run: () => renameFolderNamed(currentFolder) },
+        { id: "cmd-delete-folder", group: "Action", label: `Delete “${currentFolder.name}”…`, run: () => deleteFolderNamed(currentFolder) },
+      ]
+    : commands;
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -375,14 +391,23 @@ export default function App() {
       } else if (mod && event.key === ",") {
         event.preventDefault();
         dispatch({ type: "overlay", overlay: { kind: "settings" } });
-      } else if (event.key === "/" && !mod && !event.altKey && !isTyping(event.target)) {
+      } else if (event.metaKey && event.ctrlKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        toggleSidebar();
+      } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "r") {
+        event.preventDefault();
+        if (scanPhase !== "running") void startScan();
+      } else if (
+        (event.key === "/" && !mod && !event.altKey && !isTyping(event.target)) ||
+        (mod && event.altKey && event.code === "KeyF")
+      ) {
         event.preventDefault();
         queryRef.current?.focus();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ws.overlay.kind]);
+  }, [scanPhase, startScan, toggleSidebar, ws.overlay.kind]);
 
   const scanning = ws.scan.phase === "running";
   const catalogState = catalog.state;
@@ -395,157 +420,189 @@ export default function App() {
     repositories.length === 0 &&
     agents.every((a) => a.session_count === 0);
 
+  const plural = (n: number) => `${n} ${n === 1 ? "session" : "sessions"}`;
+  const scopeCount = selectedRow?.count ?? null;
+  // An agent row is a saved search with an exact count in the sidebar; any other
+  // search counts the sessions it has loaded, and says "More than" while pages remain.
+  const searchTitled = searching && (selected.kind !== "agent" || selectedRow === null);
+  const searchState = search.state;
+  const found = searchState.status === "ready" ? groupHits(searchState.items).length : null;
+  const subtitle = scanning
+    ? "Scanning…"
+    : searchTitled
+      ? searchPending || searchState.status !== "ready" || found === null
+        ? ""
+        : found === 0
+          ? "No results"
+          : searchState.cursor === null
+            ? plural(found)
+            : `More than ${plural(found)}`
+      : catalogState.status !== "ready" || scopeCount === null
+        ? ""
+        : plural(scopeCount);
+  const title = searchTitled ? `Searching “${currentRepo?.display_name ?? "All Sessions"}”` : scopeLabel;
+  const setSort = (sort: SearchSort) => dispatch({ type: "sort", sort });
+  const filterValues = useMemo<FilterValues>(
+    () => ({
+      "agent:": agents.map((a) => ({ value: a.id, count: a.session_count })),
+      "repo:": repositories.map((r) => ({ value: r.display_name, count: r.session_count })),
+    }),
+    [agents, repositories],
+  );
+
   return (
-    <div className="app">
-      <header className="bar">
-        <div className="bar__brand">
-          <Mark />
-          <h1 className="bar__name">Lore</h1>
-        </div>
-        <div className="bar__query">
-          <QueryLine
-            value={ws.query}
-            onChange={(query) => dispatch({ type: "query", query })}
-            inputRef={queryRef}
-            scopeLabel={scopeLabel}
-            scopeOpen={ws.overlay.kind === "scope"}
-            scopeButtonRef={scopeButtonRef}
-            onScope={() => overlay({ kind: ws.overlay.kind === "scope" ? "none" : "scope" })}
-            onLeaveDown={focusList}
+    <TooltipProvider>
+      <div className={clsx("grid h-full", sidebar.visible ? "grid-cols-window" : "grid-cols-window-collapsed")}>
+        {sidebar.visible && (
+          <Sidebar
+            sections={sections}
+            selected={selected}
+            onChoose={(source) => chooseSource(source, "stay")}
+            onToggle={sidebar.toggle}
+            folderActions={folderActions}
           />
-          {ws.overlay.kind === "scope" && (
-            <ScopePicker
-              scope={scope}
-              total={agents.length > 0 ? archiveTotal : null}
-              repositories={repositories}
-              folders={folders}
-              onChoose={chooseScope}
-              onNewFolder={newFolder}
-              onClose={() => {
-                closeOverlay();
-                scopeButtonRef.current?.focus();
-              }}
-            />
-          )}
-        </div>
-        <div className="bar__tools">
-          <button type="button" className="btn btn--quiet" onClick={() => overlay({ kind: "palette" })} aria-keyshortcuts="Meta+K">
-            <span className="bar__jump-label">Jump to</span> <kbd>⌘K</kbd>
-          </button>
-          <button type="button" className="btn" onClick={() => void startScan()} disabled={scanning}>
-            {scanning ? "Scanning…" : "Rescan"}
-          </button>
-          <button type="button" className="btn btn--quiet btn--icon" aria-label="Settings" title="Settings (⌘,)" onClick={() => overlay({ kind: "settings" })}>
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M3 6h14M3 14h14" stroke="currentColor" strokeWidth="1.6" />
-              <circle cx="7" cy="6" r="2.2" fill="var(--sheet)" stroke="currentColor" strokeWidth="1.6" />
-              <circle cx="13" cy="14" r="2.2" fill="var(--sheet)" stroke="currentColor" strokeWidth="1.6" />
-            </svg>
-          </button>
-        </div>
-      </header>
-
-      <main className="body">
-        {catalogState.status === "failed" ? (
-          <div className="placeholder placeholder--page" role="alert">
-            <p>Lore could not open the archive.</p>
-            <p className="quiet">{catalogState.error}</p>
-            <p className="quiet">Your agent logs were not changed.</p>
-            <button type="button" className="btn" onClick={() => void refreshAll()}>
-              Try again
-            </button>
-          </div>
-        ) : archiveEmpty ? (
-          <Onboarding
-            agents={agents}
-            scanning={scanning}
-            busyAgent={busyAgent}
-            onScan={() => void startScan()}
-            onAddRoot={(agent) => void addRoot(agent)}
-            onOpenSettings={() => overlay({ kind: "settings" })}
-          />
-        ) : (
-          <>
-            <div className="body__list">
-              {searching ? (
-                <SearchPane
-                  query={ws.query}
-                  pending={searchPending}
-                  needsTerm={!searchPending && terms.length === 0}
-                  scopeNote={
-                    currentRepo ? (
-                      <>
-                        Searching sessions in {currentRepo.display_name}.{" "}
-                        <button type="button" className="link" onClick={() => chooseScope(ALL)}>
-                          Search everything
-                        </button>
-                      </>
-                    ) : currentFolder ? (
-                      "Searching all sessions. A folder cannot narrow a search yet."
-                    ) : null
-                  }
-                  sort={ws.sort}
-                  onSort={(sort) => dispatch({ type: "sort", sort })}
-                  state={search.state}
-                  openId={ws.openId}
-                  onOpen={openSession}
-                  onMore={() => void search.loadMore()}
-                  listRef={listRef}
-                  onExitTop={focusQuery}
-                />
-              ) : (
-                <BrowsePane
-                  heading={catalogState.status === "loading" ? "Sessions" : scopeLabel}
-                  count={scopeCount}
-                  headerActions={
-                    currentFolder && (
-                      <>
-                        <button type="button" className="btn btn--quiet" onClick={renameCurrentFolder}>
-                          Rename
-                        </button>
-                        <button type="button" className="btn btn--quiet" onClick={deleteCurrentFolder}>
-                          Delete
-                        </button>
-                      </>
-                    )
-                  }
-                  state={catalogState.status === "loading" ? { status: "loading" } : browse.state}
-                  openId={ws.openId}
-                  onOpen={openSession}
-                  onMore={() => void browse.loadMore()}
-                  onRetry={() => void refreshAll()}
-                  listRef={listRef}
-                  onExitTop={focusQuery}
-                  emptyHint={
-                    currentFolder
-                      ? "This folder is empty. Open a session and choose File in folder."
-                      : currentRepo
-                        ? "No sessions are linked to this repository."
-                        : "No sessions yet. Rescan to read your agent history."
-                  }
-                />
-              )}
-            </div>
-            <div className="body__reader">
-              <Reader
-                state={open.state}
-                onRetry={open.retry}
-                terms={searching ? terms : []}
-                folders={folders}
-                repositories={repositories}
-                actions={actions}
-                onBack={focusList}
-                readerRef={readerRef}
-              />
-            </div>
-          </>
         )}
-      </main>
-
-      <StatusBar agents={agents} flash={ws.flash} scan={ws.scan} onDismiss={() => dispatch({ type: "flash", flash: null })} />
+        <div className="flex min-h-0 min-w-0 flex-col">
+          <Toolbar
+            insetForTrafficLights={!sidebar.visible}
+            list={
+              <>
+                {!sidebar.visible && <SidebarToggle visible={false} onToggle={sidebar.toggle} />}
+                {sidebar.visible ? (
+                  <ScopeTitle title={title} subtitle={subtitle} />
+                ) : (
+                  <ScopeMenu
+                    title={title}
+                    subtitle={subtitle}
+                    sort={searching ? { value: ws.sort, onChange: setSort } : null}
+                    sections={sections}
+                    selected={selected}
+                    onChoose={chooseSource}
+                    onNewFolder={newFolder}
+                  />
+                )}
+              </>
+            }
+            reader={
+              <>
+                <div data-tauri-drag-region data-slot="reader-actions" className="flex h-full min-w-0 flex-1 items-center" />
+                <ScanControl scan={ws.scan} lastScanAt={lastScanAt} onRescan={() => void startScan()} />
+                <Tooltip label="Command Palette (⌘K)">
+                  <Button
+                    variant="toolbar"
+                    aria-label="Command Palette"
+                    aria-keyshortcuts="Meta+K"
+                    onClick={() => overlay({ kind: "palette" })}
+                  >
+                    <CommandIcon className={ICON.toolbar} aria-hidden="true" />
+                  </Button>
+                </Tooltip>
+                <SearchField
+                  value={ws.query}
+                  onChange={(query) => dispatch({ type: "query", query })}
+                  inputRef={queryRef}
+                  onLeaveDown={focusList}
+                  values={filterValues}
+                  sort={ws.sort}
+                  onSort={setSort}
+                />
+              </>
+            }
+          />
+          <MessageBar flash={ws.flash} onDismiss={() => dispatch({ type: "flash", flash: null })} />
+          <main className="grid min-h-0 flex-1 grid-cols-panes">
+            {catalogState.status === "failed" ? (
+              <div className="placeholder placeholder--page col-all" role="alert">
+                <p>Lore could not open the archive.</p>
+                <p className="quiet">{catalogState.error}</p>
+                <p className="quiet">Your agent logs were not changed.</p>
+                <button type="button" className="btn" onClick={() => void refreshAll()}>
+                  Try again
+                </button>
+              </div>
+            ) : archiveEmpty ? (
+              <div className="col-all min-h-0 overflow-auto">
+                <Onboarding
+                  agents={agents}
+                  scanning={scanning}
+                  busyAgent={busyAgent}
+                  onScan={() => void startScan()}
+                  onAddRoot={(agent) => void addRoot(agent)}
+                  onOpenSettings={() => overlay({ kind: "settings" })}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="flex min-h-0 min-w-0 border-r bg-bg-content select-none">
+                  {searching ? (
+                    <SearchPane
+                      query={settledQuery}
+                      terms={terms}
+                      filters={queryFilters(settledQuery)}
+                      pending={searchPending}
+                      scopeBar={
+                        <ScopeBar
+                          scope={
+                            currentRepo
+                              ? { label: currentRepo.display_name, narrows: true }
+                              : currentFolder
+                                ? { label: currentFolder.name, narrows: false }
+                                : null
+                          }
+                          onSearchAll={() => chooseSource(ALL, "stay")}
+                          sort={ws.sort}
+                          onSort={setSort}
+                        />
+                      }
+                      state={search.state}
+                      openId={ws.openId}
+                      onOpen={openSession}
+                      onMore={() => void search.loadMore()}
+                      listRef={listRef}
+                      onExitTop={focusQuery}
+                      onSearchAll={currentRepo ? () => chooseSource(ALL) : null}
+                      onClearFilters={() => dispatch({ type: "query", query: withoutFilters(ws.query) })}
+                    />
+                  ) : (
+                    <BrowsePane
+                      label={scopeLabel}
+                      state={catalogState.status === "loading" ? { status: "loading" } : browse.state}
+                      openId={ws.openId}
+                      onOpen={openSession}
+                      onMore={() => void browse.loadMore()}
+                      onRetry={() => void refreshAll()}
+                      listRef={listRef}
+                      onExitTop={focusQuery}
+                      emptyHint={
+                        currentFolder
+                          ? "This folder is empty. Open a session and choose File in folder."
+                          : currentRepo
+                            ? "No sessions are linked to this repository."
+                            : "No sessions yet. Rescan to read your agent history."
+                      }
+                    />
+                  )}
+                </div>
+                <div className="min-h-0 min-w-0 overflow-auto bg-bg-content select-text">
+                  <Reader
+                    state={open.state}
+                    onRetry={open.retry}
+                    terms={searching ? terms : []}
+                    folders={folders}
+                    repositories={repositories}
+                    actions={actions}
+                    onBack={focusList}
+                    readerRef={readerRef}
+                  />
+                </div>
+              </>
+            )}
+          </main>
+        </div>
+      </div>
 
       {ws.overlay.kind === "palette" && (
-        <CommandPalette commands={commands} searchArchive={searchArchive} onClose={closeOverlay} />
+        <CommandPalette commands={paletteCommands} searchArchive={searchArchive} onClose={closeOverlay} />
       )}
       {ws.overlay.kind === "settings" && (
         <SettingsDialog
@@ -576,6 +633,6 @@ export default function App() {
           onClose={closeOverlay}
         />
       )}
-    </div>
+    </TooltipProvider>
   );
 }
