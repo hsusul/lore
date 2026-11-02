@@ -64,9 +64,14 @@ fn doctor_reports_and_still_exits_zero() {
     let summary = text.lines().last().unwrap();
     assert_eq!(
         summary,
-        "3 duplicates, 1 drift, 7 unknown sources; 11 findings; 12 skills found"
+        "3 duplicates, 1 drift, 7 unknown sources, 1 name mismatches, \
+         2 bad frontmatter; 14 findings; 12 skills found"
     );
-    assert!(text.starts_with("clean-git-commit\n  drift"), "{text}");
+    assert!(text.starts_with("bad-yaml\n  bad-frontmatter"), "{text}");
+    assert!(
+        text.contains("\n  hint            Managed by codex."),
+        "{text}"
+    );
 }
 
 #[test]
@@ -88,6 +93,7 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
     let hint = |kind: &str, skill: &str, fix: String| {
         (kind.to_string(), skill.to_string(), "hint".to_string(), fix)
     };
+    let edit = |rel: &str| format!("${{EDITOR:-vi}} '{h}/{rel}/SKILL.md'");
     let unknown = |skill: &str, rel: &str| {
         hint(
             "unknown-source",
@@ -106,6 +112,27 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
     );
 
     let expected = vec![
+        cmd(
+            "bad-frontmatter",
+            "bad-yaml",
+            edit(".agents/skills/bad-yaml"),
+        ),
+        unknown("bad-yaml", ".agents/skills/bad-yaml"),
+        hint(
+            "bad-frontmatter",
+            "sys-bad",
+            format!(
+                "Managed by codex. Report the bad frontmatter in \
+                 '{h}/.codex/skills/.system/sys-bad/SKILL.md' to its maintainer. Do not \
+                 edit the managed copy."
+            ),
+        ),
+        cmd(
+            "name-mismatch",
+            "mislabeled",
+            edit(".agents/skills/mislabeled"),
+        ),
+        unknown("mislabeled", ".agents/skills/mislabeled"),
         cmd("drift", "clean-git-commit", cgc.clone()),
         cmd("duplicate", "clean-git-commit", cgc),
         unknown("clean-git-commit", ".agents/skills/clean-git-commit"),
@@ -123,10 +150,8 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
                 ".codex/plugins/cache/mkt/tool/1.0/skills/tool-skill",
             ),
         ),
-        unknown("bad-yaml", ".agents/skills/bad-yaml"),
         unknown("big", ".codex/skills/big"),
         unknown("claude-only", ".claude/skills/claude-only"),
-        unknown("mislabeled", ".agents/skills/mislabeled"),
         unknown("referrer", ".agents/skills/referrer"),
     ];
     let output = lorectl(&home, &["skills", "doctor", "--json"]);
@@ -171,6 +196,7 @@ fn hostile_folder_names_are_quoted_in_every_fix_and_run_as_data() {
         let agents = format!("'{h}/.agents/skills/{quoted}'");
         let claude = format!("'{h}/.claude/skills/{quoted}'");
         let diff = format!("diff -ru {agents} {claude}");
+        let edit = |p: &str| format!("${{EDITOR:-vi}} '{h}/{p}/{quoted}/SKILL.md'");
         let unknown = |p: &str| {
             format!(
                 "No lockfile or plugin records '{h}/{p}/{quoted}'. If you wrote it, there \
@@ -179,6 +205,8 @@ fn hostile_folder_names_are_quoted_in_every_fix_and_run_as_data() {
             )
         };
         for (kind, fix_kind, fix) in [
+            ("name-mismatch", "command", edit(".agents/skills")),
+            ("name-mismatch", "command", edit(".claude/skills")),
             ("drift", "command", diff.clone()),
             ("duplicate", "command", diff),
             ("unknown-source", "hint", unknown(".agents/skills")),
@@ -192,9 +220,9 @@ fn hostile_folder_names_are_quoted_in_every_fix_and_run_as_data() {
     expected.sort();
     assert_eq!(got_sorted, expected);
 
-    // Run every command: each must name existing paths and nothing else may
-    // happen.
-    for (_, name, fix_kind, fix) in &got {
+    // Run every command with a stand-in editor: each must name exactly one
+    // existing path and nothing else may happen.
+    for (kind, name, fix_kind, fix) in &got {
         if fix_kind != "command" {
             continue;
         }
@@ -203,10 +231,18 @@ fn hostile_folder_names_are_quoted_in_every_fix_and_run_as_data() {
             .arg(fix)
             .current_dir(dir.path())
             .env("HOME", dir.path())
+            .env("EDITOR", "printf %s\\n")
             .output()
             .unwrap();
-        // diff exits 1 when the copies differ and 2 when a path is wrong.
-        assert_eq!(out.status.code(), Some(1), "{name}: `{fix}`");
+        if kind == "name-mismatch" {
+            let printed = String::from_utf8(out.stdout).unwrap();
+            let path = Path::new(printed.trim_end_matches('\n'));
+            assert!(path.is_file(), "{name}: `{fix}` printed {printed:?}");
+            assert_eq!(path.parent().unwrap().file_name().unwrap(), &**name);
+        } else {
+            // diff exits 1 when the copies differ and 2 when a path is wrong.
+            assert_eq!(out.status.code(), Some(1), "{name}: `{fix}`");
+        }
     }
     assert!(!dir.path().join("pwned").exists());
     assert!(!home.join("pwned").exists());
@@ -322,8 +358,8 @@ fn doctor_json_is_the_same_findings_each_with_a_fix() {
     let output = lorectl(&fixture_home(), &["skills", "doctor", "--json"]);
     assert_eq!(output.status.code(), Some(0));
     let findings = json(&output);
-    assert_eq!(findings.len(), 11);
-    assert_eq!(findings[0]["kind"], "drift");
+    assert_eq!(findings.len(), 14);
+    assert_eq!(findings[0]["kind"], "bad-frontmatter");
 }
 
 #[test]
