@@ -44,9 +44,10 @@ pub fn inventory(roots: &Roots) -> Inventory {
         let root = roots.dir(location);
         for skills_dir in skills_dirs(&root, location.layout) {
             for (name, path) in skill_folders(&skills_dir) {
-                // A plugin cache keeps every plugin ever fetched. Until a
-                // manifest says which are installed, none of them is loaded.
-                let loaded = !location.agents.is_empty() && location.layout == Layout::Flat;
+                let relative = path.strip_prefix(&root).unwrap_or(&path);
+                let plugin = plugin_source(location.provenance, relative, &locks);
+                let loaded = !location.agents.is_empty()
+                    && (location.layout == Layout::Flat || plugin.is_some());
                 if !loaded {
                     elsewhere.entry(name).or_insert(path);
                     continue;
@@ -65,6 +66,7 @@ pub fn inventory(roots: &Roots) -> Inventory {
                     &name,
                     &real_path,
                     &mode,
+                    plugin,
                     &locks,
                     agents_dir.as_deref(),
                 );
@@ -92,11 +94,20 @@ pub fn inventory(roots: &Roots) -> Inventory {
     }
 }
 
+fn plugin_source(provenance: Provenance, relative: &Path, locks: &Lockfiles) -> Option<Source> {
+    match provenance {
+        Provenance::ClaudePlugins => lockfiles::claude_plugin(relative, &locks.claude_plugins),
+        Provenance::CodexPlugins => lockfiles::codex_plugin(relative, &locks.codex_enabled),
+        Provenance::Lockfiles | Provenance::Builtin(_) | Provenance::None => None,
+    }
+}
+
 fn source(
     location: &Location,
     name: &str,
     real_path: &Path,
     mode: &Mode,
+    plugin: Option<Source>,
     locks: &Lockfiles,
     agents_dir: Option<&Path>,
 ) -> Source {
@@ -105,6 +116,9 @@ fn source(
     let in_agents_dir = agents_dir.is_some_and(|dir| real_path.parent() == Some(dir));
     if let Some(tracked) = locks.tracked.get(name).filter(|_| in_agents_dir) {
         return tracked.clone();
+    }
+    if let Some(plugin) = plugin {
+        return plugin;
     }
     if let Provenance::Builtin(agent) = location.provenance {
         return Source::Builtin { agent };
