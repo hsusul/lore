@@ -16,3 +16,6 @@ workspace = true
 # Calendar validation for `created` and `forget_after`. Already in the graph.
 time = "0.3"
 thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
