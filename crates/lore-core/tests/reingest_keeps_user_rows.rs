@@ -154,6 +154,23 @@ fn a_forgotten_session_stays_gone_after_a_parser_bump() {
     assert_eq!(archive.session_id(), None);
 }
 
+/// An archive written before forget marked sources: the source is still `ok`
+/// but supports no session.
+#[test]
+fn a_session_forgotten_by_an_older_lore_stays_gone_after_a_parser_bump() {
+    let archive = Archive::new();
+    let session = archive.session_id().unwrap();
+    lore_core::forget::forget_session(&archive.conn, &archive.blobs, &session).unwrap();
+    archive
+        .conn
+        .execute("UPDATE ingest_state SET state = 'ok'", [])
+        .unwrap();
+
+    archive.age_parser_version();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None, "a forgotten session came back");
+}
+
 fn git(dir: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
         .args(args)
