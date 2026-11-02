@@ -7,8 +7,18 @@
 //! The exit-code table interpolates the constants from [`crate::exit`] rather
 //! than restating the numbers, so documentation and behaviour cannot drift.
 
-use crate::cli::COMMANDS;
+use crate::cli::{Command, COMMANDS};
 use crate::exit;
+
+/// The help for `topic`: `lorectl help mem` and `lorectl mem --help` print the
+/// `mem` section alone; every other command shares the full text.
+#[must_use]
+pub fn usage_for(topic: Option<Command>) -> String {
+    match topic {
+        Some(Command::Mem) => crate::mem::USAGE.to_string(),
+        _ => usage(),
+    }
+}
 
 /// The full usage text.
 #[must_use]
@@ -78,16 +88,18 @@ Exit codes:
     {usage}  usage: unknown flag or command, a relative --archive, or a command
        this build does not implement
     {no_archive}  no archive at that location (run `lorectl scan` to build one); for
-       `mem`, no vault there, or a note, path, or date was refused and nothing
-       was written
+       `mem`, no vault there (run `lorectl mem init`)
     {not_a_repo}  not inside a Git repository
     {unreadable}  archive present but unreadable: not a Lore archive, a schema
        from a newer or older build, an inconsistent migration ledger, or an
-       I/O failure
-    {busy}  another Lore process is writing to this archive; the one failure
-       worth retrying unchanged
+       I/O failure; for `mem`, a vault file, the index, or git failed and the
+       message says which
+    {busy}  another Lore process is writing to this archive or vault; the one
+       failure worth retrying unchanged
     {scan_failed}  the scan did not complete (the archive itself is fine)
-    7-9  reserved
+    {refused}  `mem` refused a note, path, date, or id in use and wrote nothing, or
+       `mem reindex` found one id in two files
+    8-9  reserved
 ",
         version = lore_core::version(),
         commands = commands,
@@ -99,6 +111,7 @@ Exit codes:
         unreadable = exit::ARCHIVE_UNREADABLE,
         busy = exit::ARCHIVE_BUSY,
         scan_failed = exit::SCAN_FAILED,
+        refused = exit::NOTE_REFUSED,
     )
 }
 
@@ -135,6 +148,7 @@ mod tests {
             exit::ARCHIVE_UNREADABLE,
             exit::ARCHIVE_BUSY,
             exit::SCAN_FAILED,
+            exit::NOTE_REFUSED,
         ] {
             assert!(
                 text.contains(&format!("\n    {code}  ")),

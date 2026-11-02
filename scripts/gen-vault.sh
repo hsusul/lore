@@ -24,33 +24,34 @@ words=(worktree branch commit rebase index lock sqlite vault note anchor
   deadline budget latency throughput memory freshness provenance timeline)
 types=(convention decision fact howto pitfall)
 repos=(3f9a1c0b a71e9d24c3 5be0c1d2e3)
+names=(lore lore-infra notes-site)
 
 RANDOM=42
 n=${#words[@]}
 
 mkdir -p "$vault/global"
-for repo in "${repos[@]}"; do mkdir -p "$vault/repos/$repo"; done
+for r in 0 1 2; do mkdir -p "$vault/repos/${names[r]}-${repos[r]}"; done
 
 for ((i = 1; i <= count; i++)); do
   title="${words[RANDOM % n]} ${words[RANDOM % n]} ${words[RANDOM % n]} ${words[RANDOM % n]} $i"
   slug="${title// /-}"
   type="${types[i % 5]}"
   if ((i % 4 == 0)); then
-    scope="global"
+    scope="scope: global"
     dir="global"
   else
-    repo="${repos[i % 3]}"
-    scope="repo:$repo"
-    dir="repos/$repo"
+    r=$((i % 3))
+    scope="scope: repo:${repos[r]}"$'\n'"repo: ${names[r]}"
+    dir="repos/${names[r]}-${repos[r]}"
   fi
   body=""
   for ((w = 0; w < 60; w++)); do body+="${words[RANDOM % n]} "; done
-  printf -- '---\nid: 01JD%022d\ntype: %s\ntitle: %s\nscope: %s\nstatus: active\ncreated: 2026-10-%02d\n---\n%s\n\n## Timeline\n- 2026-10-%02d generated\n' \
-    "$i" "$type" "$title" "$scope" $((i % 28 + 1)) "$body" $((i % 28 + 1)) \
+  printf -- '---\nid: 01JD%022d\ntype: %s\ntitle: %s\naliases:\n  - %s\n%s\nstatus: active\ncreated: 2026-10-%02d\n---\n%s\n\n## Timeline\n- 2026-10-%02d generated\n' \
+    "$i" "$type" "$title" "$title" "$scope" $((i % 28 + 1)) "$body" $((i % 28 + 1)) \
     >"$vault/$dir/$slug.md"
 done
 
-printf '.lore/\n_inbox/\n' >"$vault/.gitignore"
+printf '.lore/\n_inbox/\n.*.md.tmp\n' >"$vault/.gitignore"
 git -C "$vault" init -q
 git -C "$vault" add -A
 git -C "$vault" -c user.name=Lore -c user.email=lore@localhost commit -q -m "mem: generate $count notes"

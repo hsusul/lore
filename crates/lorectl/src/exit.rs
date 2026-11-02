@@ -48,12 +48,13 @@ pub const ARCHIVE_BUSY: u8 = 5;
 /// Distinct from [`ARCHIVE_UNREADABLE`]: nothing is wrong with the archive's
 /// shape, so "upgrade Lore" would be the wrong advice.
 pub const SCAN_FAILED: u8 = 6;
-/// `mem` refused a note, a path, or a date, and wrote nothing.
+/// `mem` refused a note, a path, a date, or an id another note already has,
+/// and wrote nothing; or `mem reindex` found one id in two files.
 ///
-/// Shares its number with [`NO_ARCHIVE`] on purpose: `mem` never opens the
-/// archive, so within `mem` the code cannot be read two ways, and a missing
-/// vault is the same condition as a missing archive.
-pub const NOTE_REFUSED: u8 = 2;
+/// Its own code because its next action is its own: fix the note. A missing
+/// vault stays [`NO_ARCHIVE`] (create one), a busy vault [`ARCHIVE_BUSY`]
+/// (retry).
+pub const NOTE_REFUSED: u8 = 7;
 
 /// Everything `lorectl` can fail with.
 ///
@@ -107,7 +108,7 @@ impl CliError {
                 Some("run `lorectl scan` to build one")
             }
             CliError::Usage(_) | CliError::NotImplemented(_) => Some("run `lorectl --help`"),
-            CliError::Lock(LockError::Held) => {
+            CliError::Lock(LockError::Held) | CliError::Memory(VaultError::Busy(_)) => {
                 Some("wait for the other process to finish, then run it again")
             }
             CliError::NotARepository => Some("run it from inside a Git repository"),
@@ -117,6 +118,12 @@ impl CliError {
             CliError::Memory(VaultError::Conflict(_)) => {
                 Some("edit that file by hand, or give the new note another title")
             }
+            CliError::Memory(VaultError::DuplicateId { .. }) => {
+                Some("leave out `id:` to get a new one, or edit the note that has it")
+            }
+            CliError::Memory(VaultError::Git(..)) => Some(
+                "git failed in the vault; run `git status` there to see why (Lore skips hooks and signing)",
+            ),
             _ => None,
         }
     }
@@ -145,8 +152,12 @@ pub fn exit_code(error: &CliError) -> u8 {
 /// Map a `mem` failure onto the taxonomy. Exhaustive, like the others.
 fn memory_exit_code(error: &VaultError) -> u8 {
     match error {
-        VaultError::Note(_) | VaultError::BadPath(..) | VaultError::Conflict(_) => NOTE_REFUSED,
+        VaultError::Note(_)
+        | VaultError::BadPath(..)
+        | VaultError::Conflict(_)
+        | VaultError::DuplicateId { .. } => NOTE_REFUSED,
         VaultError::Missing(_) => NO_ARCHIVE,
+        VaultError::Busy(_) => ARCHIVE_BUSY,
         VaultError::RelativeDir(_)
         | VaultError::NoHome
         | VaultError::NotFound(_)
@@ -288,12 +299,17 @@ mod tests {
             ARCHIVE_UNREADABLE,
             ARCHIVE_BUSY,
             SCAN_FAILED,
+            NOTE_REFUSED,
         ];
         let mut seen = assigned.to_vec();
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), assigned.len(), "codes must not collide");
-        assert_eq!(seen, [0, 1, 2, 3, 4, 5, 6], "7-9 stay free for later work");
+        assert_eq!(
+            seen,
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            "8-9 stay free for later work"
+        );
     }
 
     #[test]
@@ -350,21 +366,38 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_note_exits_2_and_a_broken_vault_does_not() {
+    fn a_refused_note_a_missing_vault_and_a_busy_vault_each_have_one_code() {
         use lore_memory::note::NoteError;
         let refused = [
             VaultError::Note(NoteError::Missing("title")),
             VaultError::BadPath("../x".into(), "`..` is not allowed".into()),
             VaultError::Conflict("global/x.md".into()),
+            VaultError::DuplicateId {
+                id: "01JC9V6Q4M8K2T7X3N5R0B1H6D".into(),
+                existing: "global/x.md".into(),
+            },
         ];
         for error in refused {
-            assert_eq!(exit_code(&CliError::Memory(error)), 2);
+            let error = CliError::Memory(error);
+            assert_eq!(exit_code(&error), NOTE_REFUSED);
+            assert!(error.advice().is_none_or(|a| !a.contains("mem init")));
         }
+        assert_ne!(NOTE_REFUSED, NO_ARCHIVE);
         let missing = CliError::Memory(VaultError::Missing("/tmp/v".into()));
         assert_eq!(exit_code(&missing), NO_ARCHIVE);
         assert!(missing.advice().is_some_and(|a| a.contains("mem init")));
+        let busy = CliError::Memory(VaultError::Busy("/tmp/v".into()));
+        assert_eq!(exit_code(&busy), ARCHIVE_BUSY);
+        assert!(busy.advice().is_some_and(|a| a.contains("again")));
+    }
+
+    #[test]
+    fn a_git_failure_says_to_look_at_git_not_to_upgrade_lore() {
         let git = CliError::Memory(VaultError::Git("commit".into(), "boom".into()));
         assert_eq!(exit_code(&git), ARCHIVE_UNREADABLE);
+        let advice = git.advice().expect("a git failure has a next action");
+        assert!(advice.contains("git status"), "{advice}");
+        assert!(!advice.contains("upgrade"), "{advice}");
     }
 
     #[test]

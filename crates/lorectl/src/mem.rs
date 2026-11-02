@@ -12,17 +12,21 @@ use lore_memory::vault::{self, Added, Init, Vault};
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
 
-/// The `mem` section of `--help`, also printed by `lorectl mem <SUB> --help`.
+/// The `mem` section of `--help`, and all of `lorectl help mem`,
+/// `lorectl mem --help`, and `lorectl mem <SUB> --help`.
 pub const USAGE: &str = "\
 Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
-    init              Create the vault, a git repository
+    init              Create the vault, a git repository Obsidian can open
     add <FILE>        Add a note file (`-` reads stdin); id, created, status,
                       and scope may be left out. The same file twice is one
-                      note and one commit
-    show <NOTE>       Print a note by id, slug, or vault path
+                      note and one commit. An id another note has is refused
+    show <NOTE>       Print a note by id, file name, or vault path
     search <QUERY>    Rank notes by BM25 [--limit N, default 10]
-    reindex           Rebuild the index from the vault files alone
+    reindex           Rebuild the index from the vault files alone, and name
+                      any id that two files share (exit 7)
     --vault <DIR>     Vault directory. Must be absolute
+    Search and show pick up notes edited, renamed, or deleted by hand.
+    Exit codes: 2 no vault, 5 vault busy, 7 note refused, 4 other failure.
 ";
 
 const DEFAULT_LIMIT: usize = 10;
@@ -166,12 +170,23 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             for (rel, error) in &report.skipped {
                 eprintln!("lorectl: skipped {rel}: {error}");
             }
+            for duplicate in &report.duplicates {
+                eprintln!(
+                    "lorectl: id {} is in more than one note: {}",
+                    duplicate.id.as_str(),
+                    duplicate.paths.join(", ")
+                );
+            }
             let _ = writeln!(
                 out,
                 "indexed {} notes, skipped {} files",
                 report.indexed,
                 report.skipped.len()
             );
+            if !report.duplicates.is_empty() {
+                eprintln!("  give all but one of them a new id, then run `lorectl mem reindex`");
+                return Ok(exit::NOTE_REFUSED);
+            }
         }
     }
     Ok(exit::OK)

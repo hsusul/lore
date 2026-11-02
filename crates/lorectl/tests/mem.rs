@@ -120,7 +120,7 @@ fn mem_search_prints_slug_scope_and_excerpt() {
 }
 
 fn assert_refused(vault: &Path, out: &Output, field: &str) {
-    assert_eq!(code(out), 2, "{}", stderr(out));
+    assert_eq!(code(out), 7, "{}", stderr(out));
     assert!(stderr(out).contains(field), "{}", stderr(out));
     assert_eq!(log(vault), ["mem: init vault"]);
     assert_eq!(status(vault), "");
@@ -128,7 +128,7 @@ fn assert_refused(vault: &Path, out: &Output, field: &str) {
 }
 
 #[test]
-fn mem_add_refuses_a_malformed_date_with_exit_2() {
+fn mem_add_refuses_a_malformed_date_with_exit_7() {
     let (dir, vault) = init();
     let text = "---\ntype: fact\ntitle: T\ncreated: 2026-11-31\n---\n";
     let out = lorectl(&vault, &["add", &note_file(dir.path(), "n.md", text)]);
@@ -136,7 +136,7 @@ fn mem_add_refuses_a_malformed_date_with_exit_2() {
 }
 
 #[test]
-fn mem_add_refuses_a_bad_anchor_path_with_exit_2() {
+fn mem_add_refuses_a_bad_anchor_path_with_exit_7() {
     let (dir, vault) = init();
     for path in ["/etc/passwd", "../outside.rs"] {
         let text = format!("---\ntype: fact\ntitle: T\nanchors:\n  - path: {path}\n---\n");
@@ -146,10 +146,87 @@ fn mem_add_refuses_a_bad_anchor_path_with_exit_2() {
 }
 
 #[test]
-fn mem_show_refuses_a_path_outside_the_vault_with_exit_2() {
+fn mem_show_refuses_a_path_outside_the_vault_with_exit_7() {
     let (_dir, vault) = init();
     let out = lorectl(&vault, &["show", "../secret.md"]);
-    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert_eq!(code(&out), 7, "{}", stderr(&out));
+}
+
+const DUP: &str = "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6D\ntype: fact\ntitle: First\n---\nOne.\n";
+
+#[test]
+fn mem_add_refuses_an_id_in_use_with_exit_7() {
+    let (dir, vault) = init();
+    let first = lorectl(&vault, &["add", &note_file(dir.path(), "a.md", DUP)]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    let second = DUP.replace("First", "Second");
+    let out = lorectl(&vault, &["add", &note_file(dir.path(), "b.md", &second)]);
+    assert_eq!(code(&out), 7, "{}", stderr(&out));
+    assert!(stderr(&out).contains("global/first.md"), "{}", stderr(&out));
+    assert_eq!(log(&vault).len(), 2);
+    assert!(!vault.join("global/second.md").exists());
+}
+
+#[test]
+fn mem_reindex_names_both_paths_of_a_duplicate_id_and_exits_7() {
+    let (dir, vault) = init();
+    lorectl(&vault, &["add", &note_file(dir.path(), "a.md", DUP)]);
+    let text = std::fs::read_to_string(vault.join("global/first.md")).unwrap();
+    std::fs::write(vault.join("global/copy-of-first.md"), text).unwrap();
+    let out = lorectl(&vault, &["reindex"]);
+    assert_eq!(code(&out), 7, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "indexed 2 notes, skipped 0 files\n");
+    let err = stderr(&out);
+    assert!(
+        err.contains("01JC9V6Q4M8K2T7X3N5R0B1H6D")
+            && err.contains("global/copy-of-first.md")
+            && err.contains("global/first.md"),
+        "{err}"
+    );
+    let shown = lorectl(&vault, &["show", "copy-of-first"]);
+    assert_eq!(code(&shown), 0, "{}", stderr(&shown));
+}
+
+#[test]
+fn mem_help_prints_only_the_mem_section() {
+    for args in [
+        &["mem", "--help"][..],
+        &["help", "mem"][..],
+        &["mem", "add", "--help"][..],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(text.starts_with("Memory (lorectl mem"), "{args:?}: {text}");
+        assert!(!text.contains("Exit codes") || text.contains("7"), "{text}");
+        assert!(!text.contains("--archive"), "{args:?}: {text}");
+    }
+    let full = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .arg("help")
+        .output()
+        .unwrap();
+    assert_eq!(code(&full), 0);
+    assert!(stdout(&full).contains("--archive"));
+}
+
+#[test]
+fn mem_search_sees_a_hand_edit_without_reindex() {
+    let (dir, vault) = init();
+    lorectl(&vault, &["add", &note_file(dir.path(), "n.md", NOTE)]);
+    assert_eq!(code(&lorectl(&vault, &["search", "fetch"])), 0);
+    let path = vault.join("repos/3f9a1c0b/worktrees-share-refs.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("A fetch", "A quetzalcoatl fetch")).unwrap();
+    let out = lorectl(&vault, &["search", "quetzalcoatl"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).starts_with("worktrees-share-refs "),
+        "{}",
+        stdout(&out)
+    );
 }
 
 #[test]
