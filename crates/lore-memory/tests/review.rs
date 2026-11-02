@@ -696,6 +696,21 @@ fn a_symlinked_temp_file_is_not_written_through() {
     assert_eq!(vault.read(&note.rel_path()).unwrap(), note.render());
 }
 
+#[test]
+fn sessions_that_differ_only_in_case_can_both_be_accepted() {
+    let (dir, vault) = new_vault();
+    inbox::propose(&vault, proposal(P1, AgentKind::Codex, "Ab1", BODY)).unwrap();
+    let mut other = proposal(P2, AgentKind::Codex, "ab1", BODY);
+    other.title = "Another note".into();
+    inbox::propose(&vault, other).unwrap();
+    let pending = review::inbox(&vault).unwrap();
+    assert!(pending.skipped.is_empty(), "{:?}", pending.skipped);
+    assert_eq!(pending.proposals.len(), 2);
+    review::accept(&vault, P1, None).unwrap();
+    review::accept(&vault, P2, None).unwrap();
+    assert_eq!(subjects(dir.path()).len(), 3);
+}
+
 /// Undo the last commit but keep its file, as if the process died after the
 /// write and before the commit, and move that write's Timeline date to
 /// `date`, as if it happened before midnight.

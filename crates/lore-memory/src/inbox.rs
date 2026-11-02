@@ -100,10 +100,16 @@ pub fn check_line(name: &str, text: &str) -> Result<(), InboxError> {
 }
 
 impl Proposal {
-    /// Where the proposal lives: `_inbox/<agent>-<session>.jsonl`.
+    /// Where the proposal lives: `_inbox/<agent>-<session>.jsonl`, with the
+    /// session lowercased, so sessions that differ only in case share one
+    /// file on every file system, not only on case-insensitive ones.
     #[must_use]
     pub fn file_name(&self) -> String {
-        format!("{}-{}.jsonl", self.agent.as_str(), self.session.as_str())
+        format!(
+            "{}-{}.jsonl",
+            self.agent.as_str(),
+            self.session.as_str().to_ascii_lowercase()
+        )
     }
 
     #[must_use]
@@ -381,7 +387,7 @@ pub fn proposals(vault: &Vault) -> Result<(Vec<Proposal>, Vec<Skipped>), InboxEr
             }
             let at = format!("{INBOX_DIR}/{name}:{}", number + 1);
             match Proposal::from_line(line) {
-                Ok(p) if p.file_name() == name => match refusal(&p) {
+                Ok(p) if p.file_name() == name.to_ascii_lowercase() => match refusal(&p) {
                     None => found.push(p),
                     Some(problem) => skipped.push(Skipped {
                         at,
