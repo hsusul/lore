@@ -1,5 +1,6 @@
 //! Claude Code writes several transcript files that carry one `sessionId`: a
-//! subagent transcript under `<session>/subagents/` repeats its parent's id.
+//! subagent transcript under `<session>/subagents/` repeats its parent's id, and
+//! a resumed transcript opens with lines copied from the session it resumed.
 //! Ingesting any of those files must not erase the text another one stored.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -91,6 +92,35 @@ fn line(session: &str, uuid: &str, role: &str, text: &str) -> String {
     ) + "\n"
 }
 
+#[test]
+fn resumed_transcript_does_not_replace_the_session_it_resumed() {
+    let old_id = "dddddddd-0000-4000-8000-000000000001";
+    let new_id = "dddddddd-0000-4000-8000-000000000002";
+    let copied = line(old_id, "d1", "user", "first question")
+        + &line(old_id, "d2", "assistant", "first answer");
+    let original = copied.clone() + &line(old_id, "d3", "assistant", "late answer names the cedar");
+    let resumed = copied
+        + &line(new_id, "d4", "user", "follow up")
+        + &line(new_id, "d5", "assistant", "follow up names the birch");
+
+    let dir = tempfile::tempdir().unwrap();
+    let original_path = dir.path().join(format!("{old_id}.jsonl"));
+    let resumed_path = dir.path().join(format!("{new_id}.jsonl"));
+    std::fs::write(&original_path, original).unwrap();
+    std::fs::write(&resumed_path, resumed).unwrap();
+
+    for order in [
+        [original_path.clone(), resumed_path.clone()],
+        [resumed_path.clone(), original_path.clone()],
+    ] {
+        let conn = ingest_in_order(&order);
+        let (original_session, _) = session_for(&conn, old_id);
+        let (resumed_session, _) = session_for(&conn, new_id);
+        assert_eq!(hit_sessions(&conn, "cedar"), vec![original_session]);
+        assert_eq!(hit_sessions(&conn, "birch"), vec![resumed_session]);
+    }
+}
+
 fn native_ids(conn: &Connection) -> Vec<String> {
     let mut stmt = conn
         .prepare("SELECT native_session_id FROM agent_session ORDER BY native_session_id")
@@ -163,6 +193,77 @@ fn subagent_without_agent_id_keeps_its_own_session() {
         let (parent_session, _) = session_for(&conn, parent_id);
         assert_eq!(message_count(&conn, &parent_session), 2);
     }
+}
+
+#[test]
+fn one_stray_session_id_line_does_not_move_the_file() {
+    let own_id = "ffffffff-0000-4000-8000-000000000001";
+    let stray_id = "ffffffff-0000-4000-8000-000000000099";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("{own_id}.jsonl"));
+    let stray =
+        format!(r#"{{"type":"last-prompt","sessionId":"{stray_id}","lastPrompt":"x"}}"#) + "\n";
+    std::fs::write(
+        &path,
+        line(own_id, "f1", "user", "question")
+            + &line(own_id, "f2", "assistant", "answer names the spruce")
+            + &stray,
+    )
+    .unwrap();
+    let conn = ingest_in_order(&[path]);
+    assert_eq!(native_ids(&conn), vec![own_id.to_string()]);
+}
+
+/// A resumed transcript scanned while it still holds only lines copied from
+/// the session it resumed must not take over that session.
+#[test]
+fn resumed_transcript_with_only_copied_lines_leaves_the_original_whole() {
+    let old_id = "abababab-0000-4000-8000-000000000001";
+    let new_id = "abababab-0000-4000-8000-000000000002";
+    let copied = line(old_id, "g1", "user", "first question")
+        + &line(old_id, "g2", "assistant", "first answer names the walnut");
+    let original = copied.clone()
+        + &line(old_id, "g3", "user", "second question")
+        + &line(old_id, "g4", "assistant", "second answer names the juniper");
+    let dir = tempfile::tempdir().unwrap();
+    let original_path = dir.path().join(format!("{old_id}.jsonl"));
+    let resumed_path = dir.path().join(format!("{new_id}.jsonl"));
+    std::fs::write(&original_path, original).unwrap();
+    std::fs::write(&resumed_path, &copied).unwrap();
+
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(blob_dir.path()).unwrap();
+    let adapter = ClaudeCodeAdapter::new();
+    ingest_file(&conn, &adapter, &original_path, &blobs).unwrap();
+    ingest_file(&conn, &adapter, &resumed_path, &blobs).unwrap();
+    let (original_session, _) = session_for(&conn, old_id);
+    assert_eq!(message_count(&conn, &original_session), 4);
+    assert_eq!(
+        hit_sessions(&conn, "juniper"),
+        vec![original_session.clone()]
+    );
+
+    // The resumed file then gains its own lines.
+    std::fs::write(
+        &resumed_path,
+        copied
+            + &line(
+                new_id,
+                "g5",
+                "assistant",
+                "resumed answer names the sequoia",
+            ),
+    )
+    .unwrap();
+    ingest_file(&conn, &adapter, &resumed_path, &blobs).unwrap();
+    assert_eq!(message_count(&conn, &original_session), 4);
+    let (resumed_session, _) = session_for(&conn, new_id);
+    assert_eq!(message_count(&conn, &resumed_session), 3);
+    assert_eq!(
+        native_ids(&conn),
+        vec![old_id.to_string(), new_id.to_string()]
+    );
 }
 
 /// The subagent fixture tree copied somewhere writable.
