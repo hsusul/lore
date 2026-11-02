@@ -27,7 +27,7 @@ pub const MOVE_SEARCH_LIMIT: u64 = 1024 * 1024;
 /// Hex characters kept when Lore writes a line hash.
 const PINNED_HASH_LEN: usize = 16;
 
-/// How an anchor compares with the working tree.
+/// How an anchor, or a note, compares with the working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Freshness {
     /// The anchored lines are where the note says.
@@ -39,6 +39,8 @@ pub enum Freshness {
     Changed,
     /// The file is not there and no rename of it was found.
     Gone,
+    /// The note has no anchors, so there is nothing to check.
+    Unanchored,
 }
 
 impl Freshness {
@@ -50,7 +52,33 @@ impl Freshness {
             Freshness::Moved { .. } => "moved",
             Freshness::Changed => "changed",
             Freshness::Gone => "gone",
+            Freshness::Unanchored => "unanchored",
         }
+    }
+
+    fn severity(self) -> u8 {
+        match self {
+            Freshness::Fresh | Freshness::Unanchored => 0,
+            Freshness::Moved { .. } => 1,
+            Freshness::Changed => 2,
+            Freshness::Gone => 3,
+        }
+    }
+
+    /// A note's freshness: its worst anchor, or `Unanchored` with none.
+    #[must_use]
+    pub fn of_note(anchors: &[Located]) -> Freshness {
+        anchors
+            .iter()
+            .map(|located| located.freshness)
+            .reduce(|worst, next| {
+                if next.severity() > worst.severity() {
+                    next
+                } else {
+                    worst
+                }
+            })
+            .unwrap_or(Freshness::Unanchored)
     }
 }
 
@@ -346,5 +374,25 @@ mod tests {
             Some(LineRange::new(3, 4).unwrap())
         );
         assert_eq!(find_lines(b"a\nb\n", 2, &hash), None);
+    }
+
+    #[test]
+    fn worst_anchor_wins() {
+        let at = |freshness| Located {
+            freshness,
+            path: RelPath::parse("a").unwrap(),
+        };
+        assert_eq!(Freshness::of_note(&[]), Freshness::Unanchored);
+        let moved = Freshness::Moved {
+            lines: LineRange::new(2, 3).unwrap(),
+        };
+        assert_eq!(
+            Freshness::of_note(&[at(Freshness::Fresh), at(moved)]),
+            moved
+        );
+        assert_eq!(
+            Freshness::of_note(&[at(Freshness::Gone), at(Freshness::Changed)]),
+            Freshness::Gone
+        );
     }
 }
