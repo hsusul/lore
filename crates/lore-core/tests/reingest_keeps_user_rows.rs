@@ -84,7 +84,7 @@ impl Archive {
     /// written before a `PARSER_VERSION` bump is.
     fn age_parser_version(&self) {
         self.conn
-            .execute("UPDATE ingest_state SET parser_version = '2'", [])
+            .execute("UPDATE ingest_state SET parser_version = '3'", [])
             .unwrap();
     }
 
