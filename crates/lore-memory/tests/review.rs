@@ -711,6 +711,27 @@ fn sessions_that_differ_only_in_case_can_both_be_accepted() {
     assert_eq!(subjects(dir.path()).len(), 3);
 }
 
+#[test]
+fn a_proposal_after_a_torn_inbox_line_is_still_read() {
+    let (dir, vault) = new_vault();
+    fs::create_dir_all(dir.path().join("_inbox")).unwrap();
+    // A propose of P2 killed halfway through its write.
+    fs::write(
+        dir.path().join("_inbox/codex-s1.jsonl"),
+        format!("{{\"id\":\"{P2}\",\"agen"),
+    )
+    .unwrap();
+    inbox::propose(&vault, proposal(P1, AgentKind::Codex, "s1", BODY)).unwrap();
+    let pending = review::inbox(&vault).unwrap();
+    let ids: Vec<&str> = pending.proposals.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, [P1]);
+    assert_eq!(pending.skipped.len(), 1);
+    assert_eq!(
+        review::accept(&vault, P1, None).unwrap().outcome,
+        Added::Committed
+    );
+}
+
 /// Undo the last commit but keep its file, as if the process died after the
 /// write and before the commit, and move that write's Timeline date to
 /// `date`, as if it happened before midnight.

@@ -568,7 +568,7 @@ fn record(vault: &Vault, id: &NoteId, decision: &Decision) -> Result<(), VaultEr
 }
 
 /// Whether the file is not empty and its last byte is not a newline.
-fn ends_torn(file: &mut fs::File) -> io::Result<bool> {
+pub(crate) fn ends_torn(file: &mut fs::File) -> io::Result<bool> {
     if file.metadata()?.len() == 0 {
         return Ok(false);
     }

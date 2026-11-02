@@ -343,13 +343,23 @@ pub fn propose(vault: &Vault, proposal: Proposal) -> Result<Proposal, InboxError
     let dir = vault.root().join(INBOX_DIR);
     fs::create_dir_all(&dir).map_err(io_error("create _inbox"))?;
     let name = proposal.file_name();
-    let mut line = proposal.to_line();
-    line.push('\n');
     let mut file = OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(dir.join(&name))
         .map_err(io_error(format!("open {INBOX_DIR}/{name}")))?;
+    // Start a fresh line after one torn by a crash, so this proposal is not
+    // glued onto it and lost with it.
+    let mut line = if crate::review::ends_torn(&mut file)
+        .map_err(io_error(format!("read {INBOX_DIR}/{name}")))?
+    {
+        String::from("\n")
+    } else {
+        String::new()
+    };
+    line.push_str(&proposal.to_line());
+    line.push('\n');
     file.write_all(line.as_bytes())
         .map_err(io_error(format!("append to {INBOX_DIR}/{name}")))?;
     Ok(proposal)
