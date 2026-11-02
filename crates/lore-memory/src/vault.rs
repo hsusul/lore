@@ -95,6 +95,16 @@ pub struct Reindexed {
     pub indexed: usize,
     /// Markdown files that are not valid notes, with the reason.
     pub skipped: Vec<(String, NoteError)>,
+    /// Ids that more than one file carries. Every such file is still indexed.
+    pub duplicates: Vec<DuplicateId>,
+}
+
+/// One id carried by several note files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateId {
+    pub id: NoteId,
+    /// The files, sorted.
+    pub paths: Vec<String>,
 }
 
 /// A markdown file found in the vault, and whether it is a valid note.
@@ -269,12 +279,28 @@ impl Vault {
                 Err(error) => skipped.push((stamp.path.clone(), error)),
             }
         }
+        let mut by_id: std::collections::BTreeMap<&NoteId, Vec<String>> = Default::default();
+        for (rel, note) in &notes {
+            by_id.entry(&note.id).or_default().push((*rel).to_string());
+        }
+        let duplicates = by_id
+            .into_iter()
+            .filter(|(_, paths)| paths.len() > 1)
+            .map(|(id, paths)| DuplicateId {
+                id: id.clone(),
+                paths,
+            })
+            .collect();
         let indexed = Index::build(
             &self.lore_dir(),
             notes.iter().map(|(rel, note)| (*rel, note)),
             &stamps,
         )?;
-        Ok(Reindexed { indexed, skipped })
+        Ok(Reindexed {
+            indexed,
+            skipped,
+            duplicates,
+        })
     }
 
     /// The index, brought up to date with the vault files first.
