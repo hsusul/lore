@@ -267,6 +267,73 @@ fn vault_lock_gives_up_with_busy_after_a_bounded_wait() {
 }
 
 #[test]
+fn vault_write_replaces_an_existing_note_in_place_and_commits() {
+    let (dir, vault) = new_vault();
+    let (mut note, _) = vault.add(NOTE).unwrap();
+    std::fs::rename(
+        dir.path().join("global/prune-worktrees.md"),
+        dir.path().join("global/renamed.md"),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "-A"]);
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "rename",
+        ],
+    );
+    note.body = "Run `git worktree prune -v`.\n".into();
+    assert_eq!(
+        vault.write("global/renamed.md", &note).unwrap(),
+        Added::Committed
+    );
+    assert_eq!(vault.read("global/renamed.md").unwrap(), note.render());
+    assert_eq!(subjects(dir.path())[0], "mem: update renamed");
+    assert!(git(dir.path(), &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        vault.write("global/renamed.md", &note).unwrap(),
+        Added::Unchanged
+    );
+    assert_eq!(vault.search("verbose prune", 5).unwrap().len(), 0);
+    assert_eq!(
+        vault.search("prune", 5).unwrap()[0].path,
+        "global/renamed.md"
+    );
+}
+
+#[test]
+fn vault_write_refuses_a_missing_file_or_another_notes_path() {
+    let (_dir, vault) = new_vault();
+    let (note, _) = vault.add(NOTE).unwrap();
+    assert!(matches!(
+        vault.write("global/nope.md", &note),
+        Err(VaultError::NotFound(_))
+    ));
+    let (other, _) = vault
+        .add("---\ntype: fact\ntitle: Other\n---\nO.\n")
+        .unwrap();
+    assert!(matches!(
+        vault.write(&other.rel_path(), &note),
+        Err(VaultError::Conflict(_))
+    ));
+}
+
+#[test]
+fn vault_write_temp_files_are_gitignored() {
+    let (dir, _vault) = new_vault();
+    std::fs::create_dir_all(dir.path().join("global")).unwrap();
+    std::fs::write(dir.path().join("global/.x.md.tmp"), "half").unwrap();
+    assert!(git(dir.path(), &["status", "--porcelain"]).is_empty());
+}
+
+#[test]
 fn vault_search_and_find_see_hand_edits_renames_and_deletes() {
     let (dir, vault) = new_vault();
     vault.add(NOTE).unwrap();
