@@ -122,8 +122,9 @@ impl Command {
 /// What the process should do, once argv has been understood.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    /// `--help` was asked for: usage on stdout, exit 0.
-    Help,
+    /// `--help` or `help [COMMAND]` was asked for: usage on stdout, exit 0.
+    /// Carries the command it was asked about, if any.
+    Help(Option<Command>),
     /// `--version` was asked for.
     Version,
     /// A recognized command name was given.
@@ -183,10 +184,24 @@ where
     let mut command: Option<Command> = None;
     let mut operand: Option<String> = None;
     let mut rest = Vec::new();
+    // `lorectl help [COMMAND]`, the spelling git and cargo also accept.
+    let mut help_word = false;
+    let mut topic: Option<Command> = None;
 
     while let Some(arg) = parser.next().map_err(usage)? {
         match arg {
             Short('h') | Long("help") => help = true,
+            Value(value) if command.is_none() && !help_word && value == "help" => {
+                help = true;
+                help_word = true;
+            }
+            Value(value) if help_word && topic.is_none() => {
+                let name = value.to_string_lossy();
+                topic = Some(
+                    Command::from_name(&name)
+                        .ok_or_else(|| CliError::Usage(format!("unknown command `{name}`")))?,
+                );
+            }
             Short('V') | Long("version") => version = true,
             Long("json") => json = true,
             Long("patch") => patch = true,
@@ -218,7 +233,7 @@ where
     // `--help` outranks `--version`, and both outrank a command: someone who
     // asks what a command does must not have it run at them.
     let action = if help {
-        Action::Help
+        Action::Help(topic.or(command))
     } else if version {
         Action::Version
     } else {
@@ -284,8 +299,8 @@ mod tests {
 
     #[test]
     fn help_and_version_are_recognized_in_both_spellings() {
-        for args in [vec!["--help"], vec!["-h"]] {
-            assert_eq!(parse(args).expect("parses").action, Action::Help);
+        for args in [vec!["--help"], vec!["-h"], vec!["help"]] {
+            assert_eq!(parse(args).expect("parses").action, Action::Help(None));
         }
         for args in [vec!["--version"], vec!["-V"]] {
             assert_eq!(parse(args).expect("parses").action, Action::Version);
@@ -295,8 +310,23 @@ mod tests {
     #[test]
     fn help_wins_over_version_and_over_a_command() {
         // Asking what something does must never run it.
-        assert_eq!(parsed(&["--help", "--version"]).action, Action::Help);
-        assert_eq!(parsed(&["scan", "--help"]).action, Action::Help);
+        assert_eq!(parsed(&["--help", "--version"]).action, Action::Help(None));
+        assert_eq!(
+            parsed(&["scan", "--help"]).action,
+            Action::Help(Some(Command::Scan))
+        );
+        assert_eq!(
+            parsed(&["help", "mem"]).action,
+            Action::Help(Some(Command::Mem))
+        );
+        assert_eq!(
+            parsed(&["mem", "--help"]).action,
+            Action::Help(Some(Command::Mem))
+        );
+        assert_eq!(
+            exit::exit_code(&parse(["help", "frob"]).unwrap_err()),
+            USAGE
+        );
         assert_eq!(parsed(&["--version", "scan"]).action, Action::Version);
     }
 

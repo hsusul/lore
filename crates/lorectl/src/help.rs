@@ -7,8 +7,18 @@
 //! The exit-code table interpolates the constants from [`crate::exit`] rather
 //! than restating the numbers, so documentation and behaviour cannot drift.
 
-use crate::cli::COMMANDS;
+use crate::cli::{Command, COMMANDS};
 use crate::exit;
+
+/// The help for `topic`: `lorectl help mem` and `lorectl mem --help` print the
+/// `mem` section alone; every other command shares the full text.
+#[must_use]
+pub fn usage_for(topic: Option<Command>) -> String {
+    match topic {
+        Some(Command::Mem) => crate::mem::USAGE.to_string(),
+        _ => usage(),
+    }
+}
 
 /// The full usage text.
 #[must_use]

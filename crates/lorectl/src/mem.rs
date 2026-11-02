@@ -12,7 +12,8 @@ use lore_memory::vault::{self, Added, Init, Vault};
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
 
-/// The `mem` section of `--help`.
+/// The `mem` section of `--help`, and all of `lorectl help mem`,
+/// `lorectl mem --help`, and `lorectl mem <SUB> --help`.
 pub const USAGE: &str = "\
 Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     init              Create the vault, a git repository Obsidian can open
@@ -41,7 +42,7 @@ enum Sub {
 
 #[derive(Debug, PartialEq, Eq)]
 struct MemArgs {
-    sub: Sub,
+    sub: Option<Sub>,
     vault: Option<PathBuf>,
     limit: usize,
 }
@@ -54,9 +55,11 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
     let mut parser = lexopt::Parser::from_args(rest);
     let mut vault = None;
     let mut limit = None;
+    let mut help = false;
     let mut operand: Option<String> = None;
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
+            Short('h') | Long("help") => help = true,
             Long("vault") => {
                 vault = Some(PathBuf::from(
                     parser.value().map_err(|e| usage(e.to_string()))?,
@@ -81,6 +84,13 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
             other => return Err(usage(other.unexpected().to_string())),
         }
     }
+    if help {
+        return Ok(MemArgs {
+            sub: None,
+            vault,
+            limit: DEFAULT_LIMIT,
+        });
+    }
     let needs = |name: &str| {
         operand
             .clone()
@@ -98,7 +108,7 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
         other => return Err(usage(format!("unknown mem subcommand `{other}`"))),
     };
     Ok(MemArgs {
-        sub: parsed,
+        sub: Some(parsed),
         vault,
         limit: limit.unwrap_or(DEFAULT_LIMIT),
     })
@@ -108,9 +118,13 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let sub = invocation.operand.as_deref().unwrap_or_default();
     let args = parse(sub, &invocation.rest)?;
+    let Some(sub) = args.sub else {
+        print!("{USAGE}");
+        return Ok(exit::OK);
+    };
     let dir = vault::resolve_dir(args.vault.as_deref())?;
     let mut out = std::io::stdout().lock();
-    match args.sub {
+    match sub {
         Sub::Init => {
             let (vault, init) = Vault::init(&dir)?;
             let verb = match init {
@@ -200,12 +214,18 @@ mod tests {
 
     #[test]
     fn every_subcommand_parses() {
-        assert_eq!(args("init", &[]).unwrap().sub, Sub::Init);
-        assert_eq!(args("reindex", &[]).unwrap().sub, Sub::Reindex);
-        assert_eq!(args("add", &["n.md"]).unwrap().sub, Sub::Add("n.md".into()));
-        assert_eq!(args("show", &["x"]).unwrap().sub, Sub::Show("x".into()));
+        assert_eq!(args("init", &[]).unwrap().sub, Some(Sub::Init));
+        assert_eq!(args("reindex", &[]).unwrap().sub, Some(Sub::Reindex));
+        assert_eq!(
+            args("add", &["n.md"]).unwrap().sub,
+            Some(Sub::Add("n.md".into()))
+        );
+        assert_eq!(
+            args("show", &["x"]).unwrap().sub,
+            Some(Sub::Show("x".into()))
+        );
         let search = args("search", &["two words", "--limit", "3", "--vault", "/v"]).unwrap();
-        assert_eq!(search.sub, Sub::Search("two words".into()));
+        assert_eq!(search.sub, Some(Sub::Search("two words".into())));
         assert_eq!((search.limit, search.vault), (3, Some(PathBuf::from("/v"))));
     }
 
@@ -223,5 +243,10 @@ mod tests {
             let error = args(sub, rest).unwrap_err();
             assert_eq!(exit::exit_code(&error), exit::USAGE, "{sub} {rest:?}");
         }
+    }
+
+    #[test]
+    fn help_wins_over_a_missing_operand() {
+        assert_eq!(args("add", &["--help"]).unwrap().sub, None);
     }
 }
