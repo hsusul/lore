@@ -221,6 +221,35 @@ fn vault_lock_gives_up_with_busy_after_a_bounded_wait() {
 }
 
 #[test]
+fn vault_search_and_find_see_hand_edits_renames_and_deletes() {
+    let (dir, vault) = new_vault();
+    vault.add(NOTE).unwrap();
+    let other = vault
+        .add("---\ntype: fact\ntitle: Kingfisher facts\n---\nBlue birds.\n")
+        .unwrap()
+        .0;
+    assert_eq!(vault.search("prune", 5).unwrap().len(), 1);
+    let path = dir.path().join("global/prune-worktrees.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("Run", "Quetzalcoatl says run")).unwrap();
+    let hits = vault.search("quetzalcoatl", 5).unwrap();
+    assert_eq!(hits.len(), 1, "an edit is found without reindex");
+    std::fs::rename(&path, dir.path().join("global/tidy-up.md")).unwrap();
+    assert_eq!(vault.find("tidy-up").unwrap(), "global/tidy-up.md");
+    assert_eq!(vault.search("quetzalcoatl", 5).unwrap()[0].slug, "tidy-up");
+    assert!(matches!(
+        vault.find("prune-worktrees"),
+        Err(VaultError::NotFound(_))
+    ));
+    std::fs::remove_file(dir.path().join(other.rel_path())).unwrap();
+    assert!(vault.search("kingfisher", 5).unwrap().is_empty());
+    assert!(matches!(
+        vault.find(other.id.as_str()),
+        Err(VaultError::NotFound(_))
+    ));
+}
+
+#[test]
 fn vault_notes_skips_dot_directories_and_the_inbox() {
     let (dir, vault) = new_vault();
     vault.add(NOTE).unwrap();
