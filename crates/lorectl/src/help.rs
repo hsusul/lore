@@ -11,14 +11,62 @@ use crate::cli::{Command, COMMANDS};
 use crate::exit;
 
 /// The help for `topic`: `lorectl help mem` and `lorectl mem --help` print the
-/// `mem` section alone; every other command shares the full text.
+/// `mem` section alone, and likewise `skills`, `mcp`, and `hook`. Every other
+/// command shares the full text.
 #[must_use]
 pub fn usage_for(topic: Option<Command>) -> String {
     match topic {
         Some(Command::Mem) => crate::mem::USAGE.to_string(),
+        Some(Command::Skills) => SKILLS_USAGE.to_string(),
+        Some(Command::Mcp) => MCP_USAGE.to_string(),
+        Some(Command::Hook) => HOOK_USAGE.to_string(),
         _ => usage(),
     }
 }
+
+/// `lorectl help skills`. The kinds are the `kind` strings `--json` carries.
+const SKILLS_USAGE: &str = "\
+Skills (lorectl skills <SUBCOMMAND> [--json]):
+    ls                Every skill folder each agent loads, with its source
+    doctor            Problems, each with a quoted command or a plain hint;
+                      nothing is suggested for a copy an agent manages
+    --json            Machine-readable output, to gate a script on findings
+    Finding kinds: duplicate, drift, unknown-source, broken-ref,
+    name-mismatch, bad-frontmatter, codex-budget.
+    Reads ~/.agents/skills, ~/.claude/skills, ~/.codex/skills,
+    ~/.cursor/skills, and plugin caches. HOME, CLAUDE_CONFIG_DIR, and
+    CODEX_HOME set where it looks. Never writes; exits 0 when the scan ran.
+";
+
+/// `lorectl help mcp`. The tool names are the ones `tools/list` answers with.
+const MCP_USAGE: &str = "\
+MCP server (lorectl mcp [--archive <DIR>]):
+    A Model Context Protocol server on stdin and stdout, run by an agent, not
+    a person. Run `lorectl scan` first, or the session tools report that
+    there is no archive yet.
+    Tools:
+    search_sessions   Full-text search of archived sessions; redacted snippets
+    read_session      One archived session's text in order, paged
+    recall_memory     Accepted notes for a repository, each with its freshness
+    read_note         One note in full
+    propose_memory    File a proposal in the vault's inbox, the only tool that
+                      writes; review it with `lorectl mem inbox`
+    Environment:
+    LORE_VAULT_DIR    Vault directory (absolute); otherwise ~/Lore
+    LORE_AGENT        claude-code or codex; names the agent behind a proposal
+                      ahead of the name the client sends
+    LORE_ARCHIVE_DIR  Archive directory (absolute) when --archive is absent
+";
+
+/// `lorectl help hook`.
+const HOOK_USAGE: &str = "\
+Hooks (lorectl hook <EVENT> [--archive <DIR>]):
+    session-start     One line when files agents wrote in this repository are
+                      staged and not committed; otherwise nothing
+    Run by an agent, not a person. Read-only, and it never scans. Every
+    failure, and any other EVENT, exits 0 in silence, so a session never
+    stalls on Lore.
+";
 
 /// The full usage text.
 #[must_use]
