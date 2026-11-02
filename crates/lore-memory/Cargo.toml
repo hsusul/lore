@@ -13,6 +13,9 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# The index. Same version and features as lore-core, so one bundled SQLite with
+# FTS5 is built for the whole workspace.
+rusqlite = { version = "0.32", features = ["bundled"] }
 # Calendar validation for `created` and `forget_after`. Already in the graph.
 time = "0.3"
 thiserror = "1"
