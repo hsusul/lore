@@ -175,7 +175,10 @@ fn persist_rows(
 
 /// Rows about a session that no source holds, so replacing the session's
 /// parsed rows must keep them: the folder the user filed it in (migration
-/// 0008 promises it survives a re-scan).
+/// 0008 promises it survives a re-scan), and the git evidence Lore recorded,
+/// whose `observed_at` says when it was first observed and is never rewritten
+/// (`enrich::write_outcomes`). The evidence waits in temp tables, since
+/// `git_observation` rows are wide and restored whole.
 struct KeptRows {
     folder: Option<(String, i64)>,
 }
@@ -189,10 +192,29 @@ impl KeptRows {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
+        tx.execute_batch(
+            "DROP TABLE IF EXISTS temp.kept_git_observation;
+             DROP TABLE IF EXISTS temp.kept_segment;",
+        )?;
+        tx.execute(
+            "CREATE TEMP TABLE kept_git_observation AS
+             SELECT * FROM git_observation WHERE session_id = ?1",
+            [session_id],
+        )?;
+        tx.execute(
+            "CREATE TEMP TABLE kept_segment AS
+             SELECT id, cwd, repository_id, worktree_id, resolution_confidence
+             FROM session_segment WHERE session_id = ?1 AND repository_id IS NOT NULL",
+            [session_id],
+        )?;
         Ok(Self { folder })
     }
 
-    /// Restore after the parsed rows are inserted.
+    /// Restore after the parsed rows are inserted. A segment keeps its
+    /// resolved repository while its cwd is unchanged, so enrichment does not
+    /// capture it again. An agent-recorded observation the parse wrote again
+    /// keeps its first `observed_at` while it records the same branch and
+    /// commit. Lore's own observations come back whole.
     fn restore(&self, tx: &Connection, session_id: &str) -> Result<()> {
         if let Some((folder_id, added_at)) = &self.folder {
             tx.execute(
@@ -200,7 +222,44 @@ impl KeptRows {
                 params![session_id, folder_id, added_at],
             )?;
         }
-        Ok(())
+        tx.execute(
+            "UPDATE session_segment SET
+                repository_id = (SELECT k.repository_id FROM temp.kept_segment k
+                                 WHERE k.id = session_segment.id),
+                worktree_id = (SELECT k.worktree_id FROM temp.kept_segment k
+                               WHERE k.id = session_segment.id),
+                resolution_confidence = (SELECT k.resolution_confidence
+                                         FROM temp.kept_segment k
+                                         WHERE k.id = session_segment.id)
+             WHERE session_id = ?1 AND EXISTS (
+                SELECT 1 FROM temp.kept_segment k
+                WHERE k.id = session_segment.id AND k.cwd IS session_segment.cwd)",
+            [session_id],
+        )?;
+        tx.execute(
+            "UPDATE git_observation SET observed_at = (
+                SELECT k.observed_at FROM temp.kept_git_observation k
+                WHERE k.id = git_observation.id)
+             WHERE session_id = ?1 AND EXISTS (
+                SELECT 1 FROM temp.kept_git_observation k
+                WHERE k.id = git_observation.id AND k.source = git_observation.source
+                  AND k.branch IS git_observation.branch
+                  AND k.commit_sha IS git_observation.commit_sha)",
+            [session_id],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO git_observation
+             SELECT * FROM temp.kept_git_observation k
+             WHERE k.source IN ('lore_captured', 'lore_reverified')
+               AND (k.segment_id IS NULL
+                    OR k.segment_id IN (SELECT id FROM session_segment WHERE session_id = ?1))",
+            [session_id],
+        )?;
+        tx.execute_batch(
+            "DROP TABLE temp.kept_git_observation;
+             DROP TABLE temp.kept_segment;",
+        )?;
+        crate::search::project_session_git(tx, session_id)
     }
 }
 
