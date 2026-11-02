@@ -27,6 +27,8 @@ const PINNED_HASH_LEN: usize = 16;
 pub enum Freshness {
     /// The anchored lines are where the note says.
     Fresh,
+    /// The anchored lines are unchanged but now at `lines`.
+    Moved { lines: LineRange },
     /// The file is there but the anchored lines are not.
     Changed,
     /// The file is not there.
@@ -39,6 +41,7 @@ impl Freshness {
     pub fn label(self) -> &'static str {
         match self {
             Freshness::Fresh => "fresh",
+            Freshness::Moved { .. } => "moved",
             Freshness::Changed => "changed",
             Freshness::Gone => "gone",
         }
@@ -137,7 +140,10 @@ impl WorkTree {
         if digest.is_some_and(|d| hash_matches(hash, &d)) {
             return Some(Freshness::Fresh);
         }
-        Some(Freshness::Changed)
+        let moved = fs::read(&file)
+            .ok()
+            .and_then(|bytes| find_lines(&bytes, lines.end() - lines.start() + 1, hash));
+        Some(moved.map_or(Freshness::Changed, |lines| Freshness::Moved { lines }))
     }
 
     /// The file at `path`, when it is a regular file inside the working tree.
@@ -196,6 +202,21 @@ fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
     body.split(|b| *b == b'\n').collect()
 }
 
+/// The first run of `len` lines in `bytes` whose hash matches `hash`.
+fn find_lines(bytes: &[u8], len: u32, hash: &LineHash) -> Option<LineRange> {
+    let lines = split_lines(bytes);
+    let len = usize::try_from(len).ok()?;
+    if len == 0 || len > lines.len() {
+        return None;
+    }
+    let start = (0..=lines.len() - len).find(|&start| {
+        hash_matches(hash, &hash_lines(lines[start..start + len].iter().copied()))
+    })?;
+    let first = u32::try_from(start + 1).ok()?;
+    let last = u32::try_from(start + len).ok()?;
+    LineRange::new(first, last).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +239,15 @@ mod tests {
         assert_eq!(split_lines(b"a\nb\n"), vec![&b"a"[..], b"b"]);
         assert_eq!(split_lines(b"a\nb"), vec![&b"a"[..], b"b"]);
         assert_eq!(split_lines(b"\n"), vec![&b""[..]]);
+    }
+
+    #[test]
+    fn find_lines_reports_the_new_range() {
+        let hash = LineHash::parse(&format!("b3:{}", &hash_lines([&b"x"[..], b"y"])[..8])).unwrap();
+        assert_eq!(
+            find_lines(b"a\nb\nx\ny\n", 2, &hash),
+            Some(LineRange::new(3, 4).unwrap())
+        );
+        assert_eq!(find_lines(b"a\nb\n", 2, &hash), None);
     }
 }

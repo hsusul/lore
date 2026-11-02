@@ -70,7 +70,7 @@ fn fixture(dir: &Path) -> ([String; 3], Anchor) {
 fn anchor_freshness_at_each_fixture_commit() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let ([first, _, third], anchor) = fixture(root);
+    let ([first, second, third], anchor) = fixture(root);
 
     assert_eq!(
         anchor.hash,
@@ -79,11 +79,20 @@ fn anchor_freshness_at_each_fixture_commit() {
     assert_eq!(anchor.commit.as_ref().unwrap().as_str(), &first[..12]);
 
     let mut seen = Vec::new();
-    for commit in [&first, &third] {
+    for commit in [&first, &second, &third] {
         git(root, &["checkout", "-q", commit]);
         seen.push(anchor.check(root));
     }
-    assert_eq!(seen, [Freshness::Fresh, Freshness::Changed]);
+    assert_eq!(
+        seen,
+        [
+            Freshness::Fresh,
+            Freshness::Moved {
+                lines: lines("5-7")
+            },
+            Freshness::Changed,
+        ]
+    );
 
     git(root, &["checkout", "-q", &third]);
     fs::remove_file(root.join("src/lib.rs")).unwrap();
