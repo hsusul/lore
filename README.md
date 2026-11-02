@@ -167,16 +167,24 @@ command = "/absolute/path/to/lorectl"
 args = ["mcp"]
 ```
 
-The vault is `~/Lore` by default. For another vault, set `LORE_VAULT_DIR` to an absolute path in the server's environment. For another archive, add `--archive /absolute/dir` to the arguments.
+The vault is `~/Lore` by default. For another vault, set `LORE_VAULT_DIR` to an absolute path in the server's environment. For another archive, add `--archive /absolute/dir` to the arguments. Lore names the agent behind a proposal from `LORE_AGENT` in the server's environment, else from the name the client sends. If proposals fail with `agent_unknown`, set `LORE_AGENT=claude-code` or `LORE_AGENT=codex`.
 
-The server offers four tools. All are read only.
+The server offers five tools. The first four are read only.
 
 - `search_sessions` searches the archive with the filters above. It returns up to 20 hits per call, each with a session id and a redacted snippet.
 - `read_session` returns one session in order, paged at 24,000 characters. It leaves out thinking and raw tool payloads.
 - `recall_memory` returns accepted notes for the directory the agent is working in, each with its freshness label.
 - `read_note` returns one note in full, with its freshness when the agent passes its working directory.
+- `propose_memory` files one proposal into the vault's `_inbox/<agent>-<session>.jsonl`. It answers with the proposal id and the inbox file.
 
-A `propose_memory` tool that files a proposal into the inbox is coming. It will not accept, edit, or delete notes.
+`propose_memory` is the only tool that writes. It never accepts, edits, or deletes notes, and retiring a note needs a person. You review its proposals with `lorectl mem inbox`, `mem accept`, and `mem reject`. Secrets in a proposal are masked before it is stored. `title`, `body`, `type`, and `scope` are required. `type` is one of `convention`, `decision`, `fact`, `howto`, or `pitfall`. `scope` is `global` or `repo`. A `repo` proposal needs `cwd` and may carry up to 8 `anchors`, each a `path` relative to the repo root with optional `lines`. `updates` names a note id to supersede. `session_id` is the agent's own session id. Lore records the source as unverified unless it can match it.
+
+```json
+{"title": "Bound cargo jobs", "type": "pitfall", "scope": "repo",
+ "cwd": "/absolute/path/to/repo",
+ "body": "Run cargo with CARGO_BUILD_JOBS=4 on this host.",
+ "anchors": [{"path": "Cargo.toml"}]}
+```
 
 ## Privacy
 
