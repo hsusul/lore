@@ -11,7 +11,7 @@ use lore_memory::note::{
     AgentKind, Anchor, LineRange, NoteDate, NoteId, NoteType, RelPath, Relation, Scope, SessionId,
 };
 use lore_memory::review::{self, ReviewError};
-use lore_memory::vault::{Added, Vault};
+use lore_memory::vault::{Added, Vault, VaultError};
 use time::OffsetDateTime;
 
 const P1: &str = "01JC9V6Q4M8K2T7X3N5R0B1H6D";
@@ -330,4 +330,125 @@ fn accept_as_names_the_note_and_retire_finds_it_by_that_name() {
         ("global/shared-refs.md", Added::Committed)
     );
     assert_eq!(subjects(dir.path()).len(), 3);
+}
+
+const TARGET: &str = "---\ntitle: Worktrees share refs\ntype: pitfall\n---\nA fetch in one worktree is seen by all of them.\n";
+
+/// How many lines of the decision log name proposal `id`.
+fn decision_lines(root: &Path, id: &str) -> usize {
+    fs::read_to_string(root.join(".lore/decisions.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains(id))
+        .count()
+}
+
+fn lose_decisions(root: &Path) {
+    fs::remove_file(root.join(".lore/decisions.jsonl")).unwrap();
+}
+
+fn update_of(target: &lore_memory::note::Note) -> Proposal {
+    let mut update = proposal(P2, AgentKind::Codex, "s2", "Fetch once.\n");
+    update.relation = Some(Relation::Updates(target.id.clone()));
+    update
+}
+
+#[test]
+fn accept_update_refuses_a_target_id_two_files_carry() {
+    let (dir, vault) = new_vault();
+    let (target, _) = vault.add(TARGET).unwrap();
+    let text = vault.read(&target.rel_path()).unwrap();
+    fs::write(dir.path().join("global/copy.md"), &text).unwrap();
+    inbox::propose(&vault, update_of(&target)).unwrap();
+    let head = git(dir.path(), &["rev-parse", "HEAD"]);
+    let error = review::accept(&vault, P2, None).unwrap_err();
+    assert!(
+        matches!(error, ReviewError::Vault(VaultError::Ambiguous(..))),
+        "{error}"
+    );
+    assert_eq!(git(dir.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(vault.read(&target.rel_path()).unwrap(), text);
+    assert_eq!(decision_lines(dir.path(), P2), 0);
+}
+
+#[test]
+fn accepted_and_retired_notes_reach_search_without_a_reindex() {
+    let (_dir, vault) = new_vault();
+    vault
+        .add("---\ntitle: Other\ntype: fact\n---\nUnrelated.\n")
+        .unwrap();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    let accepted = review::accept(&vault, P1, None).unwrap();
+    let hits = vault.search("fetch", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        (hits[0].path.as_str(), hits[0].status.as_str()),
+        (accepted.rel.as_str(), "active")
+    );
+    review::retire(&vault, &accepted.rel, "fixed upstream").unwrap();
+    let hits = vault.search("fetch", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].status, "retired");
+}
+
+#[test]
+fn accept_update_finds_a_target_renamed_by_hand_and_refreshes_search() {
+    let (dir, vault) = new_vault();
+    let (note, _) = vault
+        .add("---\ntitle: Original\ntype: fact\n---\nOld statement.\n")
+        .unwrap();
+    git(dir.path(), &["mv", &note.rel_path(), "global/renamed.md"]);
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.test",
+            "commit",
+            "-qm",
+            "rename",
+        ],
+    );
+    let mut update = proposal(P1, AgentKind::Codex, "s1", "Replacement statement.\n");
+    update.relation = Some(Relation::Updates(note.id));
+    inbox::propose(&vault, update).unwrap();
+    let accepted = review::accept(&vault, P1, None).unwrap();
+    assert_eq!(accepted.rel, "global/renamed.md");
+    let hits = vault.search("Replacement", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].slug, "renamed");
+    assert!(vault.search("Old", 10).unwrap().is_empty());
+}
+
+#[test]
+fn accept_as_converges_when_its_decision_line_is_lost() {
+    let (dir, vault) = new_vault();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    let first = review::accept(&vault, P1, Some("shared-refs")).unwrap();
+    let bytes = vault.read(&first.rel).unwrap();
+    lose_decisions(dir.path());
+    let again = review::accept(&vault, P1, Some("shared-refs")).unwrap();
+    assert_eq!(
+        (again.outcome, &again.id, again.rel.as_str()),
+        (Added::Unchanged, &first.id, "global/shared-refs.md")
+    );
+    assert_eq!(vault.read(&first.rel).unwrap(), bytes);
+    assert_eq!(subjects(dir.path()).len(), 2);
+    assert_eq!(decision_lines(dir.path(), P1), 1);
+}
+
+#[test]
+fn an_update_converges_when_its_decision_line_is_lost() {
+    let (dir, vault) = new_vault();
+    let (target, _) = vault.add(TARGET).unwrap();
+    inbox::propose(&vault, update_of(&target)).unwrap();
+    let first = review::accept(&vault, P2, None).unwrap();
+    let bytes = vault.read(&first.rel).unwrap();
+    lose_decisions(dir.path());
+    let again = review::accept(&vault, P2, None).unwrap();
+    assert_eq!((again.outcome, again.updated), (Added::Unchanged, true));
+    assert_eq!(vault.read(&first.rel).unwrap(), bytes);
+    assert_eq!(subjects(dir.path()).len(), 3);
+    assert_eq!(decision_lines(dir.path(), P2), 1);
 }
