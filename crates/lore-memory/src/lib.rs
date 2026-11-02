@@ -5,11 +5,15 @@
 //! index ([`index`]) lives in `<vault>/.lore/index.db`, is gitignored, and is
 //! rebuilt from the vault alone, so it can never hold anything the vault lacks.
 //!
+//! Recall ([`recall`]) returns the notes for a directory's repository, each with
+//! a [`anchor::Freshness`] from checking its anchors against the working tree.
+//!
 //! This crate has no network capability (`tests/no_network_in_memory.rs`,
 //! `scripts/egress-check.sh`). It spawns the `git` binary and nothing else.
 
 pub mod anchor;
 pub mod index;
 pub mod note;
+pub mod recall;
 pub mod repo;
 pub mod vault;
