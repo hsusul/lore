@@ -1048,10 +1048,7 @@ pub fn ingest_file(
         }
     };
 
-    let fallback = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| snapshot.path.clone());
+    let fallback = adapter.session_key(path);
 
     if let (Some(row), ChangeClass::Appended, None) = (&prev, change, &oversized_note) {
         let source = AppendSource {

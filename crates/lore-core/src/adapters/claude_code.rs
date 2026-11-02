@@ -8,7 +8,7 @@
 //! `partial` with a bounded, content-free note — never a panic.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -70,6 +70,10 @@ fn parse_from(
     archived: &dyn ArchivedSession,
 ) -> ParseRun {
     let mut session = resume_session(from, fallback_dedupe);
+    let file_id = file_session_id(fallback_dedupe);
+    if file_id.is_some() {
+        session.native_session_id = file_id.clone();
+    }
     // Per-message context (cwd, branch) used to build segments afterward.
     let mut contexts: Vec<(Option<String>, Option<String>)> = Vec::new();
     let mut offset = from.offset;
@@ -94,8 +98,8 @@ fn parse_from(
         let event_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
 
         // Session-level metadata.
-        if let Some(id) = transcript_id(&obj) {
-            session.native_session_id = Some(id);
+        if file_id.is_none() && session.native_session_id.is_none() {
+            session.native_session_id = transcript_id(&obj);
         }
         if session.agent_version.is_none() {
             session.agent_version = str_field(&obj, "version");
@@ -148,11 +152,29 @@ fn parse_from(
     finish_parse(from, session, end, archived)
 }
 
-/// The session a line belongs to. Ingest replaces a session with each file it
-/// parses, so two transcripts must never share an id. A subagent transcript
-/// repeats its parent's `sessionId`, so its lines are qualified by `agentId`.
-/// A resumed transcript opens with lines copied from the session it resumed, so
-/// the caller keeps the newest id.
+/// The session id a transcript's file name gives it. Ingest replaces a session
+/// with each file it parses, so two transcripts must never share an id, and one
+/// line must not move a whole file. Claude Code names a transcript
+/// `<sessionId>.jsonl` and a subagent transcript
+/// `<sessionId>/subagents/agent-<agentId>.jsonl`, whose key (`session_key`)
+/// is `<sessionId>/agent-<agentId>`. A
+/// resumed transcript opens with lines copied from the session it resumed, and
+/// a subagent transcript repeats its parent's `sessionId`, so the lines cannot
+/// name the file. `None` for a file Claude did not name, such as a fixture.
+fn file_session_id(key: &str) -> Option<String> {
+    (key.contains('/') || is_uuid(key)).then(|| key.to_string())
+}
+
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// The session a line names, for a file whose name does not give one: its
+/// `sessionId`, qualified by `agentId` on a subagent line. The first line wins.
 fn transcript_id(obj: &Value) -> Option<String> {
     let session_id = str_field(obj, "sessionId")?;
     Some(match str_field(obj, "agentId") {
@@ -560,6 +582,26 @@ impl AgentAdapter for ClaudeCodeAdapter {
             paths.push(claude_dir);
         }
         paths
+    }
+
+    /// The file stem, qualified by the session directory for a subagent
+    /// transcript (`<sessionId>/subagents/agent-<agentId>.jsonl` gives
+    /// `<sessionId>/agent-<agentId>`), whose stem alone repeats across sessions.
+    fn session_key(&self, path: &Path) -> String {
+        let name = |p: &Path| p.file_name().map(|s| s.to_string_lossy().into_owned());
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let parent = path.parent();
+        let session_dir = parent
+            .filter(|p| name(p).as_deref() == Some("subagents"))
+            .and_then(Path::parent)
+            .and_then(name);
+        match session_dir {
+            Some(dir) => format!("{dir}/{stem}"),
+            None => stem,
+        }
     }
 
     fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef> {
