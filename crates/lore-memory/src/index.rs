@@ -4,24 +4,36 @@
 //! renamed over the old one, so it never holds anything the vault lacks and a
 //! reader never sees half of it. Ranking is FTS5 BM25 with the title weighted
 //! above the body, and the `## Timeline` section below both.
+//!
+//! The index also keeps a stamp (size and mtime) of every markdown file it
+//! read, and a fingerprint of all of them. A person editing, renaming, or
+//! deleting a note in Obsidian changes the fingerprint, and the vault then
+//! re-reads only the files whose stamps changed.
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::Path;
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use thiserror::Error;
 
 use crate::note::Note;
 
 pub const INDEX_FILE: &str = "index.db";
 const TEMP_FILE: &str = "index.db.tmp";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const SCHEMA: &str = "CREATE VIRTUAL TABLE notes USING fts5(
     path UNINDEXED, id UNINDEXED, slug UNINDEXED, scope UNINDEXED,
     note_type UNINDEXED, status UNINDEXED, title, body, timeline,
     tokenize = 'porter unicode61'
-);";
+);
+CREATE TABLE files (
+    path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;";
 
 #[derive(Debug, Error)]
 pub enum IndexError {
@@ -48,6 +60,26 @@ pub struct Hit {
     pub score: f64,
 }
 
+/// What the index remembers about one markdown file, to tell whether it
+/// changed since it was read.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FileStamp {
+    /// Vault-relative path.
+    pub path: String,
+    pub size: u64,
+    /// Modification time in nanoseconds since the Unix epoch.
+    pub mtime_ns: i64,
+}
+
+/// One value for the whole set of stamps, compared before anything else so an
+/// unchanged vault costs one directory walk and one row read.
+#[must_use]
+pub fn fingerprint(stamps: &[FileStamp]) -> String {
+    let mut hasher = DefaultHasher::new();
+    stamps.hash(&mut hasher);
+    format!("{}:{:016x}", stamps.len(), hasher.finish())
+}
+
 #[derive(Debug)]
 pub struct Index {
     conn: Connection,
@@ -70,10 +102,12 @@ impl Index {
         Ok((version == SCHEMA_VERSION).then_some(Self { conn }))
     }
 
-    /// Replace the index in `lore_dir` with one holding exactly `notes`.
+    /// Replace the index in `lore_dir` with one holding exactly `notes`, and
+    /// `stamps` for every markdown file that was read, notes or not.
     pub fn build<'a>(
         lore_dir: &Path,
         notes: impl IntoIterator<Item = (&'a str, &'a Note)>,
+        stamps: &[FileStamp],
     ) -> Result<usize, IndexError> {
         let temp = lore_dir.join(TEMP_FILE);
         match fs::remove_file(&temp) {
@@ -90,6 +124,11 @@ impl Index {
                 insert.execute(row(rel, note))?;
                 count += 1;
             }
+            let mut stamp = tx.prepare(STAMP)?;
+            for s in stamps {
+                stamp.execute(stamp_row(s))?;
+            }
+            tx.execute(SET_FINGERPRINT, params![fingerprint(stamps)])?;
         }
         tx.commit()?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -103,6 +142,65 @@ impl Index {
         self.conn
             .execute("DELETE FROM notes WHERE path = ?1", params![rel])?;
         self.conn.execute(INSERT, row(rel, note))?;
+        Ok(())
+    }
+
+    /// The fingerprint stored with the stamps, if any.
+    pub fn fingerprint(&self) -> Result<Option<String>, IndexError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'fingerprint'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Every stored stamp, by path.
+    pub fn stamps(&self) -> Result<HashMap<String, (u64, i64)>, IndexError> {
+        let mut statement = self.conn.prepare("SELECT path, size, mtime FROM files")?;
+        let stamps = statement
+            .query_map([], |r| {
+                let size: i64 = r.get(1)?;
+                Ok((
+                    r.get(0)?,
+                    (u64::try_from(size).unwrap_or_default(), r.get(2)?),
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(stamps)
+    }
+
+    /// Apply what changed on disk in one transaction: re-read files (with the
+    /// note when the file is one), files that are gone, and the new
+    /// fingerprint. A reader sees the index before or after, never between.
+    pub fn refresh(
+        &mut self,
+        changed: &[(FileStamp, Option<Note>)],
+        removed: &[String],
+        fingerprint: &str,
+    ) -> Result<(), IndexError> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut drop_note = tx.prepare("DELETE FROM notes WHERE path = ?1")?;
+            let mut drop_file = tx.prepare("DELETE FROM files WHERE path = ?1")?;
+            let mut insert = tx.prepare(INSERT)?;
+            let mut stamp = tx.prepare(STAMP)?;
+            for path in removed {
+                drop_note.execute(params![path])?;
+                drop_file.execute(params![path])?;
+            }
+            for (s, note) in changed {
+                drop_note.execute(params![s.path])?;
+                if let Some(note) = note {
+                    insert.execute(row(&s.path, note))?;
+                }
+                stamp.execute(stamp_row(s))?;
+            }
+            tx.execute(SET_FINGERPRINT, params![fingerprint])?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -165,6 +263,16 @@ impl Index {
 const INSERT: &str = "INSERT INTO notes
     (path, id, slug, scope, note_type, status, title, body, timeline)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+const STAMP: &str = "INSERT OR REPLACE INTO files (path, size, mtime) VALUES (?1, ?2, ?3)";
+const SET_FINGERPRINT: &str = "INSERT OR REPLACE INTO meta (key, value) VALUES ('fingerprint', ?1)";
+
+fn stamp_row(s: &FileStamp) -> impl rusqlite::Params + '_ {
+    (
+        s.path.as_str(),
+        i64::try_from(s.size).unwrap_or(i64::MAX),
+        s.mtime_ns,
+    )
+}
 
 fn row<'a>(rel: &'a str, note: &'a Note) -> impl rusqlite::Params + 'a {
     let file = rel.rsplit('/').next().unwrap_or(rel);

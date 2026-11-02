@@ -1,8 +1,9 @@
 //! The vault: a git repository of note files, and the only place notes live.
 //!
 //! Layout: `global/<slug>.md` and `repos/<repo name>-<repo key>/<slug>.md`
-//! (`repos/<repo key>/` when a note does not name its repository). `.lore/` is
-//! Lore's private directory, and is gitignored with `_inbox/` and the
+//! (`repos/<repo key>/` when a note does not name its repository). A person may
+//! move or rename files; the vault finds notes by walking it. `.lore/` holds the
+//! write lock and the index, and is gitignored with `_inbox/` and the
 //! `.*.md.tmp` files of an interrupted write. Every write takes
 //! `.lore/write.lock` (waiting at most [`LOCK_WAIT`]), writes one file, and
 //! commits only that file, so two writers queue rather than interleave and the
@@ -16,11 +17,11 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use thiserror::Error;
 
-use crate::index::{Hit, Index, IndexError};
+use crate::index::{fingerprint, FileStamp, Hit, Index, IndexError};
 use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
 
 /// Lore's private directory inside the vault. Gitignored.
@@ -52,6 +53,7 @@ pub enum VaultError {
     BadPath(String, String),
     #[error("a different note already lives at {0}")]
     Conflict(String),
+
     #[error("another Lore process is writing to the vault at {}", .0.display())]
     Busy(PathBuf),
     #[error("no note matches `{0}`")]
@@ -255,40 +257,72 @@ impl Vault {
     /// Rebuild the index from the vault files alone.
     pub fn reindex(&self) -> Result<Reindexed, VaultError> {
         let _lock = self.lock()?;
-        self.build_locked(self.paths()?)
+        self.build_locked(self.stamps()?)
     }
 
-    fn build_locked(&self, paths: Vec<String>) -> Result<Reindexed, VaultError> {
+    fn build_locked(&self, stamps: Vec<FileStamp>) -> Result<Reindexed, VaultError> {
         let mut notes = Vec::new();
         let mut skipped = Vec::new();
-        for rel in paths {
-            match self.parse_file(&rel)? {
-                Ok(note) => notes.push((rel, note)),
-                Err(error) => skipped.push((rel, error)),
+        for stamp in &stamps {
+            match self.parse_file(&stamp.path)? {
+                Ok(note) => notes.push((stamp.path.as_str(), note)),
+                Err(error) => skipped.push((stamp.path.clone(), error)),
             }
         }
         let indexed = Index::build(
             &self.lore_dir(),
-            notes.iter().map(|(rel, note)| (rel.as_str(), note)),
+            notes.iter().map(|(rel, note)| (*rel, note)),
+            &stamps,
         )?;
         Ok(Reindexed { indexed, skipped })
     }
 
-    /// The index, built from the vault files first when there is none.
+    /// The index, brought up to date with the vault files first.
+    ///
+    /// The common case costs one directory walk with a stat per file and one
+    /// read of the stored fingerprint. When a person edited, renamed, added, or
+    /// deleted a file, only those files are read again, under the write lock.
     pub fn index(&self) -> Result<Index, VaultError> {
+        let stamps = self.stamps()?;
         if let Some(index) = Index::open(&self.lore_dir())? {
-            return Ok(index);
+            if index.fingerprint()?.as_deref() == Some(fingerprint(&stamps).as_str()) {
+                return Ok(index);
+            }
         }
         let _lock = self.lock()?;
         self.refresh_locked()
     }
 
-    /// Rebuild the index for a caller that holds the write lock.
+    /// [`Vault::index`] for a caller that holds the write lock.
     fn refresh_locked(&self) -> Result<Index, VaultError> {
+        let stamps = self.stamps()?;
+        let print = fingerprint(&stamps);
         let lore_dir = self.lore_dir();
-        self.build_locked(self.paths()?)?;
-        Index::open(&lore_dir)?
-            .ok_or_else(|| VaultError::Missing(lore_dir.join(crate::index::INDEX_FILE)))
+        let mut index = match Index::open(&lore_dir)? {
+            Some(index) => index,
+            None => {
+                self.build_locked(stamps)?;
+                return Index::open(&lore_dir)?
+                    .ok_or_else(|| VaultError::Missing(lore_dir.join(crate::index::INDEX_FILE)));
+            }
+        };
+        if index.fingerprint()?.as_deref() == Some(print.as_str()) {
+            return Ok(index);
+        }
+        let mut stored = index.stamps()?;
+        let mut changed = Vec::new();
+        for stamp in stamps {
+            let same = stored
+                .remove(&stamp.path)
+                .is_some_and(|old| old == (stamp.size, stamp.mtime_ns));
+            if !same {
+                let note = self.parse_file(&stamp.path)?.ok();
+                changed.push((stamp, note));
+            }
+        }
+        let removed: Vec<String> = stored.into_keys().collect();
+        index.refresh(&changed, &removed, &print)?;
+        Ok(index)
     }
 
     /// Read and parse one vault file. The outer error is a failed read.
@@ -298,12 +332,12 @@ impl Vault {
         Ok(Note::parse(&text))
     }
 
-    /// Every markdown file [`Vault::notes`] would read, sorted.
-    fn paths(&self) -> Result<Vec<String>, VaultError> {
-        let mut paths = Vec::new();
-        collect_markdown(&self.root, &self.root, &mut paths)?;
-        paths.sort();
-        Ok(paths)
+    /// A stamp for every markdown file [`Vault::notes`] would read, sorted.
+    fn stamps(&self) -> Result<Vec<FileStamp>, VaultError> {
+        let mut stamps = Vec::new();
+        collect_markdown(&self.root, &self.root, &mut stamps)?;
+        stamps.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(stamps)
     }
 
     /// Notes matching every word of `query`, best first.
@@ -342,11 +376,14 @@ impl Vault {
     /// Every `.md` file in the vault outside `.lore`, `.git`, other dot
     /// directories, and `_inbox`, sorted by path, each with its parse result.
     pub fn notes(&self) -> Result<Vec<VaultFile>, VaultError> {
-        self.paths()?
+        self.stamps()?
             .into_iter()
-            .map(|rel| {
-                let note = self.parse_file(&rel)?;
-                Ok(VaultFile { rel, note })
+            .map(|stamp| {
+                let note = self.parse_file(&stamp.path)?;
+                Ok(VaultFile {
+                    rel: stamp.path,
+                    note,
+                })
             })
             .collect()
     }
@@ -408,7 +445,7 @@ impl Vault {
     }
 }
 
-fn collect_markdown(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), VaultError> {
+fn collect_markdown(dir: &Path, root: &Path, out: &mut Vec<FileStamp>) -> Result<(), VaultError> {
     let entries = fs::read_dir(dir).map_err(io_error(format!("list {}", dir.display())))?;
     for entry in entries {
         let entry = entry.map_err(io_error(format!("list {}", dir.display())))?;
@@ -425,7 +462,19 @@ fn collect_markdown(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<()
             collect_markdown(&path, root, out)?;
         } else if kind.is_file() && name.ends_with(".md") {
             if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_string_lossy().replace('\\', "/"));
+                let meta = entry
+                    .metadata()
+                    .map_err(io_error(format!("stat {}", path.display())))?;
+                let mtime_ns = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX));
+                out.push(FileStamp {
+                    path: rel.to_string_lossy().replace('\\', "/"),
+                    size: meta.len(),
+                    mtime_ns,
+                });
             }
         }
     }
