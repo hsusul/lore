@@ -22,6 +22,29 @@ use crate::repo::git;
 /// Hex characters kept when Lore writes a line hash.
 const PINNED_HASH_LEN: usize = 16;
 
+/// How an anchor compares with the working tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Freshness {
+    /// The anchored lines are where the note says.
+    Fresh,
+    /// The file is there but the anchored lines are not.
+    Changed,
+    /// The file is not there.
+    Gone,
+}
+
+impl Freshness {
+    /// The word printed beside a recalled note.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Freshness::Fresh => "fresh",
+            Freshness::Changed => "changed",
+            Freshness::Gone => "gone",
+        }
+    }
+}
+
 /// Why an anchor cannot be pinned to the working tree.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PinError {
@@ -33,6 +56,16 @@ pub enum PinError {
         lines: LineRange,
         len: usize,
     },
+}
+
+impl Anchor {
+    /// Check this anchor against the working tree at `repo`.
+    #[must_use]
+    pub fn check(&self, repo: &Path) -> Freshness {
+        WorkTree::new(repo)
+            .check_at(self, &self.path)
+            .unwrap_or(Freshness::Gone)
+    }
 }
 
 /// A working tree that anchors are checked against.
@@ -85,6 +118,28 @@ impl WorkTree {
             .as_ref()
     }
 
+    /// The anchor checked at `path`. `None` when there is no such file.
+    fn check_at(&self, anchor: &Anchor, path: &RelPath) -> Option<Freshness> {
+        let file = self.file(path)?;
+        let Some(lines) = anchor.lines else {
+            return Some(Freshness::Fresh);
+        };
+        let Ok(digest) = range_digest(&file, lines) else {
+            return Some(Freshness::Changed);
+        };
+        let Some(hash) = &anchor.hash else {
+            return Some(if digest.is_some() {
+                Freshness::Fresh
+            } else {
+                Freshness::Changed
+            });
+        };
+        if digest.is_some_and(|d| hash_matches(hash, &d)) {
+            return Some(Freshness::Fresh);
+        }
+        Some(Freshness::Changed)
+    }
+
     /// The file at `path`, when it is a regular file inside the working tree.
     fn file(&self, path: &RelPath) -> Option<PathBuf> {
         let candidate = self.root.join(path.as_str());
@@ -106,6 +161,13 @@ pub fn hash_lines<'a>(lines: impl IntoIterator<Item = &'a [u8]>) -> String {
         hasher.update(b"\n");
     }
     hasher.finalize().to_hex().to_string()
+}
+
+fn hash_matches(stored: &LineHash, digest: &str) -> bool {
+    stored
+        .as_str()
+        .strip_prefix("b3:")
+        .is_some_and(|hex| digest.starts_with(hex))
 }
 
 /// The digest of `lines` in `file`, read only as far as the last of them.
