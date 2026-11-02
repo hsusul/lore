@@ -1194,9 +1194,11 @@ pub fn ingest_file(
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
     let target_session_id = session_id_for(agent_id, &parsed);
-    if prev.is_some() {
-        detach_reassigned_source(&tx, &artifact_id, &target_session_id)?;
-    }
+    let left_folder = if prev.is_some() {
+        detach_reassigned_source(&tx, &artifact_id, &target_session_id)?
+    } else {
+        None
+    };
     let session_id = persist_rows(
         &tx,
         agent_id,
@@ -1205,6 +1207,15 @@ pub fn ingest_file(
         Some(&artifact_id),
         &patch_blobs,
     )?;
+    // The user filed what this source held; keep it filed unless the session
+    // it moved to has a folder of its own.
+    if let Some((folder_id, added_at)) = left_folder {
+        tx.execute(
+            "INSERT OR IGNORE INTO session_folder (session_id, folder_id, added_at)
+             VALUES (?1,?2,?3)",
+            params![session_id, folder_id, added_at],
+        )?;
+    }
 
     if prev.is_none() {
         insert_source(&tx, &artifact_id, agent_id, &snapshot, generation)?;
@@ -1402,12 +1413,13 @@ fn session_sources(tx: &Connection, session_id: &str) -> Result<Vec<SessionSourc
 
 /// If a physical source is rewritten into a different native session, detach
 /// it from the old logical session and remove that session only when no other
-/// source still supports it.
+/// source still supports it. Returns the folder an old session was filed in,
+/// for the session the source moves to.
 fn detach_reassigned_source(
     tx: &Connection,
     source_artifact_id: &str,
     target_session_id: &str,
-) -> Result<()> {
+) -> Result<Option<(String, i64)>> {
     let old_session_ids = {
         let mut statement = tx.prepare(
             "SELECT session_id FROM session_source
@@ -1421,7 +1433,17 @@ fn detach_reassigned_source(
         rows
     };
 
+    let mut folder = None;
     for old_session_id in old_session_ids {
+        if folder.is_none() {
+            folder = tx
+                .query_row(
+                    "SELECT folder_id, added_at FROM session_folder WHERE session_id = ?1",
+                    [&old_session_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+        }
         tx.execute(
             "DELETE FROM session_source WHERE session_id = ?1 AND source_artifact_id = ?2",
             params![old_session_id, source_artifact_id],
@@ -1435,7 +1457,7 @@ fn detach_reassigned_source(
             tx.execute("DELETE FROM agent_session WHERE id = ?1", [&old_session_id])?;
         }
     }
-    Ok(())
+    Ok(folder)
 }
 
 fn source_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRow> {
