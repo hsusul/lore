@@ -148,7 +148,15 @@ fn speaks_the_mcp_handshake() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["search_sessions", "read_session", "recall_memory"]);
+    assert_eq!(
+        names,
+        [
+            "search_sessions",
+            "read_session",
+            "recall_memory",
+            "read_note"
+        ]
+    );
     assert_eq!(
         replies[2],
         json!({ "jsonrpc": "2.0", "id": 3, "result": {} })
@@ -351,17 +359,24 @@ fn add_note(home: &Path, text: &str, args: &[&str]) {
 
 /// One `recall_memory` call, with `HOME` at `home` and the vault at `vault`.
 fn recall(home: &Path, vault: &Path, arguments: Value) -> Value {
+    memory_tool(home, vault, "recall_memory", arguments)
+}
+
+/// One `read_note` call, with `HOME` at `home` and the vault at `vault`.
+fn read_note(home: &Path, vault: &Path, arguments: Value) -> Value {
+    memory_tool(home, vault, "read_note", arguments)
+}
+
+/// One call to a memory `tool`, with `HOME` at `home` and the vault at
+/// `vault`. Checks the text content carries the same JSON.
+fn memory_tool(home: &Path, vault: &Path, tool: &str, arguments: Value) -> Value {
     let envs = [
         GIT_ENV[0],
         GIT_ENV[1],
         ("HOME", home.to_str().unwrap()),
         ("LORE_VAULT_DIR", vault.to_str().unwrap()),
     ];
-    let mut replies = converse_with(
-        &home.join("archive"),
-        &envs,
-        &[call(1, "recall_memory", arguments)],
-    );
+    let mut replies = converse_with(&home.join("archive"), &envs, &[call(1, tool, arguments)]);
     let reply = replies.remove(0);
     let text = reply["result"]["content"][0]["text"].as_str().unwrap();
     assert_eq!(
@@ -551,5 +566,219 @@ fn recall_memory_rejects_bad_arguments_with_a_code_and_a_fix() {
                 "fix": format!("Fix `{field}`: {problem}, then call again."),
             })
         );
+    }
+}
+
+const TIMELINE_NOTE_ID: &str = "01JC9V6Q4M8K2T7X3N5R0B1H7A";
+const TIMELINE_NOTE: &str = "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H7A\ntype: pitfall\n\
+title: Retry the migration\nscope: global\nstatus: active\ncreated: 2026-11-01\n\
+anchors:\n  - path: src/db.rs\n    lines: 2-3\n    hash: b3:0123456789abcdef\n---\n\
+Retry a failed migration once.\n\n## Timeline\n- 2026-11-01 written by hand\n\
+- 2026-11-02 accepted from claude-code:s_1\n";
+
+/// A memory home whose vault holds `text` at `rel`, written by hand.
+fn vault_with(rel: &str, text: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let file = vault.join(rel);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, text).unwrap();
+    (home, vault)
+}
+
+#[test]
+fn read_note_by_id_drops_the_timeline_and_counts_its_entries() {
+    let (home, vault) = vault_with("global/retry-the-migration.md", TIMELINE_NOTE);
+    let reply = read_note(home.path(), &vault, json!({ "note": TIMELINE_NOTE_ID }));
+
+    assert_eq!(
+        structured(&reply),
+        &json!({
+            "id": TIMELINE_NOTE_ID,
+            "title": "Retry the migration",
+            "scope": "global",
+            "status": "active",
+            "freshness": "unchecked",
+            "body": "Retry a failed migration once.",
+            "timeline_entries": 2,
+            "truncated": false,
+        })
+    );
+}
+
+#[test]
+fn read_note_by_file_name_or_path() {
+    let (home, vault) = vault_with("global/retry-the-migration.md", TIMELINE_NOTE);
+    for key in [
+        "retry-the-migration",
+        "retry-the-migration.md",
+        "global/retry-the-migration.md",
+    ] {
+        let reply = read_note(home.path(), &vault, json!({ "note": key }));
+        assert_eq!(structured(&reply)["id"], TIMELINE_NOTE_ID, "{key}: {reply}");
+    }
+}
+
+#[test]
+fn read_note_rejects_paths_outside_the_vault() {
+    let (home, vault) = vault_with("global/retry-the-migration.md", TIMELINE_NOTE);
+    let problem = "must be a note id, file name, or path inside the vault";
+    let cases = [
+        (json!({ "note": "../etc/passwd" }), "note", problem),
+        (json!({ "note": "/etc/passwd" }), "note", problem),
+        (json!({ "note": "global/../../x.md" }), "note", problem),
+        (json!({ "note": ".lore/x.md" }), "note", problem),
+        (json!({}), "note", problem),
+        (
+            json!({ "note": TIMELINE_NOTE_ID, "cwd": "src" }),
+            "cwd",
+            "must be an absolute path",
+        ),
+    ];
+    for (arguments, field, problem) in cases {
+        let reply = read_note(home.path(), &vault, arguments);
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
+        assert_eq!(
+            reply["result"]["structuredContent"],
+            json!({
+                "code": "invalid_argument",
+                "field": field,
+                "message": format!("`{field}` {problem}"),
+                "fix": format!("Fix `{field}`: {problem}, then call again."),
+            })
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn read_note_does_not_follow_a_symlink_out_of_the_vault() {
+    let (home, vault) = vault_with("global/retry-the-migration.md", TIMELINE_NOTE);
+    let outside = home.path().join("outside.md");
+    std::fs::write(&outside, TIMELINE_NOTE.replace("1H7A", "1H7C")).unwrap();
+    std::os::unix::fs::symlink(&outside, vault.join("global/escape.md")).unwrap();
+    let reply = read_note(home.path(), &vault, json!({ "note": "global/escape.md" }));
+    assert_eq!(
+        reply["result"]["structuredContent"]["code"], "invalid_argument",
+        "{reply}"
+    );
+}
+
+#[test]
+fn read_note_reports_unknown_and_ambiguous_notes() {
+    let (home, vault) = vault_with("global/dup.md", TIMELINE_NOTE);
+    let other = TIMELINE_NOTE.replace("1H7A", "1H7B");
+    std::fs::create_dir_all(vault.join("repos/x")).unwrap();
+    std::fs::write(vault.join("repos/x/dup.md"), other).unwrap();
+
+    let reply = read_note(
+        home.path(),
+        &vault,
+        json!({ "note": "01JC9V6Q4M8K2T7X3N5R0B1H7Z" }),
+    );
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+    assert_eq!(
+        reply["result"]["structuredContent"],
+        json!({
+            "code": "note_not_found",
+            "message": "no note matches `01JC9V6Q4M8K2T7X3N5R0B1H7Z`",
+            "fix": "Call recall_memory to get a current note id.",
+        })
+    );
+
+    let reply = read_note(home.path(), &vault, json!({ "note": "dup" }));
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+    assert_eq!(
+        reply["result"]["structuredContent"],
+        json!({
+            "code": "note_ambiguous",
+            "message": "`dup` matches more than one note: global/dup.md, repos/x/dup.md",
+            "fix": "Pass the note id instead of the slug.",
+            "candidates": ["global/dup.md", "repos/x/dup.md"],
+        })
+    );
+}
+
+#[test]
+fn read_note_without_a_vault_is_vault_missing_and_creates_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let vault = home.path().join("none");
+    let reply = read_note(home.path(), &vault, json!({ "note": TIMELINE_NOTE_ID }));
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+    let dir = vault.display();
+    assert_eq!(
+        reply["result"]["structuredContent"],
+        json!({
+            "code": "vault_missing",
+            "message": format!("no vault at {dir}"),
+            "fix": format!(
+                "No memory vault at {dir}. Continue without memory. \
+        Tell the user `lorectl mem init` creates one."
+            ),
+        })
+    );
+    assert!(!vault.exists(), "the server created a vault");
+    assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn read_note_masks_a_secret_in_a_hand_written_note() {
+    let note = format!(
+        "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6E\ntype: fact\ntitle: Deploy with ghp_{SECRET_BODY}\n\
+scope: global\nstatus: active\ncreated: 2026-11-02\n---\n\
+Deploy zanzibar with token ghp_{SECRET_BODY} only.\n"
+    );
+    let (home, vault) = vault_with("global/deploy.md", &note);
+    let reply = read_note(home.path(), &vault, json!({ "note": "deploy" }));
+    assert!(!reply.to_string().contains(SECRET_BODY), "{reply}");
+    let read = structured(&reply);
+    assert_eq!(read["title"], "Deploy with «redacted:github-token»");
+    assert_eq!(
+        read["body"],
+        "Deploy zanzibar with token «redacted:github-token» only."
+    );
+    assert_eq!(read["freshness"], "unanchored");
+    assert_eq!(read["timeline_entries"], 0);
+}
+
+#[test]
+fn read_note_cuts_a_long_body() {
+    let note = TIMELINE_NOTE.replace("Retry a failed", &"w".repeat(9_000));
+    let (home, vault) = vault_with("global/long.md", &note);
+    let reply = read_note(home.path(), &vault, json!({ "note": "long" }));
+    let read = structured(&reply);
+    assert_eq!(read["truncated"], true);
+    assert_eq!(read["body"], "w".repeat(8_000));
+}
+
+#[test]
+fn read_note_checks_freshness_against_the_cwd_repo() {
+    let home = memory_home();
+    let repo = home.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:hsusul/lore.git"],
+    );
+    std::fs::write(repo.join("src/a.rs"), "fn retry() {}\n").unwrap();
+    let cwd = repo.to_str().unwrap();
+    add_note(home.path(), REPO_NOTE, &["--cwd", cwd]);
+    let vault = home.path().join("vault");
+    let elsewhere = home.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+
+    let id = "01JC9V6Q4M8K2T7X3N5R0B1H6D";
+    let cases = [
+        (json!({ "note": id, "cwd": cwd }), "fresh"),
+        (json!({ "note": id }), "unchecked"),
+        (
+            json!({ "note": id, "cwd": elsewhere.to_str().unwrap() }),
+            "unchecked",
+        ),
+    ];
+    for (arguments, freshness) in cases {
+        let reply = read_note(home.path(), &vault, arguments);
+        assert_eq!(structured(&reply)["freshness"], freshness, "{reply}");
     }
 }
