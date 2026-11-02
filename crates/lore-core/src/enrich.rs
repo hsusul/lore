@@ -667,6 +667,9 @@ fn link_segment(
     )?;
 
     // lore_captured observation: current repository state, never session-time.
+    // A row already here for the segment (carried from the session its lines
+    // came from) keeps when it was first observed while the branch and commit
+    // are the same.
     let changed_files_json = facts
         .changed_files
         .as_ref()
@@ -679,7 +682,11 @@ fn link_segment(
          VALUES (?1, ?2, ?3, 'lore_captured', unixepoch('now')*1000, 'current_only',
                  ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(id) DO UPDATE SET
-            observed_at = unixepoch('now')*1000, branch = excluded.branch,
+            observed_at = CASE
+                WHEN git_observation.branch IS excluded.branch
+                 AND git_observation.commit_sha IS excluded.commit_sha
+                THEN git_observation.observed_at ELSE excluded.observed_at END,
+            branch = excluded.branch,
             commit_sha = excluded.commit_sha, is_dirty = excluded.is_dirty,
             ahead = excluded.ahead, behind = excluded.behind,
             changed_files_json = excluded.changed_files_json,
