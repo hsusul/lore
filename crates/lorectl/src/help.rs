@@ -69,8 +69,8 @@ Options:
 
 Skills:
     skills ls         Every skill folder each agent loads, with its source.
-    skills doctor     Duplicates, drift, unknown sources, name mismatches,
-                      bad frontmatter, and Codex's budget.
+    skills doctor     Duplicates, drift, unknown sources, broken references,
+                      name mismatches, bad frontmatter, and Codex's budget.
                       Each gets a quoted command or a plain hint; nothing
                       is suggested for a copy an agent manages. Never
                       writes; exits 0.

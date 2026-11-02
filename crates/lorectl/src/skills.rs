@@ -7,7 +7,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use lore_skills::{Finding, Fix, Inventory, Roots, SkillRecord, Source};
+use lore_skills::{Finding, Inventory, Roots, SkillRecord, Source};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
@@ -95,7 +95,7 @@ fn source_label(record: &SkillRecord) -> String {
 /// The findings as one JSON array, each with its `fix` and whether that fix
 /// is a `command` or a `hint`.
 fn doctor_json(inventory: &Inventory, findings: &[Finding]) -> String {
-    let fixes: Vec<Fix> = findings.iter().map(|f| f.fix(&inventory.roots)).collect();
+    let fixes = lore_skills::fixes(findings, &inventory.roots);
     let records: Vec<serde_json::Value> = findings
         .iter()
         .zip(&fixes)
@@ -118,7 +118,7 @@ fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
     };
     let mut out = String::new();
     let mut group: Option<Option<&str>> = None;
-    let fixes: Vec<Fix> = findings.iter().map(|f| f.fix(&inventory.roots)).collect();
+    let fixes = lore_skills::fixes(findings, &inventory.roots);
     for (finding, fix) in findings.iter().zip(&fixes) {
         if group != Some(finding.skill()) {
             group = Some(finding.skill());
@@ -155,6 +155,17 @@ fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
         Finding::NameMismatch { declared, path, .. } => {
             format!("{} declares `name: {declared}`", show(path))
         }
+        Finding::BrokenRef {
+            missing,
+            agent,
+            path,
+            found_at,
+            ..
+        } => format!(
+            "{} names `{missing}`, which {agent} cannot load (it is at {})",
+            show(path),
+            show(found_at)
+        ),
         Finding::Drift { copies, .. } => {
             let copies: Vec<String> = copies
                 .iter()
@@ -182,11 +193,12 @@ fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
 fn summary(findings: &[Finding], skills: usize) -> String {
     let count = |kind: &str| findings.iter().filter(|f| f.kind() == kind).count();
     format!(
-        "{} duplicates, {} drift, {} unknown sources, {} name mismatches, \
+        "{} duplicates, {} drift, {} unknown sources, {} broken refs, {} name mismatches, \
          {} bad frontmatter, {} codex budget; {} findings; {skills} skills found",
         count("duplicate"),
         count("drift"),
         count("unknown-source"),
+        count("broken-ref"),
         count("name-mismatch"),
         count("bad-frontmatter"),
         count("codex-budget"),
