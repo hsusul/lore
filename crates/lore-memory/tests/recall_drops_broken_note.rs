@@ -60,15 +60,29 @@ fn a_note_that_stopped_parsing_is_reported_not_silently_dropped() {
     let reindexed = vault.reindex();
     let named_in_skipped = reindexed
         .as_ref()
-        .map(|r| r.skipped.iter().any(|(rel, _)| rel.contains(&note.rel_path())))
+        .map(|r| {
+            r.skipped
+                .iter()
+                .any(|(rel, _)| rel.contains(&note.rel_path()))
+        })
         .unwrap_or(true);
     assert!(
         named_in_skipped,
         "reindex no longer names the file, so this case is not the one under test: {reindexed:?}"
     );
-    assert!(
-        !after.notes.is_empty(),
-        "recall silently dropped the note it cannot parse, and Recall carries no record of the \
-         drop, so a caller cannot tell an incomplete answer from a complete one: {after:?}"
+    assert_eq!(note.rel_path(), "global/deploy-window.md");
+    assert!(after.notes.is_empty(), "{after:?}");
+    let skipped: Vec<(&str, String)> = after
+        .skipped
+        .iter()
+        .map(|(rel, error)| (rel.as_str(), error.to_string()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [(
+            "global/deploy-window.md",
+            "not a note: the frontmatter has no closing `---` line".to_string()
+        )],
+        "recall must name the note it cannot parse: {after:?}"
     );
 }

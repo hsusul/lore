@@ -6,12 +6,15 @@
 //! whose anchors changed sink below the rest and notes whose files are gone
 //! sink to the bottom. Recall goes through [`Vault::index`], so notes a person
 //! edited, renamed, or deleted by hand are picked up first; it never writes a
-//! note file or the working tree.
+//! note file or the working tree. A file that no longer parses cannot be
+//! searched, so recall names it in `skipped` instead of dropping it unseen.
 
+use std::fs;
+use std::io;
 use std::path::Path;
 
 use crate::anchor::{Freshness, Located, WorkTree};
-use crate::note::Note;
+use crate::note::{Note, NoteError};
 use crate::repo::RepoContext;
 use crate::vault::{Vault, VaultError};
 
@@ -40,43 +43,74 @@ pub struct Recalled {
 pub struct Recall {
     pub context: RepoContext,
     pub notes: Vec<Recalled>,
+    /// Markdown files in the vault that are not valid notes, with the reason,
+    /// as `Vault::reindex` reports them. Recall cannot search them, so the
+    /// answer may be missing what they hold.
+    pub skipped: Vec<(String, NoteError)>,
 }
 
 /// Notes matching `query` that apply in `cwd`, best first, at most `limit`.
 pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Recall, VaultError> {
     let context = RepoContext::discover(cwd);
     let repo_scope = context.key().map(|key| format!("repo:{}", key.as_str()));
-    let hits = vault
-        .index()?
-        .search_active(query, repo_scope.as_deref(), limit)?;
+    let index = vault.index()?;
+    let hits = index.search_active(query, repo_scope.as_deref(), limit)?;
+    let mut skipped = Vec::new();
+    for rel in index.unparsed()? {
+        if let Some(Err(error)) = parse_file(vault, &rel)? {
+            skipped.push((rel, error));
+        }
+    }
     let tree = context.root().map(WorkTree::new);
-    let mut notes: Vec<Recalled> = hits
-        .into_iter()
-        .filter_map(|hit| {
-            let note = Note::parse(&vault.read(&hit.path).ok()?).ok()?;
-            let (anchors, freshness) = match &tree {
-                Some(tree) => {
-                    let anchors: Vec<Located> =
-                        note.anchors.iter().map(|a| tree.locate(a)).collect();
-                    let freshness = Freshness::of_note(&anchors);
-                    (anchors, freshness)
-                }
-                None if note.anchors.is_empty() => (Vec::new(), Freshness::Unanchored),
-                None => (Vec::new(), Freshness::Unchecked),
-            };
-            Some(Recalled {
-                freshness,
-                anchors,
-                path: hit.path,
-                slug: hit.slug,
-                note,
-                excerpt: hit.excerpt,
-                score: hit.score,
-            })
-        })
-        .collect();
+    let mut notes = Vec::new();
+    for hit in hits {
+        // The file changed after the index read it: gone, or no longer a note.
+        let note = match parse_file(vault, &hit.path)? {
+            Some(Ok(note)) => note,
+            Some(Err(error)) => {
+                skipped.push((hit.path, error));
+                continue;
+            }
+            None => continue,
+        };
+        let (anchors, freshness) = match &tree {
+            Some(tree) => {
+                let anchors: Vec<Located> = note.anchors.iter().map(|a| tree.locate(a)).collect();
+                let freshness = Freshness::of_note(&anchors);
+                (anchors, freshness)
+            }
+            None if note.anchors.is_empty() => (Vec::new(), Freshness::Unanchored),
+            None => (Vec::new(), Freshness::Unchecked),
+        };
+        notes.push(Recalled {
+            freshness,
+            anchors,
+            path: hit.path,
+            slug: hit.slug,
+            note,
+            excerpt: hit.excerpt,
+            score: hit.score,
+        });
+    }
     notes.sort_by_key(|recalled| tier(recalled.freshness));
-    Ok(Recall { context, notes })
+    Ok(Recall {
+        context,
+        notes,
+        skipped,
+    })
+}
+
+/// Read and parse one vault file the way `Vault::reindex` does: a file that
+/// is not UTF-8 is not a note. `None` when the file is gone.
+fn parse_file(vault: &Vault, rel: &str) -> Result<Option<Result<Note, NoteError>>, VaultError> {
+    match fs::read_to_string(vault.root().join(rel)) {
+        Ok(text) => Ok(Some(Note::parse(&text))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => Ok(Some(Err(
+            NoteError::NotANote("the file is not valid UTF-8"),
+        ))),
+        Err(error) => Err(VaultError::Io(format!("read {rel}"), error)),
+    }
 }
 
 fn tier(freshness: Freshness) -> u8 {

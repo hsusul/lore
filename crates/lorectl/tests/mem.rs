@@ -393,6 +393,43 @@ anchors:\n  - path: src/db.rs\n    lines: 2-3\n    hash: b3:0123456789abcdef\n\
 }
 
 #[test]
+fn mem_recall_names_a_note_it_cannot_parse() {
+    let (dir, vault) = init();
+    let deploy = "---\ntype: fact\ntitle: Deploy window\n---\nthe deploy window is thursday\n";
+    let added = lorectl(&vault, &["add", &note_file(dir.path(), "d.md", deploy)]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    std::fs::write(
+        vault.join("global/deploy-window.md"),
+        "---\ntype: fact\ntitle: Deploy window\n",
+    )
+    .unwrap();
+    let cwd = dir.path().to_str().unwrap();
+
+    let out = lorectl(&vault, &["recall", "deploy", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(
+        stderr(&out).contains(
+            "lorectl: skipped global/deploy-window.md: not a note: the frontmatter has no closing `---` line\n"
+        ),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = lorectl(&vault, &["recall", "deploy", "--json", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(json["notes"], serde_json::json!([]));
+    assert_eq!(
+        json["skipped"],
+        serde_json::json!([{
+            "path": "global/deploy-window.md",
+            "error": "not a note: the frontmatter has no closing `---` line",
+        }])
+    );
+}
+
+#[test]
 fn mem_reindex_reports_skipped_files() {
     let (dir, vault) = init();
     lorectl(&vault, &["add", &note_file(dir.path(), "n.md", NOTE)]);
