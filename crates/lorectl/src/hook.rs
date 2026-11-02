@@ -21,17 +21,28 @@
 //! all. A hook that speaks every time is one people mute, and muting it is
 //! worse than never having installed it.
 //!
+//! After that it lists the accepted memory notes that apply where the session
+//! runs, each with its freshness label, so an agent starts knowing them. The
+//! directory is the `cwd` of the hook JSON on stdin, else the process's own.
+//! No vault, no note in scope, or any vault error adds nothing. Recall may
+//! refresh the vault's derived index under `.lore/`, the same cache
+//! `lorectl mem recall` keeps, and waits at most `LOCK_WAIT` for it.
+//!
 //! It does **not** scan. A scan is unbounded — it can walk hundreds of megabytes
 //! — and taking that time at session start would make Lore the reason a session
 //! is slow to begin. Keeping the archive current is the desktop app's job, or an
 //! explicit `lorectl scan`.
 
-use std::io::Write;
+use std::io::{IsTerminal, Read, Write};
+use std::path::PathBuf;
 
 use lore_core::enrich::{resolve_repository, RepoResolution};
 use lore_core::landing::{self, Landing, LandingIndex};
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::storage;
+use lore_memory::index::Index;
+use lore_memory::vault::{self, Vault};
+use lore_memory::{inbox, recall};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
@@ -42,14 +53,99 @@ use crate::exit::{self, CliError};
 /// Lore that refused an unfamiliar one would break sessions on upgrade.
 const SESSION_START: &str = "session-start";
 
+/// At most this many notes at session start. Experiment Q3 saw agents follow
+/// them at 5, 10, and 25; the cap is set by what the context costs.
+const NOTE_CAP: usize = 10;
+/// The notes section stops adding note lines past this many bytes.
+const CHAR_CAP: usize = 2_000;
+/// Hook JSON past this many bytes is not read.
+const STDIN_CAP: u64 = 1 << 20;
+
 /// Run a hook event. Always returns `Ok(exit::OK)`.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let event = invocation.operand.as_deref().unwrap_or_default();
     if event == SESSION_START {
+        let cwd = hook_cwd();
         // Errors are swallowed on purpose: see the module docs.
         let _ = session_start(invocation);
+        if let Some(block) = memory_notes(cwd) {
+            let _ = std::io::stdout().lock().write_all(block.as_bytes());
+        }
     }
     Ok(exit::OK)
+}
+
+/// The absolute `cwd` an agent passes in its hook JSON on stdin, if any. A
+/// terminal is never read, so a person running the hook is not left waiting.
+fn hook_cwd() -> Option<PathBuf> {
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return None;
+    }
+    let mut text = String::new();
+    stdin
+        .lock()
+        .take(STDIN_CAP)
+        .read_to_string(&mut text)
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let cwd = PathBuf::from(json.get("cwd")?.as_str()?);
+    cwd.is_absolute().then_some(cwd)
+}
+
+/// The notes section for `cwd`, or `None` when there is nothing to add.
+fn memory_notes(cwd: Option<PathBuf>) -> Option<String> {
+    let cwd = cwd.or_else(|| std::env::current_dir().ok())?;
+    let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
+    let found = recall::recall(&vault, "", &cwd, NOTE_CAP).ok()?;
+    if found.notes.is_empty() {
+        return None;
+    }
+    // Recall left the index fresh, so counting what it capped is one query.
+    let scope = found.context.key().map(|k| format!("repo:{}", k.as_str()));
+    let total = Index::open(&vault.lore_dir())
+        .ok()
+        .flatten()
+        .and_then(|index| index.list_active(scope.as_deref(), usize::MAX).ok())
+        .map_or(0, |all| all.len());
+    let lines = found.notes.iter().map(|recalled| {
+        format!(
+            "- [{}] {} ({})",
+            recalled.freshness.label(),
+            title(&recalled.note.title),
+            recalled.note.id.as_str()
+        )
+    });
+    Some(render(lines, total.max(found.notes.len())))
+}
+
+/// A note title fit for an agent's context: secrets masked, on one line.
+fn title(text: &str) -> String {
+    inbox::redact(text)
+        .unwrap_or_else(|_| "(title withheld)".to_owned())
+        .replace(char::is_control, " ")
+}
+
+/// A heading, one line per note while the section stays under [`CHAR_CAP`],
+/// then a line saying how many of `total` were left out and where they are.
+fn render(lines: impl IntoIterator<Item = String>, total: usize) -> String {
+    let mut out = String::from("Lore memory for this repo:\n");
+    let mut shown = 0;
+    for line in lines {
+        if out.len() + line.len() + 1 > CHAR_CAP {
+            break;
+        }
+        out.push_str(&line);
+        out.push('\n');
+        shown += 1;
+    }
+    let left = total.saturating_sub(shown);
+    if left > 0 {
+        out.push_str(&format!(
+            "- {left} more not shown. The recall_memory tool lists them.\n"
+        ));
+    }
+    out
 }
 
 /// Report at-risk agent work for the current repository, if any.
@@ -132,7 +228,9 @@ mod tests {
         let invocation =
             crate::cli::parse(["--archive", "/nonexistent/archive", "hook", SESSION_START])
                 .unwrap();
-        assert_eq!(run(&invocation).unwrap(), exit::OK);
+        // `run` swallows this error. `run` itself is tested end to end in
+        // tests/hook.rs, where stdin and the vault are the test's own.
+        assert!(session_start(&invocation).is_err());
     }
 
     #[test]
@@ -141,6 +239,32 @@ mod tests {
         // a silent no-op, because the caller is a machine that cannot act on it.
         let invocation =
             crate::cli::parse(["--archive", "relative/path", "hook", SESSION_START]).unwrap();
-        assert_eq!(run(&invocation).unwrap(), exit::OK);
+        assert!(session_start(&invocation).is_err());
+    }
+
+    #[test]
+    fn the_notes_section_stops_near_two_thousand_bytes() {
+        let line = format!("- [fresh] {} (01JD0000000000000000000001)", "t".repeat(400));
+        let out = render(std::iter::repeat_n(line.clone(), 10), 10);
+        let expected = format!(
+            "Lore memory for this repo:\n{line}\n{line}\n{line}\n{line}\n\
+             - 6 more not shown. The recall_memory tool lists them.\n"
+        );
+        assert_eq!(out, expected);
+        assert_eq!(
+            render(["- [gone] a (b)".to_owned()], 1),
+            "Lore memory for this repo:\n- [gone] a (b)\n"
+        );
+    }
+
+    #[test]
+    fn a_title_is_redacted_and_kept_on_one_line() {
+        assert_eq!(title("two\nlines"), "two lines");
+        let key = concat!("AKIA", "Z7Q4R2T6Y8U1W3E5");
+        let shown = title(&format!("rotate {key}"));
+        assert!(
+            shown.starts_with("rotate ") && !shown.contains(key),
+            "{shown}"
+        );
     }
 }
