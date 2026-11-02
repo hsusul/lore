@@ -130,7 +130,10 @@ fn a_forgotten_session_stays_gone_after_a_parser_bump() {
     let archive = Archive::new();
     let session = archive.session_id().unwrap();
     lore_core::forget::forget_session(&archive.conn, &archive.blobs, &session).unwrap();
-    assert!(archive.path().exists(), "forget never deletes the agent log");
+    assert!(
+        archive.path().exists(),
+        "forget never deletes the agent log"
+    );
 
     archive.age_parser_version();
     assert!(matches!(archive.ingest(), IngestOutcome::Skipped));

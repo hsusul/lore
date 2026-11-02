@@ -36,6 +36,8 @@ use crate::storage::{Result, StorageError};
 /// sources whose rows replaced another transcript's session at v3 must be
 /// parsed again.
 pub const PARSER_VERSION: &str = "4";
+/// `ingest_state.state` of a source whose session the user forgot.
+pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
 const PREFIX_BYTES: usize = 4096;
 /// Media type recorded for agent-recorded patch/diff blobs.
@@ -1046,10 +1048,13 @@ pub fn ingest_file(
             0,
             ChangeClass::New,
         ),
+        // A forgotten source stays skipped at any parser version while its
+        // content is what the user forgot (`forget::forget_session`).
         Some(row)
             if row.full_hash.as_deref() == Some(snapshot.full_hash.as_str())
-                && row.parser_version.as_deref() == Some(PARSER_VERSION)
-                && row.ingest_state.as_deref() == Some("ok") =>
+                && (row.ingest_state.as_deref() == Some(FORGOTTEN)
+                    || (row.parser_version.as_deref() == Some(PARSER_VERSION)
+                        && row.ingest_state.as_deref() == Some("ok"))) =>
         {
             // Unchanged content: refresh stat/alias only, no re-parse.
             let _write = crate::storage::write_lock();
