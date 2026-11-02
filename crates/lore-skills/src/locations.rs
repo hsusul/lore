@@ -40,9 +40,9 @@ pub enum Provenance {
 pub enum Base {
     /// The user's home.
     Home,
-    /// Claude Code's config root, `~/.claude`.
+    /// Claude Code's config root: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
     Claude,
-    /// Codex's home, `~/.codex`.
+    /// Codex's home: `$CODEX_HOME`, else `~/.codex`.
     Codex,
 }
 
@@ -148,7 +148,8 @@ pub const LOCATIONS: &[Location] = &[
     },
 ];
 
-/// The roots every location hangs from.
+/// The roots every location hangs from. Resolved the way the session adapters
+/// resolve them, so `skills` and `scan` read the same agent folders.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Roots {
     pub home: PathBuf,
@@ -160,10 +161,21 @@ impl Roots {
     /// `~/.claude` and `~/.codex` under `home`.
     #[must_use]
     pub fn from_home(home: &Path) -> Self {
+        Self::resolve(home, None, None)
+    }
+
+    /// `claude_config_dir` (`$CLAUDE_CONFIG_DIR`) and `codex_home`
+    /// (`$CODEX_HOME`) win over the defaults under `home` when set.
+    #[must_use]
+    pub fn resolve(
+        home: &Path,
+        claude_config_dir: Option<PathBuf>,
+        codex_home: Option<PathBuf>,
+    ) -> Self {
         Self {
             home: home.to_path_buf(),
-            claude: home.join(".claude"),
-            codex: home.join(".codex"),
+            claude: claude_config_dir.unwrap_or_else(|| home.join(".claude")),
+            codex: codex_home.unwrap_or_else(|| home.join(".codex")),
         }
     }
 
@@ -235,6 +247,30 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), LOCATIONS.len());
+    }
+
+    #[test]
+    fn the_overrides_move_the_claude_and_codex_roots_only() {
+        let roots = Roots::resolve(
+            Path::new("/h"),
+            Some(PathBuf::from("/cfg")),
+            Some(PathBuf::from("/cx")),
+        );
+        let dirs: Vec<PathBuf> = LOCATIONS.iter().map(|l| roots.dir(l)).collect();
+        let want: Vec<PathBuf> = [
+            "/h/.agents/skills",
+            "/cfg/skills",
+            "/cx/skills",
+            "/cx/skills/.system",
+            "/h/.cursor/skills",
+            "/cfg/plugins/cache",
+            "/cx/plugins/cache",
+            "/h/.agents/vendor",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+        assert_eq!(dirs, want);
     }
 
     #[test]
