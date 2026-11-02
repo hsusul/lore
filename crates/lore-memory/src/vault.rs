@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
+use crate::index::{Hit, Index, IndexError};
 use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
 
 /// Lore's private directory inside the vault. Gitignored.
@@ -57,6 +58,8 @@ pub enum VaultError {
     Io(String, #[source] io::Error),
     #[error("`git {0}` failed: {1}")]
     Git(String, String),
+    #[error(transparent)]
+    Index(#[from] IndexError),
 }
 
 fn io_error(what: impl Into<String>) -> impl FnOnce(io::Error) -> VaultError {
@@ -78,6 +81,21 @@ pub enum Added {
     Committed,
     /// The same note was already in the vault. Nothing was written.
     Unchanged,
+}
+
+/// What `reindex` read.
+#[derive(Debug)]
+pub struct Reindexed {
+    pub indexed: usize,
+    /// Markdown files that are not valid notes, with the reason.
+    pub skipped: Vec<(String, NoteError)>,
+}
+
+/// A markdown file found in the vault, and whether it is a valid note.
+#[derive(Debug)]
+pub struct VaultFile {
+    pub rel: String,
+    pub note: Result<Note, NoteError>,
 }
 
 /// An exclusive hold on the vault's write lock. Released on drop.
@@ -152,7 +170,7 @@ impl Vault {
         &self.root
     }
 
-    /// `<vault>/.lore`, where the write lock lives.
+    /// `<vault>/.lore`, where the lock and the index live.
     #[must_use]
     pub fn lore_dir(&self) -> PathBuf {
         self.root.join(LORE_DIR)
@@ -222,11 +240,71 @@ impl Vault {
         Ok((note, Added::Committed))
     }
 
-    /// Stage and commit one file.
+    /// Stage and commit one file, then bring the index up to date.
     fn commit(&self, rel: &str, message: &str) -> Result<(), VaultError> {
         self.git(&["add", "--", rel])?;
         self.git(&["commit", "-q", "-m", message, "--", rel])?;
+        self.refresh_locked()?;
         Ok(())
+    }
+
+    /// Rebuild the index from the vault files alone.
+    pub fn reindex(&self) -> Result<Reindexed, VaultError> {
+        let _lock = self.lock()?;
+        self.build_locked(self.paths()?)
+    }
+
+    fn build_locked(&self, paths: Vec<String>) -> Result<Reindexed, VaultError> {
+        let mut notes = Vec::new();
+        let mut skipped = Vec::new();
+        for rel in paths {
+            match self.parse_file(&rel)? {
+                Ok(note) => notes.push((rel, note)),
+                Err(error) => skipped.push((rel, error)),
+            }
+        }
+        let indexed = Index::build(
+            &self.lore_dir(),
+            notes.iter().map(|(rel, note)| (rel.as_str(), note)),
+        )?;
+        Ok(Reindexed { indexed, skipped })
+    }
+
+    /// The index, built from the vault files first when there is none.
+    pub fn index(&self) -> Result<Index, VaultError> {
+        if let Some(index) = Index::open(&self.lore_dir())? {
+            return Ok(index);
+        }
+        let _lock = self.lock()?;
+        self.refresh_locked()
+    }
+
+    /// Rebuild the index for a caller that holds the write lock.
+    fn refresh_locked(&self) -> Result<Index, VaultError> {
+        let lore_dir = self.lore_dir();
+        self.build_locked(self.paths()?)?;
+        Index::open(&lore_dir)?
+            .ok_or_else(|| VaultError::Missing(lore_dir.join(crate::index::INDEX_FILE)))
+    }
+
+    /// Read and parse one vault file. The outer error is a failed read.
+    fn parse_file(&self, rel: &str) -> Result<Result<Note, NoteError>, VaultError> {
+        let text =
+            fs::read_to_string(self.root.join(rel)).map_err(io_error(format!("read {rel}")))?;
+        Ok(Note::parse(&text))
+    }
+
+    /// Every markdown file [`Vault::notes`] would read, sorted.
+    fn paths(&self) -> Result<Vec<String>, VaultError> {
+        let mut paths = Vec::new();
+        collect_markdown(&self.root, &self.root, &mut paths)?;
+        paths.sort();
+        Ok(paths)
+    }
+
+    /// Notes matching every word of `query`, best first.
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>, VaultError> {
+        Ok(self.index()?.search(query, limit)?)
     }
 
     /// Read a note file by its vault-relative path.
@@ -235,6 +313,18 @@ impl Vault {
             RelPath::parse(rel).map_err(|e| VaultError::BadPath(rel.into(), e.to_string()))?;
         fs::read_to_string(self.root.join(rel.as_str()))
             .map_err(io_error(format!("read {}", rel.as_str())))
+    }
+
+    /// Every `.md` file in the vault outside `.lore`, `.git`, other dot
+    /// directories, and `_inbox`, sorted by path, each with its parse result.
+    pub fn notes(&self) -> Result<Vec<VaultFile>, VaultError> {
+        self.paths()?
+            .into_iter()
+            .map(|rel| {
+                let note = self.parse_file(&rel)?;
+                Ok(VaultFile { rel, note })
+            })
+            .collect()
     }
 
     fn is_committed(&self, rel: &str) -> Result<bool, VaultError> {
@@ -292,6 +382,30 @@ impl Vault {
             (has("user.name"), has("user.email"))
         })
     }
+}
+
+fn collect_markdown(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), VaultError> {
+    let entries = fs::read_dir(dir).map_err(io_error(format!("list {}", dir.display())))?;
+    for entry in entries {
+        let entry = entry.map_err(io_error(format!("list {}", dir.display())))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || (dir == root && name == "_inbox") {
+            continue;
+        }
+        let path = entry.path();
+        let kind = entry
+            .file_type()
+            .map_err(io_error(format!("stat {}", path.display())))?;
+        if kind.is_dir() {
+            collect_markdown(&path, root, out)?;
+        } else if kind.is_file() && name.ends_with(".md") {
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Write through a dot-prefixed temporary file and a rename, so a reader never

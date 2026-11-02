@@ -219,3 +219,18 @@ fn vault_lock_gives_up_with_busy_after_a_bounded_wait() {
     assert!(waited < lore_memory::vault::LOCK_WAIT * 3, "{waited:?}");
     assert!(!dir.path().join("global").exists());
 }
+
+#[test]
+fn vault_notes_skips_dot_directories_and_the_inbox() {
+    let (dir, vault) = new_vault();
+    vault.add(NOTE).unwrap();
+    std::fs::create_dir_all(dir.path().join("_inbox")).unwrap();
+    std::fs::write(dir.path().join("_inbox/x.md"), "not a note").unwrap();
+    std::fs::create_dir_all(dir.path().join(".obsidian")).unwrap();
+    std::fs::write(dir.path().join(".obsidian/y.md"), "not a note").unwrap();
+    std::fs::write(dir.path().join("README.md"), "# my vault\n").unwrap();
+    let notes = vault.notes().unwrap();
+    let paths: Vec<&str> = notes.iter().map(|f| f.rel.as_str()).collect();
+    assert_eq!(paths, ["README.md", "global/prune-worktrees.md"]);
+    assert!(notes[0].note.is_err() && notes[1].note.is_ok());
+}
