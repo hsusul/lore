@@ -35,9 +35,151 @@ fn json(output: &Output) -> Vec<serde_json::Value> {
     value.as_array().unwrap().clone()
 }
 
+/// `(kind, skill, fix_kind, fix)` for each finding, in report order.
+fn fixes(findings: &[serde_json::Value]) -> Vec<(String, String, String, String)> {
+    let text = |v: &serde_json::Value, key: &str| v[key].as_str().unwrap_or("").to_string();
+    findings
+        .iter()
+        .map(|f| {
+            (
+                text(f, "kind"),
+                text(f, "skill"),
+                text(f, "fix_kind"),
+                text(f, "fix"),
+            )
+        })
+        .collect()
+}
+
 fn write(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
+}
+
+#[test]
+fn doctor_reports_and_still_exits_zero() {
+    let output = lorectl(&fixture_home(), &["skills", "doctor"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    let summary = text.lines().last().unwrap();
+    assert_eq!(
+        summary,
+        "3 duplicates, 1 drift; 4 findings; 12 skills found"
+    );
+    assert!(text.starts_with("clean-git-commit\n  drift"), "{text}");
+}
+
+#[test]
+fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
+    let home = fixture_home();
+    let h = home.display().to_string();
+    assert!(
+        !h.contains('\''),
+        "the expected strings below assume no quote"
+    );
+    let cmd = |kind: &str, skill: &str, fix: String| {
+        (
+            kind.to_string(),
+            skill.to_string(),
+            "command".to_string(),
+            fix,
+        )
+    };
+    let diff = |a: &str, b: &str| format!("diff -ru '{h}/{a}' '{h}/{b}'");
+    let cgc = diff(
+        ".agents/skills/clean-git-commit",
+        ".claude/skills/clean-git-commit",
+    );
+
+    let expected = vec![
+        cmd("drift", "clean-git-commit", cgc.clone()),
+        cmd("duplicate", "clean-git-commit", cgc),
+        cmd(
+            "duplicate",
+            "gpt-taste",
+            diff(".agents/skills/gpt-taste", ".claude/skills/gpt-taste"),
+        ),
+        cmd(
+            "duplicate",
+            "tool-skill",
+            diff(
+                ".claude/skills/tool-skill",
+                ".codex/plugins/cache/mkt/tool/1.0/skills/tool-skill",
+            ),
+        ),
+    ];
+    let output = lorectl(&home, &["skills", "doctor", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(fixes(&json(&output)), expected);
+}
+
+/// Folder names a shell would read as syntax, with the quoting a reader must
+/// see in the fix. Written out by hand so the test does not trust the quoter.
+const HOSTILE: &[(&str, &str)] = &[
+    ("a b", "a b"),
+    ("it's", r"it'\''s"),
+    ("x'; touch pwned; '", r"x'\''; touch pwned; '\''"),
+    ("amp&er", "amp&er"),
+    ("$(touch pwned)", "$(touch pwned)"),
+    ("back`touch pwned`tick", "back`touch pwned`tick"),
+];
+
+#[cfg(unix)]
+#[test]
+fn hostile_folder_names_are_quoted_in_every_fix_and_run_as_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    for (name, _) in HOSTILE {
+        for (root, text) in [
+            (".agents/skills", "agents copy"),
+            (".claude/skills", "claude copy, edited"),
+        ] {
+            write(
+                &home.join(root).join(name).join("SKILL.md"),
+                &format!("---\nname: other\ndescription: {text}\n---\nBody.\n"),
+            );
+        }
+    }
+    let h = home.display().to_string();
+    let output = lorectl(&home, &["skills", "doctor", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let got = fixes(&json(&output));
+
+    let mut expected = Vec::new();
+    for (name, quoted) in HOSTILE {
+        let agents = format!("'{h}/.agents/skills/{quoted}'");
+        let claude = format!("'{h}/.claude/skills/{quoted}'");
+        let diff = format!("diff -ru {agents} {claude}");
+        for (kind, fix_kind, fix) in [
+            ("drift", "command", diff.clone()),
+            ("duplicate", "command", diff),
+        ] {
+            expected.push((kind.into(), (*name).into(), fix_kind.into(), fix));
+        }
+    }
+    let mut got_sorted = got.clone();
+    got_sorted.sort();
+    expected.sort();
+    assert_eq!(got_sorted, expected);
+
+    // Run every command: each must name existing paths and nothing else may
+    // happen.
+    for (_, name, fix_kind, fix) in &got {
+        if fix_kind != "command" {
+            continue;
+        }
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(fix)
+            .current_dir(dir.path())
+            .env("HOME", dir.path())
+            .output()
+            .unwrap();
+        // diff exits 1 when the copies differ and 2 when a path is wrong.
+        assert_eq!(out.status.code(), Some(1), "{name}: `{fix}`");
+    }
+    assert!(!dir.path().join("pwned").exists());
+    assert!(!home.join("pwned").exists());
 }
 
 #[test]
@@ -146,10 +288,29 @@ fn hashing_reads_a_bounded_prefix_of_large_files() {
 }
 
 #[test]
+fn doctor_json_is_the_same_findings_each_with_a_fix() {
+    let output = lorectl(&fixture_home(), &["skills", "doctor", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let findings = json(&output);
+    assert_eq!(findings.len(), 4);
+    assert_eq!(findings[0]["kind"], "drift");
+}
+
+#[test]
 fn ls_json_lists_one_record_per_distinct_content() {
     let output = lorectl(&fixture_home(), &["--json", "skills", "ls"]);
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(json(&output).len(), 13);
+}
+
+#[test]
+fn an_empty_home_finds_nothing_and_exits_zero() {
+    let home = tempfile::tempdir().unwrap();
+    let output = lorectl(home.path(), &["skills", "doctor"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(stdout(&output)
+        .trim_end()
+        .ends_with("0 findings; 0 skills found"));
 }
 
 /// Every path below `root` with its modification time and length.
@@ -174,7 +335,11 @@ fn snapshot(root: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
 fn skills_commands_write_nothing_under_home() {
     let home = fixture_home();
     let before = snapshot(&home);
-    for args in [&["skills", "ls"][..], &["--json", "skills", "ls"]] {
+    for args in [
+        &["skills", "doctor"][..],
+        &["skills", "doctor", "--json"],
+        &["skills", "ls"],
+    ] {
         assert_eq!(lorectl(&home, args).status.code(), Some(0));
     }
     assert_eq!(snapshot(&home), before);
@@ -191,6 +356,6 @@ fn a_missing_or_unknown_subcommand_is_a_usage_error() {
 
 #[test]
 fn a_relative_home_is_a_usage_error() {
-    let output = lorectl(Path::new("relative/home"), &["skills", "ls"]);
+    let output = lorectl(Path::new("relative/home"), &["skills", "doctor"]);
     assert_eq!(output.status.code(), Some(1));
 }

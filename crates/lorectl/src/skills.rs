@@ -1,16 +1,19 @@
-//! `lorectl skills ls`: report on the skill folders every agent loads.
-//! Read-only, and independent of the archive.
+//! `lorectl skills ls` and `lorectl skills doctor`: report on the skill
+//! folders every agent loads. Read-only, and independent of the archive.
+//!
+//! `doctor` exits 0 whenever the scan ran, findings or not: it reports, and a
+//! hook or script that wants to gate on findings reads `--json`.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use lore_skills::{Inventory, Roots, SkillRecord, Source};
+use lore_skills::{Finding, Fix, Inventory, Roots, SkillRecord, Source};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
 
 /// The subcommands `skills` accepts.
-pub const SUBCOMMANDS: &[&str] = &["ls"];
+pub const SUBCOMMANDS: &[&str] = &["ls", "doctor"];
 
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let subcommand = invocation.operand.as_deref().unwrap_or_default();
@@ -21,10 +24,11 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         )));
     }
     let inventory = lore_skills::inventory(&roots()?);
-    let out = if invocation.json {
-        serde_json::to_string(&inventory.records).unwrap_or_default()
-    } else {
-        ls_text(&inventory)
+    let out = match (subcommand, invocation.json) {
+        ("ls", true) => serde_json::to_string(&inventory.records).unwrap_or_default(),
+        ("ls", false) => ls_text(&inventory),
+        (_, true) => doctor_json(&lore_skills::doctor(&inventory)),
+        (_, false) => doctor_text(&inventory, &lore_skills::doctor(&inventory)),
     };
     let _ = writeln!(std::io::stdout().lock(), "{out}");
     Ok(exit::OK)
@@ -86,4 +90,86 @@ fn source_label(record: &SkillRecord) -> String {
         Source::Builtin { agent } => format!("builtin {agent}"),
         Source::Unknown => "unknown".to_string(),
     }
+}
+
+/// The findings as one JSON array, each with its `fix` and whether that fix
+/// is a `command` or a `hint`.
+fn doctor_json(findings: &[Finding]) -> String {
+    let fixes: Vec<Fix> = findings.iter().map(Finding::fix).collect();
+    let records: Vec<serde_json::Value> = findings
+        .iter()
+        .zip(&fixes)
+        .map(|(f, fix)| {
+            let mut value = serde_json::to_value(f).unwrap_or_default();
+            if let Some(object) = value.as_object_mut() {
+                object.insert("fix".into(), fix.text().into());
+                object.insert("fix_kind".into(), fix.kind().into());
+            }
+            value
+        })
+        .collect();
+    serde_json::Value::Array(records).to_string()
+}
+
+fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
+    let show = |path: &Path| match path.strip_prefix(&inventory.roots.home) {
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
+    };
+    let mut out = String::new();
+    let mut group: Option<Option<&str>> = None;
+    let fixes: Vec<Fix> = findings.iter().map(Finding::fix).collect();
+    for (finding, fix) in findings.iter().zip(&fixes) {
+        if group != Some(finding.skill()) {
+            group = Some(finding.skill());
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(finding.skill().unwrap_or("(codex skill list)"));
+            out.push('\n');
+        }
+        let label = match fix.kind() {
+            "command" => "fix",
+            other => other,
+        };
+        out.push_str(&format!(
+            "  {:<15} {}\n  {:<15} {}\n",
+            finding.kind(),
+            describe(finding, &show),
+            label,
+            fix.text()
+        ));
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(&summary(findings, distinct_names(inventory)));
+    out
+}
+
+fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
+    match finding {
+        Finding::Drift { copies, .. } => {
+            let copies: Vec<String> = copies
+                .iter()
+                .map(|c| format!("{} ({} lines, {})", show(&c.path), c.lines, c.hash.short()))
+                .collect();
+            format!("{} copies differ: {}", copies.len(), copies.join(", "))
+        }
+        Finding::Duplicate { paths, .. } => {
+            let paths: Vec<String> = paths.iter().map(|p| show(p)).collect();
+            format!("{} separate copies: {}", paths.len(), paths.join(", "))
+        }
+    }
+}
+
+/// One line, duplicates first.
+fn summary(findings: &[Finding], skills: usize) -> String {
+    let count = |kind: &str| findings.iter().filter(|f| f.kind() == kind).count();
+    format!(
+        "{} duplicates, {} drift; {} findings; {skills} skills found",
+        count("duplicate"),
+        count("drift"),
+        findings.len(),
+    )
 }
