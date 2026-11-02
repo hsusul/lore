@@ -1,7 +1,13 @@
 //! The vault: a git repository of note files, and the only place notes live.
 //!
-//! `.lore/` is Lore's private directory inside the vault. It is gitignored with
-//! `_inbox/` and the `.*.md.tmp` files of an interrupted write.
+//! Layout: `global/<slug>.md` and `repos/<repo name>-<repo key>/<slug>.md`
+//! (`repos/<repo key>/` when a note does not name its repository). `.lore/` is
+//! Lore's private directory, and is gitignored with `_inbox/` and the
+//! `.*.md.tmp` files of an interrupted write. Every write writes one file and
+//! commits only that file, so the history stays one note per commit.
+//!
+//! Lore's commits skip the person's git hooks and commit signing and never
+//! prompt, so a hook or a pinentry can never hang a write.
 
 use std::cell::OnceCell;
 use std::fs;
@@ -11,14 +17,33 @@ use std::process::{Command, Stdio};
 
 use thiserror::Error;
 
+use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
+
 /// Lore's private directory inside the vault. Gitignored.
 pub const LORE_DIR: &str = ".lore";
 const IGNORED: [&str; 3] = [".lore/", "_inbox/", ".*.md.tmp"];
+/// Settings every git call carries: no hooks, no signing, no prompts.
+const GIT_SAFE: [&str; 8] = [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "tag.gpgsign=false",
+    "-c",
+    "core.fsmonitor=false",
+];
 
 #[derive(Debug, Error)]
 pub enum VaultError {
     #[error("no vault at {0}")]
     Missing(PathBuf),
+    #[error(transparent)]
+    Note(#[from] NoteError),
+    #[error("`{0}` is not a valid note path: {1}")]
+    BadPath(String, String),
+    #[error("a different note already lives at {0}")]
+    Conflict(String),
     #[error("{0}: {1}")]
     Io(String, #[source] io::Error),
     #[error("`git {0}` failed: {1}")]
@@ -35,6 +60,15 @@ fn io_error(what: impl Into<String>) -> impl FnOnce(io::Error) -> VaultError {
 pub enum Init {
     Created,
     AlreadyInitialized,
+}
+
+/// What `add` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Added {
+    /// The note was written and committed.
+    Committed,
+    /// The same note was already in the vault. Nothing was written.
+    Unchanged,
 }
 
 /// A vault on disk.
@@ -108,9 +142,69 @@ impl Vault {
         self.root.join(LORE_DIR)
     }
 
+    /// Add a note from its file text. `id`, `created`, `status`, and `scope`
+    /// may be left out; a new note also gets its title as an Obsidian alias.
+    /// Adding the same text twice writes and commits once.
+    ///
+    /// Nothing is written unless the whole note is valid.
+    pub fn add(&self, text: &str) -> Result<(Note, Added), VaultError> {
+        let draft = Note::parse_draft(text, NoteId::generate(), NoteDate::today())?;
+        let mut note = draft.note;
+        let rel = note.rel_path();
+        let path = self.root.join(&rel);
+
+        let existing = match fs::read_to_string(&path) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(io_error(format!("read {rel}"))(e)),
+        };
+        if let Some(existing) = existing {
+            let current = Note::parse(&existing).map_err(|_| VaultError::Conflict(rel.clone()))?;
+            if draft.id_filled {
+                note.id = current.id;
+            }
+            if draft.created_filled {
+                note.created = current.created;
+            }
+            if note.render() != existing {
+                return Err(VaultError::Conflict(rel));
+            }
+            if self.is_committed(&rel)? {
+                return Ok((note, Added::Unchanged));
+            }
+        } else {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(io_error(format!("create {rel}")))?;
+            }
+            write_atomically(&path, &note.render())?;
+        }
+        self.commit(&rel, &format!("mem: add {}", note.slug()))?;
+        Ok((note, Added::Committed))
+    }
+
+    /// Stage and commit one file.
+    fn commit(&self, rel: &str, message: &str) -> Result<(), VaultError> {
+        self.git(&["add", "--", rel])?;
+        self.git(&["commit", "-q", "-m", message, "--", rel])?;
+        Ok(())
+    }
+
+    /// Read a note file by its vault-relative path.
+    pub fn read(&self, rel: &str) -> Result<String, VaultError> {
+        let rel =
+            RelPath::parse(rel).map_err(|e| VaultError::BadPath(rel.into(), e.to_string()))?;
+        fs::read_to_string(self.root.join(rel.as_str()))
+            .map_err(io_error(format!("read {}", rel.as_str())))
+    }
+
+    fn is_committed(&self, rel: &str) -> Result<bool, VaultError> {
+        let status = self.git(&["status", "--porcelain", "--", rel])?;
+        Ok(status.trim().is_empty())
+    }
+
     fn git(&self, args: &[&str]) -> Result<String, VaultError> {
         let mut command = Command::new("git");
-        command.arg("-C").arg(&self.root);
+        command.arg("-C").arg(&self.root).args(GIT_SAFE);
         let (has_name, has_email) = self.identity();
         if !has_name {
             command.args(["-c", "user.name=Lore"]);
@@ -120,6 +214,8 @@ impl Vault {
         }
         let output = command
             .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_EDITOR", "true")
             .stdin(Stdio::null())
             .output()
             .map_err(io_error("run git"))?;
@@ -141,6 +237,7 @@ impl Vault {
                 .arg("-C")
                 .arg(&self.root)
                 .args(["config", "--get-regexp", r"^user\.(name|email)$"])
+                .env("GIT_TERMINAL_PROMPT", "0")
                 .stdin(Stdio::null())
                 .output();
             let text = output

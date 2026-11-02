@@ -5,7 +5,8 @@
 use std::path::Path;
 use std::process::Command;
 
-use lore_memory::vault::{Init, Vault, VaultError};
+use lore_memory::note::NoteError;
+use lore_memory::vault::{Added, Init, Vault, VaultError};
 
 /// Run git, and the vault's own git calls, without the developer's config, so
 /// the identity fallback is what CI sees.
@@ -44,6 +45,8 @@ fn new_vault() -> (tempfile::TempDir, Vault) {
     (dir, vault)
 }
 
+const NOTE: &str = "---\ntype: howto\ntitle: Prune worktrees\n---\nRun `git worktree prune`.\n";
+
 #[test]
 fn vault_init_is_a_git_repo_that_ignores_lore_and_inbox() {
     let (dir, _vault) = new_vault();
@@ -58,10 +61,122 @@ fn vault_init_is_a_git_repo_that_ignores_lore_and_inbox() {
 }
 
 #[test]
+fn vault_add_commits_one_note_and_is_idempotent() {
+    let (dir, vault) = new_vault();
+    let (note, first) = vault.add(NOTE).unwrap();
+    assert_eq!(first, Added::Committed);
+    assert_eq!(note.rel_path(), "global/prune-worktrees.md");
+    let (again, second) = vault.add(NOTE).unwrap();
+    assert_eq!(second, Added::Unchanged);
+    assert_eq!(again.id, note.id);
+    assert_eq!(
+        subjects(dir.path()),
+        ["mem: add prune-worktrees", "mem: init vault"]
+    );
+    let written = vault.read("global/prune-worktrees.md").unwrap();
+    assert!(written.starts_with(&format!("---\nid: {}\ntype: howto\n", note.id.as_str())));
+    assert!(git(dir.path(), &["status", "--porcelain"]).is_empty());
+}
+
+#[test]
+fn vault_add_commits_a_note_left_uncommitted() {
+    let (dir, vault) = new_vault();
+    let (note, _) = vault.add(NOTE).unwrap();
+    git(dir.path(), &["reset", "-q", "--soft", "HEAD~1"]);
+    git(dir.path(), &["reset", "-q", "--", "global"]);
+    let (_, outcome) = vault.add(&note.render()).unwrap();
+    assert_eq!(outcome, Added::Committed);
+    assert_eq!(
+        subjects(dir.path()),
+        ["mem: add prune-worktrees", "mem: init vault"]
+    );
+}
+
+fn assert_nothing_written(dir: &Path) {
+    assert_eq!(subjects(dir), ["mem: init vault"]);
+    assert!(git(dir, &["status", "--porcelain"]).is_empty());
+    assert!(!dir.join("global").exists());
+}
+
+#[test]
+fn vault_add_refuses_a_bad_date_and_writes_nothing() {
+    let (dir, vault) = new_vault();
+    let error = vault
+        .add("---\ntype: fact\ntitle: T\ncreated: 2026-02-30\n---\n")
+        .unwrap_err();
+    assert!(
+        matches!(error, VaultError::Note(NoteError::Field { ref field, .. }) if field == "created")
+    );
+    assert_nothing_written(dir.path());
+}
+
+#[test]
+fn vault_add_refuses_a_bad_anchor_path_and_writes_nothing() {
+    let (dir, vault) = new_vault();
+    let error = vault
+        .add("---\ntype: fact\ntitle: T\nanchors:\n  - path: ../../etc/passwd\n---\n")
+        .unwrap_err();
+    assert!(
+        matches!(error, VaultError::Note(NoteError::Field { ref field, .. }) if field == "anchors[0].path")
+    );
+    assert_nothing_written(dir.path());
+}
+
+#[test]
+fn vault_add_never_overwrites_a_different_note() {
+    let (dir, vault) = new_vault();
+    vault.add(NOTE).unwrap();
+    let before = vault.read("global/prune-worktrees.md").unwrap();
+    let error = vault
+        .add("---\ntype: howto\ntitle: Prune worktrees\n---\nSomething else.\n")
+        .unwrap_err();
+    assert!(matches!(error, VaultError::Conflict(ref rel) if rel == "global/prune-worktrees.md"));
+    assert_eq!(vault.read("global/prune-worktrees.md").unwrap(), before);
+    assert_eq!(subjects(dir.path()).len(), 2);
+}
+
+#[test]
+fn vault_read_refuses_paths_outside_the_vault() {
+    let (_dir, vault) = new_vault();
+    for rel in ["../secret.md", "/etc/passwd", "global/../../x.md"] {
+        assert!(
+            matches!(vault.read(rel), Err(VaultError::BadPath(..))),
+            "{rel}"
+        );
+    }
+}
+
+#[test]
 fn vault_open_reports_a_missing_vault() {
     let dir = tempfile::tempdir().unwrap();
     assert!(matches!(
         Vault::open(dir.path()),
         Err(VaultError::Missing(_))
     ));
+}
+
+/// Hooks and signing configured in the vault's own git config, the way a
+/// person's global config would carry them. Either one would block or fail a
+/// commit if Lore inherited it.
+#[test]
+fn vault_commits_skip_hooks_and_signing() {
+    let (dir, vault) = new_vault();
+    let hooks = dir.path().join(".lore/test-hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    git(
+        dir.path(),
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
+    git(dir.path(), &["config", "commit.gpgsign", "true"]);
+    git(dir.path(), &["config", "gpg.program", "/nonexistent/gpg"]);
+    let (_, added) = vault.add(NOTE).unwrap();
+    assert_eq!(added, Added::Committed);
+    assert_eq!(subjects(dir.path()).len(), 2);
 }
