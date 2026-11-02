@@ -82,6 +82,30 @@ fn roundtrip_reads_the_design_sample_fields() {
     );
 }
 
+#[test]
+fn roundtrip_quotes_titles_yaml_would_misread() {
+    let id = NoteId::parse("01JC9V6Q4M8K2T7X3N5R0B1HZZ").unwrap();
+    let today = NoteDate::parse("2026-11-01").unwrap();
+    for (title, written) in [
+        ("plain words", "plain words"),
+        ("a: b", "\"a: b\""),
+        ("yes", "\"yes\""),
+        ("2026", "\"2026\""),
+        ("#tag", "\"#tag\""),
+        ("say \"hi\"", "say \"hi\""),
+        ("- dash", "\"- dash\""),
+        ("back\\slash: x", "\"back\\\\slash: x\""),
+    ] {
+        let text = format!("---\ntype: fact\ntitle: {written}\n---\n");
+        let note = Note::parse_draft(&text, id.clone(), today).unwrap().note;
+        assert_eq!(note.title, title, "reading {written}");
+        assert!(
+            note.render().contains(&format!("\ntitle: {written}\n")),
+            "{title}"
+        );
+    }
+}
+
 fn parse_error(text: &str) -> NoteError {
     Note::parse(text).expect_err("must be refused")
 }
