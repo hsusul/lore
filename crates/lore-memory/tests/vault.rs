@@ -183,6 +183,34 @@ fn vault_concurrent_adds_all_land_and_fsck_is_clean() {
 const ID: &str = "01JC9V6Q4M8K2T7X3N5R0B1H6D";
 
 #[test]
+fn vault_add_refuses_an_id_another_note_already_has() {
+    let (dir, vault) = new_vault();
+    let first = format!("---\nid: {ID}\ntype: fact\ntitle: First\n---\nOne.\n");
+    vault.add(&first).unwrap();
+    let second = format!("---\nid: {ID}\ntype: fact\ntitle: Second\n---\nTwo.\n");
+    let error = vault.add(&second).unwrap_err();
+    assert!(
+        matches!(error, VaultError::DuplicateId { ref id, ref existing } if id == ID && existing == "global/first.md"),
+        "{error:?}"
+    );
+    assert!(!dir.path().join("global/second.md").exists());
+    assert_eq!(subjects(dir.path()).len(), 2);
+}
+
+#[test]
+fn vault_add_refuses_an_id_from_a_hand_copied_file_the_index_has_not_seen() {
+    let (dir, vault) = new_vault();
+    vault.search("anything", 5).unwrap();
+    let copied = format!("---\nid: {ID}\ntype: fact\ntitle: Copied\nscope: global\nstatus: active\ncreated: 2026-11-01\n---\nC.\n");
+    std::fs::create_dir_all(dir.path().join("global")).unwrap();
+    std::fs::write(dir.path().join("global/copied.md"), copied).unwrap();
+    let error = vault
+        .add(&format!("---\nid: {ID}\ntype: fact\ntitle: New\n---\nN.\n"))
+        .unwrap_err();
+    assert!(matches!(error, VaultError::DuplicateId { .. }), "{error:?}");
+}
+
+#[test]
 fn vault_reindex_reports_duplicate_ids_with_both_paths_and_indexes_the_rest() {
     let (dir, vault) = new_vault();
     vault.add(NOTE).unwrap();

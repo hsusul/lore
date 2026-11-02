@@ -53,6 +53,8 @@ pub enum VaultError {
     BadPath(String, String),
     #[error("a different note already lives at {0}")]
     Conflict(String),
+    #[error("id `{id}` is already used by {existing}")]
+    DuplicateId { id: String, existing: String },
 
     #[error("another Lore process is writing to the vault at {}", .0.display())]
     Busy(PathBuf),
@@ -219,13 +221,15 @@ impl Vault {
     /// may be left out; a new note also gets its title as an Obsidian alias.
     /// Adding the same text twice writes and commits once.
     ///
-    /// Nothing is written unless the whole note is valid.
+    /// Nothing is written unless the whole note is valid and its id is not
+    /// already used by another file.
     pub fn add(&self, text: &str) -> Result<(Note, Added), VaultError> {
         let draft = Note::parse_draft(text, NoteId::generate(), NoteDate::today())?;
         let mut note = draft.note;
         let rel = note.rel_path();
         let path = self.root.join(&rel);
         let _lock = self.lock()?;
+        let index = self.refresh_locked()?;
 
         let existing = match fs::read_to_string(&path) {
             Ok(text) => Some(text),
@@ -243,15 +247,18 @@ impl Vault {
             if note.render() != existing {
                 return Err(VaultError::Conflict(rel));
             }
+            check_id_free(&index, &note.id, &rel)?;
             if self.is_committed(&rel)? {
                 return Ok((note, Added::Unchanged));
             }
         } else {
+            check_id_free(&index, &note.id, &rel)?;
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).map_err(io_error(format!("create {rel}")))?;
             }
             write_atomically(&path, &note.render())?;
         }
+        drop(index);
         self.commit(&rel, &format!("mem: add {}", note.slug()))?;
         Ok((note, Added::Committed))
     }
@@ -468,6 +475,21 @@ impl Vault {
             };
             (has("user.name"), has("user.email"))
         })
+    }
+}
+
+/// Refuse `id` when a file other than `rel` already carries it.
+fn check_id_free(index: &Index, id: &NoteId, rel: &str) -> Result<(), VaultError> {
+    match index
+        .paths_with_id(id.as_str())?
+        .into_iter()
+        .find(|p| p != rel)
+    {
+        Some(existing) => Err(VaultError::DuplicateId {
+            id: id.as_str().to_string(),
+            existing,
+        }),
+        None => Ok(()),
     }
 }
 
