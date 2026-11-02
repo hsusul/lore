@@ -167,15 +167,16 @@ fn subagent_without_agent_id_keeps_its_own_session() {
     std::fs::write(
         &parent,
         line(parent_id, "e1", "user", "parent question")
-            + &line(parent_id, "e2", "assistant", "parent answer names the maple"),
+            + &line(
+                parent_id,
+                "e2",
+                "assistant",
+                "parent answer names the maple",
+            ),
     )
     .unwrap();
     // No agentId on any line: the id must come from the file name.
-    std::fs::write(
-        &subagent,
-        line(parent_id, "e3", "user", "subagent prompt"),
-    )
-    .unwrap();
+    std::fs::write(&subagent, line(parent_id, "e3", "user", "subagent prompt")).unwrap();
 
     for order in [
         [parent.clone(), subagent.clone()],
@@ -200,9 +201,8 @@ fn one_stray_session_id_line_does_not_move_the_file() {
     let stray_id = "ffffffff-0000-4000-8000-000000000099";
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(format!("{own_id}.jsonl"));
-    let stray = format!(
-        r#"{{"type":"last-prompt","sessionId":"{stray_id}","lastPrompt":"x"}}"#
-    ) + "\n";
+    let stray =
+        format!(r#"{{"type":"last-prompt","sessionId":"{stray_id}","lastPrompt":"x"}}"#) + "\n";
     std::fs::write(
         &path,
         line(own_id, "f1", "user", "question")
@@ -239,17 +239,29 @@ fn resumed_transcript_with_only_copied_lines_leaves_the_original_whole() {
     ingest_file(&conn, &adapter, &resumed_path, &blobs).unwrap();
     let (original_session, _) = session_for(&conn, old_id);
     assert_eq!(message_count(&conn, &original_session), 4);
-    assert_eq!(hit_sessions(&conn, "juniper"), vec![original_session.clone()]);
+    assert_eq!(
+        hit_sessions(&conn, "juniper"),
+        vec![original_session.clone()]
+    );
 
     // The resumed file then gains its own lines.
     std::fs::write(
         &resumed_path,
-        copied + &line(new_id, "g5", "assistant", "resumed answer names the sequoia"),
+        copied
+            + &line(
+                new_id,
+                "g5",
+                "assistant",
+                "resumed answer names the sequoia",
+            ),
     )
     .unwrap();
     ingest_file(&conn, &adapter, &resumed_path, &blobs).unwrap();
     assert_eq!(message_count(&conn, &original_session), 4);
     let (resumed_session, _) = session_for(&conn, new_id);
     assert_eq!(message_count(&conn, &resumed_session), 3);
-    assert_eq!(native_ids(&conn), vec![old_id.to_string(), new_id.to_string()]);
+    assert_eq!(
+        native_ids(&conn),
+        vec![old_id.to_string(), new_id.to_string()]
+    );
 }

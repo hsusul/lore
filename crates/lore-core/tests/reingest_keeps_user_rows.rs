@@ -49,7 +49,13 @@ impl Archive {
     }
 
     fn ingest(&self) -> IngestOutcome {
-        ingest_file(&self.conn, &ClaudeCodeAdapter::new(), &self.path, &self.blobs).unwrap()
+        ingest_file(
+            &self.conn,
+            &ClaudeCodeAdapter::new(),
+            &self.path,
+            &self.blobs,
+        )
+        .unwrap()
     }
 
     fn session_id(&self) -> Option<String> {
@@ -74,7 +80,8 @@ impl Archive {
     fn rewrite(&self) {
         std::fs::write(
             &self.path,
-            line("u1", "user", "question again") + &line("u2", "assistant", "answer names the larch"),
+            line("u1", "user", "question again")
+                + &line("u2", "assistant", "answer names the larch"),
         )
         .unwrap();
     }
