@@ -20,10 +20,6 @@ fn line_at(cwd: &str, uuid: &str, role: &str, text: &str) -> String {
     ) + "\n"
 }
 
-fn line(uuid: &str, role: &str, text: &str) -> String {
-    line_at(NO_REPO, uuid, role, text)
-}
-
 struct Archive {
     conn: Connection,
     blobs: BlobStore,
@@ -92,12 +88,48 @@ impl Archive {
 
     /// Rewrite the source with different content (not an append).
     fn rewrite(&self) {
+        self.rewrite_at(NO_REPO);
+    }
+
+    /// Rewrite the source with different content that ran in `cwd`.
+    fn rewrite_at(&self, cwd: &str) {
         std::fs::write(
             &self.path,
-            line("u1", "user", "question again")
-                + &line("u2", "assistant", "answer names the larch"),
+            line_at(cwd, "u1", "user", "question again")
+                + &line_at(cwd, "u2", "assistant", "answer names the larch"),
         )
         .unwrap();
+    }
+
+    /// Append one line, as an agent still writing the session does.
+    fn append(&self, uuid: &str) {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .unwrap();
+        file.write_all(line(uuid, "user", "one more line").as_bytes())
+            .unwrap();
+    }
+
+    /// Sessions, messages, and search documents in the archive.
+    fn derived_rows(&self) -> (i64, i64, i64) {
+        let count = |table: &str| -> i64 {
+            self.conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        (
+            count("agent_session"),
+            count("message"),
+            count("search_document"),
+        )
+    }
+
+    fn source_state(&self) -> String {
+        self.conn
+            .query_row("SELECT state FROM ingest_state", [], |r| r.get(0))
+            .unwrap()
     }
 
     fn path(&self) -> &Path {
@@ -173,6 +205,54 @@ fn a_session_forgotten_by_an_older_lore_stays_gone_after_a_parser_bump() {
     assert_eq!(archive.session_id(), None, "a forgotten session came back");
 }
 
+/// A forgotten source stays forgotten while it exists, even when the agent
+/// keeps writing it: nothing it holds is ingested again.
+#[test]
+fn a_forgotten_session_stays_gone_after_its_log_changes() {
+    let archive = Archive::new();
+    let session = archive.session_id().unwrap();
+    lore_core::forget::forget_session(&archive.conn, &archive.blobs, &session).unwrap();
+    assert_eq!(archive.source_state(), "forgotten");
+
+    archive.append("u3");
+    let outcome = archive.ingest();
+    assert_eq!(archive.derived_rows(), (0, 0, 0), "an append restored rows");
+    assert_eq!(archive.session_id(), None);
+    assert!(matches!(outcome, IngestOutcome::Skipped));
+    assert_eq!(archive.source_state(), "forgotten");
+
+    archive.append("u4");
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    archive.rewrite();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None, "a rewrite restored the session");
+    assert_eq!(archive.derived_rows(), (0, 0, 0));
+    assert_eq!(archive.source_state(), "forgotten");
+}
+
+/// The same for a source an older Lore left `ok` with no session.
+#[test]
+fn a_session_forgotten_by_an_older_lore_stays_gone_after_its_log_changes() {
+    let archive = Archive::new();
+    let session = archive.session_id().unwrap();
+    lore_core::forget::forget_session(&archive.conn, &archive.blobs, &session).unwrap();
+    archive
+        .conn
+        .execute("UPDATE ingest_state SET state = 'ok'", [])
+        .unwrap();
+
+    archive.append("u3");
+    let outcome = archive.ingest();
+    assert_eq!(archive.derived_rows(), (0, 0, 0), "an append restored rows");
+    assert_eq!(archive.session_id(), None);
+    assert!(matches!(outcome, IngestOutcome::Skipped));
+
+    archive.rewrite();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None, "a rewrite restored the session");
+    assert_eq!(archive.derived_rows(), (0, 0, 0));
+}
+
 fn git(dir: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
         .args(args)
@@ -183,6 +263,8 @@ fn git(dir: &Path, args: &[&str]) {
         .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .env("GIT_AUTHOR_DATE", "2026-10-31T18:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-10-31T18:00:00Z")
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .expect("git must be installed");
@@ -253,4 +335,86 @@ fn git_evidence_keeps_when_it_was_first_observed_across_a_parser_bump() {
     assert!(search_git
         .iter()
         .any(|(class, _)| class == "lore_reverified"));
+}
+
+/// A repository on `branch` with one commit of `text`. The commit date is
+/// fixed, so its sha is known.
+fn repo_on(branch: &str, text: &str) -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    git(repo.path(), &["init", "-b", branch]);
+    std::fs::write(repo.path().join("README.md"), text).unwrap();
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-m", "initial"]);
+    repo
+}
+
+/// (source, branch, commit) of the git evidence Lore recorded on segment 0.
+type LoreEvidence = Vec<(String, Option<String>, Option<String>)>;
+
+fn lore_evidence(conn: &Connection, session: &str) -> LoreEvidence {
+    let mut stmt = conn
+        .prepare(
+            "SELECT g.source, g.branch, g.commit_sha FROM git_observation g
+             JOIN session_segment seg ON seg.id = g.segment_id
+             WHERE g.session_id = ?1 AND seg.seq_start = 0
+               AND g.source IN ('lore_captured', 'lore_reverified')
+             ORDER BY g.source, g.id",
+        )
+        .unwrap();
+    stmt.query_map([session], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<LoreEvidence>>()
+        .unwrap()
+}
+
+fn evidence(source: &str, branch: &str, commit: &str) -> (String, Option<String>, Option<String>) {
+    (
+        source.to_string(),
+        Some(branch.to_string()),
+        Some(commit.to_string()),
+    )
+}
+
+#[test]
+fn a_segment_whose_cwd_moves_to_another_repository_drops_the_old_repositorys_evidence() {
+    const OLD_SHA: &str = "e09836f70174a380c9c02472de679a7807f4ed5f";
+    const NEW_SHA: &str = "edbaf241d3277779b5f97fddc0512bc3bcd3dcb1";
+    let old = repo_on("alpha", "old\n");
+    let new = repo_on("beta", "new\n");
+    let archive = Archive::at(&old.path().to_string_lossy());
+    let session = archive.session_id().unwrap();
+    assert!(lore_core::enrich::enrich_session(&archive.conn, &session).unwrap() > 0);
+    // A re-verification of the old repository, the way the reverify job
+    // records one.
+    archive
+        .conn
+        .execute_batch(
+            "INSERT INTO git_observation
+                (id, session_id, segment_id, source, observed_at, temporal_confidence,
+                 branch, commit_sha, commit_exists)
+             SELECT 'gr_old', session_id, segment_id, 'lore_reverified', 2000,
+                    'retrospective', branch, commit_sha, 1
+             FROM git_observation WHERE source = 'lore_captured';",
+        )
+        .unwrap();
+    assert_eq!(
+        lore_evidence(&archive.conn, &session),
+        vec![
+            evidence("lore_captured", "alpha", OLD_SHA),
+            evidence("lore_reverified", "alpha", OLD_SHA),
+        ]
+    );
+
+    archive.rewrite_at(&new.path().to_string_lossy());
+    assert!(matches!(archive.ingest(), IngestOutcome::Ingested { .. }));
+    assert_eq!(
+        lore_evidence(&archive.conn, &session),
+        vec![],
+        "the old repository's evidence came back on a segment that moved"
+    );
+    assert!(lore_core::enrich::enrich_session(&archive.conn, &session).unwrap() > 0);
+    assert_eq!(
+        lore_evidence(&archive.conn, &session),
+        vec![evidence("lore_captured", "beta", NEW_SHA)]
+    );
 }
