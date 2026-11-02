@@ -158,7 +158,10 @@ fn memory_exit_code(error: &VaultError) -> u8 {
         | VaultError::DuplicateId { .. } => NOTE_REFUSED,
         VaultError::Missing(_) => NO_ARCHIVE,
         VaultError::Busy(_) => ARCHIVE_BUSY,
-        VaultError::NotFound(_) | VaultError::Ambiguous(..) => USAGE,
+        VaultError::RelativeDir(_)
+        | VaultError::NoHome
+        | VaultError::NotFound(_)
+        | VaultError::Ambiguous(..) => USAGE,
         VaultError::Io(..) | VaultError::Git(..) | VaultError::Index(_) => ARCHIVE_UNREADABLE,
     }
 }
