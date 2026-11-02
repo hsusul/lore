@@ -584,6 +584,45 @@ describe("window shell", () => {
     await waitFor(() => expect(m.createFolder).toHaveBeenCalledWith("Ideas"));
   });
 
+  it("takes typed keys in a dialog opened from a folder's context menu", async () => {
+    const user = userEvent.setup();
+    m.renameFolder.mockResolvedValue(undefined);
+    m.createFolder.mockResolvedValue({ id: "f2", name: "Ideas", session_count: 0, position: 1 });
+    await renderLoaded();
+    const folder = () => within(sidebar()).getByRole("button", { name: /Release prep/ });
+
+    await user.pointer({ keys: "[MouseRight]", target: folder() });
+    await user.click(screen.getByRole("menuitem", { name: "Rename Folder…" }));
+    await screen.findByRole("dialog", { name: "Rename Folder" });
+    await user.keyboard(" 2026{Enter}");
+    await waitFor(() => expect(m.renameFolder).toHaveBeenCalledWith("f1", "Release prep 2026"));
+
+    await user.pointer({ keys: "[MouseRight]", target: folder() });
+    await user.click(screen.getByRole("menuitem", { name: "Delete Folder…" }));
+    await screen.findByRole("alertdialog", { name: "Delete “Release prep”?" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    await user.pointer({ keys: "[MouseRight]", target: folder() });
+    await user.click(screen.getByRole("menuitem", { name: "New Folder…" }));
+    await screen.findByRole("dialog", { name: "New Folder" });
+    await user.keyboard("Ideas{Enter}");
+    await waitFor(() => expect(m.createFolder).toHaveBeenCalledWith("Ideas"));
+    expect(m.deleteFolder).not.toHaveBeenCalled();
+  });
+
+  it("takes typed keys in New Folder opened from the scope menu", async () => {
+    const user = userEvent.setup();
+    m.createFolder.mockResolvedValue({ id: "f2", name: "Ideas", session_count: 0, position: 1 });
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: "Hide Sidebar" }));
+    await user.click(screen.getByRole("button", { name: "All Sessions, choose what to browse" }));
+    await user.click(screen.getByRole("menuitem", { name: "New Folder…" }));
+    await screen.findByRole("dialog", { name: "New Folder" });
+    await user.keyboard("Ideas{Enter}");
+    await waitFor(() => expect(m.createFolder).toHaveBeenCalledWith("Ideas"));
+  });
+
   it("reaches Settings by mouse through the palette button", async () => {
     await renderLoaded();
     fireEvent.click(screen.getByRole("button", { name: "Command Palette" }));

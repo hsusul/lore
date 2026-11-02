@@ -6,6 +6,7 @@ import type { FolderSummary } from "../ipc";
 import { sameSource, type Source } from "../hooks/workspace";
 import { Button, ICON } from "./ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "./ui/context-menu";
+import { useAfterMenuClose } from "./ui/menu-action";
 import { Tooltip } from "./ui/tooltip";
 import type { SourceRow, SourceSection } from "./sources";
 
@@ -161,6 +162,7 @@ function SourceButton({
   onChoose: (source: Source) => void;
   folderActions: FolderActions;
 }) {
+  const { afterClose, onCloseAutoFocus } = useAfterMenuClose();
   const Icon = row.icon;
   const onSelected = "group-focus-within/sidebar:text-on-selected";
   const button = (
@@ -197,11 +199,11 @@ function SourceButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{button}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={() => folderActions.onRenameFolder(folder)}>Rename Folder…</ContextMenuItem>
-        <ContextMenuItem onSelect={() => folderActions.onDeleteFolder(folder)}>Delete Folder…</ContextMenuItem>
+      <ContextMenuContent onCloseAutoFocus={onCloseAutoFocus}>
+        <ContextMenuItem onSelect={afterClose(() => folderActions.onRenameFolder(folder))}>Rename Folder…</ContextMenuItem>
+        <ContextMenuItem onSelect={afterClose(() => folderActions.onDeleteFolder(folder))}>Delete Folder…</ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={folderActions.onNewFolder}>New Folder…</ContextMenuItem>
+        <ContextMenuItem onSelect={afterClose(folderActions.onNewFolder)}>New Folder…</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
   MenuTrailing,
 } from "./ui/dropdown-menu";
+import { useAfterMenuClose } from "./ui/menu-action";
 import type { SourceSection } from "./sources";
 
 /**
@@ -71,6 +72,7 @@ export function ScopeMenu({
   onChoose: (source: Source) => void;
   onNewFolder: () => void;
 }) {
+  const { afterClose, onCloseAutoFocus } = useAfterMenuClose();
   const keyOf = (source: Source) => (source.kind === "all" ? "all" : `${source.kind}:${source.id}`);
   const rows = sections.flatMap((s) => s.rows);
   return (
@@ -88,7 +90,7 @@ export function ScopeMenu({
           <span className="max-w-full truncate text-subheadline tabular-nums text-label-2">{subtitle}</span>
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent>
+      <DropdownMenuContent onCloseAutoFocus={onCloseAutoFocus}>
         <DropdownMenuRadioGroup
           value={keyOf(selected)}
           onValueChange={(key) => {
@@ -115,7 +117,7 @@ export function ScopeMenu({
           ))}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={onNewFolder}>New Folder…</DropdownMenuItem>
+        <DropdownMenuItem onSelect={afterClose(onNewFolder)}>New Folder…</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
