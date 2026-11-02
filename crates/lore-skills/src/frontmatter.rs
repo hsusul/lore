@@ -1,4 +1,4 @@
-//! SKILL.md frontmatter.
+//! SKILL.md frontmatter and the skill names its body mentions.
 //!
 //! Hand-rolled rather than a YAML crate: it only needs `name` and
 //! `description`, plus enough structure to say when an agent's YAML reader
@@ -157,6 +157,93 @@ fn quoted(body: &str, quote: char) -> Result<String, String> {
     Err(format!("has an unclosed `{quote}`"))
 }
 
+/// Candidate skill names a body mentions as `**name**`, `` `name` skill``, or
+/// `/name`. The caller keeps only names that exist on the machine.
+///
+/// Bold is also how prose emphasises a word, so `**name**` counts only when
+/// the name is hyphenated or its line says "skill", and never as a `**label**:`.
+#[must_use]
+pub fn mentions(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = body.get(i..).unwrap_or_default();
+        let prev = i.checked_sub(1).and_then(|p| bytes.get(p)).copied();
+        if let Some(after) = rest.strip_prefix("**") {
+            let name = name_prefix(after);
+            let tail = after.get(name.len()..).and_then(|t| t.strip_prefix("**"));
+            if let Some(tail) = tail.filter(|_| !name.is_empty()) {
+                let line = line_around(body, i);
+                if !tail.starts_with(':') && (name.contains('-') || line.contains("skill")) {
+                    out.push(name.to_string());
+                }
+                i += 4 + name.len();
+                continue;
+            }
+        } else if let Some(after) = rest.strip_prefix('`') {
+            let name = name_prefix(after);
+            if let Some(tail) = after.get(name.len()..).and_then(|t| t.strip_prefix('`')) {
+                if !name.is_empty() && tail.trim_start_matches(' ').starts_with("skill") {
+                    out.push(name.to_string());
+                }
+            }
+        } else if let Some(after) = rest.strip_prefix('/') {
+            let opens = prev.is_none_or(|p| p.is_ascii_whitespace() || b"(`\"'".contains(&p));
+            let name = name_prefix(after);
+            let tail = after.get(name.len()..).unwrap_or_default();
+            if opens && !name.is_empty() && ends_mention(tail) {
+                out.push(name.to_string());
+            }
+        }
+        i += rest.chars().next().map_or(1, char::len_utf8);
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn line_around(body: &str, at: usize) -> &str {
+    let start = body
+        .get(..at)
+        .and_then(|b| b.rfind('\n'))
+        .map_or(0, |n| n + 1);
+    let end = body
+        .get(at..)
+        .and_then(|b| b.find('\n'))
+        .map_or(body.len(), |n| at + n);
+    body.get(start..end).unwrap_or_default()
+}
+
+/// The longest prefix shaped like a skill name: `[a-z0-9][a-z0-9-]*`, at
+/// least two characters, not ending in `-`.
+fn name_prefix(s: &str) -> &str {
+    let len = s
+        .bytes()
+        .take_while(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+        .count();
+    let name = s.get(..len).unwrap_or_default();
+    let name = name.trim_end_matches('-');
+    if name.len() < 2 || name.starts_with('-') {
+        ""
+    } else {
+        name
+    }
+}
+
+/// A `/name` mention ends at whitespace, closing punctuation, or a sentence
+/// period. Anything else (`/name/`, `/name.md`, `/name:x`) is a path or a
+/// plugin command, not a skill.
+fn ends_mention(tail: &str) -> bool {
+    let mut chars = tail.chars();
+    match chars.next() {
+        None => true,
+        Some(c) if c.is_whitespace() || "),;!?`'\"".contains(c) => true,
+        Some('.') => chars.next().is_none_or(char::is_whitespace),
+        Some(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +292,16 @@ mod tests {
     fn the_body_starts_after_the_closing_fence() {
         let (_, body) = parse("---\nname: x\ndescription: d\n---\nhello\n");
         assert_eq!(body, "hello\n");
+    }
+
+    #[test]
+    fn finds_the_three_mention_shapes_and_nothing_else() {
+        let body = "Use the **how** skill first. Then the `swarm` skill, or run /poteto-mode.\n\
+                    Per **principle-x**. Not **Bold Words**, not `code`, not ~/x/tdd, not /tmp/file.\n\
+                    Not /a, not https://e.com/why, not **domains**: a label, not to **triage** them.";
+        assert_eq!(
+            mentions(body),
+            ["how", "poteto-mode", "principle-x", "swarm"]
+        );
     }
 }
