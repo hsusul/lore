@@ -2,7 +2,71 @@
 //! refused with the field it came from.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use lore_memory::note::{Note, NoteDate, NoteError, NoteId};
+use std::path::{Path, PathBuf};
+
+use lore_memory::note::{Note, NoteDate, NoteError, NoteId, NoteType, RelPath};
+
+fn fixture_vault() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault")
+}
+
+fn fixtures() -> Vec<(String, String)> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                let rel = path
+                    .strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                out.push((rel, std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&fixture_vault(), &fixture_vault(), &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn roundtrip_fixtures_cover_every_type_four_times() {
+    let notes: Vec<Note> = fixtures()
+        .iter()
+        .map(|(_, text)| Note::parse(text).unwrap())
+        .collect();
+    for note_type in NoteType::ALL {
+        let count = notes.iter().filter(|n| n.note_type == note_type).count();
+        assert!(count >= 4, "{} has {count} fixtures", note_type.as_str());
+    }
+}
+
+#[test]
+fn roundtrip_reads_the_design_sample_fields() {
+    let text = std::fs::read_to_string(
+        fixture_vault().join("repos/3f9a1c0b/reference-id-panics-on-symbolic-refs.md"),
+    )
+    .unwrap();
+    let note = Note::parse(&text).unwrap();
+    assert_eq!(note.id.as_str(), "01JC9V6Q4M8K2T7X3N5R0B1H17");
+    assert_eq!(note.scope.to_string(), "repo:3f9a1c0b");
+    let anchor = &note.anchors[0];
+    assert_eq!(anchor.path.as_str(), "crates/lore-core/src/git.rs");
+    let lines = anchor.lines.unwrap();
+    assert_eq!((lines.start(), lines.end()), (210, 224));
+    assert_eq!(anchor.hash.as_ref().unwrap().as_str(), "b3:9c1e04aa");
+    assert_eq!(anchor.commit.as_ref().unwrap().as_str(), "067ef8d");
+    assert_eq!(note.relations[0].kind(), "updates");
+    assert_eq!(note.sources[0].to_string(), "claude-code:7d2f9a1e");
+    assert_eq!(note.forget_after.unwrap().to_string(), "2027-05-01");
+    assert_eq!(
+        note.body,
+        "Peel a symbolic ref before you call `id()` on it.\n\n## Timeline\n- 2026-11-01 accepted from claude-code:7d2f9a1e\n"
+    );
+}
 
 fn parse_error(text: &str) -> NoteError {
     Note::parse(text).expect_err("must be refused")
@@ -12,6 +76,30 @@ fn with(line: &str) -> String {
     format!(
         "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H01\ntype: fact\ntitle: T\nscope: global\nstatus: active\ncreated: 2026-11-01\n{line}\n---\nbody\n"
     )
+}
+
+#[test]
+fn roundtrip_refuses_bad_paths_by_field() {
+    for path in [
+        "/etc/passwd",
+        "../outside",
+        "a/../../b",
+        "C:/x",
+        "a//b",
+        "./a",
+        "a\\b",
+    ] {
+        let text = with(&format!(
+            "anchors:\n  - path: \"{}\"",
+            path.replace('\\', "\\\\")
+        ));
+        match parse_error(&text) {
+            NoteError::Field { field, .. } => assert_eq!(field, "anchors[0].path", "{path}"),
+            other => panic!("{path}: {other:?}"),
+        }
+        assert!(RelPath::parse(path).is_err(), "{path}");
+    }
+    assert_eq!(RelPath::parse("src/lib.rs").unwrap().as_str(), "src/lib.rs");
 }
 
 #[test]
@@ -48,6 +136,13 @@ fn roundtrip_refuses_malformed_files_without_panicking() {
         ("---\r\ntitle: T\r\n---\r\n", "CRLF line endings"),
         ("---\ntype: fact\n---\n", "missing required key `id`"),
         (&with("type: fact"), "appears twice"),
+        (&with("anchors:\n  - path: a\n    color: red"), "`color`"),
+        (&with("anchors: [a]"), "one `- ` item per line"),
+        (
+            &with("relations:\n  - replaces: 01JC9V6Q4M8K2T7X3N5R0B1H01"),
+            "updates, extends",
+        ),
+        (&with("sources:\n  - slack:abc"), "claude-code or codex"),
         (&with("just words"), "not `key: value`"),
         (&with("forget_after: soon"), "`forget_after`"),
     ];
