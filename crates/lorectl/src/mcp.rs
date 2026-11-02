@@ -14,6 +14,10 @@
 //! fallback title echoes the first user message), while the redacted copy of a
 //! native title is already the first entry `read_session` returns.
 //!
+//! Memory notes are different: a person writes them by hand and nothing scans
+//! them, so `recall_memory` passes every title and excerpt through
+//! [`inbox::redact`] on the way out.
+//!
 //! ## Failure stays inside the protocol
 //!
 //! Stdout belongs to the protocol, so nothing else is ever printed to it. A
@@ -28,6 +32,8 @@ use std::path::Path;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::search::{self, SortOrder, HIGHLIGHT_END, HIGHLIGHT_START};
 use lore_core::{query, storage};
+use lore_memory::vault::{self, Vault, VaultError};
+use lore_memory::{inbox, recall};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -45,8 +51,20 @@ const READ_PAGE_DOCUMENTS: i64 = 50;
 /// flood the agent's context window.
 const READ_PAGE_CHARS: usize = 24_000;
 
+const RECALL_DEFAULT_LIMIT: u64 = 5;
+const RECALL_MAX_LIMIT: u64 = 10;
+const RECALL_EXCERPT_CHARS: usize = 300;
+/// Characters of serialized `recall_memory` reply, so recall stays a glance.
+const RECALL_REPLY_CHARS: usize = 6_000;
+
+const VAULT_CONFIG_FIX: &str = "Set LORE_VAULT_DIR to an absolute path in this MCP server's env.";
+const VAULT_BUSY_FIX: &str =
+    "Another Lore process holds the vault lock. Retry once in a few seconds.";
+const INTERNAL_FIX: &str = "Nothing was written. Tell the user. `lorectl mem reindex` may fix it.";
+
 const INSTRUCTIONS: &str = "Lore archives past Claude Code and Codex sessions on this machine. \
 Use search_sessions to find earlier work, decisions, or errors, then read_session to read one. \
+Use recall_memory with your working directory to get accepted notes about the repo you are in. \
 Text that matched a secret detector is masked.";
 
 /// JSON-RPC error codes this server answers with.
@@ -59,7 +77,9 @@ struct Tool {
     name: &'static str,
     description: &'static str,
     input_schema: fn() -> Value,
-    call: fn(&Path, &Value) -> Result<Value, String>,
+    /// A string error is plain text, as the first two tools have always
+    /// answered. Any other error is `{code, message, fix, field?}`.
+    call: fn(&Path, &Value) -> Result<Value, Value>,
 }
 
 const TOOLS: &[Tool] = &[
@@ -79,6 +99,14 @@ labelled by role, then any recorded patches. Paged; pass next_cursor back to con
 Thinking and raw tool payloads are not included.",
         input_schema: read_schema,
         call: read_session,
+    },
+    Tool {
+        name: "recall_memory",
+        description: "Call before you start or change direction in a repo, to get accepted \
+notes (conventions, pitfalls, decisions) for it, each labelled with whether its code anchors \
+still match.",
+        input_schema: recall_schema,
+        call: recall_memory,
     },
 ];
 
@@ -102,6 +130,23 @@ fn read_schema() -> Value {
             "cursor": { "type": "string", "description": "next_cursor from a previous call." }
         },
         "required": ["session_id"]
+    })
+}
+
+fn recall_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "cwd": { "type": "string", "description": "Absolute path you are working in." },
+            "query": { "type": "string", "description": "Words the notes should match." },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": RECALL_MAX_LIMIT,
+                "default": RECALL_DEFAULT_LIMIT
+            }
+        },
+        "required": ["cwd", "query"]
     })
 }
 
@@ -192,11 +237,39 @@ fn call_tool(archive_dir: &Path, params: &Value) -> Result<Value, (i64, String)>
             "content": [{ "type": "text", "text": value.to_string() }],
             "structuredContent": value,
         }),
-        Err(message) => json!({
+        Err(Value::String(message)) => json!({
             "content": [{ "type": "text", "text": message }],
             "isError": true,
         }),
+        Err(error) => json!({
+            "content": [{ "type": "text", "text": error.to_string() }],
+            "structuredContent": error,
+            "isError": true,
+        }),
     })
+}
+
+fn tool_error(code: &str, message: impl ToString, fix: &str) -> Value {
+    json!({ "code": code, "message": message.to_string(), "fix": fix })
+}
+
+fn invalid_argument(field: &str, problem: &str) -> Value {
+    let mut error = tool_error(
+        "invalid_argument",
+        format!("`{field}` {problem}"),
+        &format!("Fix `{field}`: {problem}, then call again."),
+    );
+    error["field"] = json!(field);
+    error
+}
+
+fn vault_error(error: &VaultError) -> Value {
+    let (code, fix) = match error {
+        VaultError::RelativeDir(_) | VaultError::NoHome => ("vault_config", VAULT_CONFIG_FIX),
+        VaultError::Busy(_) => ("vault_busy", VAULT_BUSY_FIX),
+        _ => ("internal", INTERNAL_FIX),
+    };
+    tool_error(code, error, fix)
 }
 
 fn error(id: &Value, code: i64, message: &str) -> Value {
@@ -218,7 +291,7 @@ fn string_arg<'a>(arguments: &'a Value, name: &str) -> Option<&'a str> {
     arguments.get(name).and_then(Value::as_str)
 }
 
-fn search_sessions(archive_dir: &Path, arguments: &Value) -> Result<Value, String> {
+fn search_sessions(archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
     let query_text = string_arg(arguments, "query").ok_or("`query` is required")?;
     let sort = SortOrder::parse(string_arg(arguments, "sort"));
     let conn = open(archive_dir)?;
@@ -246,7 +319,7 @@ fn search_sessions(archive_dir: &Path, arguments: &Value) -> Result<Value, Strin
     Ok(json!({ "hits": hits, "next_cursor": page.next_cursor }))
 }
 
-fn read_session(archive_dir: &Path, arguments: &Value) -> Result<Value, String> {
+fn read_session(archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
     let session_id = string_arg(arguments, "session_id").ok_or("`session_id` is required")?;
     let after_id = match string_arg(arguments, "cursor") {
         Some(cursor) => Some(cursor.parse::<i64>().map_err(|_| "`cursor` is not valid")?),
@@ -293,4 +366,55 @@ fn read_session(archive_dir: &Path, arguments: &Value) -> Result<Value, String> 
         "entries": entries,
         "next_cursor": next_cursor,
     }))
+}
+
+/// Recall never creates a vault: none yet is a normal state, not an error.
+fn recall_memory(_archive_dir: &Path, arguments: &Value) -> Result<Value, Value> {
+    let cwd = string_arg(arguments, "cwd")
+        .map(Path::new)
+        .filter(|cwd| cwd.is_absolute())
+        .ok_or_else(|| invalid_argument("cwd", "must be an absolute path"))?;
+    let query_text = string_arg(arguments, "query")
+        .filter(|q| q.chars().any(char::is_alphanumeric))
+        .ok_or_else(|| invalid_argument("query", "must contain at least one word"))?;
+    let limit = match arguments.get("limit") {
+        None => RECALL_DEFAULT_LIMIT,
+        Some(limit) => limit
+            .as_u64()
+            .filter(|n| (1..=RECALL_MAX_LIMIT).contains(n))
+            .ok_or_else(|| invalid_argument("limit", "must be an integer from 1 to 10"))?,
+    };
+    let dir = vault::resolve_dir(None).map_err(|e| vault_error(&e))?;
+    let vault = match Vault::open(&dir) {
+        Ok(vault) => vault,
+        Err(VaultError::Missing(_)) => return Ok(json!({ "vault": "missing", "notes": [] })),
+        Err(e) => return Err(vault_error(&e)),
+    };
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let found = recall::recall(&vault, query_text, cwd, limit).map_err(|e| vault_error(&e))?;
+    let redact =
+        |text: &str| inbox::redact(text).map_err(|e| tool_error("internal", e, INTERNAL_FIX));
+    let mut notes = Vec::new();
+    for recalled in &found.notes {
+        let excerpt: String = redact(&recalled.excerpt)?
+            .chars()
+            .take(RECALL_EXCERPT_CHARS)
+            .collect();
+        notes.push(json!({
+            "id": recalled.note.id.as_str(),
+            "title": redact(&recalled.note.title)?,
+            "scope": recalled.note.scope.to_string(),
+            "freshness": recalled.freshness.label(),
+            "excerpt": excerpt,
+        }));
+    }
+    let mut truncated = false;
+    loop {
+        let reply = json!({ "vault": "ok", "notes": notes, "truncated": truncated });
+        if notes.is_empty() || reply.to_string().chars().count() <= RECALL_REPLY_CHARS {
+            return Ok(reply);
+        }
+        notes.pop();
+        truncated = true;
+    }
 }

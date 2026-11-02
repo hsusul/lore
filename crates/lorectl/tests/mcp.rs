@@ -30,11 +30,17 @@ fn lorectl(archive: &Path, homes: &Path, args: &[&str]) -> Output {
 
 /// Send `messages` to `lorectl mcp`, close stdin, and return every reply.
 fn converse(archive: &Path, messages: &[Value]) -> Vec<Value> {
+    converse_with(archive, &[], messages)
+}
+
+/// [`converse`] with extra environment variables set on the server.
+fn converse_with(archive: &Path, envs: &[(&str, &str)], messages: &[Value]) -> Vec<Value> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
         .arg("mcp")
         .arg("--archive")
         .arg(archive)
         .env_remove("LORE_ARCHIVE_DIR")
+        .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -142,7 +148,7 @@ fn speaks_the_mcp_handshake() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["search_sessions", "read_session"]);
+    assert_eq!(names, ["search_sessions", "read_session", "recall_memory"]);
     assert_eq!(
         replies[2],
         json!({ "jsonrpc": "2.0", "id": 3, "result": {} })
@@ -287,4 +293,263 @@ fn unknown_sessions_and_tools_are_reported() {
         "`query` is required"
     );
     assert_eq!(replies[2]["error"]["code"], -32602);
+}
+
+const GIT_ENV: [(&str, &str); 2] = [
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+];
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=T", "-c", "user.email=t@localhost"])
+        .args(args)
+        .envs(GIT_ENV)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `lorectl mem <args>` against `<home>/vault`, with `HOME` at `home`.
+fn mem(home: &Path, args: &[&str]) {
+    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .arg("mem")
+        .args(args)
+        .arg("--vault")
+        .arg(home.join("vault"))
+        .envs(GIT_ENV)
+        .env("HOME", home)
+        .env_remove("LORE_VAULT_DIR")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A temporary `HOME` holding an initialized vault at `<home>/vault`.
+fn memory_home() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    mem(home.path(), &["init"]);
+    home
+}
+
+/// `mem add` a note written to a file in `home`, with extra `args`.
+fn add_note(home: &Path, text: &str, args: &[&str]) {
+    let file = home.join("note.md");
+    std::fs::write(&file, text).unwrap();
+    mem(home, &[&["add", file.to_str().unwrap()], args].concat());
+}
+
+/// One `recall_memory` call, with `HOME` at `home` and the vault at `vault`.
+fn recall(home: &Path, vault: &Path, arguments: Value) -> Value {
+    let envs = [
+        GIT_ENV[0],
+        GIT_ENV[1],
+        ("HOME", home.to_str().unwrap()),
+        ("LORE_VAULT_DIR", vault.to_str().unwrap()),
+    ];
+    let mut replies = converse_with(
+        &home.join("archive"),
+        &envs,
+        &[call(1, "recall_memory", arguments)],
+    );
+    let reply = replies.remove(0);
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(text).unwrap(),
+        reply["result"]["structuredContent"],
+        "the text content carries the same JSON"
+    );
+    reply
+}
+
+const REPO_NOTE: &str = "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6D\ntype: pitfall\n\
+title: Retry the migration\nscope: repo:81444c90f1ff44ac\n\
+anchors:\n  - path: src/a.rs\n    lines: 1\n---\nRetry a failed migration once.\n";
+
+#[test]
+fn recall_memory_labels_a_fresh_note_and_returns_no_notes_for_no_match() {
+    let home = memory_home();
+    let repo = home.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:hsusul/lore.git"],
+    );
+    std::fs::write(repo.join("src/a.rs"), "fn retry() {}\n").unwrap();
+    let cwd = repo.to_str().unwrap();
+    add_note(home.path(), REPO_NOTE, &["--cwd", cwd]);
+    let vault = home.path().join("vault");
+
+    let reply = recall(
+        home.path(),
+        &vault,
+        json!({ "cwd": cwd, "query": "migration" }),
+    );
+
+    assert_eq!(
+        structured(&reply),
+        &json!({
+            "vault": "ok",
+            "notes": [{
+                "id": "01JC9V6Q4M8K2T7X3N5R0B1H6D",
+                "title": "Retry the migration",
+                "scope": "repo:81444c90f1ff44ac",
+                "freshness": "fresh",
+                "excerpt": "Retry a failed migration once.",
+            }],
+            "truncated": false,
+        })
+    );
+
+    let reply = recall(
+        home.path(),
+        &vault,
+        json!({ "cwd": cwd, "query": "kingfisher" }),
+    );
+    assert_eq!(
+        structured(&reply),
+        &json!({ "vault": "ok", "notes": [], "truncated": false })
+    );
+}
+
+#[test]
+fn recall_memory_labels_anchors_outside_their_repo_as_unchecked() {
+    let home = memory_home();
+    let note = "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6F\ntype: fact\ntitle: Migrations keep a log\n\
+anchors:\n  - path: src/db.rs\n    lines: 2-3\n    hash: b3:0123456789abcdef\n\
+---\nEvery migration writes a log line.\n";
+    add_note(home.path(), note, &[]);
+    let elsewhere = home.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+
+    let reply = recall(
+        home.path(),
+        &home.path().join("vault"),
+        json!({ "cwd": elsewhere.to_str().unwrap(), "query": "migration", "limit": 10 }),
+    );
+    assert_eq!(
+        structured(&reply)["notes"],
+        json!([{
+            "id": "01JC9V6Q4M8K2T7X3N5R0B1H6F",
+            "title": "Migrations keep a log",
+            "scope": "global",
+            "freshness": "unchecked",
+            "excerpt": "Every migration writes a log line.",
+        }])
+    );
+}
+
+#[test]
+fn recall_memory_without_a_vault_is_missing_and_creates_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let vault = home.path().join("none");
+    let reply = recall(
+        home.path(),
+        &vault,
+        json!({ "cwd": home.path().to_str().unwrap(), "query": "migration" }),
+    );
+    assert_eq!(
+        structured(&reply),
+        &json!({ "vault": "missing", "notes": [] })
+    );
+    assert!(!vault.exists(), "the server created a vault");
+    assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn recall_memory_masks_a_secret_in_a_hand_written_note() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let note = format!(
+        "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6E\ntype: fact\ntitle: Deploy with ghp_{SECRET_BODY}\n\
+scope: global\nstatus: active\ncreated: 2026-11-02\n---\n\
+Deploy zanzibar with token ghp_{SECRET_BODY} only.\n"
+    );
+    std::fs::create_dir_all(vault.join("global")).unwrap();
+    std::fs::write(vault.join("global/deploy.md"), note).unwrap();
+
+    let reply = recall(
+        home.path(),
+        &vault,
+        json!({ "cwd": home.path().to_str().unwrap(), "query": "zanzibar" }),
+    );
+    assert!(!reply.to_string().contains(SECRET_BODY), "{reply}");
+    let note = &structured(&reply)["notes"][0];
+    assert_eq!(note["title"], "Deploy with «redacted:github-token»");
+    assert_eq!(
+        note["excerpt"],
+        "Deploy zanzibar with token «redacted:github-token» only."
+    );
+}
+
+#[test]
+fn recall_memory_drops_notes_from_the_tail_to_fit_the_reply() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    std::fs::create_dir_all(vault.join("global")).unwrap();
+    for i in 0..10 {
+        let note = format!(
+            "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H{i:02}\ntype: fact\ntitle: Zanzibar {}\n\
+scope: global\nstatus: active\ncreated: 2026-11-02\n---\nZanzibar body.\n",
+            "w".repeat(600)
+        );
+        std::fs::write(vault.join(format!("global/n{i}.md")), note).unwrap();
+    }
+    let reply = recall(
+        home.path(),
+        &vault,
+        json!({ "cwd": home.path().to_str().unwrap(), "query": "zanzibar", "limit": 10 }),
+    );
+    let content = structured(&reply);
+    assert_eq!(content["truncated"], true);
+    assert_eq!(content["notes"].as_array().unwrap().len(), 8);
+    assert!(content.to_string().chars().count() <= 6_000);
+}
+
+#[test]
+fn recall_memory_rejects_bad_arguments_with_a_code_and_a_fix() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let cwd = home.path().to_str().unwrap();
+    let cases = [
+        (
+            json!({ "cwd": cwd, "query": "x", "limit": 11 }),
+            "limit",
+            "must be an integer from 1 to 10",
+        ),
+        (
+            json!({ "cwd": "src", "query": "x" }),
+            "cwd",
+            "must be an absolute path",
+        ),
+        (
+            json!({ "cwd": cwd, "query": "--" }),
+            "query",
+            "must contain at least one word",
+        ),
+    ];
+    for (arguments, field, problem) in cases {
+        let reply = recall(home.path(), &vault, arguments);
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
+        assert_eq!(
+            reply["result"]["structuredContent"],
+            json!({
+                "code": "invalid_argument",
+                "field": field,
+                "message": format!("`{field}` {problem}"),
+                "fix": format!("Fix `{field}`: {problem}, then call again."),
+            })
+        );
+    }
 }
