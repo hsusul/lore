@@ -27,6 +27,10 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
     let at = |p: &str| home.join(p);
     let agents_cgc = at(".agents/skills/clean-git-commit");
     let claude_cgc = at(".claude/skills/clean-git-commit");
+    let unknown = |skill: &str, path: &str| Finding::UnknownSource {
+        skill: skill.into(),
+        path: at(path),
+    };
 
     let expected = vec![
         Finding::Drift {
@@ -48,6 +52,8 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
             skill: "clean-git-commit".into(),
             paths: vec![agents_cgc.clone(), claude_cgc.clone()],
         },
+        unknown("clean-git-commit", ".agents/skills/clean-git-commit"),
+        unknown("clean-git-commit", ".claude/skills/clean-git-commit"),
         Finding::Duplicate {
             skill: "gpt-taste".into(),
             paths: vec![
@@ -62,6 +68,11 @@ fn the_fixture_home_yields_exactly_these_findings_worst_first() {
                 at(".codex/plugins/cache/mkt/tool/1.0/skills/tool-skill"),
             ],
         },
+        unknown("bad-yaml", ".agents/skills/bad-yaml"),
+        unknown("big", ".codex/skills/big"),
+        unknown("claude-only", ".claude/skills/claude-only"),
+        unknown("mislabeled", ".agents/skills/mislabeled"),
+        unknown("referrer", ".agents/skills/referrer"),
     ];
     assert_eq!(lore_skills::doctor(&inventory), expected);
 }

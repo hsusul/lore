@@ -68,7 +68,7 @@ Options:
 
 Skills:
     skills ls         Every skill folder each agent loads, with its source.
-    skills doctor     Duplicates and drift.
+    skills doctor     Duplicates, drift, and unknown sources.
                       Each gets a quoted command or a plain hint. Never
                       writes; exits 0.
 

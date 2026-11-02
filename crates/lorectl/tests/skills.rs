@@ -64,7 +64,7 @@ fn doctor_reports_and_still_exits_zero() {
     let summary = text.lines().last().unwrap();
     assert_eq!(
         summary,
-        "3 duplicates, 1 drift; 4 findings; 12 skills found"
+        "3 duplicates, 1 drift, 7 unknown sources; 11 findings; 12 skills found"
     );
     assert!(text.starts_with("clean-git-commit\n  drift"), "{text}");
 }
@@ -85,6 +85,20 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
             fix,
         )
     };
+    let hint = |kind: &str, skill: &str, fix: String| {
+        (kind.to_string(), skill.to_string(), "hint".to_string(), fix)
+    };
+    let unknown = |skill: &str, rel: &str| {
+        hint(
+            "unknown-source",
+            skill,
+            format!(
+                "No lockfile or plugin records '{h}/{rel}'. If you wrote it, there is \
+                 nothing to do. If it came from a repo, back up any local edits, then \
+                 reinstall it with the skills CLI so a lockfile records it."
+            ),
+        )
+    };
     let diff = |a: &str, b: &str| format!("diff -ru '{h}/{a}' '{h}/{b}'");
     let cgc = diff(
         ".agents/skills/clean-git-commit",
@@ -94,6 +108,8 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
     let expected = vec![
         cmd("drift", "clean-git-commit", cgc.clone()),
         cmd("duplicate", "clean-git-commit", cgc),
+        unknown("clean-git-commit", ".agents/skills/clean-git-commit"),
+        unknown("clean-git-commit", ".claude/skills/clean-git-commit"),
         cmd(
             "duplicate",
             "gpt-taste",
@@ -107,6 +123,11 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
                 ".codex/plugins/cache/mkt/tool/1.0/skills/tool-skill",
             ),
         ),
+        unknown("bad-yaml", ".agents/skills/bad-yaml"),
+        unknown("big", ".codex/skills/big"),
+        unknown("claude-only", ".claude/skills/claude-only"),
+        unknown("mislabeled", ".agents/skills/mislabeled"),
+        unknown("referrer", ".agents/skills/referrer"),
     ];
     let output = lorectl(&home, &["skills", "doctor", "--json"]);
     assert_eq!(output.status.code(), Some(0));
@@ -150,9 +171,18 @@ fn hostile_folder_names_are_quoted_in_every_fix_and_run_as_data() {
         let agents = format!("'{h}/.agents/skills/{quoted}'");
         let claude = format!("'{h}/.claude/skills/{quoted}'");
         let diff = format!("diff -ru {agents} {claude}");
+        let unknown = |p: &str| {
+            format!(
+                "No lockfile or plugin records '{h}/{p}/{quoted}'. If you wrote it, there \
+                 is nothing to do. If it came from a repo, back up any local edits, then \
+                 reinstall it with the skills CLI so a lockfile records it."
+            )
+        };
         for (kind, fix_kind, fix) in [
             ("drift", "command", diff.clone()),
             ("duplicate", "command", diff),
+            ("unknown-source", "hint", unknown(".agents/skills")),
+            ("unknown-source", "hint", unknown(".claude/skills")),
         ] {
             expected.push((kind.into(), (*name).into(), fix_kind.into(), fix));
         }
@@ -292,7 +322,7 @@ fn doctor_json_is_the_same_findings_each_with_a_fix() {
     let output = lorectl(&fixture_home(), &["skills", "doctor", "--json"]);
     assert_eq!(output.status.code(), Some(0));
     let findings = json(&output);
-    assert_eq!(findings.len(), 4);
+    assert_eq!(findings.len(), 11);
     assert_eq!(findings[0]["kind"], "drift");
 }
 

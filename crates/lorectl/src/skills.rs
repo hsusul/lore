@@ -160,6 +160,9 @@ fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
             let paths: Vec<String> = paths.iter().map(|p| show(p)).collect();
             format!("{} separate copies: {}", paths.len(), paths.join(", "))
         }
+        Finding::UnknownSource { path, .. } => {
+            format!("{} is in no lockfile or plugin manifest", show(path))
+        }
     }
 }
 
@@ -167,9 +170,10 @@ fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
 fn summary(findings: &[Finding], skills: usize) -> String {
     let count = |kind: &str| findings.iter().filter(|f| f.kind() == kind).count();
     format!(
-        "{} duplicates, {} drift; {} findings; {skills} skills found",
+        "{} duplicates, {} drift, {} unknown sources; {} findings; {skills} skills found",
         count("duplicate"),
         count("drift"),
+        count("unknown-source"),
         findings.len(),
     )
 }
