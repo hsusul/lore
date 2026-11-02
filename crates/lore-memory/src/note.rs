@@ -107,7 +107,9 @@ pub struct NoteDate(time::Date);
 /// A note.
 ///
 /// `body` is everything after the closing `---` fence, kept byte for byte: the
-/// current statement first, then an append-only `## Timeline`.
+/// current statement first, then an append-only `## Timeline`. `extra` keeps
+/// the frontmatter's layout and every key Lore does not own, so a parse then a
+/// render never loses an Obsidian plugin's keys.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Note {
     pub id: NoteId,
@@ -123,6 +125,58 @@ pub struct Note {
     pub created: NoteDate,
     pub forget_after: Option<NoteDate>,
     pub body: String,
+    pub extra: Frontmatter,
+}
+
+/// The frontmatter's layout: Lore's keys in the order the file had them, with
+/// unknown keys, comments, and blank lines kept as verbatim text in place.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Frontmatter {
+    slots: Vec<Slot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Slot {
+    Known(Key),
+    /// A Lore key written with nothing after the colon. Rendered the same way
+    /// while it has no value, so clearing a field in Obsidian round trips.
+    Empty(Key),
+    Raw(String),
+}
+
+impl Slot {
+    fn key(&self) -> Option<Key> {
+        match self {
+            Slot::Known(key) | Slot::Empty(key) => Some(*key),
+            Slot::Raw(_) => None,
+        }
+    }
+}
+
+/// The frontmatter keys Lore owns, in the order a new note writes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Key {
+    Id,
+    Type,
+    Title,
+    Scope,
+    Repo,
+    Status,
+    Created,
+    ForgetAfter,
+}
+
+/// Why a file is not a valid note. Every variant names what to fix.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum NoteError {
+    #[error("not a note: {0}")]
+    NotANote(&'static str),
+    #[error("missing required key `{0}`")]
+    Missing(&'static str),
+    #[error("key `{0}` appears twice")]
+    Duplicate(&'static str),
+    #[error("`{field}`: {problem}")]
+    Field { field: String, problem: String },
 }
 
 /// A value that does not fit its type. The text says what was expected.
@@ -132,6 +186,13 @@ pub struct InvalidValue(String);
 
 fn invalid(problem: impl Into<String>) -> InvalidValue {
     InvalidValue(problem.into())
+}
+
+fn field_error(field: impl Into<String>, problem: impl fmt::Display) -> NoteError {
+    NoteError::Field {
+        field: field.into(),
+        problem: problem.to_string(),
+    }
 }
 
 fn is_lower_hex(s: &str) -> bool {
@@ -545,4 +606,323 @@ impl fmt::Display for NoteDate {
             self.0.day()
         )
     }
+}
+
+impl Key {
+    const ALL: [Key; 8] = [
+        Key::Id,
+        Key::Type,
+        Key::Title,
+        Key::Scope,
+        Key::Repo,
+        Key::Status,
+        Key::Created,
+        Key::ForgetAfter,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Key::Id => "id",
+            Key::Type => "type",
+            Key::Title => "title",
+            Key::Scope => "scope",
+            Key::Repo => "repo",
+            Key::Status => "status",
+            Key::Created => "created",
+            Key::ForgetAfter => "forget_after",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+}
+
+impl Frontmatter {
+    fn has(&self, key: Key) -> bool {
+        self.slots.iter().any(|slot| slot.key() == Some(key))
+    }
+}
+
+impl Note {
+    /// Parse a note file. Every required key must be present.
+    pub fn parse(text: &str) -> Result<Note, NoteError> {
+        parse_note(text)
+    }
+}
+
+const NO_COMMENT: &str =
+    "remove the trailing `#` comment, Lore rewrites this key and would drop it (quote the value if `#` is part of it)";
+
+/// Read one YAML scalar of a key Lore owns: plain, single-quoted, or
+/// double-quoted. A trailing comment is refused rather than dropped, because
+/// a render could not put it back.
+fn parse_scalar(raw: &str) -> Result<String, InvalidValue> {
+    let raw = raw.trim();
+    let rest_is_comment = |rest: &str| {
+        let rest = rest.trim_start();
+        if rest.starts_with('#') {
+            return Err(invalid(NO_COMMENT));
+        }
+        Ok(rest.is_empty())
+    };
+    if let Some(inner) = raw.strip_prefix('"') {
+        let mut value = String::new();
+        let mut chars = inner.char_indices();
+        while let Some((i, c)) = chars.next() {
+            match c {
+                '"' => {
+                    return match inner.get(i + 1..).map(rest_is_comment) {
+                        Some(Ok(true)) => Ok(value),
+                        Some(Err(e)) => Err(e),
+                        _ => Err(invalid("text after the closing quote")),
+                    }
+                }
+                '\\' => match chars.next().map(|(_, e)| e) {
+                    Some('\\') => value.push('\\'),
+                    Some('"') => value.push('"'),
+                    Some('/') => value.push('/'),
+                    Some('t') => value.push('\t'),
+                    Some('n') => value.push('\n'),
+                    _ => return Err(invalid("unsupported escape in a quoted value")),
+                },
+                c => value.push(c),
+            }
+        }
+        return Err(invalid("a quoted value has no closing quote"));
+    }
+    if let Some(inner) = raw.strip_prefix('\'') {
+        let mut value = String::new();
+        let mut chars = inner.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            if c != '\'' {
+                value.push(c);
+            } else if chars.peek().is_some_and(|(_, n)| *n == '\'') {
+                value.push('\'');
+                chars.next();
+            } else {
+                return match inner.get(i + 1..).map(rest_is_comment) {
+                    Some(Ok(true)) => Ok(value),
+                    Some(Err(e)) => Err(e),
+                    _ => Err(invalid("text after the closing quote")),
+                };
+            }
+        }
+        return Err(invalid("a quoted value has no closing quote"));
+    }
+    if raw.starts_with(['|', '>', '[', '{', '&', '*', '!']) {
+        return Err(invalid(format!(
+            "expected a single-line value, got `{raw}`"
+        )));
+    }
+    if raw.starts_with('#') || raw.contains(" #") || raw.contains("\t#") {
+        return Err(invalid(NO_COMMENT));
+    }
+    Ok(raw.to_string())
+}
+
+/// A top-level frontmatter entry: `key: value` and its continuation lines.
+struct Block<'a> {
+    key: &'a str,
+    value: &'a str,
+    lines: Vec<&'a str>,
+    raw: String,
+}
+
+enum Piece<'a> {
+    Raw(String),
+    Block(Block<'a>),
+}
+
+fn split_document(text: &str) -> Result<(&str, &str), NoteError> {
+    let rest = text.strip_prefix("---\n").ok_or(NoteError::NotANote(
+        "the file does not start with a `---` line",
+    ))?;
+    let mut at = 0;
+    loop {
+        let remaining = rest.get(at..).unwrap_or_default();
+        match remaining.find('\n') {
+            Some(end) => {
+                if remaining.get(..end) == Some("---") {
+                    let body = remaining.get(end + 1..).unwrap_or_default();
+                    return Ok((rest.get(..at).unwrap_or_default(), body));
+                }
+                at += end + 1;
+            }
+            None if remaining == "---" => return Ok((rest.get(..at).unwrap_or_default(), "")),
+            None => {
+                return Err(NoteError::NotANote(
+                    "the frontmatter has no closing `---` line",
+                ))
+            }
+        }
+    }
+}
+
+fn group_lines(frontmatter: &str) -> Result<Vec<Piece<'_>>, NoteError> {
+    let mut pieces: Vec<Piece<'_>> = Vec::new();
+    for (number, line) in frontmatter.split_inclusive('\n').enumerate() {
+        let content = line.trim_end_matches('\n');
+        let continues = content.starts_with([' ', '\t', '-']) || content.trim().is_empty();
+        if continues {
+            match pieces.last_mut() {
+                Some(Piece::Block(block)) => {
+                    block.raw.push_str(line);
+                    block.lines.push(content);
+                }
+                Some(Piece::Raw(raw)) => raw.push_str(line),
+                None => pieces.push(Piece::Raw(line.to_string())),
+            }
+        } else if content.starts_with('#') {
+            pieces.push(Piece::Raw(line.to_string()));
+        } else {
+            let (key, value) = content.split_once(':').ok_or_else(|| {
+                field_error(
+                    "frontmatter",
+                    format!("line {} is not `key: value`", number + 2),
+                )
+            })?;
+            pieces.push(Piece::Block(Block {
+                key: key.trim_end(),
+                value,
+                lines: Vec::new(),
+                raw: line.to_string(),
+            }));
+        }
+    }
+    Ok(pieces)
+}
+
+/// Values read from Lore's keys, before the required ones are checked.
+#[derive(Default)]
+struct Fields {
+    id: Option<NoteId>,
+    note_type: Option<NoteType>,
+    title: Option<String>,
+    scope: Option<Scope>,
+    status: Option<Status>,
+    repo: Option<RepoName>,
+    anchors: Vec<Anchor>,
+    relations: Vec<Relation>,
+    sources: Vec<SourceRef>,
+    created: Option<NoteDate>,
+    forget_after: Option<NoteDate>,
+}
+
+fn scalar_field(key: Key, block: &Block<'_>) -> Result<String, NoteError> {
+    if block.lines.iter().any(|l| !l.trim().is_empty()) {
+        return Err(field_error(key.name(), "expected a single-line value"));
+    }
+    parse_scalar(block.value).map_err(|e| field_error(key.name(), e))
+}
+
+fn typed<T>(
+    key: Key,
+    value: &str,
+    parse: fn(&str) -> Result<T, InvalidValue>,
+) -> Result<T, NoteError> {
+    parse(value).map_err(|e| field_error(key.name(), e))
+}
+
+fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), NoteError> {
+    match key {
+        Key::Id => fields.id = Some(typed(key, &scalar_field(key, block)?, NoteId::parse)?),
+        Key::Type => {
+            fields.note_type = Some(typed(key, &scalar_field(key, block)?, NoteType::parse)?);
+        }
+        Key::Title => {
+            let title = scalar_field(key, block)?;
+            if title.trim().is_empty() || title.chars().any(char::is_control) {
+                return Err(field_error(
+                    key.name(),
+                    "expected one non-empty line of text",
+                ));
+            }
+            fields.title = Some(title);
+        }
+        Key::Scope => fields.scope = Some(typed(key, &scalar_field(key, block)?, Scope::parse)?),
+        Key::Status => fields.status = Some(typed(key, &scalar_field(key, block)?, Status::parse)?),
+        Key::Repo => {
+            let value = scalar_field(key, block)?;
+            if !value.is_empty() {
+                fields.repo = Some(typed(key, &value, RepoName::parse)?);
+            }
+        }
+        Key::Created => {
+            fields.created = Some(typed(key, &scalar_field(key, block)?, NoteDate::parse)?);
+        }
+        Key::ForgetAfter => {
+            let value = scalar_field(key, block)?;
+            if !value.is_empty() {
+                fields.forget_after = Some(typed(key, &value, NoteDate::parse)?);
+            }
+        }
+    }
+    Ok(())
+}
+
+const CRLF: &str = "CRLF line endings are not supported in the frontmatter";
+
+fn parse_note(text: &str) -> Result<Note, NoteError> {
+    if text.starts_with("---\r\n") {
+        return Err(NoteError::NotANote(CRLF));
+    }
+    let (frontmatter, body) = split_document(text)?;
+    if frontmatter.contains('\r') {
+        return Err(NoteError::NotANote(CRLF));
+    }
+    let mut extra = Frontmatter::default();
+    let mut fields = Fields::default();
+    for piece in group_lines(frontmatter)? {
+        let block = match piece {
+            Piece::Raw(raw) => {
+                extra.slots.push(Slot::Raw(raw));
+                continue;
+            }
+            Piece::Block(block) => block,
+        };
+        let Some(key) = Key::from_name(block.key) else {
+            extra.slots.push(Slot::Raw(block.raw));
+            continue;
+        };
+        if extra.has(key) {
+            return Err(NoteError::Duplicate(key.name()));
+        }
+        read_block(key, &block, &mut fields)?;
+        let empty =
+            block.value.trim().is_empty() && block.lines.iter().all(|l| l.trim().is_empty());
+        extra.slots.push(if empty {
+            Slot::Empty(key)
+        } else {
+            Slot::Known(key)
+        });
+        let trailing: String = block
+            .raw
+            .split_inclusive('\n')
+            .rev()
+            .take_while(|l| l.trim().is_empty())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        if !trailing.is_empty() {
+            extra.slots.push(Slot::Raw(trailing));
+        }
+    }
+
+    Ok(Note {
+        id: fields.id.ok_or(NoteError::Missing("id"))?,
+        note_type: fields.note_type.ok_or(NoteError::Missing("type"))?,
+        title: fields.title.ok_or(NoteError::Missing("title"))?,
+        scope: fields.scope.ok_or(NoteError::Missing("scope"))?,
+        repo: fields.repo,
+        status: fields.status.ok_or(NoteError::Missing("status"))?,
+        anchors: fields.anchors,
+        relations: fields.relations,
+        sources: fields.sources,
+        created: fields.created.ok_or(NoteError::Missing("created"))?,
+        forget_after: fields.forget_after,
+        body: body.to_string(),
+        extra,
+    })
 }
