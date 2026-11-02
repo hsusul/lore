@@ -62,10 +62,15 @@ MCP server (lorectl mcp [--archive <DIR>]):
 const HOOK_USAGE: &str = "\
 Hooks (lorectl hook <EVENT> [--archive <DIR>]):
     session-start     One line when files agents wrote in this repository are
-                      staged and not committed; otherwise nothing
-    Run by an agent, not a person. Read-only, and it never scans. Every
-    failure, and any other EVENT, exits 0 in silence, so a session never
-    stalls on Lore.
+                      staged and not committed. Then up to 10 accepted
+                      memory notes for the repository, each with its
+                      freshness label, and how many more recall_memory
+                      lists. Prints nothing when there is neither.
+    Notes are for `cwd` in the hook JSON on stdin, else the current
+    directory. LORE_VAULT_DIR names the vault; otherwise ~/Lore.
+    Run by an agent, not a person. It never scans, and it writes nothing
+    but the vault's rebuildable index. Every failure, and any other EVENT,
+    exits 0 in silence, so a session never stalls on Lore.
 ";
 
 /// The full usage text.
