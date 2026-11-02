@@ -45,6 +45,15 @@ pub fn forget_session(
             "DELETE FROM search_document WHERE session_id = ?1",
             [session_id],
         )?;
+        // The original logs remain, so mark their sources forgotten: a later
+        // re-parse of unchanged content (a parser version bump) skips them
+        // instead of restoring the session.
+        tx.execute(
+            "UPDATE ingest_state SET state = ?2, updated_at = unixepoch('now')*1000
+             WHERE source_artifact_id IN
+                 (SELECT source_artifact_id FROM session_source WHERE session_id = ?1)",
+            [session_id, crate::ingest::FORGOTTEN],
+        )?;
         tx.execute("DELETE FROM agent_session WHERE id = ?1", [session_id])?;
 
         let orphans = orphan_blobs(&tx)?;
