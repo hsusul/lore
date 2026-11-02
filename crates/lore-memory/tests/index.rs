@@ -171,6 +171,40 @@ fn index_find_resolves_ids_slugs_and_paths() {
 }
 
 #[test]
+fn index_excerpts_leave_out_the_timeline_but_it_stays_searchable() {
+    let (_dir, vault) = fixture_vault();
+    vault
+        .add("---\ntype: fact\ntitle: Herons wait\n---\nHerons wait for fish.\n\n## Timeline\n- 2026-11-01 heron noted by codex\n")
+        .unwrap();
+    for query in ["herons", "heron"] {
+        let hits = vault.search(query, 3).unwrap();
+        assert_eq!(hits[0].slug, "herons-wait");
+        assert!(!hits[0].excerpt.contains("Timeline"), "{}", hits[0].excerpt);
+        assert!(!hits[0].excerpt.contains("2026"), "{}", hits[0].excerpt);
+    }
+    assert_eq!(top3(&vault, "codex noted"), ["herons-wait"]);
+}
+
+#[test]
+fn index_slug_is_the_file_name_so_a_renamed_file_is_found_by_it() {
+    let (dir, vault) = fixture_vault();
+    let old = dir
+        .path()
+        .join("repos/3f9a1c0b/reference-id-panics-on-symbolic-refs.md");
+    std::fs::rename(
+        &old,
+        dir.path().join("repos/3f9a1c0b/peel-symbolic-refs.md"),
+    )
+    .unwrap();
+    vault.reindex().unwrap();
+    assert_eq!(
+        vault.find("peel-symbolic-refs").unwrap(),
+        "repos/3f9a1c0b/peel-symbolic-refs.md"
+    );
+    assert_eq!(top3(&vault, "Reference::id")[0], "peel-symbolic-refs");
+}
+
+#[test]
 fn index_search_treats_punctuation_as_text() {
     let (_dir, vault) = fixture_vault();
     for query in ["\"", "NEAR(", "a OR", "*", "title:x", "(", ""] {

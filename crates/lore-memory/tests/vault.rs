@@ -52,7 +52,7 @@ fn vault_init_is_a_git_repo_that_ignores_lore_and_inbox() {
     let (dir, _vault) = new_vault();
     assert_eq!(
         std::fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
-        ".lore/\n_inbox/\n"
+        ".lore/\n_inbox/\n.*.md.tmp\n"
     );
     assert_eq!(subjects(dir.path()), ["mem: init vault"]);
     let (_, again) = Vault::init(dir.path()).unwrap();
@@ -178,6 +178,176 @@ fn vault_concurrent_adds_all_land_and_fsck_is_clean() {
     }
     git(&root, &["fsck", "--strict"]);
     assert!(git(&root, &["status", "--porcelain"]).is_empty());
+}
+
+const ID: &str = "01JC9V6Q4M8K2T7X3N5R0B1H6D";
+
+#[test]
+fn vault_add_refuses_an_id_another_note_already_has() {
+    let (dir, vault) = new_vault();
+    let first = format!("---\nid: {ID}\ntype: fact\ntitle: First\n---\nOne.\n");
+    vault.add(&first).unwrap();
+    let second = format!("---\nid: {ID}\ntype: fact\ntitle: Second\n---\nTwo.\n");
+    let error = vault.add(&second).unwrap_err();
+    assert!(
+        matches!(error, VaultError::DuplicateId { ref id, ref existing } if id == ID && existing == "global/first.md"),
+        "{error:?}"
+    );
+    assert!(!dir.path().join("global/second.md").exists());
+    assert_eq!(subjects(dir.path()).len(), 2);
+}
+
+#[test]
+fn vault_add_refuses_an_id_from_a_hand_copied_file_the_index_has_not_seen() {
+    let (dir, vault) = new_vault();
+    vault.search("anything", 5).unwrap();
+    let copied = format!("---\nid: {ID}\ntype: fact\ntitle: Copied\nscope: global\nstatus: active\ncreated: 2026-11-01\n---\nC.\n");
+    std::fs::create_dir_all(dir.path().join("global")).unwrap();
+    std::fs::write(dir.path().join("global/copied.md"), copied).unwrap();
+    let error = vault
+        .add(&format!("---\nid: {ID}\ntype: fact\ntitle: New\n---\nN.\n"))
+        .unwrap_err();
+    assert!(matches!(error, VaultError::DuplicateId { .. }), "{error:?}");
+}
+
+#[test]
+fn vault_reindex_reports_duplicate_ids_with_both_paths_and_indexes_the_rest() {
+    let (dir, vault) = new_vault();
+    vault.add(NOTE).unwrap();
+    let text = |title: &str| {
+        format!("---\nid: {ID}\ntype: fact\ntitle: {title}\nscope: global\nstatus: active\ncreated: 2026-11-01\n---\nB.\n")
+    };
+    std::fs::write(dir.path().join("global/a.md"), text("A")).unwrap();
+    std::fs::write(dir.path().join("global/b.md"), text("B")).unwrap();
+    let report = vault.reindex().unwrap();
+    assert_eq!(report.indexed, 3);
+    assert_eq!(report.duplicates.len(), 1);
+    assert_eq!(report.duplicates[0].id.as_str(), ID);
+    assert_eq!(report.duplicates[0].paths, ["global/a.md", "global/b.md"]);
+}
+
+/// Hooks and signing configured in the vault's own git config, the way a
+/// person's global config would carry them. Either one would block or fail a
+/// commit if Lore inherited it.
+#[test]
+fn vault_commits_skip_hooks_and_signing() {
+    let (dir, vault) = new_vault();
+    let hooks = dir.path().join(".lore/test-hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    git(
+        dir.path(),
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
+    git(dir.path(), &["config", "commit.gpgsign", "true"]);
+    git(dir.path(), &["config", "gpg.program", "/nonexistent/gpg"]);
+    let (_, added) = vault.add(NOTE).unwrap();
+    assert_eq!(added, Added::Committed);
+    assert_eq!(subjects(dir.path()).len(), 2);
+}
+
+#[test]
+fn vault_lock_gives_up_with_busy_after_a_bounded_wait() {
+    let (dir, vault) = new_vault();
+    let held = vault.lock().unwrap();
+    let started = std::time::Instant::now();
+    let error = Vault::open(dir.path()).unwrap().add(NOTE).unwrap_err();
+    let waited = started.elapsed();
+    drop(held);
+    assert!(matches!(error, VaultError::Busy(_)), "{error:?}");
+    assert!(waited >= lore_memory::vault::LOCK_WAIT, "{waited:?}");
+    assert!(waited < lore_memory::vault::LOCK_WAIT * 3, "{waited:?}");
+    assert!(!dir.path().join("global").exists());
+}
+
+#[test]
+fn vault_write_replaces_an_existing_note_in_place_and_commits() {
+    let (dir, vault) = new_vault();
+    let (mut note, _) = vault.add(NOTE).unwrap();
+    std::fs::rename(
+        dir.path().join("global/prune-worktrees.md"),
+        dir.path().join("global/renamed.md"),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "-A"]);
+    git(dir.path(), &["commit", "-q", "-m", "rename"]);
+    note.body = "Run `git worktree prune -v`.\n".into();
+    assert_eq!(
+        vault.write("global/renamed.md", &note).unwrap(),
+        Added::Committed
+    );
+    assert_eq!(vault.read("global/renamed.md").unwrap(), note.render());
+    assert_eq!(subjects(dir.path())[0], "mem: update renamed");
+    assert!(git(dir.path(), &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        vault.write("global/renamed.md", &note).unwrap(),
+        Added::Unchanged
+    );
+    assert_eq!(vault.search("verbose prune", 5).unwrap().len(), 0);
+    assert_eq!(
+        vault.search("prune", 5).unwrap()[0].path,
+        "global/renamed.md"
+    );
+}
+
+#[test]
+fn vault_write_refuses_a_missing_file_or_another_notes_path() {
+    let (_dir, vault) = new_vault();
+    let (note, _) = vault.add(NOTE).unwrap();
+    assert!(matches!(
+        vault.write("global/nope.md", &note),
+        Err(VaultError::NotFound(_))
+    ));
+    let (other, _) = vault
+        .add("---\ntype: fact\ntitle: Other\n---\nO.\n")
+        .unwrap();
+    assert!(matches!(
+        vault.write(&other.rel_path(), &note),
+        Err(VaultError::Conflict(_))
+    ));
+}
+
+#[test]
+fn vault_write_temp_files_are_gitignored() {
+    let (dir, _vault) = new_vault();
+    std::fs::create_dir_all(dir.path().join("global")).unwrap();
+    std::fs::write(dir.path().join("global/.x.md.tmp"), "half").unwrap();
+    assert!(git(dir.path(), &["status", "--porcelain"]).is_empty());
+}
+
+#[test]
+fn vault_search_and_find_see_hand_edits_renames_and_deletes() {
+    let (dir, vault) = new_vault();
+    vault.add(NOTE).unwrap();
+    let other = vault
+        .add("---\ntype: fact\ntitle: Kingfisher facts\n---\nBlue birds.\n")
+        .unwrap()
+        .0;
+    assert_eq!(vault.search("prune", 5).unwrap().len(), 1);
+    let path = dir.path().join("global/prune-worktrees.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("Run", "Quetzalcoatl says run")).unwrap();
+    let hits = vault.search("quetzalcoatl", 5).unwrap();
+    assert_eq!(hits.len(), 1, "an edit is found without reindex");
+    std::fs::rename(&path, dir.path().join("global/tidy-up.md")).unwrap();
+    assert_eq!(vault.find("tidy-up").unwrap(), "global/tidy-up.md");
+    assert_eq!(vault.search("quetzalcoatl", 5).unwrap()[0].slug, "tidy-up");
+    assert!(matches!(
+        vault.find("prune-worktrees"),
+        Err(VaultError::NotFound(_))
+    ));
+    std::fs::remove_file(dir.path().join(other.rel_path())).unwrap();
+    assert!(vault.search("kingfisher", 5).unwrap().is_empty());
+    assert!(matches!(
+        vault.find(other.id.as_str()),
+        Err(VaultError::NotFound(_))
+    ));
 }
 
 #[test]
