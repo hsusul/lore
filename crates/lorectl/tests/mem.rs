@@ -318,6 +318,55 @@ fn mem_add_cwd_pins_anchors_and_names_the_repo() {
 }
 
 #[test]
+fn mem_recall_labels_notes_against_the_repo_at_cwd() {
+    let (dir, vault) = init();
+    let repo = lore_repo(dir.path());
+    let global_note =
+        "---\ntype: fact\ntitle: Migrations are global\n---\nEvery migration is logged.\n";
+    let cwd = repo.to_str().unwrap();
+    let file = note_file(dir.path(), "r.md", REPO_NOTE);
+    let added = lorectl(&vault, &["add", &file, "--cwd", cwd]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    lorectl(
+        &vault,
+        &["add", &note_file(dir.path(), "g.md", global_note)],
+    );
+
+    std::fs::write(repo.join("src/a.rs"), "fn retry_twice() {}\n").unwrap();
+    let out = lorectl(&vault, &["recall", "migration", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "unanchored  migrations-are-global  global                 Every migration is logged.\n\
+         changed     retry-the-migration    repo:81444c90f1ff44ac  Retry a failed migration once.\n"
+    );
+    assert_eq!(stderr(&out), "");
+
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let out = lorectl(
+        &vault,
+        &[
+            "recall",
+            "migration",
+            "--json",
+            "--cwd",
+            elsewhere.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stderr(&out).matches("recalling global notes only").count(),
+        1
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(json["repo"]["state"], "no_repo");
+    assert_eq!(json["notes"].as_array().unwrap().len(), 1);
+    assert_eq!(json["notes"][0]["freshness"], "unanchored");
+    assert_eq!(status(&vault), "");
+}
+
+#[test]
 fn mem_reindex_reports_skipped_files() {
     let (dir, vault) = init();
     lorectl(&vault, &["add", &note_file(dir.path(), "n.md", NOTE)]);
