@@ -314,10 +314,45 @@ impl RepoName {
         }
     }
 
+    /// The name in an origin URL or path: `git@host:me/lore.git` is `lore`.
+    #[must_use]
+    pub fn from_origin(origin: &str) -> Option<Self> {
+        let trimmed = origin.trim().trim_end_matches(['/', '\\']);
+        let last = trimmed.rsplit(['/', ':', '\\']).next()?;
+        Self::parse(last.strip_suffix(".git").unwrap_or(last)).ok()
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The folder-name form: see [`Note::slug`].
+    #[must_use]
+    pub fn slug(&self) -> String {
+        slugify(&self.0)
+    }
+}
+
+/// Lowercase letters and digits of any script, other runs joined by `-`. At
+/// most 64 characters and 200 bytes, so the file name fits every filesystem.
+fn slugify(text: &str) -> String {
+    let mut slug = String::new();
+    let mut chars = 0;
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            let lower: String = c.to_lowercase().collect();
+            if chars >= 64 || slug.len() + lower.len() > 200 {
+                break;
+            }
+            slug.push_str(&lower);
+            chars += 1;
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+            chars += 1;
+        }
+    }
+    slug.trim_end_matches('-').to_string()
 }
 
 impl Scope {
@@ -330,6 +365,16 @@ impl Scope {
             None => Err(invalid(format!(
                 "expected `global` or `repo:<hex>`, got `{s}`"
             ))),
+        }
+    }
+
+    /// The vault directory for this scope when the repository has no name.
+    /// [`Note::dir`] is where a note goes.
+    #[must_use]
+    pub fn dir(&self) -> String {
+        match self {
+            Scope::Global => "global".to_string(),
+            Scope::Repo(key) => format!("repos/{}", key.as_str()),
         }
     }
 }
@@ -738,6 +783,53 @@ impl Note {
         out.push_str("---\n");
         out.push_str(&self.body);
         out
+    }
+
+    /// The file name stem for a new note: the title's letters and digits, in
+    /// any script, lowercased where case exists, other runs joined by `-`. The
+    /// lowercase id when the title has no letters or digits.
+    #[must_use]
+    pub fn slug(&self) -> String {
+        let slug = slugify(&self.title);
+        if slug.is_empty() {
+            self.id.as_str().to_ascii_lowercase()
+        } else {
+            slug
+        }
+    }
+
+    /// The folder a new note goes in: `global`, `repos/<name>-<key>` when the
+    /// note names its repository, else `repos/<key>`.
+    #[must_use]
+    pub fn dir(&self) -> String {
+        match (&self.scope, &self.repo) {
+            (Scope::Repo(key), Some(name)) if !name.slug().is_empty() => {
+                format!("repos/{}-{}", name.slug(), key.as_str())
+            }
+            _ => self.scope.dir(),
+        }
+    }
+
+    /// Where a new note lives in the vault: `<dir>/<slug>.md`. A person may
+    /// move or rename the file later; the vault finds notes by walking it.
+    #[must_use]
+    pub fn rel_path(&self) -> String {
+        format!("{}/{}.md", self.dir(), self.slug())
+    }
+
+    /// Add `aliases:` with the title right after `title:`, so `[[Title]]`
+    /// links resolve in Obsidian. Does nothing when the note has `aliases`.
+    pub fn add_title_alias(&mut self) {
+        if self.extra.unknown_keys().contains(&"aliases") {
+            return;
+        }
+        let raw = format!("aliases:\n  - {}\n", render_scalar(&self.title));
+        let slots = &mut self.extra.slots;
+        let at = slots
+            .iter()
+            .position(|s| s.key() == Some(Key::Title))
+            .map_or(slots.len(), |i| i + 1);
+        slots.insert(at, Slot::Raw(raw));
     }
 
     fn has_value(&self, key: Key) -> bool {
@@ -1226,6 +1318,7 @@ fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
     }
 
     let (mut id_filled, mut created_filled) = (false, false);
+    let drafting = fill.is_some();
     if let Some(fill) = fill {
         if fields.id.is_none() {
             fields.id = Some(fill.id);
@@ -1242,7 +1335,7 @@ fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
         }
     }
 
-    let note = Note {
+    let mut note = Note {
         id: fields.id.ok_or(NoteError::Missing("id"))?,
         note_type: fields.note_type.ok_or(NoteError::Missing("type"))?,
         title: fields.title.ok_or(NoteError::Missing("title"))?,
@@ -1257,6 +1350,9 @@ fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
         body: body.to_string(),
         extra,
     };
+    if drafting {
+        note.add_title_alias();
+    }
     Ok(Draft {
         note,
         id_filled,
