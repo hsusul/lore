@@ -216,3 +216,24 @@ fn index_search_treats_punctuation_as_text() {
     assert_eq!(hits[0].scope, "repo:3f9a1c0b5e2d7a46");
     assert!(!hits[0].excerpt.contains('\n'));
 }
+
+#[test]
+fn index_search_active_keeps_global_and_one_repo_and_drops_retired() {
+    let (_dir, vault) = fixture_vault();
+    let index = vault.index().unwrap();
+    let all = index.search("and", 100).unwrap();
+    let repo = "repo:3f9a1c0b5e2d7a46";
+    assert!(all.iter().any(|h| h.status == "retired" && h.scope == repo));
+    assert!(all.iter().any(|h| h.scope == "repo:a71e9d24c3b85f10"));
+    for scope in [Some(repo), None] {
+        let expected: Vec<&str> = all
+            .iter()
+            .filter(|h| h.status == "active")
+            .filter(|h| h.scope == "global" || Some(h.scope.as_str()) == scope)
+            .map(|h| h.path.as_str())
+            .collect();
+        let active = index.search_active("and", scope, 100).unwrap();
+        let paths: Vec<&str> = active.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(paths, expected, "{scope:?}");
+    }
+}
