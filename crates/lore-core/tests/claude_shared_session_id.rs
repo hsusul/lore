@@ -1,0 +1,226 @@
+//! Claude Code writes several transcript files that carry one `sessionId`: a
+//! subagent transcript under `<session>/subagents/` repeats its parent's id.
+//! Ingesting any of those files must not erase the text another one stored.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::path::{Path, PathBuf};
+
+use lore_core::adapters::claude_code::ClaudeCodeAdapter;
+use lore_core::ingest::{ingest_file, ChangeClass, IngestOutcome};
+use lore_core::search::search;
+use lore_core::storage::blob::BlobStore;
+use rusqlite::Connection;
+
+const PARENT_ID: &str = "cccccccc-0000-4000-8000-000000000001";
+
+fn fixture_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/claude_code/subagent_fold")
+}
+
+fn ingest_in_order(paths: &[PathBuf]) -> Connection {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(blob_dir.path()).unwrap();
+    for path in paths {
+        ingest_file(&conn, &ClaudeCodeAdapter::new(), path, &blobs).unwrap();
+    }
+    conn
+}
+
+fn session_for(conn: &Connection, native_session_id: &str) -> (String, Option<String>) {
+    conn.query_row(
+        "SELECT id, title FROM agent_session WHERE native_session_id = ?1",
+        [native_session_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .unwrap()
+}
+
+fn part_texts(conn: &Connection, session_id: &str) -> Vec<String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT p.text FROM message_part p JOIN message m ON m.id = p.message_id
+             WHERE m.session_id = ?1 AND p.text IS NOT NULL ORDER BY m.seq, p.ordinal",
+        )
+        .unwrap();
+    stmt.query_map([session_id], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap()
+}
+
+fn hit_sessions(conn: &Connection, term: &str) -> Vec<String> {
+    search(conn, term, 20)
+        .unwrap()
+        .into_iter()
+        .map(|h| h.session_id)
+        .collect()
+}
+
+#[test]
+fn subagent_transcript_does_not_replace_its_parent_session() {
+    let parent = fixture_dir().join(format!("{PARENT_ID}.jsonl"));
+    let subagent = fixture_dir().join(format!(
+        "{PARENT_ID}/subagents/agent-a0000000000000001.jsonl"
+    ));
+
+    for order in [
+        [parent.clone(), subagent.clone()],
+        [subagent.clone(), parent.clone()],
+    ] {
+        let conn = ingest_in_order(&order);
+        let (parent_session, title) = session_for(&conn, PARENT_ID);
+
+        assert!(
+            part_texts(&conn, &parent_session)
+                .contains(&"The parent answer names the heron.".to_string()),
+            "parent assistant text must reach message_part.text"
+        );
+        assert_eq!(title.as_deref(), Some("Placeholder parent title"));
+        assert_eq!(hit_sessions(&conn, "heron"), vec![parent_session.clone()]);
+
+        let otter = hit_sessions(&conn, "otter");
+        assert_eq!(otter.len(), 1, "subagent text must stay searchable");
+        assert_ne!(otter[0], parent_session);
+    }
+}
+
+fn line(session: &str, uuid: &str, role: &str, text: &str) -> String {
+    format!(
+        r#"{{"type":"{role}","uuid":"{uuid}","sessionId":"{session}","timestamp":"2026-10-31T18:00:00.000Z","message":{{"role":"{role}","content":[{{"type":"text","text":"{text}"}}]}}}}"#
+    ) + "\n"
+}
+
+fn native_ids(conn: &Connection) -> Vec<String> {
+    let mut stmt = conn
+        .prepare("SELECT native_session_id FROM agent_session ORDER BY native_session_id")
+        .unwrap();
+    stmt.query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap()
+}
+
+fn message_count(conn: &Connection, session_id: &str) -> i64 {
+    conn.query_row(
+        "SELECT count(*) FROM message WHERE session_id = ?1",
+        [session_id],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn subagent_session_id_is_the_parent_id_and_agent_file_name() {
+    let parent = fixture_dir().join(format!("{PARENT_ID}.jsonl"));
+    let subagent = fixture_dir().join(format!(
+        "{PARENT_ID}/subagents/agent-a0000000000000001.jsonl"
+    ));
+    let conn = ingest_in_order(&[parent, subagent]);
+    assert_eq!(
+        native_ids(&conn),
+        vec![
+            PARENT_ID.to_string(),
+            format!("{PARENT_ID}/agent-a0000000000000001"),
+        ]
+    );
+}
+
+#[test]
+fn subagent_without_agent_id_keeps_its_own_session() {
+    let parent_id = "eeeeeeee-0000-4000-8000-000000000001";
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join(format!("{parent_id}.jsonl"));
+    let sub_dir = dir.path().join(parent_id).join("subagents");
+    std::fs::create_dir_all(&sub_dir).unwrap();
+    let subagent = sub_dir.join("agent-a0000000000000002.jsonl");
+    std::fs::write(
+        &parent,
+        line(parent_id, "e1", "user", "parent question")
+            + &line(
+                parent_id,
+                "e2",
+                "assistant",
+                "parent answer names the maple",
+            ),
+    )
+    .unwrap();
+    // No agentId on any line: the id must come from the file name.
+    std::fs::write(&subagent, line(parent_id, "e3", "user", "subagent prompt")).unwrap();
+
+    for order in [
+        [parent.clone(), subagent.clone()],
+        [subagent.clone(), parent.clone()],
+    ] {
+        let conn = ingest_in_order(&order);
+        assert_eq!(
+            native_ids(&conn),
+            vec![
+                parent_id.to_string(),
+                format!("{parent_id}/agent-a0000000000000002"),
+            ]
+        );
+        let (parent_session, _) = session_for(&conn, parent_id);
+        assert_eq!(message_count(&conn, &parent_session), 2);
+    }
+}
+
+/// The subagent fixture tree copied somewhere writable.
+fn copy_fixture_tree() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join(format!("{PARENT_ID}.jsonl"));
+    let sub_dir = dir.path().join(PARENT_ID).join("subagents");
+    std::fs::create_dir_all(&sub_dir).unwrap();
+    let subagent = sub_dir.join("agent-a0000000000000001.jsonl");
+    std::fs::copy(fixture_dir().join(format!("{PARENT_ID}.jsonl")), &parent).unwrap();
+    std::fs::copy(
+        fixture_dir().join(format!(
+            "{PARENT_ID}/subagents/agent-a0000000000000001.jsonl"
+        )),
+        &subagent,
+    )
+    .unwrap();
+    (dir, parent, subagent)
+}
+
+#[test]
+fn an_appended_subagent_transcript_keeps_its_id_and_grows() {
+    let (_dir, parent, subagent) = copy_fixture_tree();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(blob_dir.path()).unwrap();
+    let adapter = ClaudeCodeAdapter::new();
+    ingest_file(&conn, &adapter, &parent, &blobs).unwrap();
+    ingest_file(&conn, &adapter, &subagent, &blobs).unwrap();
+    let sub_id = format!("{PARENT_ID}/agent-a0000000000000001");
+    let (sub_session, _) = session_for(&conn, &sub_id);
+    assert_eq!(message_count(&conn, &sub_session), 2);
+
+    let tail = format!(
+        r#"{{"type":"assistant","uuid":"c5555555-5555-4555-8555-555555555555","sessionId":"{PARENT_ID}","agentId":"a0000000000000001","timestamp":"2026-10-31T18:00:09.000Z","message":{{"role":"assistant","content":[{{"type":"text","text":"The subagent adds the badger."}}]}}}}"#
+    ) + "\n";
+    let mut content = std::fs::read_to_string(&subagent).unwrap();
+    content.push_str(&tail);
+    std::fs::write(&subagent, content).unwrap();
+
+    let outcome = ingest_file(&conn, &adapter, &subagent, &blobs).unwrap();
+    assert!(
+        matches!(
+            outcome,
+            IngestOutcome::Ingested {
+                change: ChangeClass::Appended,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        native_ids(&conn),
+        vec![PARENT_ID.to_string(), sub_id.clone()]
+    );
+    assert_eq!(session_for(&conn, &sub_id).0, sub_session);
+    assert_eq!(message_count(&conn, &sub_session), 3);
+    assert_eq!(hit_sessions(&conn, "badger"), vec![sub_session]);
+    let (parent_session, _) = session_for(&conn, PARENT_ID);
+    assert_eq!(message_count(&conn, &parent_session), 2);
+}
