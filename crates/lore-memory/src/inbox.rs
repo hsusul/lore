@@ -144,8 +144,14 @@ impl Proposal {
         }
     }
 
-    /// The same proposal with title, body, and anchor paths redacted.
+    /// The same proposal with title, body, and anchor paths redacted. A
+    /// session id the scanner flags is refused, not masked, because it names
+    /// the inbox file.
     pub fn redacted(mut self) -> Result<Self, InboxError> {
+        let session = secrets::scan(self.session.as_str()).map_err(|_| InboxError::ScanFailed)?;
+        if !session.is_empty() {
+            return Err(field("session", "looks like a secret"));
+        }
         self.title = redact(&self.title)?;
         self.body = redact(&self.body)?;
         for (i, anchor) in self.anchors.iter_mut().enumerate() {

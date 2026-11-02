@@ -555,3 +555,28 @@ fn a_decision_after_a_torn_line_is_still_read() {
     assert_eq!(decision_lines(dir.path(), P1), 1);
     assert_eq!(subjects(dir.path()).len(), 2);
 }
+
+#[test]
+fn a_session_id_that_is_a_secret_is_refused() {
+    let (dir, vault) = new_vault();
+    let token = concat!("ghp_", "Z7Q4R2T6Y8U1W3E5Z7Q4R2T6Y8U1W3E5abcd");
+    let error = inbox::propose(&vault, proposal(P1, AgentKind::Codex, token, BODY)).unwrap_err();
+    assert!(error.to_string().starts_with("`session`"), "{error}");
+    assert!(!dir.path().join("_inbox").exists());
+
+    // The same line written by hand is refused by accept.
+    let line = proposal(P1, AgentKind::Codex, token, BODY).to_line();
+    fs::create_dir_all(dir.path().join("_inbox")).unwrap();
+    fs::write(
+        dir.path().join(format!("_inbox/codex-{token}.jsonl")),
+        format!("{line}\n"),
+    )
+    .unwrap();
+    let head = git(dir.path(), &["rev-parse", "HEAD"]);
+    let error = review::accept(&vault, P1, None).unwrap_err();
+    assert!(matches!(error, ReviewError::Refused { .. }), "{error}");
+    assert_eq!(git(dir.path(), &["rev-parse", "HEAD"]), head);
+
+    let uuid = "0199f5c2-7a4e-7c31-9b6d-2f8e1a3c5d7b";
+    inbox::propose(&vault, proposal(P2, AgentKind::Codex, uuid, BODY)).unwrap();
+}
