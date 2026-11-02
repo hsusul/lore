@@ -25,3 +25,96 @@ fn help_banner_describes_the_archive_memory_and_skills() {
     );
     assert!(!stdout.contains("ledger of coding-agent work"));
 }
+
+fn help_text(args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(args)
+        .env_remove("LORE_ARCHIVE_DIR")
+        .output()
+        .expect("spawn lorectl");
+    assert_eq!(output.status.code(), Some(0), "{args:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// The usage line of the full `--help`, which no topic page may repeat.
+const FULL_HELP_USAGE: &str = "    lorectl [OPTIONS] <COMMAND>";
+
+fn assert_topic_page(topic: &str, first_line: &str, names: &[&str]) {
+    let page = help_text(&["help", topic]);
+    assert_eq!(page, help_text(&[topic, "--help"]), "`{topic} --help`");
+    assert_eq!(page, help_text(&[topic, "-h"]), "`{topic} -h`");
+    assert_eq!(page.lines().next(), Some(first_line), "`help {topic}`");
+    assert!(
+        !page.contains(FULL_HELP_USAGE),
+        "`help {topic}` printed the full help:\n{page}"
+    );
+    for name in names {
+        assert!(
+            page.contains(name),
+            "`help {topic}` omits `{name}`:\n{page}"
+        );
+    }
+}
+
+#[test]
+fn help_skills_prints_the_skills_page() {
+    assert_topic_page(
+        "skills",
+        "Skills (lorectl skills <SUBCOMMAND> [--json]):",
+        &[
+            "    ls ",
+            "    doctor ",
+            "--json",
+            "duplicate",
+            "drift",
+            "unknown-source",
+            "broken-ref",
+            "name-mismatch",
+            "bad-frontmatter",
+            "codex-budget",
+            "HOME",
+            "CLAUDE_CONFIG_DIR",
+            "CODEX_HOME",
+        ],
+    );
+}
+
+#[test]
+fn help_mcp_prints_the_mcp_page() {
+    assert_topic_page(
+        "mcp",
+        "MCP server (lorectl mcp [--archive <DIR>]):",
+        &[
+            "    search_sessions ",
+            "    read_session ",
+            "    recall_memory ",
+            "    read_note ",
+            "    propose_memory ",
+            "LORE_VAULT_DIR",
+            "LORE_AGENT",
+            "LORE_ARCHIVE_DIR",
+        ],
+    );
+}
+
+#[test]
+fn help_hook_prints_the_hook_page() {
+    assert_topic_page(
+        "hook",
+        "Hooks (lorectl hook <EVENT> [--archive <DIR>]):",
+        &["    session-start "],
+    );
+}
+
+#[test]
+fn help_mem_is_still_the_memory_section_of_the_full_help() {
+    let page = help_text(&["help", "mem"]);
+    assert_eq!(page, help_text(&["mem", "--help"]));
+    assert_eq!(
+        page.lines().next(),
+        Some("Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):")
+    );
+    assert!(!page.contains(FULL_HELP_USAGE));
+    // The same text the full help embeds, byte for byte.
+    assert!(help_text(&["--help"]).contains(&page));
+}
