@@ -153,14 +153,24 @@ fn parse_from(
 }
 
 /// The session id a transcript's file name gives it. Ingest replaces a session
-/// with each file it parses, so two transcripts must never share an id. Claude
-/// Code names a subagent transcript
+/// with each file it parses, so two transcripts must never share an id, and one
+/// line must not move a whole file. Claude Code names a transcript
+/// `<sessionId>.jsonl` and a subagent transcript
 /// `<sessionId>/subagents/agent-<agentId>.jsonl`, whose key (`session_key`)
-/// is `<sessionId>/agent-<agentId>`. A subagent transcript repeats its
-/// parent's `sessionId`, so its lines cannot name the file. `None` for any
-/// other file, whose lines name it.
+/// is `<sessionId>/agent-<agentId>`. A
+/// resumed transcript opens with lines copied from the session it resumed, and
+/// a subagent transcript repeats its parent's `sessionId`, so the lines cannot
+/// name the file. `None` for a file Claude did not name, such as a fixture.
 fn file_session_id(key: &str) -> Option<String> {
-    key.contains('/').then(|| key.to_string())
+    (key.contains('/') || is_uuid(key)).then(|| key.to_string())
+}
+
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
 }
 
 /// The session a line names, for a file whose name does not give one: its
