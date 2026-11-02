@@ -113,7 +113,11 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
              ln -s '{h}/.claude/skills/claude-only' '{h}/.agents/skills/claude-only'"
         ),
     );
-
+    let same_link = hint(
+        "broken-ref",
+        "referrer",
+        format!("The fix for codex above covers cursor too: both load skills from '{h}/.agents/skills'."),
+    );
     let managed_ref = |agent: &str, missing: &str, rel: &str, manager: &str| {
         hint(
             "broken-ref",
@@ -155,8 +159,8 @@ fn every_fix_is_pinned_and_none_touches_a_managed_copy() {
             edit(".agents/skills/mislabeled"),
         ),
         unknown("mislabeled", ".agents/skills/mislabeled"),
-        link.clone(),
         link,
+        same_link,
         managed_ref("codex", "off-skill", off, "codex"),
         managed_ref("cursor", "off-skill", off, "codex"),
         managed_ref("codex", "plugin-skill", plugin, "claude-code"),
@@ -275,6 +279,86 @@ fn hostile_folder_names_are_quoted_in_every_fix_and_run_as_data() {
     }
     assert!(!dir.path().join("pwned").exists());
     assert!(!home.join("pwned").exists());
+}
+
+/// Codex and Cursor both load `~/.agents/skills`, so one missing skill is a
+/// broken ref for each. Pasting every printed fix, twice, must leave one link
+/// and never a link nested inside the user's own copy.
+#[cfg(unix)]
+#[test]
+fn pasting_every_fix_twice_links_each_missing_skill_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let copied = Command::new("cp")
+        .arg("-R")
+        .arg(fixture_home())
+        .arg(&home)
+        .status()
+        .unwrap();
+    assert!(copied.success());
+    let h = home.display().to_string();
+    assert!(
+        !h.contains('\''),
+        "the expected strings below assume no quote"
+    );
+
+    let output = lorectl(&home, &["skills", "doctor", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let findings = json(&output);
+    let got = fixes(&findings);
+    let links: Vec<&(String, String, String, String)> = findings
+        .iter()
+        .zip(&got)
+        .filter(|(f, _)| f["missing"] == "claude-only")
+        .map(|(_, fix)| fix)
+        .collect();
+    let dest = format!("'{h}/.agents/skills/claude-only'");
+    assert_eq!(
+        links,
+        vec![
+            &(
+                "broken-ref".to_string(),
+                "referrer".to_string(),
+                "command".to_string(),
+                format!("[ -e {dest} ] || ln -s '{h}/.claude/skills/claude-only' {dest}"),
+            ),
+            &(
+                "broken-ref".to_string(),
+                "referrer".to_string(),
+                "hint".to_string(),
+                format!(
+                    "The fix for codex above covers cursor too: both load skills \
+                     from '{h}/.agents/skills'."
+                ),
+            ),
+        ]
+    );
+
+    for _ in 0..2 {
+        for (_, _, fix_kind, fix) in &got {
+            if fix_kind == "command" {
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(fix)
+                    .current_dir(dir.path())
+                    .env("HOME", &home)
+                    .env("EDITOR", "true")
+                    .output()
+                    .unwrap();
+            }
+        }
+    }
+    let link = home.join(".agents/skills/claude-only");
+    assert_eq!(
+        fs::read_link(&link).unwrap(),
+        home.join(".claude/skills/claude-only")
+    );
+    let nested = home.join(".claude/skills/claude-only/claude-only");
+    assert!(
+        fs::symlink_metadata(&nested).is_err(),
+        "a pasted fix linked {} inside the user's own copy",
+        nested.display()
+    );
 }
 
 #[test]
