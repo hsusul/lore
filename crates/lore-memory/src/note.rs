@@ -687,10 +687,31 @@ impl Frontmatter {
     }
 }
 
+/// The result of parsing a note someone is adding: the note, and which
+/// required values were missing and filled in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Draft {
+    pub note: Note,
+    pub id_filled: bool,
+    pub created_filled: bool,
+}
+
+/// Values a draft takes when its file leaves them out.
+struct Fill {
+    id: NoteId,
+    today: NoteDate,
+}
+
 impl Note {
     /// Parse a note file. Every required key must be present.
     pub fn parse(text: &str) -> Result<Note, NoteError> {
-        parse_note(text)
+        parse_note(text, None).map(|draft| draft.note)
+    }
+
+    /// Parse a note someone is adding. `id`, `created`, `status`, and `scope`
+    /// may be left out; they become `id`, `today`, `active`, and `global`.
+    pub fn parse_draft(text: &str, id: NoteId, today: NoteDate) -> Result<Draft, NoteError> {
+        parse_note(text, Some(Fill { id, today }))
     }
 
     /// Render the note as a file. `Note::parse(s)?.render() == s` for every
@@ -1157,7 +1178,7 @@ fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), No
 
 const CRLF: &str = "CRLF line endings are not supported in the frontmatter";
 
-fn parse_note(text: &str) -> Result<Note, NoteError> {
+fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
     if text.starts_with("---\r\n") {
         return Err(NoteError::NotANote(CRLF));
     }
@@ -1204,7 +1225,24 @@ fn parse_note(text: &str) -> Result<Note, NoteError> {
         }
     }
 
-    Ok(Note {
+    let (mut id_filled, mut created_filled) = (false, false);
+    if let Some(fill) = fill {
+        if fields.id.is_none() {
+            fields.id = Some(fill.id);
+            id_filled = true;
+        }
+        if fields.created.is_none() {
+            fields.created = Some(fill.today);
+            created_filled = true;
+        }
+        fields.status.get_or_insert(Status::Active);
+        fields.scope.get_or_insert(Scope::Global);
+        for key in [Key::Id, Key::Scope, Key::Status, Key::Created] {
+            extra.insert(key);
+        }
+    }
+
+    let note = Note {
         id: fields.id.ok_or(NoteError::Missing("id"))?,
         note_type: fields.note_type.ok_or(NoteError::Missing("type"))?,
         title: fields.title.ok_or(NoteError::Missing("title"))?,
@@ -1218,5 +1256,10 @@ fn parse_note(text: &str) -> Result<Note, NoteError> {
         forget_after: fields.forget_after,
         body: body.to_string(),
         extra,
+    };
+    Ok(Draft {
+        note,
+        id_filled,
+        created_filled,
     })
 }
