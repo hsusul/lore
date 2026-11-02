@@ -32,6 +32,8 @@ use crate::storage::{Result, StorageError};
 /// landing feature can never turn on for an existing archive, because
 /// unchanged v2 sources are skipped.
 pub const PARSER_VERSION: &str = "3";
+/// `ingest_state.state` of a source whose session the user forgot.
+pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
 const PREFIX_BYTES: usize = 4096;
 /// Media type recorded for agent-recorded patch/diff blobs.
@@ -98,6 +100,7 @@ fn persist_rows(
 
     let session_id = session_id_for(agent_id, parsed);
     let existing_sources = session_sources(tx, &session_id)?;
+    let kept = KeptRows::save(tx, &session_id)?;
 
     // Explicitly delete search projections first so the FTS external-content
     // delete trigger fires (an FK cascade would not fire it), then cascade-delete
@@ -165,8 +168,40 @@ fn persist_rows(
         patch_blobs,
         RowBase::default(),
     )?;
+    kept.restore(tx, &session_id)?;
     index_search_rows(tx, high_water)?;
     Ok(session_id)
+}
+
+/// Rows about a session that no source holds, so replacing the session's
+/// parsed rows must keep them: the folder the user filed it in (migration
+/// 0008 promises it survives a re-scan).
+struct KeptRows {
+    folder: Option<(String, i64)>,
+}
+
+impl KeptRows {
+    fn save(tx: &Connection, session_id: &str) -> Result<Self> {
+        let folder = tx
+            .query_row(
+                "SELECT folder_id, added_at FROM session_folder WHERE session_id = ?1",
+                [session_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(Self { folder })
+    }
+
+    /// Restore after the parsed rows are inserted.
+    fn restore(&self, tx: &Connection, session_id: &str) -> Result<()> {
+        if let Some((folder_id, added_at)) = &self.folder {
+            tx.execute(
+                "INSERT INTO session_folder (session_id, folder_id, added_at) VALUES (?1,?2,?3)",
+                params![session_id, folder_id, added_at],
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// The highest search row id. Rows inserted after reading it get higher ids,
@@ -922,6 +957,21 @@ struct SourceRow {
     parser_version: Option<String>,
     ingest_state: Option<String>,
     resume_json: Option<String>,
+    /// The source supports at least one session.
+    linked: bool,
+}
+
+impl SourceRow {
+    /// The user forgot the session this source supported. Forget marks the
+    /// source; an archive forgotten before it did shows an `ok` source that
+    /// supports no session, since ingest links every source it parses.
+    fn forgotten(&self) -> bool {
+        match self.ingest_state.as_deref() {
+            Some(FORGOTTEN) => true,
+            Some("ok") => !self.linked,
+            _ => false,
+        }
+    }
 }
 
 struct SourceSnapshot {
@@ -1010,10 +1060,13 @@ pub fn ingest_file(
             0,
             ChangeClass::New,
         ),
+        // A forgotten source stays skipped at any parser version while its
+        // content is what the user forgot (`forget::forget_session`).
         Some(row)
             if row.full_hash.as_deref() == Some(snapshot.full_hash.as_str())
-                && row.parser_version.as_deref() == Some(PARSER_VERSION)
-                && row.ingest_state.as_deref() == Some("ok") =>
+                && (row.forgotten()
+                    || (row.parser_version.as_deref() == Some(PARSER_VERSION)
+                        && row.ingest_state.as_deref() == Some("ok"))) =>
         {
             // Unchanged content: refresh stat/alias only, no re-parse.
             let _write = crate::storage::write_lock();
@@ -1335,13 +1388,15 @@ fn source_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRow> {
         parser_version: r.get(5)?,
         ingest_state: r.get(6)?,
         resume_json: r.get(7)?,
+        linked: r.get(8)?,
     })
 }
 
 fn find_source_by_path(conn: &Connection, agent_id: &str, path: &str) -> Result<Option<SourceRow>> {
     conn.query_row(
         "SELECT sa.id, sa.size, sa.full_hash, sa.prefix_hash, sa.generation,
-                ist.parser_version, ist.state, ist.resume_json
+                ist.parser_version, ist.state, ist.resume_json,
+                EXISTS (SELECT 1 FROM session_source ss WHERE ss.source_artifact_id = sa.id)
          FROM source_artifact sa
          LEFT JOIN ingest_state ist ON ist.source_artifact_id = sa.id
          WHERE sa.agent_id = ?1 AND sa.current_path = ?2",
@@ -1364,7 +1419,8 @@ fn find_source_by_native_id(
     };
     conn.query_row(
         "SELECT sa.id, sa.size, sa.full_hash, sa.prefix_hash, sa.generation,
-                ist.parser_version, ist.state, ist.resume_json
+                ist.parser_version, ist.state, ist.resume_json,
+                EXISTS (SELECT 1 FROM session_source ss WHERE ss.source_artifact_id = sa.id)
          FROM source_artifact sa
          LEFT JOIN ingest_state ist ON ist.source_artifact_id = sa.id
          WHERE sa.agent_id = ?1 AND sa.native_file_id = ?2 AND sa.full_hash = ?3
