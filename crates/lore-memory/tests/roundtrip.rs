@@ -103,7 +103,7 @@ fn roundtrip_a_draft_gets_its_missing_keys_in_canonical_places() {
     assert!(draft.id_filled && draft.created_filled);
     assert_eq!(
         draft.note.render(),
-        "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1HZZ\ntype: howto\ntitle: Prune worktrees\nscope: global\nstatus: active\ncreated: 2026-11-01\nmood: calm\n---\nRun it.\n"
+        "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1HZZ\ntype: howto\ntitle: Prune worktrees\naliases:\n  - Prune worktrees\nscope: global\nstatus: active\ncreated: 2026-11-01\nmood: calm\n---\nRun it.\n"
     );
     assert_eq!(draft.note.rel_path(), "global/prune-worktrees.md");
 }
@@ -197,7 +197,7 @@ fn roundtrip_refuses_malformed_files_without_panicking() {
     let cases = [
         ("no frontmatter\n", "not a note"),
         ("---\ntitle: T\n", "no closing"),
-        ("---\r\ntitle: T\r\n---\r\n", "not a note"),
+        ("---\r\ntitle: T\r\n---\r\n", "CRLF line endings"),
         ("---\ntype: fact\n---\n", "missing required key `id`"),
         (&with("type: fact"), "appears twice"),
         (&with("anchors:\n  - path: a\n    color: red"), "`color`"),
@@ -214,6 +214,149 @@ fn roundtrip_refuses_malformed_files_without_panicking() {
         let error = parse_error(text).to_string();
         assert!(error.contains(expected), "{text:?} gave {error}");
     }
+}
+
+const BASE: &str = "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6D\ntype: fact\ntitle: T\nscope: global\nstatus: active\ncreated: 2026-11-01\n";
+
+fn draft(text: &str) -> Note {
+    Note::parse_draft(
+        text,
+        NoteId::parse("01JC9V6Q4M8K2T7X3N5R0B1H6D").unwrap(),
+        NoteDate::parse("2026-11-01").unwrap(),
+    )
+    .unwrap()
+    .note
+}
+
+#[test]
+fn roundtrip_refuses_trailing_comments_on_lore_keys() {
+    for line in [
+        "type: fact # a comment",
+        "status: active  # retired soon",
+        "title: \"T\" # quoted then comment",
+        "created: 2026-11-01 # today",
+        "sources:\n  - codex:abc # from codex",
+    ] {
+        let text = BASE
+            .lines()
+            .filter(|l| !line.starts_with(l.split(':').next().unwrap()) || l.starts_with("---"))
+            .map(|l| format!("{l}\n"))
+            .collect::<String>()
+            + line
+            + "\n---\n";
+        let error = Note::parse(&text).unwrap_err().to_string();
+        assert!(error.contains("comment"), "{line:?} gave {error}");
+    }
+    // A comment on a key Lore does not own is that key's business.
+    let text = format!("{BASE}mood: calm # very\n---\n");
+    assert_eq!(Note::parse(&text).unwrap().render(), text);
+}
+
+#[test]
+fn roundtrip_keeps_empty_forget_after_and_empty_lists_as_written() {
+    for extra in ["forget_after:\n", "anchors:\n", "sources: []\n"] {
+        let text = format!("{BASE}{extra}---\nBody.\n");
+        let note = Note::parse(&text).unwrap();
+        assert_eq!(note.forget_after, None);
+        assert_eq!(note.render(), text, "{extra:?}");
+    }
+    let mut note = Note::parse(&format!("{BASE}forget_after:\n---\n")).unwrap();
+    note.forget_after = Some(NoteDate::parse("2027-05-01").unwrap());
+    assert_eq!(
+        note.render(),
+        format!("{BASE}forget_after: 2027-05-01\n---\n")
+    );
+}
+
+#[test]
+fn roundtrip_quotes_yaml_ambiguous_titles() {
+    for title in [
+        "2026-11-01",
+        "42",
+        "0x10",
+        "0o17",
+        ".inf",
+        "-.inf",
+        ".NaN",
+        "12:30",
+        "1_000",
+        "+1",
+        "yes",
+        "No",
+        "on",
+        "OFF",
+        "null",
+        "~",
+        "@mention",
+        "`code`",
+        "1e3",
+    ] {
+        let mut note = Note::parse(&format!("{BASE}---\n")).unwrap();
+        note.title = title.to_string();
+        let text = note.render();
+        let line = text.lines().find(|l| l.starts_with("title: ")).unwrap();
+        assert!(line.starts_with("title: \""), "{title} rendered as {line}");
+        assert_eq!(Note::parse(&text).unwrap().title, title);
+    }
+    let mut note = Note::parse(&format!("{BASE}---\n")).unwrap();
+    note.title = "Plain words stay plain".into();
+    assert!(note.render().contains("\ntitle: Plain words stay plain\n"));
+}
+
+#[test]
+fn roundtrip_slugs_keep_unicode_letters_and_digits() {
+    let slug = |title: &str| draft(&format!("---\ntype: fact\ntitle: {title}\n---\n")).slug();
+    assert_eq!(
+        slug("Café naïve — 日本語 round trip"),
+        "café-naïve-日本語-round-trip"
+    );
+    assert_eq!(slug("Ünïcode ÉDGE 42"), "ünïcode-édge-42");
+    assert_eq!(slug("日本語"), "日本語");
+    assert_eq!(slug("— !!! —"), "01jc9v6q4m8k2t7x3n5r0b1h6d");
+}
+
+#[test]
+fn roundtrip_a_draft_gets_its_title_as_an_alias() {
+    let note = draft("---\ntype: fact\ntitle: \"Reference::id panics\"\n---\nB.\n");
+    let dated = draft("---\ntype: fact\ntitle: \"2026-11-01 retro\"\n---\n").render();
+    assert!(
+        dated.contains("\naliases:\n  - \"2026-11-01 retro\"\n"),
+        "{dated}"
+    );
+    let text = note.render();
+    assert!(
+        text.contains("\ntitle: Reference::id panics\naliases:\n  - Reference::id panics\n"),
+        "{text}"
+    );
+    assert_eq!(Note::parse(&text).unwrap().render(), text);
+    // A draft that brings its own aliases keeps them untouched.
+    let own = draft("---\ntype: fact\ntitle: T\naliases: [x]\n---\n").render();
+    assert!(
+        own.contains("\naliases: [x]\n") && !own.contains("  - T"),
+        "{own}"
+    );
+}
+
+#[test]
+fn roundtrip_repo_notes_live_in_a_folder_named_for_people() {
+    let note = draft("---\ntype: fact\ntitle: T\nscope: repo:3f9a1c0b\nrepo: lore\n---\n");
+    assert_eq!(note.repo.as_ref().unwrap().as_str(), "lore");
+    assert_eq!(note.rel_path(), "repos/lore-3f9a1c0b/t.md");
+    assert!(note
+        .render()
+        .contains("\nscope: repo:3f9a1c0b\nrepo: lore\n"));
+    let bare = draft("---\ntype: fact\ntitle: T\nscope: repo:3f9a1c0b\n---\n");
+    assert_eq!(bare.rel_path(), "repos/3f9a1c0b/t.md");
+    use lore_memory::note::RepoName;
+    for (origin, name) in [
+        ("git@github.com:hsusul/lore.git", "lore"),
+        ("https://github.com/hsusul/Lore/", "Lore"),
+        ("/srv/git/my repo.git", "my repo"),
+    ] {
+        assert_eq!(RepoName::from_origin(origin).unwrap().as_str(), name);
+    }
+    assert_eq!(RepoName::parse("My Repo").unwrap().slug(), "my-repo");
+    assert!(RepoName::from_origin("").is_none());
 }
 
 #[test]

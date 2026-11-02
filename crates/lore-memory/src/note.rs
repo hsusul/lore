@@ -26,6 +26,12 @@ pub enum NoteType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RepoKey(String);
 
+/// A repository's name for people: the last path segment of its origin URL,
+/// without `.git`. Names the repo's vault folder next to its [`RepoKey`]; the
+/// key stays the identity.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RepoName(String);
+
 /// Where a note applies.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Scope {
@@ -110,6 +116,8 @@ pub struct Note {
     pub note_type: NoteType,
     pub title: String,
     pub scope: Scope,
+    /// The repository's display name, written `repo:`. Names the folder.
+    pub repo: Option<RepoName>,
     pub status: Status,
     pub anchors: Vec<Anchor>,
     pub relations: Vec<Relation>,
@@ -130,7 +138,19 @@ pub struct Frontmatter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Slot {
     Known(Key),
+    /// A Lore key written with nothing after the colon. Rendered the same way
+    /// while it has no value, so clearing a field in Obsidian round trips.
+    Empty(Key),
     Raw(String),
+}
+
+impl Slot {
+    fn key(&self) -> Option<Key> {
+        match self {
+            Slot::Known(key) | Slot::Empty(key) => Some(*key),
+            Slot::Raw(_) => None,
+        }
+    }
 }
 
 /// The frontmatter keys Lore owns, in the order a new note writes them.
@@ -140,6 +160,7 @@ enum Key {
     Type,
     Title,
     Scope,
+    Repo,
     Status,
     Anchors,
     Relations,
@@ -278,6 +299,62 @@ impl RepoKey {
     }
 }
 
+impl RepoName {
+    pub fn parse(s: &str) -> Result<Self, InvalidValue> {
+        let ok = !s.trim().is_empty()
+            && s.trim() == s
+            && s.len() <= 200
+            && !s.chars().any(char::is_control);
+        if ok {
+            Ok(Self(s.to_string()))
+        } else {
+            Err(invalid(format!(
+                "expected a repository name on one line, got `{s}`"
+            )))
+        }
+    }
+
+    /// The name in an origin URL or path: `git@host:me/lore.git` is `lore`.
+    #[must_use]
+    pub fn from_origin(origin: &str) -> Option<Self> {
+        let trimmed = origin.trim().trim_end_matches(['/', '\\']);
+        let last = trimmed.rsplit(['/', ':', '\\']).next()?;
+        Self::parse(last.strip_suffix(".git").unwrap_or(last)).ok()
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The folder-name form: see [`Note::slug`].
+    #[must_use]
+    pub fn slug(&self) -> String {
+        slugify(&self.0)
+    }
+}
+
+/// Lowercase letters and digits of any script, other runs joined by `-`. At
+/// most 64 characters and 200 bytes, so the file name fits every filesystem.
+fn slugify(text: &str) -> String {
+    let mut slug = String::new();
+    let mut chars = 0;
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            let lower: String = c.to_lowercase().collect();
+            if chars >= 64 || slug.len() + lower.len() > 200 {
+                break;
+            }
+            slug.push_str(&lower);
+            chars += 1;
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+            chars += 1;
+        }
+    }
+    slug.trim_end_matches('-').to_string()
+}
+
 impl Scope {
     pub fn parse(s: &str) -> Result<Self, InvalidValue> {
         if s == "global" {
@@ -291,7 +368,8 @@ impl Scope {
         }
     }
 
-    /// The vault directory that holds notes with this scope.
+    /// The vault directory for this scope when the repository has no name.
+    /// [`Note::dir`] is where a note goes.
     #[must_use]
     pub fn dir(&self) -> String {
         match self {
@@ -579,11 +657,12 @@ impl fmt::Display for NoteDate {
 }
 
 impl Key {
-    const ALL: [Key; 10] = [
+    const ALL: [Key; 11] = [
         Key::Id,
         Key::Type,
         Key::Title,
         Key::Scope,
+        Key::Repo,
         Key::Status,
         Key::Anchors,
         Key::Relations,
@@ -598,6 +677,7 @@ impl Key {
             Key::Type => "type",
             Key::Title => "title",
             Key::Scope => "scope",
+            Key::Repo => "repo",
             Key::Status => "status",
             Key::Anchors => "anchors",
             Key::Relations => "relations",
@@ -614,7 +694,7 @@ impl Key {
 
 impl Frontmatter {
     fn has(&self, key: Key) -> bool {
-        self.slots.contains(&Slot::Known(key))
+        self.slots.iter().any(|slot| slot.key() == Some(key))
     }
 
     /// Insert `key` where a new note would put it relative to the keys present.
@@ -622,13 +702,13 @@ impl Frontmatter {
         if self.has(key) {
             return;
         }
-        let after = |slot: &Slot| matches!(slot, Slot::Known(k) if *k > key);
+        let after = |slot: &Slot| slot.key().is_some_and(|k| k > key);
         let at = match self.slots.iter().position(after) {
             Some(at) => at,
             None => self
                 .slots
                 .iter()
-                .rposition(|s| matches!(s, Slot::Known(_)))
+                .rposition(|s| s.key().is_some())
                 .map_or(0, |last| last + 1),
         };
         self.slots.insert(at, Slot::Known(key));
@@ -646,7 +726,7 @@ impl Frontmatter {
                     let (key, _) = first.split_once(':')?;
                     starts_key.then_some(key.trim())
                 }
-                Slot::Known(_) => None,
+                Slot::Known(_) | Slot::Empty(_) => None,
             })
             .collect()
     }
@@ -692,7 +772,11 @@ impl Note {
         let mut out = String::from("---\n");
         for slot in &layout.slots {
             match slot {
-                Slot::Known(key) => self.render_key(*key, &mut out),
+                Slot::Empty(key) if !self.has_value(*key) => {
+                    out.push_str(key.name());
+                    out.push_str(":\n");
+                }
+                Slot::Known(key) | Slot::Empty(key) => self.render_key(*key, &mut out),
                 Slot::Raw(text) => out.push_str(text),
             }
         }
@@ -701,32 +785,51 @@ impl Note {
         out
     }
 
-    /// The file name stem: the title in lowercase ASCII words joined by `-`.
+    /// The file name stem for a new note: the title's letters and digits, in
+    /// any script, lowercased where case exists, other runs joined by `-`. The
+    /// lowercase id when the title has no letters or digits.
     #[must_use]
     pub fn slug(&self) -> String {
-        let mut slug = String::new();
-        for c in self.title.chars() {
-            if c.is_ascii_alphanumeric() {
-                if slug.len() >= 64 {
-                    break;
-                }
-                slug.push(c.to_ascii_lowercase());
-            } else if !slug.is_empty() && !slug.ends_with('-') {
-                slug.push('-');
-            }
-        }
-        let slug = slug.trim_end_matches('-');
+        let slug = slugify(&self.title);
         if slug.is_empty() {
             self.id.as_str().to_ascii_lowercase()
         } else {
-            slug.to_string()
+            slug
         }
     }
 
-    /// Where the note lives in the vault: `<scope dir>/<slug>.md`.
+    /// The folder a new note goes in: `global`, `repos/<name>-<key>` when the
+    /// note names its repository, else `repos/<key>`.
+    #[must_use]
+    pub fn dir(&self) -> String {
+        match (&self.scope, &self.repo) {
+            (Scope::Repo(key), Some(name)) if !name.slug().is_empty() => {
+                format!("repos/{}-{}", name.slug(), key.as_str())
+            }
+            _ => self.scope.dir(),
+        }
+    }
+
+    /// Where a new note lives in the vault: `<dir>/<slug>.md`. A person may
+    /// move or rename the file later; the vault finds notes by walking it.
     #[must_use]
     pub fn rel_path(&self) -> String {
-        format!("{}/{}.md", self.scope.dir(), self.slug())
+        format!("{}/{}.md", self.dir(), self.slug())
+    }
+
+    /// Add `aliases:` with the title right after `title:`, so `[[Title]]`
+    /// links resolve in Obsidian. Does nothing when the note has `aliases`.
+    pub fn add_title_alias(&mut self) {
+        if self.extra.unknown_keys().contains(&"aliases") {
+            return;
+        }
+        let raw = format!("aliases:\n  - {}\n", render_scalar(&self.title));
+        let slots = &mut self.extra.slots;
+        let at = slots
+            .iter()
+            .position(|s| s.key() == Some(Key::Title))
+            .map_or(slots.len(), |i| i + 1);
+        slots.insert(at, Slot::Raw(raw));
     }
 
     fn has_value(&self, key: Key) -> bool {
@@ -735,6 +838,7 @@ impl Note {
             Key::Relations => !self.relations.is_empty(),
             Key::Sources => !self.sources.is_empty(),
             Key::ForgetAfter => self.forget_after.is_some(),
+            Key::Repo => self.repo.is_some(),
             Key::Id | Key::Type | Key::Title | Key::Scope | Key::Status | Key::Created => true,
         }
     }
@@ -752,6 +856,11 @@ impl Note {
             Key::Type => line(out, self.note_type.as_str()),
             Key::Title => line(out, &render_scalar(&self.title)),
             Key::Scope => line(out, &self.scope.to_string()),
+            Key::Repo => {
+                if let Some(repo) = &self.repo {
+                    line(out, &render_scalar(repo.as_str()));
+                }
+            }
             Key::Status => line(out, self.status.as_str()),
             Key::Created => line(out, &self.created.to_string()),
             Key::ForgetAfter => {
@@ -799,14 +908,19 @@ fn render_anchor(anchor: &Anchor) -> String {
     text
 }
 
-/// Plain when YAML would read the text back unchanged, double-quoted otherwise.
+/// Plain when every YAML reader would read the text back as the same string,
+/// double-quoted otherwise. Anything that starts with a digit (a number, a
+/// date, a time: `2026-11-01`, `0x10`, `12:30`), anything Rust reads as a
+/// float (`+1`, `.5`, `inf`), `.inf` and `.nan`, and the YAML 1.1 booleans and
+/// nulls are quoted, so Obsidian and other tools never retype a title.
 fn render_scalar(text: &str) -> String {
     const RESERVED: &[&str] = &[
-        "true", "false", "yes", "no", "on", "off", "y", "n", "null", "~",
+        "true", "false", "yes", "no", "on", "off", "y", "n", "null", "~", ".inf", "-.inf", "+.inf",
+        ".nan",
     ];
     let plain = !text.is_empty()
         && text.trim() == text
-        && !text.starts_with(|c: char| "-?:,[]{}#&*!|>'\"%@`".contains(c))
+        && !text.starts_with(|c: char| c.is_ascii_digit() || "-?:,[]{}#&*!|>'\"%@`".contains(c))
         && !text.contains(": ")
         && !text.contains(" #")
         && !text.ends_with(':')
@@ -829,12 +943,20 @@ fn render_scalar(text: &str) -> String {
     quoted
 }
 
-/// Read one YAML scalar: plain, single-quoted, or double-quoted.
+const NO_COMMENT: &str =
+    "remove the trailing `#` comment, Lore rewrites this key and would drop it (quote the value if `#` is part of it)";
+
+/// Read one YAML scalar of a key Lore owns: plain, single-quoted, or
+/// double-quoted. A trailing comment is refused rather than dropped, because
+/// a render could not put it back.
 fn parse_scalar(raw: &str) -> Result<String, InvalidValue> {
     let raw = raw.trim();
     let rest_is_comment = |rest: &str| {
         let rest = rest.trim_start();
-        rest.is_empty() || rest.starts_with('#')
+        if rest.starts_with('#') {
+            return Err(invalid(NO_COMMENT));
+        }
+        Ok(rest.is_empty())
     };
     if let Some(inner) = raw.strip_prefix('"') {
         let mut value = String::new();
@@ -842,8 +964,9 @@ fn parse_scalar(raw: &str) -> Result<String, InvalidValue> {
         while let Some((i, c)) = chars.next() {
             match c {
                 '"' => {
-                    return match inner.get(i + 1..) {
-                        Some(rest) if rest_is_comment(rest) => Ok(value),
+                    return match inner.get(i + 1..).map(rest_is_comment) {
+                        Some(Ok(true)) => Ok(value),
+                        Some(Err(e)) => Err(e),
                         _ => Err(invalid("text after the closing quote")),
                     }
                 }
@@ -870,8 +993,9 @@ fn parse_scalar(raw: &str) -> Result<String, InvalidValue> {
                 value.push('\'');
                 chars.next();
             } else {
-                return match inner.get(i + 1..) {
-                    Some(rest) if rest_is_comment(rest) => Ok(value),
+                return match inner.get(i + 1..).map(rest_is_comment) {
+                    Some(Ok(true)) => Ok(value),
+                    Some(Err(e)) => Err(e),
                     _ => Err(invalid("text after the closing quote")),
                 };
             }
@@ -883,11 +1007,10 @@ fn parse_scalar(raw: &str) -> Result<String, InvalidValue> {
             "expected a single-line value, got `{raw}`"
         )));
     }
-    let value = match raw.find(" #") {
-        Some(at) => raw.get(..at).unwrap_or(raw),
-        None => raw,
-    };
-    Ok(value.trim_end().to_string())
+    if raw.starts_with('#') || raw.contains(" #") || raw.contains("\t#") {
+        return Err(invalid(NO_COMMENT));
+    }
+    Ok(raw.to_string())
 }
 
 /// A top-level frontmatter entry: `key: value` and its continuation lines.
@@ -1015,6 +1138,7 @@ struct Fields {
     title: Option<String>,
     scope: Option<Scope>,
     status: Option<Status>,
+    repo: Option<RepoName>,
     anchors: Vec<Anchor>,
     relations: Vec<Relation>,
     sources: Vec<SourceRef>,
@@ -1096,6 +1220,12 @@ fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), No
         }
         Key::Scope => fields.scope = Some(typed(key, &scalar_field(key, block)?, Scope::parse)?),
         Key::Status => fields.status = Some(typed(key, &scalar_field(key, block)?, Status::parse)?),
+        Key::Repo => {
+            let value = scalar_field(key, block)?;
+            if !value.is_empty() {
+                fields.repo = Some(typed(key, &value, RepoName::parse)?);
+            }
+        }
         Key::Created => {
             fields.created = Some(typed(key, &scalar_field(key, block)?, NoteDate::parse)?);
         }
@@ -1138,10 +1268,15 @@ fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), No
     Ok(())
 }
 
+const CRLF: &str = "CRLF line endings are not supported in the frontmatter";
+
 fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
+    if text.starts_with("---\r\n") {
+        return Err(NoteError::NotANote(CRLF));
+    }
     let (frontmatter, body) = split_document(text)?;
     if frontmatter.contains('\r') {
-        return Err(NoteError::NotANote("CRLF line endings are not supported"));
+        return Err(NoteError::NotANote(CRLF));
     }
     let mut extra = Frontmatter::default();
     let mut fields = Fields::default();
@@ -1161,7 +1296,13 @@ fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
             return Err(NoteError::Duplicate(key.name()));
         }
         read_block(key, &block, &mut fields)?;
-        extra.slots.push(Slot::Known(key));
+        let empty =
+            block.value.trim().is_empty() && block.lines.iter().all(|l| l.trim().is_empty());
+        extra.slots.push(if empty {
+            Slot::Empty(key)
+        } else {
+            Slot::Known(key)
+        });
         let trailing: String = block
             .raw
             .split_inclusive('\n')
@@ -1177,6 +1318,7 @@ fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
     }
 
     let (mut id_filled, mut created_filled) = (false, false);
+    let drafting = fill.is_some();
     if let Some(fill) = fill {
         if fields.id.is_none() {
             fields.id = Some(fill.id);
@@ -1193,11 +1335,12 @@ fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
         }
     }
 
-    let note = Note {
+    let mut note = Note {
         id: fields.id.ok_or(NoteError::Missing("id"))?,
         note_type: fields.note_type.ok_or(NoteError::Missing("type"))?,
         title: fields.title.ok_or(NoteError::Missing("title"))?,
         scope: fields.scope.ok_or(NoteError::Missing("scope"))?,
+        repo: fields.repo,
         status: fields.status.ok_or(NoteError::Missing("status"))?,
         anchors: fields.anchors,
         relations: fields.relations,
@@ -1207,6 +1350,9 @@ fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
         body: body.to_string(),
         extra,
     };
+    if drafting {
+        note.add_title_alias();
+    }
     Ok(Draft {
         note,
         id_filled,
