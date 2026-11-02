@@ -23,7 +23,7 @@ words=(worktree branch commit rebase index lock sqlite vault note anchor
   diff blame bisect tag signing identity runner sandbox network egress
   deadline budget latency throughput memory freshness provenance timeline)
 types=(convention decision fact howto pitfall)
-repos=(3f9a1c0b a71e9d24c3 5be0c1d2e3)
+repos=(3f9a1c0b5e2d7a46 a71e9d24c3b85f10 5be0c1d2e3f4a5b6)
 names=(lore lore-infra notes-site)
 
 RANDOM=42

@@ -2,7 +2,7 @@
 id: 01JC9V6Q4M8K2T7X3N5R0B1H19
 type: pitfall
 title: SQLite WAL files outlive the connection
-scope: repo:3f9a1c0b
+scope: repo:3f9a1c0b5e2d7a46
 status: active
 anchors:
   - path: crates/lore-core/src/storage.rs

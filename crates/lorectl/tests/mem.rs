@@ -66,7 +66,7 @@ fn note_file(dir: &Path, name: &str, text: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
-const NOTE: &str = "---\ntype: pitfall\ntitle: Worktrees share refs\nscope: repo:3f9a1c0b\nmood: calm\n---\nA fetch in one worktree is seen by all of them.\n";
+const NOTE: &str = "---\ntype: pitfall\ntitle: Worktrees share refs\nscope: repo:3f9a1c0b5e2d7a46\nmood: calm\n---\nA fetch in one worktree is seen by all of them.\n";
 
 #[test]
 fn mem_add_twice_is_one_note_and_one_commit() {
@@ -74,16 +74,18 @@ fn mem_add_twice_is_one_note_and_one_commit() {
     let file = note_file(dir.path(), "n.md", NOTE);
     let first = lorectl(&vault, &["add", &file]);
     assert_eq!(code(&first), 0, "{}", stderr(&first));
-    assert!(stdout(&first).starts_with("added repos/3f9a1c0b/worktrees-share-refs.md "));
+    assert!(stdout(&first).starts_with("added repos/3f9a1c0b5e2d7a46/worktrees-share-refs.md "));
     let second = lorectl(&vault, &["add", &file]);
     assert_eq!(code(&second), 0, "{}", stderr(&second));
-    assert!(stdout(&second).starts_with("unchanged repos/3f9a1c0b/worktrees-share-refs.md "));
+    assert!(
+        stdout(&second).starts_with("unchanged repos/3f9a1c0b5e2d7a46/worktrees-share-refs.md ")
+    );
     assert_eq!(
         log(&vault),
         ["mem: add worktrees-share-refs", "mem: init vault"]
     );
     assert_eq!(
-        std::fs::read_dir(vault.join("repos/3f9a1c0b"))
+        std::fs::read_dir(vault.join("repos/3f9a1c0b5e2d7a46"))
             .unwrap()
             .count(),
         1
@@ -101,7 +103,8 @@ fn mem_show_prints_the_file_with_unknown_keys() {
     assert!(text.contains("\nmood: calm\n"), "{text}");
     assert_eq!(
         text,
-        std::fs::read_to_string(vault.join("repos/3f9a1c0b/worktrees-share-refs.md")).unwrap()
+        std::fs::read_to_string(vault.join("repos/3f9a1c0b5e2d7a46/worktrees-share-refs.md"))
+            .unwrap()
     );
 }
 
@@ -113,7 +116,7 @@ fn mem_search_prints_slug_scope_and_excerpt() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "worktrees-share-refs  repo:3f9a1c0b  A fetch in one worktree is seen by all of them.\n"
+        "worktrees-share-refs  repo:3f9a1c0b5e2d7a46  A fetch in one worktree is seen by all of them.\n"
     );
     let none = lorectl(&vault, &["search", "kingfisher"]);
     assert_eq!((code(&none), stdout(&none).as_str()), (0, ""));
@@ -217,7 +220,7 @@ fn mem_search_sees_a_hand_edit_without_reindex() {
     let (dir, vault) = init();
     lorectl(&vault, &["add", &note_file(dir.path(), "n.md", NOTE)]);
     assert_eq!(code(&lorectl(&vault, &["search", "fetch"])), 0);
-    let path = vault.join("repos/3f9a1c0b/worktrees-share-refs.md");
+    let path = vault.join("repos/3f9a1c0b5e2d7a46/worktrees-share-refs.md");
     let text = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, text.replace("A fetch", "A quetzalcoatl fetch")).unwrap();
     let out = lorectl(&vault, &["search", "quetzalcoatl"]);
