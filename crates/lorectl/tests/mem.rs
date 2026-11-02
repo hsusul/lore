@@ -188,6 +188,31 @@ fn mem_reindex_names_both_paths_of_a_duplicate_id_and_exits_7() {
 }
 
 #[test]
+fn mem_help_prints_only_the_mem_section() {
+    for args in [
+        &["mem", "--help"][..],
+        &["help", "mem"][..],
+        &["mem", "add", "--help"][..],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(text.starts_with("Memory (lorectl mem"), "{args:?}: {text}");
+        assert!(!text.contains("Exit codes") || text.contains("7"), "{text}");
+        assert!(!text.contains("--archive"), "{args:?}: {text}");
+    }
+    let full = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .arg("help")
+        .output()
+        .unwrap();
+    assert_eq!(code(&full), 0);
+    assert!(stdout(&full).contains("--archive"));
+}
+
+#[test]
 fn mem_search_sees_a_hand_edit_without_reindex() {
     let (dir, vault) = init();
     lorectl(&vault, &["add", &note_file(dir.path(), "n.md", NOTE)]);

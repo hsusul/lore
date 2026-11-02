@@ -44,8 +44,8 @@ fn run() -> Result<u8, CliError> {
     let invocation = cli::parse_env()?;
 
     match invocation.action {
-        Action::Help => {
-            print!("{}", help::usage());
+        Action::Help(topic) => {
+            print!("{}", help::usage_for(topic));
             Ok(exit::OK)
         }
         Action::Version => {
@@ -102,7 +102,7 @@ mod tests {
     fn dispatch_unimplemented(args: &[&str]) -> Result<u8, CliError> {
         let invocation = cli::parse(args.iter().copied())?;
         match invocation.action {
-            Action::Help | Action::Version => Ok(exit::OK),
+            Action::Help(_) | Action::Version => Ok(exit::OK),
             Action::NoCommand => Ok(exit::USAGE),
             Action::Run(command) => {
                 assert!(
