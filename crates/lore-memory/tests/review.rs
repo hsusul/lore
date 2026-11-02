@@ -259,7 +259,7 @@ fn an_updates_proposal_rewrites_its_target() {
     let date = today();
     assert_eq!(
         vault.read("global/worktrees-share-refs.md").unwrap(),
-        format!("---\ntitle: Worktrees share refs\nmood: calm\ntype: pitfall\nid: 01JC8Z0000000000000000000A\nscope: global\nstatus: active\nanchors:\n  - path: crates/lore-core/src/git.rs\n    lines: 210-224\nsources:\n  - codex:s2\ncreated: 2026-10-01\n---\nFetch once; every worktree sees it.\n\n## Timeline\n- 2026-10-01 written by hand\n- {date} accepted from codex:s2\n")
+        format!("---\ntitle: Worktrees share refs\naliases:\n  - Worktrees share refs\nmood: calm\ntype: pitfall\nid: 01JC8Z0000000000000000000A\nscope: global\nstatus: active\nanchors:\n  - path: crates/lore-core/src/git.rs\n    lines: 210-224\nsources:\n  - codex:s2\ncreated: 2026-10-01\n---\nFetch once; every worktree sees it.\n\n## Timeline\n- 2026-10-01 written by hand\n- {date} accepted from codex:s2\n")
     );
     assert_eq!(
         subjects(dir.path()),
