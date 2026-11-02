@@ -276,7 +276,19 @@ fn vault_write_replaces_an_existing_note_in_place_and_commits() {
     )
     .unwrap();
     git(dir.path(), &["add", "-A"]);
-    git(dir.path(), &["commit", "-q", "-m", "rename"]);
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "rename",
+        ],
+    );
     note.body = "Run `git worktree prune -v`.\n".into();
     assert_eq!(
         vault.write("global/renamed.md", &note).unwrap(),
