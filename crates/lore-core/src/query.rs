@@ -48,6 +48,48 @@ pub fn agent_session_count(conn: &Connection, agent_id: &str) -> Result<i64> {
     )?)
 }
 
+/// The archived session an id belongs to, and the agent that recorded it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionOwner {
+    /// Lore's archive session id (`s_<hash>`).
+    pub archive_id: String,
+    /// The recording agent's `agent.id`, the string form of
+    /// [`crate::adapters::AgentId`] (`claude-code`, `codex`).
+    pub agent_id: String,
+}
+
+/// Resolve `id` to its archived session. `id` is tried first as Lore's archive
+/// session id, then as the agent's native session id (the Claude Code or Codex
+/// session UUID). Read only. Returns `None` when neither matches. A native id
+/// is unique per agent; if two agents ever share one, the lowest archive id
+/// wins so the answer is stable.
+pub fn find_session(conn: &Connection, id: &str) -> Result<Option<SessionOwner>> {
+    let owner = |row: &rusqlite::Row<'_>| {
+        Ok(SessionOwner {
+            archive_id: row.get(0)?,
+            agent_id: row.get(1)?,
+        })
+    };
+    let by_archive = conn
+        .query_row(
+            "SELECT id, agent_id FROM agent_session WHERE id = ?1",
+            [id],
+            owner,
+        )
+        .optional()?;
+    if by_archive.is_some() {
+        return Ok(by_archive);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT id, agent_id FROM agent_session
+             WHERE native_session_id = ?1 ORDER BY id LIMIT 1",
+            [id],
+            owner,
+        )
+        .optional()?)
+}
+
 /// The most recent sessions (newest first), capped at `limit`. A stable
 /// `(started_at, id)` order keeps this ready for keyset pagination later.
 pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary>> {
