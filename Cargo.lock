@@ -2875,6 +2875,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-memory"
+version = "0.0.0"
+
+[[package]]
+name = "lore-skills"
+version = "0.0.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "lorectl"
 version = "0.0.0"
 dependencies = [
