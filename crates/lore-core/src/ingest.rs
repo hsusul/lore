@@ -208,7 +208,7 @@ impl KeptRows {
         tx.execute(
             "CREATE TEMP TABLE kept_segment AS
              SELECT id, cwd, repository_id, worktree_id, resolution_confidence
-             FROM session_segment WHERE session_id = ?1 AND repository_id IS NOT NULL",
+             FROM session_segment WHERE session_id = ?1",
             [session_id],
         )?;
         Ok(Self { folder })
@@ -218,7 +218,9 @@ impl KeptRows {
     /// resolved repository while its cwd is unchanged, so enrichment does not
     /// capture it again. An agent-recorded observation the parse wrote again
     /// keeps its first `observed_at` while it records the same branch and
-    /// commit. Lore's own observations come back whole.
+    /// commit. Lore's own observations come back whole while their segment's
+    /// cwd is unchanged. Segment ids are positional, so a segment whose cwd
+    /// changed may now describe another repository.
     fn restore(&self, tx: &Connection, session_id: &str) -> Result<()> {
         if let Some((folder_id, added_at)) = &self.folder {
             tx.execute(
@@ -237,7 +239,8 @@ impl KeptRows {
                                          WHERE k.id = session_segment.id)
              WHERE session_id = ?1 AND EXISTS (
                 SELECT 1 FROM temp.kept_segment k
-                WHERE k.id = session_segment.id AND k.cwd IS session_segment.cwd)",
+                WHERE k.id = session_segment.id AND k.cwd IS session_segment.cwd
+                  AND k.repository_id IS NOT NULL)",
             [session_id],
         )?;
         tx.execute(
@@ -256,7 +259,11 @@ impl KeptRows {
              SELECT * FROM temp.kept_git_observation k
              WHERE k.source IN ('lore_captured', 'lore_reverified')
                AND (k.segment_id IS NULL
-                    OR k.segment_id IN (SELECT id FROM session_segment WHERE session_id = ?1))",
+                    OR EXISTS (
+                        SELECT 1 FROM session_segment seg
+                        JOIN temp.kept_segment ks ON ks.id = seg.id
+                        WHERE seg.id = k.segment_id AND seg.session_id = ?1
+                          AND ks.cwd IS seg.cwd))",
             [session_id],
         )?;
         tx.execute_batch(
