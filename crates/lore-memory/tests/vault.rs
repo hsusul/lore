@@ -376,3 +376,25 @@ fn vault_notes_skips_dot_directories_and_the_inbox() {
     assert_eq!(paths, ["README.md", "global/prune-worktrees.md"]);
     assert!(notes[0].note.is_err() && notes[1].note.is_ok());
 }
+
+#[test]
+fn vault_add_with_writes_what_prepare_changed_and_nothing_when_it_fails() {
+    let (dir, vault) = new_vault();
+    let refused = vault.add_with(NOTE, |_| Err(VaultError::NotFound("prepare".into())));
+    assert!(
+        matches!(refused, Err(VaultError::NotFound(_))),
+        "{refused:?}"
+    );
+    assert_nothing_written(dir.path());
+
+    let (note, added) = vault
+        .add_with(NOTE, |note| {
+            note.body.push_str("Prepared before the write.\n");
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(added, Added::Committed);
+    let text = vault.read(&note.rel_path()).unwrap();
+    assert!(text.ends_with("Prepared before the write.\n"), "{text}");
+    assert_eq!(subjects(dir.path()).len(), 2);
+}
