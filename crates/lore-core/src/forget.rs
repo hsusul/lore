@@ -46,8 +46,8 @@ pub fn forget_session(
             [session_id],
         )?;
         // The original logs remain, so mark their sources forgotten: a later
-        // re-parse of unchanged content (a parser version bump) skips them
-        // instead of restoring the session.
+        // scan skips them instead of restoring the session, after a parser
+        // version bump and after the agent appends to or rewrites them.
         tx.execute(
             "UPDATE ingest_state SET state = ?2, updated_at = unixepoch('now')*1000
              WHERE source_artifact_id IN

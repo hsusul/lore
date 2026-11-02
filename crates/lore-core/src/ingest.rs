@@ -1123,15 +1123,16 @@ pub fn ingest_file(
             0,
             ChangeClass::New,
         ),
-        // A forgotten source stays skipped at any parser version while its
-        // content is what the user forgot (`forget::forget_session`).
+        // A forgotten source stays skipped while it exists, at any parser
+        // version and whatever the agent writes to it after the forget
+        // (`forget::forget_session`). Skipping leaves its state forgotten.
         Some(row)
-            if row.full_hash.as_deref() == Some(snapshot.full_hash.as_str())
-                && (row.forgotten()
-                    || (row.parser_version.as_deref() == Some(PARSER_VERSION)
-                        && row.ingest_state.as_deref() == Some("ok"))) =>
+            if row.forgotten()
+                || (row.full_hash.as_deref() == Some(snapshot.full_hash.as_str())
+                    && row.parser_version.as_deref() == Some(PARSER_VERSION)
+                    && row.ingest_state.as_deref() == Some("ok")) =>
         {
-            // Unchanged content: refresh stat/alias only, no re-parse.
+            // Forgotten or unchanged: refresh stat/alias only, no re-parse.
             let _write = crate::storage::write_lock();
             let tx = conn.unchecked_transaction()?;
             update_source(&tx, &row.id, &snapshot, row.generation)?;
