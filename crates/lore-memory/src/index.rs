@@ -360,7 +360,8 @@ fn row<'a>(rel: &'a str, note: &'a Note) -> impl rusqlite::Params + 'a {
 }
 
 /// The body above the `## Timeline` heading, and the timeline itself.
-fn split_timeline(body: &str) -> (&str, &str) {
+#[must_use]
+pub fn split_timeline(body: &str) -> (&str, &str) {
     const HEADING: &str = "## Timeline";
     let at = if body.starts_with(HEADING) {
         Some(0)

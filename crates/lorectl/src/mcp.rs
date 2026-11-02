@@ -37,15 +37,15 @@ use std::path::{Path, PathBuf};
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::search::{self, SortOrder, HIGHLIGHT_END, HIGHLIGHT_START};
 use lore_core::{query, storage};
-use lore_memory::anchor::{Freshness, WorkTree};
-use lore_memory::inbox::{InboxError, Proposal, TIMELINE_HEADING};
+use lore_memory::anchor::WorkTree;
+use lore_memory::inbox::{InboxError, Proposal};
 use lore_memory::note::{
     AgentKind, Anchor, InvalidValue, LineRange, Note, NoteId, NoteType, RelPath, Relation, Scope,
     SessionId,
 };
 use lore_memory::repo::RepoContext;
 use lore_memory::vault::{self, Vault, VaultError};
-use lore_memory::{inbox, recall};
+use lore_memory::{inbox, index, recall};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -586,8 +586,11 @@ fn read_note(_ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let text = vault.read(&rel).map_err(|e| vault_error(&e))?;
     let note = Note::parse(&text).map_err(|e| vault_error(&e.into()))?;
 
-    let (body, timeline) = split_timeline(&note.body);
+    let (body, timeline) = index::split_timeline(&note.body);
     let timeline_entries = timeline.lines().filter(|l| l.starts_with("- ")).count();
+    let context = cwd.map_or(RepoContext::NoRepo, RepoContext::discover);
+    let tree = context.root().map(WorkTree::new);
+    let (_, freshness) = recall::check_note(&note, &context, tree.as_ref());
     let body = redact(body.trim_end())?;
     let truncated = body.chars().count() > READ_NOTE_BODY_CHARS;
     Ok(json!({
@@ -595,7 +598,7 @@ fn read_note(_ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         "title": redact(&note.title)?,
         "scope": note.scope.to_string(),
         "status": note.status.as_str(),
-        "freshness": note_freshness(&note, cwd).label(),
+        "freshness": freshness.label(),
         "body": body.chars().take(READ_NOTE_BODY_CHARS).collect::<String>(),
         "timeline_entries": timeline_entries,
         "truncated": truncated,
@@ -781,38 +784,4 @@ fn proposed_anchors(anchors: Option<&Value>) -> Result<Vec<Anchor>, Value> {
 
 fn redact(text: &str) -> Result<String, Value> {
     inbox::redact(text).map_err(|e| tool_error("internal", e, INTERNAL_FIX))
-}
-
-/// The body above the `## Timeline` heading, and the Timeline itself, split
-/// where the index splits them.
-fn split_timeline(body: &str) -> (&str, &str) {
-    let at = if body.starts_with(TIMELINE_HEADING) {
-        Some(0)
-    } else {
-        body.find(&format!("\n{TIMELINE_HEADING}")).map(|at| at + 1)
-    };
-    at.map_or((body, ""), |at| body.split_at(at))
-}
-
-/// How `note`'s anchors compare with the working tree, labelled as recall
-/// labels them. The tree is the repository around `cwd`, used only when the
-/// note applies there, so a note from another repository is `Unchecked`.
-fn note_freshness(note: &Note, cwd: Option<&Path>) -> Freshness {
-    let context = cwd.map(RepoContext::discover);
-    let root = context
-        .as_ref()
-        .filter(|context| match &note.scope {
-            Scope::Global => true,
-            Scope::Repo(key) => context.key() == Some(key),
-        })
-        .and_then(RepoContext::root);
-    match root {
-        Some(root) => {
-            let tree = WorkTree::new(root);
-            let anchors: Vec<_> = note.anchors.iter().map(|a| tree.locate(a)).collect();
-            Freshness::of_note(&anchors)
-        }
-        None if note.anchors.is_empty() => Freshness::Unanchored,
-        None => Freshness::Unchecked,
-    }
 }
