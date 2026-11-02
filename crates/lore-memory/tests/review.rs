@@ -354,6 +354,35 @@ fn update_of(target: &lore_memory::note::Note) -> Proposal {
 }
 
 #[test]
+fn accept_refuses_to_adopt_an_orphan_whose_id_another_file_has() {
+    let (dir, vault) = new_vault();
+    let p = proposal(P1, AgentKind::Codex, "s1", BODY);
+    inbox::propose(&vault, p.clone()).unwrap();
+    let note = p.note(NoteId::parse(P2).unwrap(), NoteDate::today());
+    fs::create_dir_all(dir.path().join("global")).unwrap();
+    fs::write(
+        dir.path().join("global/worktrees-share-refs.md"),
+        note.render(),
+    )
+    .unwrap();
+    fs::write(dir.path().join("global/duplicate.md"), note.render()).unwrap();
+    let head = git(dir.path(), &["rev-parse", "HEAD"]);
+    let before = git(dir.path(), &["status", "--porcelain"]);
+    let error = review::accept(&vault, P1, None).unwrap_err();
+    assert!(
+        matches!(error, ReviewError::Vault(VaultError::DuplicateId { .. })),
+        "{error}"
+    );
+    assert_eq!(git(dir.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(dir.path(), &["status", "--porcelain"]), before);
+    assert_eq!(
+        vault.read("global/worktrees-share-refs.md").unwrap(),
+        note.render()
+    );
+    assert_eq!(decision_lines(dir.path(), P1), 0);
+}
+
+#[test]
 fn accept_update_refuses_a_target_id_two_files_carry() {
     let (dir, vault) = new_vault();
     let (target, _) = vault.add(TARGET).unwrap();
@@ -369,6 +398,25 @@ fn accept_update_refuses_a_target_id_two_files_carry() {
     assert_eq!(git(dir.path(), &["rev-parse", "HEAD"]), head);
     assert_eq!(vault.read(&target.rel_path()).unwrap(), text);
     assert_eq!(decision_lines(dir.path(), P2), 0);
+}
+
+#[test]
+fn retire_by_path_refuses_a_duplicate_id_added_by_hand() {
+    let (dir, vault) = new_vault();
+    let (note, _) = vault
+        .add("---\ntitle: Original\ntype: fact\n---\nKeep this.\n")
+        .unwrap();
+    let rel = note.rel_path();
+    let text = vault.read(&rel).unwrap();
+    fs::write(dir.path().join("global/duplicate.md"), &text).unwrap();
+    let head = git(dir.path(), &["rev-parse", "HEAD"]);
+    let error = review::retire(&vault, &rel, "superseded").unwrap_err();
+    assert!(
+        matches!(error, ReviewError::Vault(VaultError::DuplicateId { .. })),
+        "{error}"
+    );
+    assert_eq!(git(dir.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(vault.read(&rel).unwrap(), text);
 }
 
 #[test]

@@ -27,7 +27,7 @@ use time::OffsetDateTime;
 use crate::inbox::{self, append_timeline, InboxError, Proposal, Skipped, TIMELINE_HEADING};
 use crate::index::Index;
 use crate::note::{Note, NoteDate, NoteId, Relation, Status};
-use crate::vault::{write_atomically, Added, Vault, VaultError};
+use crate::vault::{check_id_free, write_atomically, Added, Vault, VaultError};
 
 const DECISIONS_FILE: &str = "decisions.jsonl";
 
@@ -154,6 +154,7 @@ pub fn retire(vault: &Vault, key: &str, reason: &str) -> Result<(String, Added),
     let _lock = vault.lock()?;
     let text = vault.read(&rel)?;
     let current = Note::parse(&text).map_err(VaultError::from)?;
+    check_id_free(&vault.refresh_locked()?, &current.id, &rel)?;
     let committed = vault.is_committed(&rel)?;
     let date = NoteDate::today();
     let retired = |note: Note| {
@@ -218,6 +219,7 @@ fn create_locked(
             if note.render() != existing {
                 return Err(VaultError::Conflict(rel).into());
             }
+            check_id_free(&vault.refresh_locked()?, &note.id, &rel)?;
             vault.is_committed(&rel)?.then_some(Added::Unchanged)
         }
     };

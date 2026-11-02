@@ -405,7 +405,7 @@ impl Vault {
     }
 
     /// [`Vault::index`] for a caller that holds the write lock.
-    fn refresh_locked(&self) -> Result<Index, VaultError> {
+    pub(crate) fn refresh_locked(&self) -> Result<Index, VaultError> {
         let stamps = self.stamps()?;
         let print = fingerprint(&stamps);
         let lore_dir = self.lore_dir();
@@ -557,7 +557,7 @@ impl Vault {
 }
 
 /// Refuse `id` when a file other than `rel` already carries it.
-fn check_id_free(index: &Index, id: &NoteId, rel: &str) -> Result<(), VaultError> {
+pub(crate) fn check_id_free(index: &Index, id: &NoteId, rel: &str) -> Result<(), VaultError> {
     match index
         .paths_with_id(id.as_str())?
         .into_iter()
