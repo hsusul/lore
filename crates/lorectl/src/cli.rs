@@ -35,6 +35,8 @@ pub enum Command {
     Report,
     /// MCP server over stdio, so agents can search the archive.
     Mcp,
+    /// Inventory of the skill folders agents load.
+    Skills,
 }
 
 /// Every command, in the order `--help` lists them.
@@ -45,6 +47,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Search,
     Command::Hook,
     Command::Mcp,
+    Command::Skills,
     Command::Report,
 ];
 
@@ -60,6 +63,7 @@ impl Command {
             Command::Hook => "hook",
             Command::Report => "report",
             Command::Mcp => "mcp",
+            Command::Skills => "skills",
         }
     }
 
@@ -74,6 +78,7 @@ impl Command {
             Command::Hook => "Agent hook entry point; run by an agent, not a person",
             Command::Report => "Longer-form summary of archived work",
             Command::Mcp => "MCP server on stdin/stdout; run by an agent, not a person",
+            Command::Skills => "`ls` every agent skill folder",
         }
     }
 
@@ -87,7 +92,8 @@ impl Command {
             | Command::Inspect
             | Command::Status
             | Command::Hook
-            | Command::Mcp => true,
+            | Command::Mcp
+            | Command::Skills => true,
             Command::Report => false,
         }
     }
@@ -103,6 +109,7 @@ impl Command {
             Command::Search => Some("QUERY"),
             Command::Inspect => Some("SESSION_ID"),
             Command::Hook => Some("EVENT"),
+            Command::Skills => Some("SUBCOMMAND"),
             Command::Scan | Command::Status | Command::Report | Command::Mcp => None,
         }
     }
@@ -292,7 +299,7 @@ mod tests {
             .collect();
         assert_eq!(
             implemented,
-            ["scan", "status", "inspect", "search", "hook", "mcp"]
+            ["scan", "status", "inspect", "search", "hook", "mcp", "skills"]
         );
     }
 
