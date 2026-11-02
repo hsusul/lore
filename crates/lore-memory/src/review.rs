@@ -123,7 +123,10 @@ pub fn accept(vault: &Vault, id: &str, as_slug: Option<&str>) -> Result<Accepted
     }
     let today = NoteDate::today();
     let (accepted, note) = match target {
-        Some(rel) => update_locked(vault, &proposal, rel, today)?,
+        Some(rel) => {
+            let (accepted, note) = update_locked(vault, &proposal, rel, today)?;
+            (accepted, Some(note))
+        }
         None => create_locked(vault, &proposal, as_slug, today)?,
     };
     record(
@@ -134,7 +137,9 @@ pub fn accept(vault: &Vault, id: &str, as_slug: Option<&str>) -> Result<Accepted
             id: accepted.id.clone(),
         },
     )?;
-    upsert_index(vault, &accepted.rel, &note)?;
+    if let Some(note) = note {
+        upsert_index(vault, &accepted.rel, &note)?;
+    }
     Ok(accepted)
 }
 
@@ -215,7 +220,19 @@ fn create_locked(
     proposal: &Proposal,
     as_slug: Option<&str>,
     today: NoteDate,
-) -> Result<(Accepted, Note), ReviewError> {
+) -> Result<(Accepted, Option<Note>), ReviewError> {
+    // A commit already accepted it and only the decision line was lost. The
+    // note may since be retired or written under another `--as` name.
+    if let Some((rel, id)) = accepted_commit(vault, &proposal.id)? {
+        let current = read_optional(vault, &rel)?.and_then(|text| Note::parse(&text).ok());
+        let accepted = Accepted {
+            rel,
+            id,
+            updated: false,
+            outcome: Added::Unchanged,
+        };
+        return Ok((accepted, current));
+    }
     let mut note = proposal.note(NoteId::generate(), today);
     let rel = match as_slug {
         Some(slug) => format!("{}/{slug}.md", note.scope.dir()),
@@ -254,7 +271,7 @@ fn create_locked(
         updated: false,
         outcome,
     };
-    Ok((accepted, note))
+    Ok((accepted, Some(note)))
 }
 
 /// The target with the proposal's statement in place of its own, the

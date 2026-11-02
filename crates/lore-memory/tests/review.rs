@@ -606,3 +606,40 @@ fn reject_after_an_accept_that_lost_its_decision_line_is_refused() {
     assert_eq!((again.outcome, again.id), (Added::Unchanged, first.id));
     assert_eq!(subjects(dir.path()).len(), 2);
 }
+
+#[test]
+fn accept_converges_after_a_lost_decision_line_and_a_retire() {
+    let (dir, vault) = new_vault();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    let first = review::accept(&vault, P1, None).unwrap();
+    lose_decisions(dir.path());
+    review::retire(&vault, &first.rel, "fixed upstream").unwrap();
+    let retired = vault.read(&first.rel).unwrap();
+    let again = review::accept(&vault, P1, None).unwrap();
+    assert_eq!(
+        (again.outcome, &again.id, again.rel.as_str()),
+        (
+            Added::Unchanged,
+            &first.id,
+            "global/worktrees-share-refs.md"
+        )
+    );
+    assert_eq!(vault.read(&first.rel).unwrap(), retired);
+    assert_eq!(subjects(dir.path()).len(), 3);
+    assert_eq!(decision_lines(dir.path(), P1), 1);
+}
+
+#[test]
+fn accept_without_as_after_a_lost_decision_line_keeps_the_as_note() {
+    let (dir, vault) = new_vault();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    let first = review::accept(&vault, P1, Some("shared-refs")).unwrap();
+    lose_decisions(dir.path());
+    let again = review::accept(&vault, P1, None).unwrap();
+    assert_eq!(
+        (again.outcome, &again.id, again.rel.as_str()),
+        (Added::Unchanged, &first.id, "global/shared-refs.md")
+    );
+    assert!(!dir.path().join("global/worktrees-share-refs.md").exists());
+    assert_eq!(subjects(dir.path()).len(), 2);
+}
