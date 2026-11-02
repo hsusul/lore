@@ -24,6 +24,10 @@ use thiserror::Error;
 use crate::index::{fingerprint, FileStamp, Hit, Index, IndexError};
 use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
 
+/// Environment variable that overrides the vault location.
+pub const VAULT_ENV: &str = "LORE_VAULT_DIR";
+/// The default vault directory name, under the home directory.
+pub const DEFAULT_DIR_NAME: &str = "Lore";
 /// Lore's private directory inside the vault. Gitignored.
 pub const LORE_DIR: &str = ".lore";
 const LOCK_FILE: &str = "write.lock";
@@ -45,6 +49,10 @@ const GIT_SAFE: [&str; 8] = [
 
 #[derive(Debug, Error)]
 pub enum VaultError {
+    #[error("the vault location must be an absolute path, got `{0}`")]
+    RelativeDir(PathBuf),
+    #[error("no home directory to put the default vault in; set {VAULT_ENV}")]
+    NoHome,
     #[error("no vault at {0}")]
     Missing(PathBuf),
     #[error(transparent)]
@@ -72,6 +80,23 @@ pub enum VaultError {
 fn io_error(what: impl Into<String>) -> impl FnOnce(io::Error) -> VaultError {
     let what = what.into();
     move |error| VaultError::Io(what, error)
+}
+
+/// Where the vault is: `flag`, else `$LORE_VAULT_DIR`, else `~/Lore`.
+pub fn resolve_dir(flag: Option<&Path>) -> Result<PathBuf, VaultError> {
+    let env = std::env::var_os(VAULT_ENV).filter(|v| !v.is_empty());
+    let dir = match (flag, env) {
+        (Some(flag), _) => flag.to_path_buf(),
+        (None, Some(env)) => PathBuf::from(env),
+        (None, None) => dirs::home_dir()
+            .ok_or(VaultError::NoHome)?
+            .join(DEFAULT_DIR_NAME),
+    };
+    if dir.is_absolute() {
+        Ok(dir)
+    } else {
+        Err(VaultError::RelativeDir(dir))
+    }
 }
 
 /// What `init` found.

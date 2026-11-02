@@ -58,6 +58,7 @@ Options may appear before or after the command.
 
 Commands:
 {commands}
+{memory}
 Options:
     --archive <DIR>   Archive directory to use. Must be absolute; it names the
                       directory, not the database file.
@@ -70,6 +71,8 @@ Skills:
     skills ls         Every skill folder each agent loads, with its source.
 
 Environment:
+    LORE_VAULT_DIR    Vault directory (absolute) for `mem` when --vault is
+                      absent. Otherwise ~/Lore.
     LORE_ARCHIVE_DIR  Archive directory (absolute) used when --archive is
                       absent. Otherwise the platform data directory is used.
     HOME              Home root `skills` scans (~/.agents, ~/.cursor).
@@ -96,6 +99,7 @@ Exit codes:
 ",
         version = lore_core::version(),
         commands = commands,
+        memory = crate::mem::USAGE,
         ok = exit::OK,
         usage = exit::USAGE,
         no_archive = exit::NO_ARCHIVE,
