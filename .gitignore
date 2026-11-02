@@ -46,6 +46,8 @@ dist-ssr/
 !README.md
 # Test data, not documentation: the skills doctor's fixture home.
 !crates/lore-skills/fixtures/**/*.md
+# Memory fixture notes are test data, not documentation.
+!/crates/lore-memory/fixtures/**/*.md
 /docs/
 
 # Local agent instructions and design previews
