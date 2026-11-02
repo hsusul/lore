@@ -136,13 +136,6 @@ pub struct DuplicateId {
     pub paths: Vec<String>,
 }
 
-/// A markdown file found in the vault, and whether it is a valid note.
-#[derive(Debug)]
-pub struct VaultFile {
-    pub rel: String,
-    pub note: Result<Note, NoteError>,
-}
-
 /// An exclusive hold on the vault's write lock. Released on drop.
 #[derive(Debug)]
 pub struct WriteLock {
@@ -455,7 +448,8 @@ impl Vault {
         }
     }
 
-    /// A stamp for every markdown file [`Vault::notes`] would read, sorted.
+    /// A stamp for every `.md` file in the vault outside `.lore`, `.git`,
+    /// other dot directories, and `_inbox`, sorted by path.
     fn stamps(&self) -> Result<Vec<FileStamp>, VaultError> {
         let mut stamps = Vec::new();
         collect_markdown(&self.root, &self.root, &mut stamps)?;
@@ -494,21 +488,6 @@ impl Vault {
             RelPath::parse(rel).map_err(|e| VaultError::BadPath(rel.into(), e.to_string()))?;
         fs::read_to_string(self.root.join(rel.as_str()))
             .map_err(io_error(format!("read {}", rel.as_str())))
-    }
-
-    /// Every `.md` file in the vault outside `.lore`, `.git`, other dot
-    /// directories, and `_inbox`, sorted by path, each with its parse result.
-    pub fn notes(&self) -> Result<Vec<VaultFile>, VaultError> {
-        self.stamps()?
-            .into_iter()
-            .map(|stamp| {
-                let note = self.parse_file(&stamp.path)?;
-                Ok(VaultFile {
-                    rel: stamp.path,
-                    note,
-                })
-            })
-            .collect()
     }
 
     pub(crate) fn is_committed(&self, rel: &str) -> Result<bool, VaultError> {

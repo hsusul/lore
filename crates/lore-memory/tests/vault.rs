@@ -363,7 +363,7 @@ fn vault_search_and_find_see_hand_edits_renames_and_deletes() {
 }
 
 #[test]
-fn vault_notes_skips_dot_directories_and_the_inbox() {
+fn vault_reindex_skips_dot_directories_and_the_inbox() {
     let (dir, vault) = new_vault();
     vault.add(NOTE).unwrap();
     std::fs::create_dir_all(dir.path().join("_inbox")).unwrap();
@@ -371,10 +371,14 @@ fn vault_notes_skips_dot_directories_and_the_inbox() {
     std::fs::create_dir_all(dir.path().join(".obsidian")).unwrap();
     std::fs::write(dir.path().join(".obsidian/y.md"), "not a note").unwrap();
     std::fs::write(dir.path().join("README.md"), "# my vault\n").unwrap();
-    let notes = vault.notes().unwrap();
-    let paths: Vec<&str> = notes.iter().map(|f| f.rel.as_str()).collect();
-    assert_eq!(paths, ["README.md", "global/prune-worktrees.md"]);
-    assert!(notes[0].note.is_err() && notes[1].note.is_ok());
+    let report = vault.reindex().unwrap();
+    let skipped: Vec<&str> = report.skipped.iter().map(|(rel, _)| rel.as_str()).collect();
+    assert_eq!(skipped, ["README.md"]);
+    assert_eq!(report.indexed, 1);
+    assert_eq!(
+        vault.find("prune-worktrees").unwrap(),
+        "global/prune-worktrees.md"
+    );
 }
 
 #[test]
