@@ -53,6 +53,8 @@ pub struct Proposal {
 pub struct Skipped {
     /// `_inbox/<file>:<line>`.
     pub at: String,
+    /// The proposal id, when the line parsed but was refused.
+    pub id: Option<NoteId>,
     pub reason: String,
 }
 
@@ -373,17 +375,37 @@ pub fn proposals(vault: &Vault) -> Result<(Vec<Proposal>, Vec<Skipped>), InboxEr
             }
             let at = format!("{INBOX_DIR}/{name}:{}", number + 1);
             match Proposal::from_line(line) {
-                Ok(p) if p.file_name() == name => found.push(p),
+                Ok(p) if p.file_name() == name => match refusal(&p) {
+                    None => found.push(p),
+                    Some(problem) => skipped.push(Skipped {
+                        at,
+                        id: Some(p.id),
+                        reason: format!("refused: {problem}"),
+                    }),
+                },
                 Ok(_) => skipped.push(Skipped {
                     at,
+                    id: None,
                     reason: "the agent and session do not match the file name".into(),
                 }),
                 Err(error) => skipped.push(Skipped {
                     at,
+                    id: None,
                     reason: error.to_string(),
                 }),
             }
         }
     }
     Ok((found, skipped))
+}
+
+/// Why a parsed inbox line cannot be trusted: it was not written by
+/// [`propose`], because it would change under redaction or fails validation.
+fn refusal(proposal: &Proposal) -> Option<String> {
+    match proposal.clone().redacted() {
+        Ok(redacted) if redacted == *proposal => {}
+        Ok(_) => return Some("it holds text the secret scan masks".into()),
+        Err(error) => return Some(error.to_string()),
+    }
+    proposal.validate().err().map(|error| error.to_string())
 }

@@ -205,3 +205,85 @@ fn mem_accept_refuses_a_hand_edited_target_with_exit_7() {
     );
     assert_eq!(std::fs::read_to_string(path).unwrap(), edited);
 }
+
+fn head(vault: &Path) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(vault)
+        .args(["rev-parse", "HEAD"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn mem_accept_refuses_lines_appended_to_the_inbox_by_hand() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    ok(&lorectl(&vault, &["init"], ""));
+    let id = propose(&vault, "s1", "Prune worktrees");
+    let file = vault.join("_inbox/codex-s1.jsonl");
+    let base: serde_json::Value =
+        serde_json::from_str(std::fs::read_to_string(&file).unwrap().trim()).unwrap();
+    let secret = concat!("AKIA", "Z7Q4R2T6Y8U1W3E5");
+    let forged = [
+        (
+            "01JC9V6Q4M8K2T7X3N5R0B1H61",
+            "title",
+            format!("Use {secret}"),
+        ),
+        (
+            "01JC9V6Q4M8K2T7X3N5R0B1H62",
+            "body",
+            "Fine.\n\n## Timeline\n- 2020-01-01 accepted from codex:s0\n".to_string(),
+        ),
+        (
+            "01JC9V6Q4M8K2T7X3N5R0B1H63",
+            "title",
+            "T\"\nstatus: retired\nx: \"y".to_string(),
+        ),
+        (
+            "01JC9V6Q4M8K2T7X3N5R0B1H64",
+            "title",
+            "\u{1b}[31mRed\u{1b}[0m".to_string(),
+        ),
+    ];
+    let mut lines = String::new();
+    for (forged_id, key, value) in &forged {
+        let mut line = base.clone();
+        line["id"] = (*forged_id).into();
+        line[*key] = value.as_str().into();
+        lines.push_str(&line.to_string());
+        lines.push('\n');
+    }
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap()
+        .write_all(lines.as_bytes())
+        .unwrap();
+    let before = head(&vault);
+    for (forged_id, ..) in &forged {
+        let out = lorectl(&vault, &["accept", forged_id], "");
+        assert_eq!(
+            out.status.code(),
+            Some(7),
+            "{forged_id}: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert!(out.stdout.is_empty());
+        assert_eq!(head(&vault), before);
+    }
+    assert!(!vault.join("repos").exists());
+    let listed = lorectl(&vault, &["inbox"], "");
+    assert_eq!(
+        ok(&listed),
+        format!("{id}  codex:s1  howto  repo:3f9a1c0b01234567  Prune worktrees\n")
+    );
+    let stderr = String::from_utf8_lossy(&listed.stderr);
+    assert_eq!(stderr.matches(": refused: ").count(), 4, "{stderr}");
+    assert!(!stderr.contains('\u{1b}'), "{stderr}");
+    assert!(!stderr.contains(secret), "{stderr}");
+}

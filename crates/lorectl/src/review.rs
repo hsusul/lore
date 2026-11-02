@@ -210,8 +210,13 @@ pub fn run(sub: &str, rest: &[String], json: bool, usage_text: &str) -> Result<u
         }
         "inbox" => {
             let pending = review::inbox(&vault)?;
+            let printable = |s: &str| s.chars().filter(|c| !c.is_control()).collect::<String>();
             for skipped in &pending.skipped {
-                eprintln!("lorectl: skipped {}: {}", skipped.at, skipped.reason);
+                eprintln!(
+                    "lorectl: skipped {}: {}",
+                    printable(&skipped.at),
+                    printable(&skipped.reason)
+                );
             }
             if json {
                 let items: Vec<Value> = pending

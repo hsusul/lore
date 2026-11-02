@@ -166,9 +166,10 @@ pub fn exit_code(error: &CliError) -> u8 {
 fn review_exit_code(error: &ReviewError) -> u8 {
     match error {
         ReviewError::NoProposal(_) | ReviewError::BadSlug(_) => USAGE,
-        ReviewError::Decided(..) | ReviewError::DuplicateProposal(_) | ReviewError::Dirty(_) => {
-            NOTE_REFUSED
-        }
+        ReviewError::Decided(..)
+        | ReviewError::Refused { .. }
+        | ReviewError::DuplicateProposal(_)
+        | ReviewError::Dirty(_) => NOTE_REFUSED,
         ReviewError::Inbox(InboxError::Field { .. } | InboxError::ScanFailed) => NOTE_REFUSED,
         ReviewError::Inbox(InboxError::Io(..)) => ARCHIVE_UNREADABLE,
         ReviewError::Inbox(InboxError::Vault(error)) | ReviewError::Vault(error) => {

@@ -37,6 +37,12 @@ pub enum ReviewError {
     NoProposal(String),
     #[error("proposal `{0}` was already {1}")]
     Decided(String, &'static str),
+    #[error("proposal `{id}` at {at} is {reason}")]
+    Refused {
+        id: String,
+        at: String,
+        reason: String,
+    },
     #[error("proposal `{0}` appears more than once in the inbox")]
     DuplicateProposal(String),
     #[error("{0} has uncommitted changes Lore did not make")]
@@ -384,7 +390,14 @@ fn find_proposal(vault: &Vault, id: &str) -> Result<Proposal, ReviewError> {
         field: "id".into(),
         problem: e.to_string(),
     })?;
-    let (proposals, _) = inbox::proposals(vault)?;
+    let (proposals, skipped) = inbox::proposals(vault)?;
+    if let Some(refused) = skipped.into_iter().find(|s| s.id.as_ref() == Some(&wanted)) {
+        return Err(ReviewError::Refused {
+            id: id.to_string(),
+            at: refused.at,
+            reason: refused.reason,
+        });
+    }
     let mut matches = proposals.into_iter().filter(|p| p.id == wanted);
     match (matches.next(), matches.next()) {
         (Some(proposal), None) => Ok(proposal),
