@@ -23,6 +23,8 @@ lore-core = { path = "../lore-core" }
 # `skills ls` and `skills doctor`. Read-only on every skill folder, and covered
 # by the same egress audit as this crate.
 lore-skills = { path = "../lore-skills" }
+# Memory notes in a git vault, behind `lorectl mem`.
+lore-memory = { path = "../lore-memory" }
 # Argument parsing. `lexopt` is a zero-dependency pull parser, deliberately
 # chosen over `clap`: this binary is subject to the same no-network guarantee as
 # the archive, and the egress dependency audit (scripts/egress-check.sh) is only
