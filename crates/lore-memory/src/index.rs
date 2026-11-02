@@ -209,31 +209,30 @@ impl Index {
         let Some(fts) = fts_query(query) else {
             return Ok(Vec::new());
         };
-        let mut statement = self.conn.prepare_cached(
-            "SELECT path, id, slug, scope, note_type, status, title,
-                    snippet(notes, 7, '', '', '...', 12),
-                    bm25(notes, 0, 0, 0, 0, 0, 0, 4.0, 1.0, 0.5) AS score
-             FROM notes WHERE notes MATCH ?1
-             ORDER BY score, path LIMIT ?2",
-        )?;
+        let statement = self.conn.prepare_cached(&format!(
+            "{SELECT_HITS} WHERE notes MATCH ?1 ORDER BY score, path LIMIT ?2"
+        ))?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let hits = statement
-            .query_map(params![fts, limit], |r| {
-                let excerpt: String = r.get(7)?;
-                Ok(Hit {
-                    path: r.get(0)?,
-                    id: r.get(1)?,
-                    slug: r.get(2)?,
-                    scope: r.get(3)?,
-                    note_type: r.get(4)?,
-                    status: r.get(5)?,
-                    title: r.get(6)?,
-                    excerpt: excerpt.split_whitespace().collect::<Vec<_>>().join(" "),
-                    score: r.get(8)?,
-                })
-            })?
-            .collect::<Result<_, _>>()?;
-        Ok(hits)
+        collect_hits(statement, params![fts, limit])
+    }
+
+    /// Active notes that are global or in `repo` (written `repo:<key>`)
+    /// matching every word of `query`, best first.
+    pub fn search_active(
+        &self,
+        query: &str,
+        repo: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Hit>, IndexError> {
+        let Some(fts) = fts_query(query) else {
+            return Ok(Vec::new());
+        };
+        let statement = self.conn.prepare_cached(&format!(
+            "{SELECT_HITS} WHERE notes MATCH ?1 AND status = 'active'
+               AND scope IN ('global', ?3) ORDER BY score, path LIMIT ?2"
+        ))?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        collect_hits(statement, params![fts, limit, repo.unwrap_or("global")])
     }
 
     /// Paths of the notes whose id, slug (file name), or path is exactly `key`.
@@ -269,6 +268,34 @@ impl Index {
     pub fn is_empty(&self) -> Result<bool, IndexError> {
         Ok(self.len()? == 0)
     }
+}
+
+const SELECT_HITS: &str = "SELECT path, id, slug, scope, note_type, status, title,
+        snippet(notes, 7, '', '', '...', 12),
+        bm25(notes, 0, 0, 0, 0, 0, 0, 4.0, 1.0, 0.5) AS score
+    FROM notes";
+
+fn collect_hits(
+    mut statement: rusqlite::CachedStatement<'_>,
+    params: impl rusqlite::Params,
+) -> Result<Vec<Hit>, IndexError> {
+    let hits = statement
+        .query_map(params, |r| {
+            let excerpt: String = r.get(7)?;
+            Ok(Hit {
+                path: r.get(0)?,
+                id: r.get(1)?,
+                slug: r.get(2)?,
+                scope: r.get(3)?,
+                note_type: r.get(4)?,
+                status: r.get(5)?,
+                title: r.get(6)?,
+                excerpt: excerpt.split_whitespace().collect::<Vec<_>>().join(" "),
+                score: r.get(8)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(hits)
 }
 
 const INSERT: &str = "INSERT INTO notes
