@@ -5,7 +5,9 @@
 //! the repository that contains it. Ranking is the index's BM25, then notes
 //! whose anchors changed sink below the rest and notes whose files are gone
 //! sink to the bottom. A query with no words recalls every note in scope, in
-//! path order before that sort. Recall goes through [`Vault::index`], so
+//! path order before that sort. The limit applies after that sort, to a
+//! bounded set of candidates, so a stale note never takes a fresher note's
+//! slot among those candidates. Recall goes through [`Vault::index`], so
 //! notes a person edited, renamed, or deleted by hand are picked up first; it
 //! never writes a note file or the working tree. A file that no longer parses
 //! cannot be searched, so recall names it in `skipped` instead of dropping it
@@ -53,16 +55,27 @@ pub struct Recall {
     pub skipped: Vec<(String, NoteError)>,
 }
 
+/// How many index hits recall checks per note it returns. Each candidate costs
+/// a file read and an anchor check, so the set is bounded rather than the
+/// whole scope.
+const CANDIDATES_PER_NOTE: usize = 5;
+/// The most candidates recall checks, unless `limit` alone asks for more.
+const MAX_CANDIDATES: usize = 200;
+
 /// Notes matching `query` that apply in `cwd`, best first, at most `limit`.
 /// When `query` has no words, every active note that applies in `cwd`.
 pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Recall, VaultError> {
     let context = RepoContext::discover(cwd);
     let repo_scope = context.key().map(|key| format!("repo:{}", key.as_str()));
     let index = vault.index()?;
+    let candidates = limit
+        .saturating_mul(CANDIDATES_PER_NOTE)
+        .min(MAX_CANDIDATES)
+        .max(limit);
     let hits = if has_words(query) {
-        index.search_active(query, repo_scope.as_deref(), limit)?
+        index.search_active(query, repo_scope.as_deref(), candidates)?
     } else {
-        index.list_active(repo_scope.as_deref(), limit)?
+        index.list_active(repo_scope.as_deref(), candidates)?
     };
     let mut skipped = Vec::new();
     for rel in index.unparsed()? {
@@ -101,7 +114,9 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
             score: hit.score,
         });
     }
+    // Stable, so BM25 order (or path order) holds within a tier.
     notes.sort_by_key(|recalled| tier(recalled.freshness));
+    notes.truncate(limit);
     Ok(Recall {
         context,
         notes,
