@@ -21,13 +21,26 @@
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "trafficLightPosition": {
-          "x": 16,
-          "y": 11
+          "x": 19,
+          "y": 24
+        },
+        "windowEffects": {
+          "effects": ["sidebar"],
+          "state": "followsWindowActiveState"
         }
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+      "capabilities": [
+        "default",
+        {
+          "identifier": "window-drag",
+          "description": "Lets toolbar areas marked data-tauri-drag-region move the window.",
+          "windows": ["main"],
+          "permissions": ["core:window:allow-start-dragging"]
+        }
+      ]
     }
   },
   "bundle": {
