@@ -4,7 +4,8 @@
 # The archive must have no network capability (AGENTS.md; SECURITY.md §7), and
 # so must every surface built on it. Static call-site guards already assert the
 # sources reference no networking APIs (`no_network_in_archive` in lore-core,
-# `no_network_in_memory` in lore-memory, `no_network_in_lorectl` in lorectl,
+# `no_network_in_memory` in lore-memory, `no_network_in_skills` in lore-skills,
+# `no_network_in_lorectl` in lorectl,
 # plus `no_egress`). This adds the two
 # checks those cannot make, for each package:
 #   1. Dependency graph — no networking crate is present in the package's normal
@@ -35,7 +36,7 @@ export CLAUDE_CONFIG_DIR="$LORE_EGRESS_HOMES/claude"
 export CODEX_HOME="$LORE_EGRESS_HOMES/codex"
 
 # Every package that must be network-incapable. Both checks run for each.
-PACKAGES=(lore-core lore-memory lorectl)
+PACKAGES=(lore-core lore-memory lore-skills lorectl)
 
 # Crates that can open an outbound connection and have no local-only purpose:
 # HTTP/WebSocket clients and servers, TLS-for-transport, DNS resolvers, QUIC.

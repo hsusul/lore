@@ -1,11 +1,35 @@
 import { describe, expect, it } from "vitest";
 
-import { agentLabel, clamp, formatRelative, formatTime, formatTokens } from "./format";
+import { agentLabel, clamp, formatAgo, formatMailDate, formatRelative, formatTime, formatTokens } from "./format";
 
 describe("format helpers", () => {
+  describe("formatAgo", () => {
+    const now = Date.UTC(2026, 9, 26, 12, 0, 0);
+
+    it("says how long ago in words", () => {
+      expect(formatAgo(now - 20_000, now)).toBe("just now");
+      expect(formatAgo(now - 2 * 60_000, now)).toBe("2 minutes ago");
+      expect(formatAgo(now - 3 * 3_600_000, now)).toBe("3 hours ago");
+      expect(formatAgo(now - 26 * 3_600_000, now)).toBe("yesterday");
+      expect(formatAgo(now - 15 * 86_400_000, now)).toBe("2 weeks ago");
+    });
+  });
+
+  describe("formatMailDate", () => {
+    const now = new Date(2026, 9, 26, 16, 30).getTime();
+
+    it("writes dates the way Mail's message list does", () => {
+      expect(formatMailDate(new Date(2026, 9, 26, 14, 0).getTime(), now)).toBe("2:00 PM");
+      expect(formatMailDate(new Date(2026, 9, 25, 23, 59).getTime(), now)).toBe("Yesterday");
+      expect(formatMailDate(new Date(2026, 9, 22, 9, 0).getTime(), now)).toBe("Thursday");
+      expect(formatMailDate(new Date(2026, 9, 19, 9, 0).getTime(), now)).toBe("10/19/26");
+      expect(formatMailDate(null, now)).toBe("");
+    });
+  });
+
   describe("agentLabel", () => {
     it("maps known agent ids to friendly display names", () => {
-      expect(agentLabel("claude-code")).toBe("Claude");
+      expect(agentLabel("claude-code")).toBe("Claude Code");
       expect(agentLabel("codex")).toBe("Codex");
     });
 

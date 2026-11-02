@@ -35,6 +35,8 @@ pub enum Command {
     Report,
     /// MCP server over stdio, so agents can search the archive.
     Mcp,
+    /// Inventory and doctor for the skill folders agents load.
+    Skills,
     /// Memory notes in a git vault.
     Mem,
 }
@@ -47,6 +49,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Search,
     Command::Hook,
     Command::Mcp,
+    Command::Skills,
     Command::Mem,
     Command::Report,
 ];
@@ -63,6 +66,7 @@ impl Command {
             Command::Hook => "hook",
             Command::Report => "report",
             Command::Mcp => "mcp",
+            Command::Skills => "skills",
             Command::Mem => "mem",
         }
     }
@@ -78,6 +82,7 @@ impl Command {
             Command::Hook => "Agent hook entry point; run by an agent, not a person",
             Command::Report => "Longer-form summary of archived work",
             Command::Mcp => "MCP server on stdin/stdout; run by an agent, not a person",
+            Command::Skills => "`ls` every agent skill folder, or `doctor` to report problems",
             Command::Mem => "Memory notes in a git vault; see Memory below",
         }
     }
@@ -93,6 +98,7 @@ impl Command {
             | Command::Status
             | Command::Hook
             | Command::Mcp
+            | Command::Skills
             | Command::Mem => true,
             Command::Report => false,
         }
@@ -109,6 +115,7 @@ impl Command {
             Command::Search => Some("QUERY"),
             Command::Inspect => Some("SESSION_ID"),
             Command::Hook => Some("EVENT"),
+            Command::Skills => Some("SUBCOMMAND"),
             Command::Mem => Some("SUBCOMMAND"),
             Command::Scan | Command::Status | Command::Report | Command::Mcp => None,
         }
@@ -340,7 +347,7 @@ mod tests {
             .collect();
         assert_eq!(
             implemented,
-            ["scan", "status", "inspect", "search", "hook", "mcp", "mem"]
+            ["scan", "status", "inspect", "search", "hook", "mcp", "skills", "mem"]
         );
     }
 
