@@ -235,6 +235,22 @@ impl Index {
         collect_hits(statement, params![fts, limit, repo.unwrap_or("global")])
     }
 
+    /// Active notes that are global or in `repo` (written `repo:<key>`), by
+    /// path, with no query to match. The score is 0 and the excerpt is the
+    /// start of the body above `## Timeline`.
+    pub fn list_active(&self, repo: Option<&str>, limit: usize) -> Result<Vec<Hit>, IndexError> {
+        let statement = self.conn.prepare_cached(
+            "SELECT path, id, slug, scope, note_type, status, title, body, 0.0 FROM notes
+               WHERE status = 'active' AND scope IN ('global', ?2) ORDER BY path LIMIT ?1",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut hits = collect_hits(statement, params![limit, repo.unwrap_or("global")])?;
+        for hit in &mut hits {
+            hit.excerpt = opening(&hit.excerpt);
+        }
+        Ok(hits)
+    }
+
     /// Paths of the notes whose id, slug (file name), or path is exactly `key`.
     pub fn lookup(&self, key: &str) -> Result<Vec<String>, IndexError> {
         let mut statement = self.conn.prepare_cached(
@@ -358,6 +374,22 @@ fn split_timeline(body: &str) -> (&str, &str) {
         ),
         None => (body, ""),
     }
+}
+
+/// The first words of a body, cut the way `snippet` cuts an excerpt.
+fn opening(body: &str) -> String {
+    const WORDS: usize = 12;
+    let mut words = body.split_whitespace();
+    let start: Vec<&str> = words.by_ref().take(WORDS).collect();
+    let more = if words.next().is_some() { "..." } else { "" };
+    format!("{}{more}", start.join(" "))
+}
+
+/// Whether `query` has a word to search for. A query without one matches
+/// nothing in [`Index::search_active`].
+#[must_use]
+pub fn has_words(query: &str) -> bool {
+    fts_query(query).is_some()
 }
 
 /// Every word of the query as a quoted FTS5 term, so punctuation in a query is
