@@ -68,6 +68,9 @@ Options:
 
 Skills:
     skills ls         Every skill folder each agent loads, with its source.
+    skills doctor     Duplicates and drift.
+                      Each gets a quoted command or a plain hint. Never
+                      writes; exits 0.
 
 Environment:
     LORE_ARCHIVE_DIR  Archive directory (absolute) used when --archive is

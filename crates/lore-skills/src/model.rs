@@ -166,6 +166,15 @@ impl Finding {
         }
     }
 
+    /// The kebab-case tag, as in `--json`.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Finding::Drift { .. } => "drift",
+            Finding::Duplicate { .. } => "duplicate",
+        }
+    }
+
     /// What a person can do about it. Suggested, never run. A command only
     /// reads; it never edits, moves, or deletes a copy.
     #[must_use]
@@ -201,6 +210,24 @@ pub enum Fix {
     Command(String),
     /// Advice for a person. Not a command.
     Hint(String),
+}
+
+impl Fix {
+    /// `command` or `hint`, as in `--json`'s `fix_kind`.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Fix::Command(_) => "command",
+            Fix::Hint(_) => "hint",
+        }
+    }
+
+    #[must_use]
+    pub fn text(&self) -> &str {
+        match self {
+            Fix::Command(text) | Fix::Hint(text) => text,
+        }
+    }
 }
 
 /// The one quoting rule for every fix: wrap in single quotes, and write each

@@ -20,8 +20,8 @@ workspace = true
 # The archive itself. `lorectl` adds a second surface over the same core the
 # desktop shell uses; it must never grow its own copy of archive logic.
 lore-core = { path = "../lore-core" }
-# `skills ls`. Read-only on every skill folder, and covered by the same egress
-# audit as this crate.
+# `skills ls` and `skills doctor`. Read-only on every skill folder, and covered
+# by the same egress audit as this crate.
 lore-skills = { path = "../lore-skills" }
 # Memory notes in a git vault, behind `lorectl mem`.
 lore-memory = { path = "../lore-memory" }

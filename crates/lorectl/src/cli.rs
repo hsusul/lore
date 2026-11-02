@@ -35,7 +35,7 @@ pub enum Command {
     Report,
     /// MCP server over stdio, so agents can search the archive.
     Mcp,
-    /// Inventory of the skill folders agents load.
+    /// Inventory and doctor for the skill folders agents load.
     Skills,
 }
 
@@ -78,7 +78,7 @@ impl Command {
             Command::Hook => "Agent hook entry point; run by an agent, not a person",
             Command::Report => "Longer-form summary of archived work",
             Command::Mcp => "MCP server on stdin/stdout; run by an agent, not a person",
-            Command::Skills => "`ls` every agent skill folder",
+            Command::Skills => "`ls` every agent skill folder, or `doctor` to report problems",
         }
     }
 
