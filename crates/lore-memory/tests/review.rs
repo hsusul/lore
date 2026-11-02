@@ -644,6 +644,42 @@ fn accept_without_as_after_a_lost_decision_line_keeps_the_as_note() {
     assert_eq!(subjects(dir.path()).len(), 2);
 }
 
+fn commit_all(root: &Path, message: &str) {
+    git(
+        root,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.test",
+            "commit",
+            "-qm",
+            message,
+        ],
+    );
+}
+
+#[test]
+fn retire_of_a_glob_named_note_commits_only_that_file() {
+    let (dir, vault) = new_vault();
+    let (note, _) = vault.add(TARGET).unwrap();
+    git(dir.path(), &["mv", &note.rel_path(), "global/[ab].md"]);
+    fs::write(dir.path().join("global/a.md"), "my notes\n").unwrap();
+    git(dir.path(), &["add", "global/a.md"]);
+    commit_all(dir.path(), "by hand");
+    fs::write(dir.path().join("global/a.md"), "my edited notes\n").unwrap();
+    let retired = review::retire(&vault, "global/[ab].md", "superseded").unwrap();
+    assert_eq!(retired, ("global/[ab].md".to_string(), Added::Committed));
+    assert_eq!(
+        git(dir.path(), &["show", "--name-only", "--format="]),
+        "global/[ab].md\n"
+    );
+    assert_eq!(
+        git(dir.path(), &["status", "--porcelain"]),
+        " M global/a.md\n"
+    );
+}
+
 /// Undo the last commit but keep its file, as if the process died after the
 /// write and before the commit, and move that write's Timeline date to
 /// `date`, as if it happened before midnight.

@@ -518,6 +518,9 @@ impl Vault {
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_EDITOR", "true")
+            // A note path is a file name, never a glob: `global/[ab].md`
+            // must not match `global/a.md`.
+            .env("GIT_LITERAL_PATHSPECS", "1")
             .stdin(Stdio::null())
             .output()
             .map_err(io_error("run git"))?;
