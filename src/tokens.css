@@ -116,6 +116,9 @@
   --sidebar-w: 220px;
   --list-w: 320px;
   --source-row-h: 28px;
+  --row-h: 52px;
+  --hit-row-h: 68px;
+  --token-h: 20px;
   --menu-row-h: 22px;
   --control-h: 22px;
   --seg-h: 22px;
