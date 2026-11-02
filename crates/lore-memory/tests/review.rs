@@ -680,6 +680,22 @@ fn retire_of_a_glob_named_note_commits_only_that_file() {
     );
 }
 
+#[test]
+fn a_symlinked_temp_file_is_not_written_through() {
+    let (dir, vault) = new_vault();
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("zshrc");
+    fs::write(&victim, "keep\n").unwrap();
+    fs::create_dir_all(dir.path().join("global")).unwrap();
+    let temp = dir.path().join("global/.worktrees-share-refs.md.tmp");
+    std::os::unix::fs::symlink(&victim, &temp).unwrap();
+    let (note, _) = vault.add(TARGET).unwrap();
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "keep\n");
+    let path = dir.path().join(note.rel_path());
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_file());
+    assert_eq!(vault.read(&note.rel_path()).unwrap(), note.render());
+}
+
 /// Undo the last commit but keep its file, as if the process died after the
 /// write and before the commit, and move that write's Timeline date to
 /// `date`, as if it happened before midnight.

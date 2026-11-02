@@ -14,7 +14,7 @@
 
 use std::cell::OnceCell;
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -618,6 +618,19 @@ pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<(), VaultError
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let temp = path.with_file_name(format!(".{name}.tmp"));
-    fs::write(&temp, text).map_err(io_error(format!("write {}", temp.display())))?;
+    let what = || format!("write {}", temp.display());
+    // A stale temp file may be a symlink, for example one a pulled commit
+    // checked out. Remove it and create a new file, never following a link.
+    match fs::remove_file(&temp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io_error(what())(e)),
+    }
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .and_then(|mut file| file.write_all(text.as_bytes()))
+        .map_err(io_error(what()))?;
     fs::rename(&temp, path).map_err(io_error(format!("write {}", path.display())))
 }
