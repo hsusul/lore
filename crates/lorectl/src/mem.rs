@@ -7,6 +7,9 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use lexopt::prelude::*;
+use lore_memory::anchor::WorkTree;
+use lore_memory::note::Scope;
+use lore_memory::repo::RepoContext;
 use lore_memory::vault::{self, Added, Init, Vault};
 
 use crate::cli::Invocation;
@@ -19,7 +22,9 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     init              Create the vault, a git repository Obsidian can open
     add <FILE>        Add a note file (`-` reads stdin); id, created, status,
                       and scope may be left out. The same file twice is one
-                      note and one commit. An id another note has is refused
+                      note and one commit. An id another note has is refused.
+                      --cwd <DIR> fills each anchor's missing hash and commit,
+                      and the repository's name, from the repository at DIR
     show <NOTE>       Print a note by id, file name, or vault path
     search <QUERY>    Rank notes by BM25 [--limit N, default 10]
     reindex           Rebuild the index from the vault files alone, and name
@@ -45,6 +50,7 @@ struct MemArgs {
     sub: Option<Sub>,
     vault: Option<PathBuf>,
     limit: usize,
+    cwd: Option<PathBuf>,
 }
 
 fn usage(message: impl Into<String>) -> CliError {
@@ -55,6 +61,7 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
     let mut parser = lexopt::Parser::from_args(rest);
     let mut vault = None;
     let mut limit = None;
+    let mut cwd = None;
     let mut help = false;
     let mut operand: Option<String> = None;
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
@@ -62,6 +69,11 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
             Short('h') | Long("help") => help = true,
             Long("vault") => {
                 vault = Some(PathBuf::from(
+                    parser.value().map_err(|e| usage(e.to_string()))?,
+                ));
+            }
+            Long("cwd") if sub == "add" => {
+                cwd = Some(PathBuf::from(
                     parser.value().map_err(|e| usage(e.to_string()))?,
                 ));
             }
@@ -89,6 +101,7 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
             sub: None,
             vault,
             limit: DEFAULT_LIMIT,
+            cwd,
         });
     }
     let needs = |name: &str| {
@@ -111,6 +124,7 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
         sub: Some(parsed),
         vault,
         limit: limit.unwrap_or(DEFAULT_LIMIT),
+        cwd,
     })
 }
 
@@ -136,7 +150,30 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         Sub::Add(file) => {
             let text = read_input(&file)?;
             let vault = Vault::open(&dir)?;
-            let (note, added) = vault.add(&text)?;
+            let (note, added) = match &args.cwd {
+                None => vault.add(&text)?,
+                Some(cwd) => {
+                    let context = RepoContext::discover(cwd);
+                    let root = context.root().ok_or_else(|| {
+                        usage(format!(
+                            "--cwd `{}` is not in a git repository",
+                            cwd.display()
+                        ))
+                    })?;
+                    let tree = WorkTree::new(root);
+                    vault.add_with(&text, |note| {
+                        for anchor in &mut note.anchors {
+                            *anchor = tree.pin(anchor)?;
+                        }
+                        let ours =
+                            matches!(&note.scope, Scope::Repo(key) if Some(key) == context.key());
+                        if ours && note.repo.is_none() {
+                            note.repo = context.name().cloned();
+                        }
+                        Ok(())
+                    })?
+                }
+            };
             let verb = match added {
                 Added::Committed => "added",
                 Added::Unchanged => "unchanged",
@@ -227,6 +264,8 @@ mod tests {
         let search = args("search", &["two words", "--limit", "3", "--vault", "/v"]).unwrap();
         assert_eq!(search.sub, Some(Sub::Search("two words".into())));
         assert_eq!((search.limit, search.vault), (3, Some(PathBuf::from("/v"))));
+        let add = args("add", &["n.md", "--cwd", "/r"]).unwrap();
+        assert_eq!(add.cwd, Some(PathBuf::from("/r")));
     }
 
     #[test]
@@ -239,6 +278,9 @@ mod tests {
             ("search", &["q", "--limit", "0"][..]),
             ("show", &["x", "--limit", "3"][..]),
             ("add", &["x", "--wat"][..]),
+            ("search", &["q", "--json"][..]),
+            ("show", &["x", "--cwd", "/r"][..]),
+            ("add", &["x", "--json"][..]),
         ] {
             let error = args(sub, rest).unwrap_err();
             assert_eq!(exit::exit_code(&error), exit::USAGE, "{sub} {rest:?}");
