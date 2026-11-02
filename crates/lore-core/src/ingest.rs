@@ -98,6 +98,7 @@ fn persist_rows(
 
     let session_id = session_id_for(agent_id, parsed);
     let existing_sources = session_sources(tx, &session_id)?;
+    let kept = KeptRows::save(tx, &session_id)?;
 
     // Explicitly delete search projections first so the FTS external-content
     // delete trigger fires (an FK cascade would not fire it), then cascade-delete
@@ -165,8 +166,40 @@ fn persist_rows(
         patch_blobs,
         RowBase::default(),
     )?;
+    kept.restore(tx, &session_id)?;
     index_search_rows(tx, high_water)?;
     Ok(session_id)
+}
+
+/// Rows about a session that no source holds, so replacing the session's
+/// parsed rows must keep them: the folder the user filed it in (migration
+/// 0008 promises it survives a re-scan).
+struct KeptRows {
+    folder: Option<(String, i64)>,
+}
+
+impl KeptRows {
+    fn save(tx: &Connection, session_id: &str) -> Result<Self> {
+        let folder = tx
+            .query_row(
+                "SELECT folder_id, added_at FROM session_folder WHERE session_id = ?1",
+                [session_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(Self { folder })
+    }
+
+    /// Restore after the parsed rows are inserted.
+    fn restore(&self, tx: &Connection, session_id: &str) -> Result<()> {
+        if let Some((folder_id, added_at)) = &self.folder {
+            tx.execute(
+                "INSERT INTO session_folder (session_id, folder_id, added_at) VALUES (?1,?2,?3)",
+                params![session_id, folder_id, added_at],
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// The highest search row id. Rows inserted after reading it get higher ids,
