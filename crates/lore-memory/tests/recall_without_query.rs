@@ -115,14 +115,30 @@ fn an_empty_query_outside_a_repo_recalls_global_notes_only() {
 }
 
 #[test]
-fn an_empty_query_honors_the_limit_in_path_order() {
+fn an_empty_query_fills_the_limit_with_fresher_notes_first() {
     let dir = tempfile::tempdir().unwrap();
     let (app, vault) = setup(dir.path());
+    // ALPHA sorts before BETA by path, but its anchor changed.
     assert_eq!(
         ids(&vault, "", &app, 2),
-        owned(&[(GLOBAL, "unanchored"), (ALPHA, "changed")])
+        owned(&[(GLOBAL, "unanchored"), (BETA, "fresh")])
     );
     assert_eq!(ids(&vault, "", &app, 1), owned(&[(GLOBAL, "unanchored")]));
+}
+
+#[test]
+fn a_query_fills_the_limit_with_fresher_notes_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, vault) = setup(dir.path());
+    // Every note matches. ALPHA ranks above BETA by BM25, but its anchor changed.
+    assert_eq!(
+        ids(&vault, "nothing in common", &app, 10),
+        owned(&[(GLOBAL, "unanchored"), (BETA, "fresh"), (ALPHA, "changed")])
+    );
+    assert_eq!(
+        ids(&vault, "nothing in common", &app, 2),
+        owned(&[(GLOBAL, "unanchored"), (BETA, "fresh")])
+    );
 }
 
 #[test]
