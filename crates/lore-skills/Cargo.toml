@@ -13,6 +13,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-# Already in the graph via lore-core and lore-ipc, so this crate adds no new
-# dependency to the egress audit (scripts/egress-check.sh).
+# Both are already in the graph via lore-core and lore-ipc, so this crate adds
+# no new dependency to the egress audit (scripts/egress-check.sh).
+blake3 = "1"
 serde = { version = "1", features = ["derive"] }
