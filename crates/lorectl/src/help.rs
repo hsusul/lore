@@ -66,9 +66,13 @@ Options:
     -h, --help        Print this help.
     -V, --version     Print the version.
 
+Skills:
+    skills ls         Every skill folder each agent loads, with its source.
+
 Environment:
     LORE_ARCHIVE_DIR  Archive directory (absolute) used when --archive is
                       absent. Otherwise the platform data directory is used.
+    HOME              Home root `skills` scans.
 
 Exit codes:
     {ok}  ok
