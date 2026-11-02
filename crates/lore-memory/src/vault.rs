@@ -359,7 +359,15 @@ impl Vault {
         let mut notes = Vec::new();
         let mut skipped = Vec::new();
         for stamp in &stamps {
-            match self.parse_file(&stamp.path)? {
+            // A file that is not UTF-8 is not a note. Skip it like any other
+            // unparseable file, so one bad file does not fail the rebuild.
+            let parsed = match self.parse_file(&stamp.path) {
+                Err(VaultError::Io(_, error)) if error.kind() == io::ErrorKind::InvalidData => {
+                    Err(NoteError::NotANote("the file is not valid UTF-8"))
+                }
+                other => other?,
+            };
+            match parsed {
                 Ok(note) => notes.push((stamp.path.as_str(), note)),
                 Err(error) => skipped.push((stamp.path.clone(), error)),
             }
