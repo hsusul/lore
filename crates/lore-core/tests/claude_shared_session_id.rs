@@ -7,7 +7,11 @@
 use std::path::{Path, PathBuf};
 
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
-use lore_core::ingest::ingest_file;
+use lore_core::adapters::{
+    AgentAdapter, AgentId, AgentMetadata, Capabilities, Detection, DiscoveryRoots, SessionRef,
+};
+use lore_core::ingest::{ingest_file, ChangeClass, IngestOutcome};
+use lore_core::model::ParsedSession;
 use lore_core::search::search;
 use lore_core::storage::blob::BlobStore;
 use rusqlite::Connection;
@@ -264,4 +268,167 @@ fn resumed_transcript_with_only_copied_lines_leaves_the_original_whole() {
         native_ids(&conn),
         vec![old_id.to_string(), new_id.to_string()]
     );
+}
+
+/// The subagent fixture tree copied somewhere writable.
+fn copy_fixture_tree() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join(format!("{PARENT_ID}.jsonl"));
+    let sub_dir = dir.path().join(PARENT_ID).join("subagents");
+    std::fs::create_dir_all(&sub_dir).unwrap();
+    let subagent = sub_dir.join("agent-a0000000000000001.jsonl");
+    std::fs::copy(fixture_dir().join(format!("{PARENT_ID}.jsonl")), &parent).unwrap();
+    std::fs::copy(
+        fixture_dir().join(format!(
+            "{PARENT_ID}/subagents/agent-a0000000000000001.jsonl"
+        )),
+        &subagent,
+    )
+    .unwrap();
+    (dir, parent, subagent)
+}
+
+#[test]
+fn an_appended_subagent_transcript_keeps_its_id_and_grows() {
+    let (_dir, parent, subagent) = copy_fixture_tree();
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(blob_dir.path()).unwrap();
+    let adapter = ClaudeCodeAdapter::new();
+    ingest_file(&conn, &adapter, &parent, &blobs).unwrap();
+    ingest_file(&conn, &adapter, &subagent, &blobs).unwrap();
+    let sub_id = format!("{PARENT_ID}/agent-a0000000000000001");
+    let (sub_session, _) = session_for(&conn, &sub_id);
+    assert_eq!(message_count(&conn, &sub_session), 2);
+
+    let tail = format!(
+        r#"{{"type":"assistant","uuid":"c5555555-5555-4555-8555-555555555555","sessionId":"{PARENT_ID}","agentId":"a0000000000000001","timestamp":"2026-10-31T18:00:09.000Z","message":{{"role":"assistant","content":[{{"type":"text","text":"The subagent adds the badger."}}]}}}}"#
+    ) + "\n";
+    let mut content = std::fs::read_to_string(&subagent).unwrap();
+    content.push_str(&tail);
+    std::fs::write(&subagent, content).unwrap();
+
+    let outcome = ingest_file(&conn, &adapter, &subagent, &blobs).unwrap();
+    assert!(
+        matches!(
+            outcome,
+            IngestOutcome::Ingested {
+                change: ChangeClass::Appended,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        native_ids(&conn),
+        vec![PARENT_ID.to_string(), sub_id.clone()]
+    );
+    assert_eq!(session_for(&conn, &sub_id).0, sub_session);
+    assert_eq!(message_count(&conn, &sub_session), 3);
+    assert_eq!(hit_sessions(&conn, "badger"), vec![sub_session]);
+    let (parent_session, _) = session_for(&conn, PARENT_ID);
+    assert_eq!(message_count(&conn, &parent_session), 2);
+}
+
+/// The Claude adapter as parser v3 keyed a file: by the first `sessionId` it
+/// carries, so a subagent transcript took its parent's session.
+struct V3Claude(ClaudeCodeAdapter);
+
+impl AgentAdapter for V3Claude {
+    fn id(&self) -> AgentId {
+        self.0.id()
+    }
+    fn metadata(&self) -> AgentMetadata {
+        self.0.metadata()
+    }
+    fn capabilities(&self) -> Capabilities {
+        self.0.capabilities()
+    }
+    fn detect_installation(&self, roots: &DiscoveryRoots) -> Detection {
+        self.0.detect_installation(roots)
+    }
+    fn roots(&self, overrides: &DiscoveryRoots) -> Vec<PathBuf> {
+        self.0.roots(overrides)
+    }
+    fn discover_sessions(&self, roots: &DiscoveryRoots) -> Vec<SessionRef> {
+        self.0.discover_sessions(roots)
+    }
+    fn parse_content(&self, content: &str, fallback_dedupe: &str) -> ParsedSession {
+        let mut parsed = self.0.parse_content(content, fallback_dedupe);
+        parsed.native_session_id = content.lines().find_map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).ok()?;
+            v.get("sessionId")?.as_str().map(str::to_string)
+        });
+        parsed
+    }
+}
+
+/// (native id, message count, title) of every session.
+fn sessions(conn: &Connection) -> Vec<(String, i64, Option<String>)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT native_session_id, message_count, title FROM agent_session
+             ORDER BY native_session_id",
+        )
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+}
+
+#[test]
+fn upgrading_a_v3_archive_matches_a_fresh_scan_and_keeps_the_folder() {
+    let (_dir, parent, subagent) = copy_fixture_tree();
+    let blob_dir = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(blob_dir.path()).unwrap();
+
+    let archive = lore_core::storage::open_in_memory().unwrap();
+    let v3 = V3Claude(ClaudeCodeAdapter::new());
+    ingest_file(&archive, &v3, &parent, &blobs).unwrap();
+    ingest_file(&archive, &v3, &subagent, &blobs).unwrap();
+    archive
+        .execute("UPDATE ingest_state SET parser_version = '3'", [])
+        .unwrap();
+    let v3_sessions = sessions(&archive);
+    assert_eq!(
+        v3_sessions.len(),
+        1,
+        "v3 folds the subagent into its parent"
+    );
+    let (parent_session, _) = session_for(&archive, PARENT_ID);
+    let folder = lore_core::folders::create_folder(&archive, "Kept").unwrap();
+    lore_core::folders::set_session_folder(&archive, &parent_session, Some(&folder.id)).unwrap();
+
+    let adapter = ClaudeCodeAdapter::new();
+    for path in [&parent, &subagent] {
+        ingest_file(&archive, &adapter, path, &blobs).unwrap();
+    }
+    let fresh = ingest_in_order(&[parent.clone(), subagent.clone()]);
+    assert_eq!(sessions(&archive), sessions(&fresh));
+    assert_eq!(
+        sessions(&archive),
+        vec![
+            (
+                PARENT_ID.to_string(),
+                2,
+                Some("Placeholder parent title".to_string())
+            ),
+            (format!("{PARENT_ID}/agent-a0000000000000001"), 2, None),
+        ]
+    );
+    assert_eq!(session_for(&archive, PARENT_ID).0, parent_session);
+    assert_eq!(
+        lore_core::folders::folder_of_session(&archive, &parent_session).unwrap(),
+        Some(folder.id)
+    );
+    let orphans: i64 = archive
+        .query_row(
+            "SELECT count(*) FROM source_artifact sa WHERE NOT EXISTS
+             (SELECT 1 FROM session_source ss WHERE ss.source_artifact_id = sa.id)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(orphans, 0);
 }
