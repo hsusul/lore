@@ -27,7 +27,8 @@ pub struct Recalled {
     pub excerpt: String,
     /// FTS5 BM25. Lower is a better match.
     pub score: f64,
-    /// The worst of the anchors, or `Unanchored`.
+    /// The worst of the anchors, `Unanchored` when the note has none, or
+    /// `Unchecked` when it has some but there is no working tree.
     pub freshness: Freshness,
     /// Each anchor checked against the working tree, in the note's order.
     /// Empty when there is no working tree to check against.
@@ -53,12 +54,18 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
         .into_iter()
         .filter_map(|hit| {
             let note = Note::parse(&vault.read(&hit.path).ok()?).ok()?;
-            let anchors: Vec<Located> = match &tree {
-                Some(tree) => note.anchors.iter().map(|a| tree.locate(a)).collect(),
-                None => Vec::new(),
+            let (anchors, freshness) = match &tree {
+                Some(tree) => {
+                    let anchors: Vec<Located> =
+                        note.anchors.iter().map(|a| tree.locate(a)).collect();
+                    let freshness = Freshness::of_note(&anchors);
+                    (anchors, freshness)
+                }
+                None if note.anchors.is_empty() => (Vec::new(), Freshness::Unanchored),
+                None => (Vec::new(), Freshness::Unchecked),
             };
             Some(Recalled {
-                freshness: Freshness::of_note(&anchors),
+                freshness,
                 anchors,
                 path: hit.path,
                 slug: hit.slug,
@@ -74,7 +81,10 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
 
 fn tier(freshness: Freshness) -> u8 {
     match freshness {
-        Freshness::Fresh | Freshness::Moved { .. } | Freshness::Unanchored => 0,
+        Freshness::Fresh
+        | Freshness::Moved { .. }
+        | Freshness::Unanchored
+        | Freshness::Unchecked => 0,
         Freshness::Changed => 1,
         Freshness::Gone => 2,
     }

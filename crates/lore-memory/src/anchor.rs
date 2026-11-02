@@ -41,6 +41,9 @@ pub enum Freshness {
     Gone,
     /// The note has no anchors, so there is nothing to check.
     Unanchored,
+    /// The note has anchors, but there was no working tree to check them
+    /// against.
+    Unchecked,
 }
 
 impl Freshness {
@@ -53,12 +56,13 @@ impl Freshness {
             Freshness::Changed => "changed",
             Freshness::Gone => "gone",
             Freshness::Unanchored => "unanchored",
+            Freshness::Unchecked => "unchecked",
         }
     }
 
     fn severity(self) -> u8 {
         match self {
-            Freshness::Fresh | Freshness::Unanchored => 0,
+            Freshness::Fresh | Freshness::Unanchored | Freshness::Unchecked => 0,
             Freshness::Moved { .. } => 1,
             Freshness::Changed => 2,
             Freshness::Gone => 3,
