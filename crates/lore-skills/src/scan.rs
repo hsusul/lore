@@ -1,7 +1,7 @@
 //! Walk every location under a home root into [`SkillRecord`]s. Read-only:
 //! nothing here opens a file for writing.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -91,9 +91,23 @@ pub fn inventory(roots: &Roots) -> Inventory {
         }
     }
 
+    let records = group(found);
+    let mut known: BTreeSet<&str> = records.iter().map(|r| r.name.as_str()).collect();
+    known.extend(elsewhere.keys().map(String::as_str));
+    let known: BTreeSet<String> = known.into_iter().map(str::to_string).collect();
+    let records = records
+        .into_iter()
+        .map(|mut record| {
+            record
+                .refs
+                .retain(|r| known.contains(r) && *r != record.name);
+            record
+        })
+        .collect();
+
     Inventory {
         roots: roots.clone(),
-        records: group(found),
+        records,
         elsewhere,
     }
 }
@@ -180,7 +194,8 @@ fn new_record(name: SkillName, install: Install, source: Source) -> SkillRecord 
         .map(|(_, bytes)| bytes)
         .unwrap_or_default();
     let text = String::from_utf8_lossy(&bytes);
-    let (parsed, _body) = frontmatter::parse(&text);
+    let (parsed, body) = frontmatter::parse(&text);
+    let refs = frontmatter::mentions(body);
     let lines = text.lines().count();
     let (declared_name, description, frontmatter_error) = match parsed {
         Ok(fm) => (Some(fm.name), Some(fm.description), None),
@@ -191,6 +206,7 @@ fn new_record(name: SkillName, install: Install, source: Source) -> SkillRecord 
         hash: install.hash.clone(),
         source,
         installs: vec![install],
+        refs,
         declared_name,
         description,
         frontmatter_error,

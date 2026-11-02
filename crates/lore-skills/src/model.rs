@@ -117,6 +117,9 @@ pub struct SkillRecord {
     pub hash: ContentHash,
     pub source: Source,
     pub installs: Vec<Install>,
+    /// Other skills this one's SKILL.md body names, limited to names that
+    /// exist somewhere on the machine.
+    pub refs: Vec<SkillName>,
     /// Frontmatter `name`, when it parsed.
     pub declared_name: Option<String>,
     pub description: Option<String>,
