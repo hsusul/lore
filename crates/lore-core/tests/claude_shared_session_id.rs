@@ -465,3 +465,159 @@ fn a_folder_on_a_v3_session_follows_the_transcripts_it_held() {
         Some(folder.id)
     );
 }
+
+fn git(dir: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git must be installed");
+    assert!(output.status.success(), "git {args:?} failed");
+}
+
+/// A v3 archive of one subagent transcript that ran in a git repository. At
+/// v3 its lines sit in the parent's session, which Lore enriched with a
+/// `lore_captured` observation, dated in the past so a rewrite is visible.
+struct V3Capture {
+    repo: tempfile::TempDir,
+    _dir: tempfile::TempDir,
+    _blob_dir: tempfile::TempDir,
+    subagent: PathBuf,
+    archive: Connection,
+    blobs: BlobStore,
+}
+
+impl V3Capture {
+    fn new() -> Self {
+        let repo = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "-b", "main"]);
+        std::fs::write(repo.path().join("README.md"), "hello\n").unwrap();
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-m", "initial"]);
+        let cwd = repo.path().to_string_lossy().into_owned();
+        let line = |uuid: &str, role: &str, text: &str| {
+            format!(
+                r#"{{"type":"{role}","uuid":"{uuid}","sessionId":"{PARENT_ID}","agentId":"a0000000000000001","timestamp":"2026-10-31T18:00:00.000Z","cwd":"{cwd}","isSidechain":true,"message":{{"role":"{role}","content":[{{"type":"text","text":"{text}"}}]}}}}"#
+            ) + "\n"
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let sub_dir = dir.path().join(PARENT_ID).join("subagents");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let subagent = sub_dir.join("agent-a0000000000000001.jsonl");
+        std::fs::write(
+            &subagent,
+            line("s1", "user", "survey") + &line("s2", "assistant", "helper otter"),
+        )
+        .unwrap();
+
+        let blob_dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(blob_dir.path()).unwrap();
+        let archive = lore_core::storage::open_in_memory().unwrap();
+        ingest_file(
+            &archive,
+            &V3Claude(ClaudeCodeAdapter::new()),
+            &subagent,
+            &blobs,
+        )
+        .unwrap();
+        archive
+            .execute("UPDATE ingest_state SET parser_version = '3'", [])
+            .unwrap();
+        let (v3_session, _) = session_for(&archive, PARENT_ID);
+        assert!(lore_core::enrich::enrich_session(&archive, &v3_session).unwrap() > 0);
+        archive
+            .execute_batch(
+                "UPDATE git_observation SET observed_at = 1000 WHERE source = 'lore_captured';
+                 UPDATE search_git SET observed_at = 1000 WHERE source_class = 'lore_captured';",
+            )
+            .unwrap();
+        Self {
+            repo,
+            _dir: dir,
+            _blob_dir: blob_dir,
+            subagent,
+            archive,
+            blobs,
+        }
+    }
+
+    /// Parse the archive again at v4 and enrich the subagent session.
+    fn upgrade(&self) {
+        ingest_file(
+            &self.archive,
+            &ClaudeCodeAdapter::new(),
+            &self.subagent,
+            &self.blobs,
+        )
+        .unwrap();
+        let (sub_session, _) = session_for(
+            &self.archive,
+            &format!("{PARENT_ID}/agent-a0000000000000001"),
+        );
+        lore_core::enrich::enrich_session(&self.archive, &sub_session).unwrap();
+    }
+
+    /// (native id, branch, commit, observed_at) of every `lore_captured` row.
+    fn captures(&self) -> Vec<(String, Option<String>, Option<String>, i64)> {
+        let mut stmt = self
+            .archive
+            .prepare(
+                "SELECT s.native_session_id, g.branch, g.commit_sha, g.observed_at
+                 FROM git_observation g JOIN agent_session s ON s.id = g.session_id
+                 WHERE g.source = 'lore_captured' ORDER BY s.native_session_id",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    }
+}
+
+/// Lines Lore captured git state for move to a subagent session of their own
+/// at v4. That session finds the same branch and commit, so the capture keeps
+/// when it was first observed.
+#[test]
+fn a_git_capture_keeps_its_first_observed_at_when_its_lines_move_to_a_subagent() {
+    let v3 = V3Capture::new();
+    let before = v3.captures();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].1.as_deref(), Some("main"));
+
+    v3.upgrade();
+    let sub_id = format!("{PARENT_ID}/agent-a0000000000000001");
+    assert_eq!(
+        v3.captures(),
+        vec![(sub_id, before[0].1.clone(), before[0].2.clone(), 1000)]
+    );
+    let projected: Vec<i64> = v3
+        .archive
+        .prepare("SELECT observed_at FROM search_git WHERE source_class = 'lore_captured'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(projected, vec![1000]);
+}
+
+/// The repository moved to another branch before the upgrade, so the subagent
+/// session's capture is new evidence and is dated when Lore took it.
+#[test]
+fn a_git_capture_on_another_branch_is_dated_when_lore_takes_it() {
+    let v3 = V3Capture::new();
+    git(v3.repo.path(), &["checkout", "-q", "-b", "moved"]);
+
+    v3.upgrade();
+    let captures = v3.captures();
+    assert_eq!(captures.len(), 1);
+    assert_eq!(captures[0].1.as_deref(), Some("moved"));
+    assert!(captures[0].3 > 1000, "new evidence keeps an old date");
+}
