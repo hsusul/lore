@@ -99,6 +99,37 @@ impl Archive {
         .unwrap();
     }
 
+    /// Append one line, as an agent still writing the session does.
+    fn append(&self, uuid: &str) {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .unwrap();
+        file.write_all(line(uuid, "user", "one more line").as_bytes())
+            .unwrap();
+    }
+
+    /// Sessions, messages, and search documents in the archive.
+    fn derived_rows(&self) -> (i64, i64, i64) {
+        let count = |table: &str| -> i64 {
+            self.conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        (
+            count("agent_session"),
+            count("message"),
+            count("search_document"),
+        )
+    }
+
+    fn source_state(&self) -> String {
+        self.conn
+            .query_row("SELECT state FROM ingest_state", [], |r| r.get(0))
+            .unwrap()
+    }
+
     fn path(&self) -> &Path {
         &self.path
     }
@@ -170,6 +201,54 @@ fn a_session_forgotten_by_an_older_lore_stays_gone_after_a_parser_bump() {
     archive.age_parser_version();
     assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
     assert_eq!(archive.session_id(), None, "a forgotten session came back");
+}
+
+/// A forgotten source stays forgotten while it exists, even when the agent
+/// keeps writing it: nothing it holds is ingested again.
+#[test]
+fn a_forgotten_session_stays_gone_after_its_log_changes() {
+    let archive = Archive::new();
+    let session = archive.session_id().unwrap();
+    lore_core::forget::forget_session(&archive.conn, &archive.blobs, &session).unwrap();
+    assert_eq!(archive.source_state(), "forgotten");
+
+    archive.append("u3");
+    let outcome = archive.ingest();
+    assert_eq!(archive.derived_rows(), (0, 0, 0), "an append restored rows");
+    assert_eq!(archive.session_id(), None);
+    assert!(matches!(outcome, IngestOutcome::Skipped));
+    assert_eq!(archive.source_state(), "forgotten");
+
+    archive.append("u4");
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    archive.rewrite();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None, "a rewrite restored the session");
+    assert_eq!(archive.derived_rows(), (0, 0, 0));
+    assert_eq!(archive.source_state(), "forgotten");
+}
+
+/// The same for a source an older Lore left `ok` with no session.
+#[test]
+fn a_session_forgotten_by_an_older_lore_stays_gone_after_its_log_changes() {
+    let archive = Archive::new();
+    let session = archive.session_id().unwrap();
+    lore_core::forget::forget_session(&archive.conn, &archive.blobs, &session).unwrap();
+    archive
+        .conn
+        .execute("UPDATE ingest_state SET state = 'ok'", [])
+        .unwrap();
+
+    archive.append("u3");
+    let outcome = archive.ingest();
+    assert_eq!(archive.derived_rows(), (0, 0, 0), "an append restored rows");
+    assert_eq!(archive.session_id(), None);
+    assert!(matches!(outcome, IngestOutcome::Skipped));
+
+    archive.rewrite();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None, "a rewrite restored the session");
+    assert_eq!(archive.derived_rows(), (0, 0, 0));
 }
 
 fn git(dir: &Path, args: &[&str]) {
