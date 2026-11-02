@@ -29,9 +29,10 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
                       and the repository's name, from the repository at DIR
     show <NOTE>       Print a note by id, file name, or vault path
     search <QUERY>    Rank notes by BM25 [--limit N, default 10]
-    recall <QUERY>    Global notes and the notes of the repository at --cwd
+    recall [QUERY]    Global notes and the notes of the repository at --cwd
                       (default: here), each labeled fresh, moved, changed,
-                      gone, or unanchored [--limit N] [--json]
+                      gone, or unanchored; all of them with no QUERY
+                      [--limit N] [--json]
     reindex           Rebuild the index from the vault files alone, and name
                       any id that two files share (exit 7)
     propose           File an agent proposal; the body is read from stdin.
@@ -135,7 +136,7 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
         "add" => Sub::Add(needs("FILE")?),
         "show" => Sub::Show(needs("NOTE")?),
         "search" => Sub::Search(needs("QUERY")?),
-        "recall" => Sub::Recall(needs("QUERY")?),
+        "recall" => Sub::Recall(operand.clone().unwrap_or_default()),
         other => return Err(usage(format!("unknown mem subcommand `{other}`"))),
     };
     Ok(MemArgs {
@@ -405,6 +406,8 @@ mod tests {
             (recall.cwd, recall.json, recall.limit),
             (Some(PathBuf::from("/r")), true, 4)
         );
+        let everything = args("recall", &["--cwd", "/r"]).unwrap();
+        assert_eq!(everything.sub, Some(Sub::Recall(String::new())));
         let add = args("add", &["n.md", "--cwd", "/r"]).unwrap();
         assert_eq!(add.cwd, Some(PathBuf::from("/r")));
     }
@@ -419,7 +422,7 @@ mod tests {
             ("search", &["q", "--limit", "0"][..]),
             ("show", &["x", "--limit", "3"][..]),
             ("add", &["x", "--wat"][..]),
-            ("recall", &[][..]),
+            ("recall", &["q", "extra"][..]),
             ("search", &["q", "--json"][..]),
             ("show", &["x", "--cwd", "/r"][..]),
             ("add", &["x", "--json"][..]),

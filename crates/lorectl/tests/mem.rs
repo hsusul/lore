@@ -367,6 +367,57 @@ fn mem_recall_labels_notes_against_the_repo_at_cwd() {
 }
 
 #[test]
+fn mem_recall_without_a_query_prints_every_note_that_applies() {
+    let (dir, vault) = init();
+    let repo = lore_repo(dir.path());
+    let cwd = repo.to_str().unwrap();
+    let notes = [
+        ("r.md", REPO_NOTE),
+        (
+            "g.md",
+            "---\ntype: fact\ntitle: Migrations are global\n---\nEvery migration is logged.\n",
+        ),
+        (
+            "l.md",
+            "---\ntype: fact\ntitle: Logs rotate\n---\none two three four five six seven eight nine ten eleven twelve thirteen\n",
+        ),
+        (
+            "o.md",
+            "---\ntype: fact\ntitle: Other repo\nscope: repo:aaaaaaaaaaaaaaaa\n---\nNot here.\n",
+        ),
+        (
+            "x.md",
+            "---\ntype: fact\ntitle: Retired\nstatus: retired\n---\nGone for good.\n",
+        ),
+    ];
+    for (name, text) in notes {
+        let added = lorectl(
+            &vault,
+            &["add", &note_file(dir.path(), name, text), "--cwd", cwd],
+        );
+        assert_eq!(code(&added), 0, "{}", stderr(&added));
+    }
+
+    let out = lorectl(&vault, &["recall", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "unanchored  logs-rotate            global                 one two three four five six seven eight nine ten eleven twelve...\n\
+         unanchored  migrations-are-global  global                 Every migration is logged.\n\
+         fresh       retry-the-migration    repo:81444c90f1ff44ac  Retry a failed migration once.\n"
+    );
+    assert_eq!(stderr(&out), "");
+
+    let out = lorectl(&vault, &["recall", "--limit", "1", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "unanchored  logs-rotate  global  one two three four five six seven eight nine ten eleven twelve...\n"
+    );
+    assert_eq!(status(&vault), "");
+}
+
+#[test]
 fn mem_recall_labels_anchors_it_cannot_check_as_unchecked() {
     let (dir, vault) = init();
     let anchored = "---\ntype: fact\ntitle: Migrations keep a log\n\
