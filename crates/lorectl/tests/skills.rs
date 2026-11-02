@@ -276,7 +276,7 @@ fn only_hash(home: &Path) -> String {
 
 #[cfg(unix)]
 #[test]
-fn hashing_stays_inside_the_skill_folder() {
+fn hashing_covers_the_folder_and_stays_inside_it() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let skill = home.join(".claude/skills/s");
@@ -284,6 +284,7 @@ fn hashing_stays_inside_the_skill_folder() {
         &skill.join("SKILL.md"),
         "---\nname: s\ndescription: d\n---\n",
     );
+    write(&skill.join("sub/notes.md"), "one");
     write(&dir.path().join("outside/secret.txt"), "one");
     std::os::unix::fs::symlink(dir.path().join("outside"), skill.join("out")).unwrap();
     let before = only_hash(&home);
@@ -292,6 +293,54 @@ fn hashing_stays_inside_the_skill_folder() {
         only_hash(&home),
         before,
         "a link out of the folder was read"
+    );
+    write(&skill.join("sub/notes.md"), "two");
+    assert_ne!(
+        only_hash(&home),
+        before,
+        "a file inside the folder was not read"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn links_back_into_the_folder_are_walked_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let skill = home.join(".claude/skills/s");
+    write(
+        &skill.join("SKILL.md"),
+        "---\nname: s\ndescription: d\n---\n",
+    );
+    write(&skill.join("sub/notes.md"), "notes\n");
+    for name in ["loop1", "loop2", "loop3", "loop4"] {
+        std::os::unix::fs::symlink(".", skill.join(name)).unwrap();
+    }
+    std::os::unix::fs::symlink("..", skill.join("sub/up")).unwrap();
+    assert_eq!(
+        only_hash(&home),
+        "b66c4cd2d8bdf4f0178d5060f710f6d8c44c8c98d0def55984423aaa72539bcc"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unlistable_folder_hashes_to_its_own_marker() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let skill = home.join(".claude/skills/s");
+    write(
+        &skill.join("SKILL.md"),
+        "---\nname: s\ndescription: d\n---\n",
+    );
+    // Searchable, so SKILL.md is found, but not readable, so it cannot be listed.
+    fs::set_permissions(&skill, fs::Permissions::from_mode(0o311)).unwrap();
+    let hash = only_hash(&home);
+    fs::set_permissions(&skill, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        hash,
+        "397d278a5703d012a5bc2e9ff0420146aa769a0d83723fe55fd7f56525e2f90c"
     );
 }
 
