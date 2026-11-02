@@ -2875,6 +2875,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-memory"
+version = "0.0.0"
+
+[[package]]
 name = "lorectl"
 version = "0.0.0"
 dependencies = [
