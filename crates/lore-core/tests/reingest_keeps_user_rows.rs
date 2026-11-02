@@ -239,18 +239,30 @@ fn git_evidence_keeps_when_it_was_first_observed_across_a_parser_bump() {
         |r| r.get::<_, i64>(0),
     );
     assert_eq!(kept.unwrap(), 1, "enrichment records lore_captured");
-    let before = git_evidence(&archive.conn).0;
+    let observed = vec![
+        ("agent_recorded".to_string(), 1000),
+        ("lore_captured".to_string(), 1000),
+        ("lore_reverified".to_string(), 2000),
+    ];
+    assert_eq!(git_evidence(&archive.conn).0, observed, "the seed took");
 
     archive.age_parser_version();
     assert!(matches!(archive.ingest(), IngestOutcome::Ingested { .. }));
     lore_core::enrich::enrich_session(&archive.conn, &session).unwrap();
     let (after, search_git) = git_evidence(&archive.conn);
-    assert_eq!(after, before, "re-parsing rewrote or dropped git evidence");
-    assert!(
-        search_git.iter().all(|(_, at)| *at <= 2000),
-        "search_git must project the kept observed_at: {search_git:?}"
+    assert_eq!(
+        after, observed,
+        "re-parsing rewrote or dropped git evidence"
     );
-    assert!(search_git
-        .iter()
-        .any(|(class, _)| class == "lore_reverified"));
+    // `segment_link` rows are synthetic and always carry observed_at 0.
+    let projected = vec![
+        ("agent_recorded".to_string(), 1000),
+        ("lore_captured".to_string(), 1000),
+        ("lore_reverified".to_string(), 2000),
+        ("segment_link".to_string(), 0),
+    ];
+    assert_eq!(
+        search_git, projected,
+        "search_git must project the kept observed_at"
+    );
 }
