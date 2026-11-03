@@ -2,11 +2,17 @@
 //! a scan of recent sessions, and the lessons in them, then what to do next.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 fn lorectl(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_lorectl"))
+    lorectl_in(home, args, "")
+}
+
+/// `lorectl args` with `stdin` as its scripted input.
+fn lorectl_in(home: &Path, args: &[&str], stdin: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
         .args(args)
         .env("HOME", home)
         .env("LORE_VAULT_DIR", home.join("vault"))
@@ -15,8 +21,18 @@ fn lorectl(home: &Path, args: &[&str]) -> Output {
         .env("CODEX_HOME", home.join("codex"))
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
         .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
 }
 
 /// Stdout of a run that exited 0, with the elapsed seconds masked as `N`.
@@ -135,6 +151,7 @@ fn init_creates_the_vault_scans_and_shows_the_lesson_then_reuses_both() {
          \n\
          \x20 {id}  2 conversations, latest 2026-10-28\n\
          \x20     \"I told you, docs are never tracked in git\"\n\
+         \x20     suggested: I told you, docs are never tracked in git\n\
          \x20     - claude-code {s2} 2026-10-28: \"I told you, docs are never tracked in git\"\n\
          \n",
         s2 = archived_id(home, 2),
@@ -201,4 +218,240 @@ fn init_refuses_a_bad_limit_a_bad_window_and_a_stray_operand() {
         !dir.path().join("vault").exists(),
         "a usage error wrote a vault"
     );
+}
+
+const DOCS: &str = "make sure that docs are never tracked in git please";
+const FMT: &str = "make sure you always run cargo fmt before you commit";
+const PROMPT: &str = "      [a]ccept  [e]dit  [s]kip  [q]uit ";
+
+/// Two lessons, each said in two conversations: docs (newest 2026-10-28,
+/// sessions 1 and 2) and fmt (newest 2026-10-26, sessions 3 and 4).
+fn two_lessons(home: &Path) {
+    claude_session(home, 1, "2026-10-20", "Added docs/ to the index.", DOCS);
+    claude_session(home, 2, "2026-10-28", "Staged docs/notes.md.", DOCS);
+    claude_session(home, 3, "2026-10-25", "Committed the change.", FMT);
+    claude_session(home, 4, "2026-10-26", "Committed it unformatted.", FMT);
+}
+
+/// The block init prints for a lesson, without what follows it.
+fn block(home: &Path, id: &str, n: u32, day: &str, text: &str, rule: &str) -> String {
+    format!(
+        "  {id}  2 conversations, latest {day}\n      \"{text}\"\n      suggested: {rule}\n      - claude-code {s} {day}: \"{text}\"\n",
+        s = archived_id(home, n),
+    )
+}
+
+/// The lesson ids in init's output, in the order shown.
+fn ids(out: &str) -> Vec<String> {
+    out.lines()
+        .filter(|l| l.contains(" conversations, latest "))
+        .filter_map(|l| l.split_whitespace().next().map(str::to_owned))
+        .collect()
+}
+
+fn kept(n: usize) -> String {
+    let s = if n == 1 { "" } else { "s" };
+    format!("Kept {n} lesson{s}. Your next Claude Code or Codex session will see them once Lore is connected (lorectl connect).\n")
+}
+
+fn git(vault: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(vault)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+fn header(home: &Path) -> String {
+    format!(
+        "Lore\n\
+         Vault      created {}\n\
+         Archive    scanned 4 new sessions from the last 30d in N s\n\
+         Lessons    2 candidates from your corrections:\n\n",
+        home.join("vault").display()
+    )
+}
+
+#[test]
+fn review_a_keeps_the_suggested_rule_as_a_note_and_a_second_run_shows_it_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_lessons(home);
+    let vault = home.join("vault");
+
+    let first = masked(&lorectl_in(home, &["init", "--review"], "a\ns\n"));
+    let [docs, fmt] = <[String; 2]>::try_from(ids(&first)).unwrap();
+    let docs_rule = "Docs are never tracked in git";
+    let fmt_rule = "Always run cargo fmt before you commit";
+    let docs_block = block(home, &docs, 2, "2026-10-28", DOCS, docs_rule);
+    let fmt_block = block(home, &fmt, 4, "2026-10-26", FMT, fmt_rule);
+    assert_eq!(
+        first,
+        format!(
+            "{}{docs_block}{PROMPT}a\n      kept global/docs-are-never-tracked-in-git.md\n\n\
+             {fmt_block}{PROMPT}s\n\n{}",
+            header(home),
+            kept(1)
+        )
+    );
+    let note =
+        std::fs::read_to_string(vault.join("global/docs-are-never-tracked-in-git.md")).unwrap();
+    for line in [
+        "title: Docs are never tracked in git",
+        "type: convention",
+        "scope: global",
+        DOCS,
+        &format!(
+            "Mined by `lorectl mem mine` (lesson {docs}) from corrections in 2 conversations:"
+        ),
+    ] {
+        assert!(note.lines().any(|l| l == line), "no `{line}` in\n{note}");
+    }
+    assert_eq!(git(&vault, &["status", "--porcelain"]), "");
+    assert_eq!(git(&vault, &["rev-list", "--count", "HEAD"]), "2\n");
+
+    // Again, with stdin at its end: the kept lesson is not offered, and the
+    // end of input stops the review at the next one.
+    let second = masked(&lorectl_in(home, &["init", "--review"], ""));
+    assert_eq!(
+        second,
+        format!(
+            "Lore\n\
+             Vault      {}, 1 note\n\
+             Archive    no new sessions from the last 30d in N s\n\
+             Lessons    2 candidates from your corrections:\n\n\
+             {docs_block}      (already kept)\n\n\
+             {fmt_block}{PROMPT}\n\n{}",
+            vault.display(),
+            kept(0)
+        )
+    );
+
+    // The accept is a decision mem eval scores; the skip is not.
+    let eval = String::from_utf8(lorectl(home, &["mem", "eval"]).stdout).unwrap();
+    assert!(
+        eval.starts_with(
+            "Policy never, scored on 1 proposals you decided: 1 accepted, 0 rejected.\n"
+        ),
+        "{eval}"
+    );
+}
+
+#[test]
+fn review_e_keeps_the_new_text_and_an_empty_edit_keeps_the_suggestion() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_lessons(home);
+    let vault = home.join("vault");
+
+    // A stray answer asks once more.
+    let script = "e\nKeep docs out of git\nx\ne\n\n";
+    let out = masked(&lorectl_in(home, &["init", "--review"], script));
+    let [docs, fmt] = <[String; 2]>::try_from(ids(&out)).unwrap();
+    let docs_block = block(
+        home,
+        &docs,
+        2,
+        "2026-10-28",
+        DOCS,
+        "Docs are never tracked in git",
+    );
+    let fmt_rule = "Always run cargo fmt before you commit";
+    let fmt_block = block(home, &fmt, 4, "2026-10-26", FMT, fmt_rule);
+    assert_eq!(
+        out,
+        format!(
+            "{}{docs_block}{PROMPT}e\n      rule: Keep docs out of git\n      kept global/keep-docs-out-of-git.md\n\n\
+             {fmt_block}{PROMPT}x\n{PROMPT}e\n      rule: \n      kept global/always-run-cargo-fmt-before-you-commit.md\n\n{}",
+            header(home),
+            kept(2)
+        )
+    );
+    let note = std::fs::read_to_string(vault.join("global/keep-docs-out-of-git.md")).unwrap();
+    assert!(
+        note.lines().any(|l| l == "title: Keep docs out of git"),
+        "{note}"
+    );
+    let note =
+        std::fs::read_to_string(vault.join("global/always-run-cargo-fmt-before-you-commit.md"))
+            .unwrap();
+    assert!(
+        note.lines().any(|l| l == format!("title: {fmt_rule}")),
+        "{note}"
+    );
+    assert_eq!(git(&vault, &["status", "--porcelain"]), "");
+    assert_eq!(git(&vault, &["rev-list", "--count", "HEAD"]), "3\n");
+}
+
+#[test]
+fn review_s_and_two_stray_answers_leave_the_vault_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_lessons(home);
+    let vault = home.join("vault");
+
+    let out = masked(&lorectl_in(home, &["init", "--review"], "s\nx\ny\n"));
+    let [docs, fmt] = <[String; 2]>::try_from(ids(&out)).unwrap();
+    let docs_block = block(
+        home,
+        &docs,
+        2,
+        "2026-10-28",
+        DOCS,
+        "Docs are never tracked in git",
+    );
+    let fmt_rule = "Always run cargo fmt before you commit";
+    let fmt_block = block(home, &fmt, 4, "2026-10-26", FMT, fmt_rule);
+    assert_eq!(
+        out,
+        format!(
+            "{}{docs_block}{PROMPT}s\n\n{fmt_block}{PROMPT}x\n{PROMPT}y\n\n{}",
+            header(home),
+            kept(0)
+        )
+    );
+    assert!(!vault.join("_inbox").exists(), "a skip filed a proposal");
+    assert!(
+        !vault.join(".lore/decisions.jsonl").exists(),
+        "a skip was recorded"
+    );
+    assert_eq!(git(&vault, &["rev-list", "--count", "HEAD"]), "1\n");
+}
+
+#[test]
+fn review_q_stops_before_the_next_lesson() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_lessons(home);
+    let vault = home.join("vault");
+
+    let out = masked(&lorectl_in(home, &["init", "--review"], "q\na\n"));
+    let [docs] = <[String; 1]>::try_from(ids(&out)).unwrap();
+    let docs_block = block(
+        home,
+        &docs,
+        2,
+        "2026-10-28",
+        DOCS,
+        "Docs are never tracked in git",
+    );
+    assert_eq!(
+        out,
+        format!("{}{docs_block}{PROMPT}q\n\n{}", header(home), kept(0))
+    );
+    assert!(!vault.join("_inbox").exists(), "quitting filed a proposal");
+    assert_eq!(git(&vault, &["rev-list", "--count", "HEAD"]), "1\n");
+
+    // The last of --review and --no-review counts; off prints the listing.
+    let plain = masked(&lorectl_in(
+        home,
+        &["init", "--review", "--no-review"],
+        "a\n",
+    ));
+    assert!(plain.ends_with(NEXT), "{plain}");
+    assert!(!plain.contains("[a]ccept"), "{plain}");
 }
