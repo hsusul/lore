@@ -31,6 +31,7 @@ pub mod landing;
 pub mod lock;
 pub mod model;
 pub mod paths;
+pub mod payloads;
 pub mod pipeline;
 pub mod query;
 pub mod recovery;
