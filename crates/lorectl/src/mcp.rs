@@ -183,7 +183,8 @@ session, agent, date, what the person said, and what the agent had just done. Se
 candidates often say one thing in different words. Group them by meaning, write each group as \
 one short rule in plain words, and file each rule once with propose_memory, citing its \
 sessions in the body and passing one of them as session_id. Leave out anything that only \
-redirected the task at hand.",
+redirected the task at hand. Replies are paged: while next_cursor is not null, call again \
+with it, and read every page before you group anything.",
         input_schema: mine_schema,
         call: mine_candidates,
     },
@@ -247,7 +248,8 @@ fn mine_schema() -> Value {
                 "minimum": 1,
                 "maximum": MINE_MAX_LIMIT,
                 "default": MINE_DEFAULT_LIMIT
-            }
+            },
+            "cursor": { "type": "string", "description": "next_cursor from a previous call." }
         }
     })
 }
@@ -785,8 +787,10 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
 }
 
 /// The miner's candidate lessons, newest first, each with up to
-/// [`MINE_RECEIPTS`] receipts. Read only; every text is redacted again on
-/// the way out, and the reply drops candidates from the tail to fit.
+/// [`MINE_RECEIPTS`] receipts, a page at a time. A page ends at `limit` or
+/// before it would pass [`MINE_REPLY_CHARS`], and `next_cursor` says where
+/// the next one starts. Read only; every text is redacted again on the way
+/// out.
 fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let limit = match arguments.get("limit") {
         None => MINE_DEFAULT_LIMIT,
@@ -795,13 +799,21 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
             .filter(|n| (1..=MINE_MAX_LIMIT).contains(n))
             .ok_or_else(|| invalid_argument("limit", "must be an integer from 1 to 50"))?,
     };
+    let start = match string_arg(arguments, "cursor") {
+        None => 0,
+        Some(cursor) => cursor
+            .parse::<usize>()
+            .map_err(|_| invalid_argument("cursor", "must be next_cursor from a previous call"))?,
+    };
     let conn = open(&ctx.archive_dir)?;
     let found = mine::corrections(&conn).map_err(|e| e.to_string())?;
     let mut lessons = mine::lessons(found);
     lessons.sort_by_key(|l| std::cmp::Reverse(l.latest_ms));
-    lessons.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    let total = lessons.len();
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut candidates = Vec::new();
-    for lesson in &lessons {
+    let mut next = start;
+    for lesson in lessons.iter().skip(start).take(limit) {
         let mut receipts = Vec::new();
         for r in lesson.receipts.iter().take(MINE_RECEIPTS) {
             receipts.push(json!({
@@ -816,16 +828,27 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
             "conversations": lesson.conversations,
             "receipts": receipts,
         }));
-    }
-    let mut truncated = false;
-    loop {
-        let reply = json!({ "candidates": candidates, "truncated": truncated });
-        if candidates.is_empty() || reply.to_string().chars().count() <= MINE_REPLY_CHARS {
-            return Ok(reply);
+        let size = page(&candidates, Some(next + 1), total)
+            .to_string()
+            .chars()
+            .count();
+        if size > MINE_REPLY_CHARS && candidates.len() > 1 {
+            candidates.pop();
+            break;
         }
-        candidates.pop();
-        truncated = true;
+        next += 1;
     }
+    Ok(page(&candidates, (next < total).then_some(next), total))
+}
+
+/// One page of `mine_candidates`: the candidates, where the next page starts,
+/// and how many there are in all.
+fn page(candidates: &[Value], next: Option<usize>, total: usize) -> Value {
+    json!({
+        "candidates": candidates,
+        "next_cursor": next.map(|n| n.to_string()),
+        "total": total,
+    })
 }
 
 /// The archived session `id` names, as an archive or native session id. Read
