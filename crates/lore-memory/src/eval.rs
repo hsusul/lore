@@ -87,6 +87,62 @@ impl Report {
     pub fn coverage(&self) -> Option<f64> {
         ratio(self.agreed, self.accepts)
     }
+
+    /// Each way the report falls short of `gate`, in words. Empty means it
+    /// passes.
+    #[must_use]
+    pub fn shortfalls(&self, gate: &Gate) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut at_least = |what: &str, have: usize, need: usize| {
+            if have < need {
+                out.push(format!("{what}: {have}, needs at least {need}"));
+            }
+        };
+        at_least("decided proposals", self.cases, gate.min_cases);
+        at_least("rejected proposals", self.rejects, gate.min_rejects);
+        at_least("auto-accepted", self.auto_accepted, gate.min_auto_accepted);
+        if self.false_accepts.len() > gate.max_false_accepts {
+            out.push(format!(
+                "false accepts: {}, allows at most {}",
+                self.false_accepts.len(),
+                gate.max_false_accepts
+            ));
+        }
+        // Per mille, so the comparison is exact.
+        let precision = per_mille(self.agreed, self.auto_accepted);
+        if self.auto_accepted > 0 && precision < gate.min_precision_per_mille {
+            out.push(format!(
+                "precision: {precision}/1000, needs at least {}/1000",
+                gate.min_precision_per_mille
+            ));
+        }
+        out
+    }
+}
+
+/// The bar a policy must clear on a person's own decisions before it may
+/// accept anything for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Gate {
+    pub min_cases: usize,
+    pub min_rejects: usize,
+    pub min_auto_accepted: usize,
+    pub max_false_accepts: usize,
+    pub min_precision_per_mille: usize,
+}
+
+impl Default for Gate {
+    /// Enough decisions to mean something, and not one accept the person
+    /// rejected.
+    fn default() -> Self {
+        Self {
+            min_cases: 30,
+            min_rejects: 5,
+            min_auto_accepted: 5,
+            max_false_accepts: 0,
+            min_precision_per_mille: 950,
+        }
+    }
 }
 
 /// Score `policy` on `cases`. Cases are taken in proposal order, ties by id,
@@ -122,6 +178,10 @@ pub fn score(policy: &dyn Policy, cases: &[Case]) -> Report {
 
 fn ratio(part: usize, whole: usize) -> Option<f64> {
     (whole > 0).then(|| part as f64 / whole as f64)
+}
+
+fn per_mille(part: usize, whole: usize) -> usize {
+    part.saturating_mul(1000).checked_div(whole).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -218,5 +278,35 @@ mod tests {
                 ("ok fine".to_owned(), s(&["ok good", "held", "ok bad"])),
             ]
         );
+    }
+
+    #[test]
+    fn the_default_gate_names_each_shortfall() {
+        let cases = [
+            case(1, "ok bad", Label::Reject),
+            case(2, "ok", Label::Accept),
+        ];
+        let policy = TitlePolicy(std::cell::RefCell::default());
+        let report = score(&policy, &cases);
+        assert_eq!(
+            report.shortfalls(&Gate::default()),
+            vec![
+                "decided proposals: 2, needs at least 30",
+                "rejected proposals: 1, needs at least 5",
+                "auto-accepted: 2, needs at least 5",
+                "false accepts: 1, allows at most 0",
+                "precision: 500/1000, needs at least 950/1000",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gate_is_passed_with_no_false_accept_and_enough_decisions() {
+        let mut cases: Vec<Case> = (1..=25).map(|n| case(n, "ok", Label::Accept)).collect();
+        cases.extend((26..=30).map(|n| case(n, "no", Label::Reject)));
+        let policy = TitlePolicy(std::cell::RefCell::default());
+        let report = score(&policy, &cases);
+        assert_eq!(report.shortfalls(&Gate::default()), Vec::<String>::new());
+        assert_eq!(report.precision(), Some(1.0));
     }
 }
