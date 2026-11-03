@@ -281,7 +281,7 @@ fn mine_takes_the_overlap_and_length_limits_from_flags() {
 }
 
 #[test]
-fn mine_marks_a_lesson_a_later_session_contradicts() {
+fn mine_lists_later_turns_that_may_conflict_with_a_lesson() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     scanned(
@@ -305,20 +305,20 @@ fn mine_marks_a_lesson_a_later_session_contradicts() {
         out,
         format!(
             "1 lesson from 1 corrections. A dry run: nothing was written.\n\
-             {id}  1 conversation, latest 2026-08-01, possibly outdated\n\
+             {id}  1 conversation, latest 2026-08-01\n\
              \x20   \"dont make a pr just push to main\"\n\
              \x20   - codex {s1} 2026-08-01: \"dont make a pr just push to main\"\n\
              \x20     after: \"Opened a PR.\"\n\
-             \x20   - possibly outdated by codex {s2} 2026-08-02: \"please open a PR for the exif branch\"\n"
+             \x20   - may conflict with codex {s2} 2026-08-02: \"please open a PR for the exif branch\"\n"
         )
     );
     let json: serde_json::Value =
         serde_json::from_str(&ok(&lorectl(home, &["mem", "mine", "--json"]))).unwrap();
     assert_eq!(
-        json[0]["outdated_by"],
-        serde_json::json!({
+        json[0]["may_conflict_with"],
+        serde_json::json!([{
             "session": s2, "agent": "codex", "date": "2026-08-02",
             "text": "please open a PR for the exif branch",
-        })
+        }])
     );
 }

@@ -210,7 +210,7 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
         json!({
             "text": "Stop asking me for permission",
             "conversations": 1,
-            "possibly_outdated": null,
+            "may_conflict_with": [],
             "receipts": [{
                 "session": session(home, 2), "agent": "codex", "date": "2026-08-02",
                 "correction": "Stop asking me for permission", "before": "Shall I run it?",
@@ -245,7 +245,7 @@ fn mine_candidates_without_an_archive_is_a_tool_error() {
 }
 
 #[test]
-fn mine_candidates_says_when_a_later_session_contradicts_a_candidate() {
+fn mine_candidates_lists_later_turns_that_may_conflict() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     scanned(
@@ -258,10 +258,10 @@ fn mine_candidates_says_when_a_later_session_contradicts_a_candidate() {
     let (_, result) = mine(&home.join("archive"), json!({}));
     let candidate = &result["structuredContent"]["candidates"][0];
     assert_eq!(
-        candidate["possibly_outdated"],
-        json!({
+        candidate["may_conflict_with"],
+        json!([{
             "session": session(home, 2), "agent": "codex", "date": "2026-08-02",
             "said": "please open a PR for the exif branch",
-        })
+        }])
     );
 }
