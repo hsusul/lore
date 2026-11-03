@@ -7,9 +7,26 @@ use std::path::Path;
 use std::process::Command;
 
 /// Run `lorectl connect` with every agent location under `tmp`, and return its
-/// stdout with the binary path shown as `<lorectl>` and `tmp` as `<tmp>`.
+/// stdout with the binary path shown as `<lorectl>`, bare or quoted for a
+/// shell, and `tmp` as `<tmp>`.
 fn connect(tmp: &Path, configure: impl FnOnce(&mut Command)) -> String {
     let exe = env!("CARGO_BIN_EXE_lorectl");
+    let canonical = fs::canonicalize(exe).unwrap();
+    let canonical = canonical.to_string_lossy();
+    let mut out = run_connect(Path::new(exe), tmp, configure);
+    for path in [&*canonical, exe] {
+        // connect quotes a path with a space for the shell; see
+        // `a_lorectl_path_with_a_space_is_quoted_for_the_shell`.
+        out = out
+            .replace(&format!("'{path}'"), "<lorectl>")
+            .replace(path, "<lorectl>");
+    }
+    out
+}
+
+/// Run the `lorectl` at `exe` as `lorectl connect` with every agent location
+/// under `tmp`, and return its stdout with `tmp` shown as `<tmp>`.
+fn run_connect(exe: &Path, tmp: &Path, configure: impl FnOnce(&mut Command)) -> String {
     let mut command = Command::new(exe);
     command
         .arg("connect")
@@ -21,12 +38,30 @@ fn connect(tmp: &Path, configure: impl FnOnce(&mut Command)) -> String {
     let output = command.output().expect("spawn lorectl");
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
-    let canonical = fs::canonicalize(exe).unwrap();
     String::from_utf8(output.stdout)
         .unwrap()
-        .replace(&canonical.to_string_lossy().into_owned(), "<lorectl>")
-        .replace(exe, "<lorectl>")
         .replace(&tmp.to_string_lossy().into_owned(), "<tmp>")
+}
+
+#[test]
+fn a_lorectl_path_with_a_space_is_quoted_for_the_shell() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tmp = fs::canonicalize(tmp.path()).unwrap();
+    fs::create_dir_all(tmp.join("claude")).unwrap();
+    fs::create_dir_all(tmp.join("codex")).unwrap();
+    let bin = tmp.join("Lore Tools");
+    fs::create_dir_all(&bin).unwrap();
+    let exe = bin.join("lorectl");
+    fs::copy(env!("CARGO_BIN_EXE_lorectl"), &exe).unwrap();
+    let out = run_connect(&exe, &tmp, |_| {});
+    for line in [
+        "  claude mcp add --scope user lore -- '<tmp>/Lore Tools/lorectl' mcp\n",
+        "\"command\": \"'<tmp>/Lore Tools/lorectl' hook session-start\"",
+        "  command = \"<tmp>/Lore Tools/lorectl\"\n",
+        "  command = \"'<tmp>/Lore Tools/lorectl' hook session-start\"\n",
+    ] {
+        assert!(out.contains(line), "missing {line:?} in:\n{out}");
+    }
 }
 
 const CLAUDE_MCP_FIX: &str = "
