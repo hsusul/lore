@@ -138,3 +138,15 @@ fn help_mem_is_still_the_memory_section_of_the_full_help() {
     // The same text the full help embeds, byte for byte.
     assert!(help_text(&["--help"]).contains(&page));
 }
+
+#[test]
+fn the_version_is_set_and_matches_the_desktop_app_and_ui() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let json = |rel: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(root.join(rel)).unwrap()).unwrap()
+    };
+    assert_eq!(help_text(&["--version"]), "lorectl 0.2.0\n");
+    assert_eq!(json("src-tauri/tauri.conf.json")["version"], "0.2.0");
+    assert_eq!(json("package.json")["version"], "0.2.0");
+    assert_eq!(json("package-lock.json")["version"], "0.2.0");
+}
