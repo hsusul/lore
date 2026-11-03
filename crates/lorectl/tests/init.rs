@@ -680,3 +680,69 @@ fn init_without_review_lists_pending_proposals_before_the_lessons() {
     let still = pending(home);
     assert!(still.contains(&tidy) && still.contains(&friday), "{still}");
 }
+
+#[test]
+fn review_says_a_lesson_was_rejected_or_is_waiting_instead_of_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_lessons(home);
+    let listed = masked(&lorectl(home, &["init", "--no-review"]));
+    let [docs, fmt] = <[String; 2]>::try_from(ids(&listed)).unwrap();
+    for id in [&docs, &fmt] {
+        let out = lorectl(home, &["mem", "mine", "--propose", id]);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let inbox: serde_json::Value =
+        serde_json::from_slice(&lorectl(home, &["mem", "inbox", "--json"]).stdout).unwrap();
+    let docs_proposal = inbox
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["body"].as_str().unwrap().contains(&docs))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out = lorectl(
+        home,
+        &["mem", "reject", &docs_proposal, "--reason", "not mine"],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The fmt proposal is still pending: skip it in the inbox step.
+    let out = masked(&lorectl_in(home, &["init", "--review"], "s\n"));
+    let docs_block = block(
+        home,
+        &docs,
+        2,
+        "2026-10-28",
+        DOCS,
+        "Docs are never tracked in git",
+    );
+    let fmt_block = block(
+        home,
+        &fmt,
+        4,
+        "2026-10-26",
+        FMT,
+        "Always run cargo fmt before you commit",
+    );
+    assert!(
+        out.contains(&format!("{docs_block}      (rejected)\n\n")),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("{fmt_block}      (in the inbox)\n\n")),
+        "{out}"
+    );
+}
