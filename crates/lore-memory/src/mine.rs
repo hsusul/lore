@@ -675,7 +675,11 @@ pub fn find_conflicts(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Re
             .filter(|t| !lesson.receipts.iter().any(|r| r.session == t.session))
             .filter(|t| t.text.chars().count() <= MAX_CHARS && names_family(&t.text, words))
             .collect();
-        later.sort_by_key(|t| std::cmp::Reverse(t.at_ms));
+        later.sort_by(|a, b| (b.at_ms, &a.session).cmp(&(a.at_ms, &b.session)));
+        // A resume or fork copies a turn into a new session with its
+        // timestamp, as in `lessons_within`: keep the earliest session's copy.
+        let mut seen = std::collections::HashSet::new();
+        later.retain(|t| seen.insert((t.at_ms, one_line(&t.text).to_lowercase())));
         lesson.conflicts = later
             .into_iter()
             .take(MAX_CONFLICTS)
