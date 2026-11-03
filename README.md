@@ -32,7 +32,9 @@ The desktop app is a second front end over the same archive. It needs Node.js 20
 
 ## The archive
 
-`lorectl scan` reads the session logs Claude Code and Codex already keep on disk. It looks in `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions`. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move those roots. Lore opens them read only and never changes them. A second scan of unchanged files ingests nothing.
+`lorectl scan` reads the session logs Claude Code and Codex already keep on disk. It looks in `~/.claude/projects`, `~/.codex/sessions`, and `~/.codex/archived_sessions`. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move those roots. Lore opens them read only and never changes them. A second scan of unchanged files ingests nothing. Every scan ingests the newest files first.
+
+A large history takes a while to scan the first time. `lorectl scan --since 30d` ingests only the files modified in the last 30 days (`h` for hours and `m` for minutes work too), so you can start with recent work and run a full `lorectl scan` later. A `--since` scan never marks older files missing.
 
 The archive is a SQLite database named `lore.db` with `blobs` and `backups` beside it. It lives in the platform data directory under `dev.lore.app`. `LORE_ARCHIVE_DIR` or `--archive <DIR>` moves it. The path must be absolute.
 

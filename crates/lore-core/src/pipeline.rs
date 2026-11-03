@@ -131,15 +131,34 @@ impl<'a> Pipeline<'a> {
     /// Run a discovery pass and schedule an ingest job per discovered source,
     /// coalescing duplicates. Returns the number newly enqueued.
     pub fn enqueue_scan(&self, sink: &dyn ProgressSink) -> jobs::Result<usize> {
+        self.enqueue_scan_since(sink, None)
+    }
+
+    /// [`Self::enqueue_scan`], but with `since` only the sources modified at or
+    /// after it. A source outside the window was not looked at, so it is
+    /// neither enqueued nor marked missing: presence is reconciled only by a
+    /// full scan.
+    pub fn enqueue_scan_since(
+        &self,
+        sink: &dyn ProgressSink,
+        since: Option<std::time::SystemTime>,
+    ) -> jobs::Result<usize> {
         let report = discover(self.registry, self.config);
         let discovered = report.sessions.len();
         let mut enqueued = 0;
         for source in &report.sessions {
-            if self.schedule(source.agent.0, &source.path)? == SourceSchedule::Enqueued {
+            let recent = since.is_none_or(|since| {
+                std::fs::metadata(&source.path)
+                    .and_then(|meta| meta.modified())
+                    .is_ok_and(|mtime| mtime >= since)
+            });
+            if recent && self.schedule(source.agent.0, &source.path)? == SourceSchedule::Enqueued {
                 enqueued += 1;
             }
         }
-        self.reconcile_source_presence(&report.sessions)?;
+        if since.is_none() {
+            self.reconcile_source_presence(&report.sessions)?;
+        }
         sink.emit(ProgressEvent::ScanEnqueued {
             discovered,
             enqueued,

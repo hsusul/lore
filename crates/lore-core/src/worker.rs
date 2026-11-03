@@ -120,14 +120,27 @@ impl Worker {
     /// is empty. Draining in batches keeps each transaction bounded and lets
     /// results land incrementally.
     pub fn scan(&self, sink: &dyn ProgressSink) -> jobs::Result<DrainSummary> {
+        self.scan_since(sink, None)
+    }
+
+    /// [`Self::scan`] limited to sources modified at or after `since`, newest
+    /// first. A limited scan did not look at everything, so it does not stamp
+    /// the archive as scanned.
+    pub fn scan_since(
+        &self,
+        sink: &dyn ProgressSink,
+        since: Option<std::time::SystemTime>,
+    ) -> jobs::Result<DrainSummary> {
         let pipeline = self.pipeline();
-        pipeline.enqueue_scan(sink)?;
+        pipeline.enqueue_scan_since(sink, since)?;
         let summary = self.drain_to_empty(&pipeline, sink)?;
         // The scan finished, so record when Lore last looked. Done here rather
         // than in a caller so every scanning surface stamps it: the desktop
         // worker and `lorectl scan` reach this same line, and an archive filled
         // by one must not look unscanned to the other.
-        let _ = crate::settings::record_scan_completed(&self.conn, now_ms());
+        if since.is_none() {
+            let _ = crate::settings::record_scan_completed(&self.conn, now_ms());
+        }
 
         // The queue is empty and no transaction is open — the one moment a
         // checkpoint can do its job. Ingesting a large source commits more in a
