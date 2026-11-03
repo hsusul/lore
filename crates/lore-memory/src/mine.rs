@@ -5,7 +5,8 @@
 //! words, never a model: a short user turn right after an assistant turn that
 //! opens with or contains a correction ("no", "don't", "instead", "use X not
 //! Y", "I told you"), or a user turn that repeats an instruction the person
-//! already gave earlier in the same session. A question is neither. [`lessons`] groups candidates
+//! already gave earlier in the same session. A question is neither, and nor
+//! is a turn that starts by invoking a skill or a slash command. [`lessons`] groups candidates
 //! that say the same thing across sessions. It writes nothing.
 
 use std::collections::BTreeSet;
@@ -226,6 +227,7 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
         let signal = if text.starts_with('<')
             || text.chars().count() > limits.max_chars
             || is_question(&text)
+            || is_invocation(&text)
         {
             None
         } else if before.is_some_and(|b| !b.user) && corrects(&text) {
@@ -256,6 +258,14 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
         earlier.push(words);
     }
     Ok(found)
+}
+
+/// Whether `text` starts by invoking a skill, `[$name](path) ...`, or a slash
+/// command, `/name ...`. A path such as `/home/me/x` is not a command.
+fn is_invocation(text: &str) -> bool {
+    let first = text.split_whitespace().next().unwrap_or_default();
+    text.starts_with("[$")
+        || (first.len() > 1 && first.starts_with('/') && !first[1..].contains('/'))
 }
 
 /// Whether `text` asks something: it ends with a question mark, or opens the
