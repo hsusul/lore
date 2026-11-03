@@ -1,8 +1,9 @@
 {
   "name": "lore",
   "version": "0.1.0",
-  "description": "Start each session with the repository's Lore memory notes and their freshness labels.",
+  "description": "Lore's memory tools, and the repository's memory notes with their freshness labels at the start of each session.",
   "repository": "https://github.com/hsusul/lore",
   "license": "Apache-2.0",
-  "hooks": "./hooks/hooks.json"
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
 }

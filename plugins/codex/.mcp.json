@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "lore": {
+      "command": "lorectl",
+      "args": ["mcp"],
+      "env": { "LORE_AGENT": "codex" },
+      "env_vars": ["LORE_VAULT_DIR", "LORE_ARCHIVE_DIR"]
+    }
+  }
+}
