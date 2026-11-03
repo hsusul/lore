@@ -148,6 +148,9 @@ Options:
                       such as 30d, 12h, or 90m, newest first. With `init`:
                       the window to scan, default 30d.
     --limit <N>       With `init`: lessons to show, default 5.
+    --scan-seconds <N> With `init`: stop scanning after N seconds, newest
+                      files first, and show lessons; default 60. The rest
+                      waits for the next scan.
     --review          With `init`: offer each lesson to keep, skip, or edit.
                       On by default when stdin is a terminal; `--no-review`
                       turns it off.
