@@ -94,7 +94,7 @@ fn mine_prints_each_lesson_with_its_receipts_and_writes_nothing() {
         .to_owned();
     let second = out
         .lines()
-        .nth(7)
+        .nth(8)
         .unwrap()
         .split_whitespace()
         .next()
@@ -106,12 +106,14 @@ fn mine_prints_each_lesson_with_its_receipts_and_writes_nothing() {
             "2 lessons from 5 corrections. A dry run: nothing was written.\n\
              {first}  3 conversations, latest 2026-08-05\n\
              \x20   \"I told you, pnpm not npm\"\n\
+             \x20   suggested: I told you, pnpm not npm\n\
              \x20   - codex {s5} 2026-08-05: \"I told you, pnpm not npm\"\n\
              \x20     after: \"npm install dayjs done.\"\n\
              \x20   - codex {s3} 2026-08-03: \"wrong tool, use pnpm instead of npm\"\n\
              \x20   - codex {s1} 2026-08-01: \"no, use pnpm not npm\"\n\
              {second}  2 conversations, latest 2026-08-04\n\
              \x20   \"stop editing the generated files\"\n\
+             \x20   suggested: Stop editing the generated files\n\
              \x20   - codex {s4} 2026-08-04: \"stop editing the generated files\"\n\
              \x20     after: \"Edited src/gen.rs.\"\n\
              \x20   - codex {s2} 2026-08-02: \"don't edit the generated files\"\n",
@@ -139,6 +141,38 @@ fn mine_prints_each_lesson_with_its_receipts_and_writes_nothing() {
             "signal": "correction", "repo": null,
         })
     );
+}
+
+#[test]
+fn mine_suggests_a_rule_in_the_persons_own_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let said = "yea sure, and also make sure that docs are never tracked please";
+    scanned(home, &[("Committed docs/ too.", said)]);
+    let s1 = session(home, 1);
+    let out = ok(&lorectl(home, &["mem", "mine"]));
+    let id = out
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        out,
+        format!(
+            "1 lesson from 1 corrections. A dry run: nothing was written.\n\
+             {id}  1 conversation, latest 2026-08-01\n\
+             \x20   \"{said}\"\n\
+             \x20   suggested: Docs are never tracked\n\
+             \x20   - codex {s1} 2026-08-01: \"{said}\"\n\
+             \x20     after: \"Committed docs/ too.\"\n"
+        )
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "mine", "--json"]))).unwrap();
+    assert_eq!(json[0]["suggested_rule"], "Docs are never tracked");
 }
 
 #[test]
@@ -307,6 +341,7 @@ fn mine_lists_later_turns_that_may_conflict_with_a_lesson() {
             "1 lesson from 1 corrections. A dry run: nothing was written.\n\
              {id}  1 conversation, latest 2026-08-01\n\
              \x20   \"dont make a pr just push to main\"\n\
+             \x20   suggested: Don't make a pr just push to main\n\
              \x20   - codex {s1} 2026-08-01: \"dont make a pr just push to main\"\n\
              \x20     after: \"Opened a PR.\"\n\
              \x20   - may conflict with codex {s2} 2026-08-02: \"please open a PR for the exif branch\"\n"

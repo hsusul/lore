@@ -835,6 +835,7 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         }
         candidates.push(json!({
             "text": redact(&lesson.text)?,
+            "suggested_rule": redact(&mine::suggest_rule(&lesson.text))?,
             "conversations": lesson.conversations,
             "receipts": receipts,
             "may_conflict_with": conflicts,

@@ -209,6 +209,7 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
         candidates[1],
         json!({
             "text": "Stop asking me for permission",
+            "suggested_rule": "Stop asking me for permission",
             "conversations": 1,
             "may_conflict_with": [],
             "receipts": [{
@@ -227,6 +228,21 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[test]
+fn mine_candidates_suggests_a_rule_in_the_persons_own_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let said = "yes do that, also make sure that you commit and push every little step";
+    scanned(home, &[("Committed the parser. Want me to push?", said)]);
+    let (_, result) = mine(&home.join("archive"), json!({}));
+    let candidate = &result["structuredContent"]["candidates"][0];
+    assert_eq!(candidate["text"], said);
+    assert_eq!(
+        candidate["suggested_rule"],
+        "Commit and push every little step"
     );
 }
 
