@@ -53,6 +53,27 @@ pub fn record_scan_completed(conn: &Connection, now_ms: i64) -> Result<()> {
     set(conn, KEY_LAST_SCAN_COMPLETED_AT, &now_ms.to_string())
 }
 
+/// When a scan limited to recent files (`scan --since`, `init`) last
+/// completed, and the modification time it looked back to, as
+/// `"<completed_ms> <since_ms>"`. Kept apart from
+/// [`KEY_LAST_SCAN_COMPLETED_AT`] because such a scan did not look at
+/// everything.
+pub const KEY_LAST_WINDOW_SCAN: &str = "scan.last_window_completed_at";
+
+/// Record that a scan of the files modified since `since_ms` completed at
+/// `now_ms`.
+pub fn record_window_scan_completed(conn: &Connection, now_ms: i64, since_ms: i64) -> Result<()> {
+    set(conn, KEY_LAST_WINDOW_SCAN, &format!("{now_ms} {since_ms}"))
+}
+
+/// When a limited scan last completed and how far back it looked, or `None`.
+pub fn last_window_scan(conn: &Connection) -> Result<Option<(i64, i64)>> {
+    Ok(get(conn, KEY_LAST_WINDOW_SCAN)?.and_then(|raw| {
+        let (at, since) = raw.split_once(' ')?;
+        Some((at.parse().ok()?, since.parse().ok()?))
+    }))
+}
+
 /// When a scan last completed, or `None` if one never has.
 ///
 /// `None` is load-bearing and must not be rendered as "no work found": it means
