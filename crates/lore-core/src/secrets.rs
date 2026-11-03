@@ -906,13 +906,23 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Position of `needle` in `haystack`, ignoring ASCII case, without allocating.
+///
+/// It jumps to each place the needle's first byte appears, in either case,
+/// with `memchr2`, and compares the rest only there. A window-by-window
+/// compare cost a call per byte for every keyword over every document.
 fn find_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
+    let (&first, rest) = needle.split_first()?;
+    let last = haystack.len().checked_sub(needle.len())?;
+    let (lower, upper) = (first.to_ascii_lowercase(), first.to_ascii_uppercase());
+    let mut at = 0;
+    while at <= last {
+        let i = at + memchr::memchr2(lower, upper, &haystack[at..=last])?;
+        if haystack[i + 1..i + needle.len()].eq_ignore_ascii_case(rest) {
+            return Some(i);
+        }
+        at = i + 1;
     }
-    haystack
-        .windows(needle.len())
-        .position(|window| window.eq_ignore_ascii_case(needle))
+    None
 }
 
 /// True if `needle` appears in `haystack`, ignoring ASCII case, without allocating.
@@ -986,6 +996,47 @@ mod tests {
             return None;
         }
         haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    #[test]
+    fn find_ignore_ascii_case_agrees_with_a_window_by_window_search() {
+        let naive = |haystack: &[u8], needle: &[u8]| -> Option<usize> {
+            if needle.is_empty() || needle.len() > haystack.len() {
+                return None;
+            }
+            (haystack.windows(needle.len())).position(|w| w.eq_ignore_ascii_case(needle))
+        };
+        let haystacks: [&[u8]; 6] = [
+            b"",
+            b"T",
+            b"TOKEN token ToKeN",
+            "caf\u{e9} Password=x PASSWD: y".as_bytes(),
+            b"secrsecrsecret_SECRET",
+            b"api_KEY API-key apikey",
+        ];
+        let needles: [&[u8]; 7] = [
+            b"",
+            b"t",
+            b"token",
+            b"password",
+            b"passwd",
+            b"secret",
+            b"api-key",
+        ];
+        for haystack in haystacks {
+            for needle in needles {
+                for from in 0..=haystack.len() {
+                    assert_eq!(
+                        find_ignore_ascii_case(&haystack[from..], needle),
+                        naive(&haystack[from..], needle),
+                        "{haystack:?} {needle:?} from {from}"
+                    );
+                }
+            }
+        }
+        let mut long = vec![b'x'; 1 << 20];
+        long.extend_from_slice(b"ToKeN");
+        assert_eq!(find_ignore_ascii_case(&long, b"token"), Some(1 << 20));
     }
 
     #[test]
