@@ -410,6 +410,20 @@ const TASK_VERBS: &[&str] = &[
     "tag",
 ];
 
+/// Verbs that open a one-off task: [`TASK_VERBS`] and the chores a person
+/// hands an agent ("delete the runtimes", "install the deps").
+const TASK_OPENERS: &[&str] = &[
+    "delete",
+    "remove",
+    "install",
+    "uninstall",
+    "move",
+    "rename",
+    "update",
+    "add",
+    "clean",
+];
+
 /// How much `text` reads like a standing rule rather than a one-off task
 /// order. Fixed and explainable: +2 for a standing phrase ("from now on",
 /// "always", "never", "going forward"), or for "make sure" alone, which earns
@@ -417,7 +431,10 @@ const TASK_VERBS: &[&str] = &[
 /// artifact; -3 for each PR or issue number (`#478`, `issue 12`), each
 /// branch-shaped token (a slash and no file extension), each URL, and each
 /// span the secret scan masked; and -2 when it opens with a task verb
-/// ("push", "merge", "fix", ...) and names an artifact.
+/// ("push", "merge", "fix", ...) and names an artifact; and -4 when it names
+/// none but opens with a task verb and adds a second instruction with "and",
+/// a task with a rule tacked on ("delete the runtimes and make it build on
+/// my ssd from now on").
 #[must_use]
 pub fn rule_score(text: &str) -> i32 {
     let lower = text.to_lowercase();
@@ -472,8 +489,13 @@ pub fn rule_score(text: &str) -> i32 {
         score += 1;
     }
     score -= 3 * i32::try_from(numbers + branches).unwrap_or(i32::MAX / 3);
-    if artifacts > 0 && tokens.first().is_some_and(|t| TASK_VERBS.contains(t)) {
+    let opens_task = tokens.first().is_some_and(|t| TASK_VERBS.contains(t));
+    if artifacts > 0 && opens_task {
         score -= 2;
+    }
+    let opens_chore = tokens.first().is_some_and(|t| TASK_OPENERS.contains(t));
+    if artifacts == 0 && (opens_task || opens_chore) && tokens.contains(&"and") {
+        score -= 4;
     }
     score
 }
