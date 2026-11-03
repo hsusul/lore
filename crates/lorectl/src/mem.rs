@@ -38,7 +38,8 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     propose           File an agent proposal; the body is read from stdin.
                       --agent, --session, --type, --title [--scope S]
                       [--anchor PATH[:LINES]]... [--updates|--extends|--derives ID]
-    inbox             List pending proposals [--json]
+    inbox             List pending proposals, each with its source session
+                      and a redacted excerpt from the archive [--json]
     accept <ID>       Write a proposal as a note, one commit [--as <slug>]
     reject <ID>       Decline a proposal --reason <TEXT>; the vault is untouched
     retire <NOTE>     Mark a note retired --reason <TEXT>, one commit
@@ -158,7 +159,8 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         return crate::eval::run(invocation, USAGE);
     }
     if crate::review::SUBCOMMANDS.contains(&sub) {
-        return crate::review::run(sub, &invocation.rest, invocation.json, USAGE);
+        let archive = invocation.archive_dir().ok();
+        return crate::review::run(sub, &invocation.rest, invocation.json, USAGE, archive);
     }
     let args = parse(sub, &invocation.rest)?;
     let Some(sub) = args.sub else {

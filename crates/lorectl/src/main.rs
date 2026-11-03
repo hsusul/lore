@@ -21,6 +21,7 @@ mod hook;
 mod mcp;
 mod mem;
 mod query;
+mod receipt;
 mod review;
 mod scan;
 mod skills;
