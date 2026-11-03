@@ -63,6 +63,50 @@ const PHRASES: &[&str] = &[
     "stop ",
 ];
 
+/// Words that make a turn a rule for later work.
+const RULE_WORDS: &[&str] = &[
+    "always",
+    "never",
+    "don't",
+    "dont",
+    "stop",
+    "convention",
+    "conventions",
+    "style",
+];
+/// Tools and commands a rule can name. Names that are everyday words, like
+/// make, just, and go, are left out.
+const TOOLS: &[&str] = &[
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "deno",
+    "node",
+    "npx",
+    "cargo",
+    "rustc",
+    "rustfmt",
+    "clippy",
+    "git",
+    "gh",
+    "uv",
+    "pip",
+    "python",
+    "python3",
+    "pytest",
+    "poetry",
+    "docker",
+    "jest",
+    "vitest",
+    "eslint",
+    "prettier",
+    "tsc",
+    "brew",
+    "kubectl",
+    "terraform",
+];
+
 /// Why a user turn is a candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
@@ -224,17 +268,55 @@ fn is_question(text: &str) -> bool {
 /// Whether `text` reads as a correction.
 fn corrects(text: &str) -> bool {
     let lower = text.to_lowercase();
-    let tokens: Vec<&str> = lower
-        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
-        .filter(|t| !t.is_empty())
-        .collect();
+    let tokens = tokens(&lower);
     // "no worries" and "no problem" open a turn without correcting anything.
     let opener = tokens.first().is_some_and(|t| OPENERS.contains(t))
         && !matches!(tokens.get(1), Some(&("worries" | "problem")));
-    let use_not = tokens
-        .windows(4)
-        .any(|w| w[0] == "use" && (w[2] == "not" || w[2] == "instead"));
+    let use_not = use_x_not_y(&tokens);
     opener || use_not || PHRASES.iter().any(|p| format!(" {lower} ").contains(p))
+}
+
+/// Lowercase words, keeping apostrophes, so "don't" stays one word.
+fn tokens(lower: &str) -> Vec<&str> {
+    lower
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// "use X not Y" or "use X instead".
+fn use_x_not_y(tokens: &[&str]) -> bool {
+    tokens
+        .windows(3)
+        .any(|w| w[0] == "use" && (w[2] == "not" || w[2] == "instead"))
+}
+
+/// Whether `text` states a rule that would apply to later work, not only to
+/// the task at hand: it names a tool, command, flag, file, or path, says
+/// always, never, don't, do not, or stop, speaks of a convention or style,
+/// or says use X not Y. A redirect like "give me the short one instead"
+/// does none of these.
+#[must_use]
+pub fn states_rule(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let words = tokens(&lower);
+    let names_a_thing = lower.split_whitespace().any(|raw| {
+        let word = raw.trim_matches(|c: char| ",.;:!?()'\"".contains(c));
+        word.contains('`')
+            || word.starts_with("--")
+            || (word.contains('/') && word.chars().any(char::is_alphanumeric))
+            || word.rsplit_once('.').is_some_and(|(stem, ext)| {
+                !stem.is_empty()
+                    && (1..=5).contains(&ext.len())
+                    && ext.chars().all(|c| c.is_ascii_alphanumeric())
+            })
+    });
+    names_a_thing
+        || lower.contains("do not ")
+        || use_x_not_y(&words)
+        || words
+            .iter()
+            .any(|w| RULE_WORDS.contains(w) || TOOLS.contains(w))
 }
 
 /// Words that say what a turn is about: lowercase, three or more letters or
@@ -269,7 +351,7 @@ fn stem(word: &str) -> String {
 pub struct Lesson {
     /// Ten hex characters, the same for as long as its oldest receipt is.
     pub id: String,
-    /// The newest receipt's text.
+    /// The newest receipt's text that states a rule.
     pub text: String,
     /// Distinct sessions among the receipts.
     pub sessions: usize,
@@ -329,15 +411,17 @@ fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
         }
     }
     // A turn re-sent across sessions with no correction among them is a task
-    // the person repeats, not a lesson.
+    // the person repeats, not a lesson; one that never states a rule is a
+    // redirect of the task at hand.
     let corrected = receipts.iter().any(|r| r.signal == Signal::Correction);
+    let rule = receipts.iter().find(|r| states_rule(&r.text))?.text.clone();
     if receipts.len() < MIN_SESSIONS || !corrected {
         return None;
     }
     let hash = blake3::hash(format!("{}\n{}", oldest.session, oldest.text).as_bytes());
     Some(Lesson {
         id: hash.to_hex()[..10].to_owned(),
-        text: receipts[0].text.clone(),
+        text: rule,
         sessions: receipts.len(),
         latest_ms: receipts[0].at_ms,
         receipts,
