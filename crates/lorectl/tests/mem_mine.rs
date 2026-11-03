@@ -357,3 +357,42 @@ fn mine_lists_later_turns_that_may_conflict_with_a_lesson() {
         }])
     );
 }
+
+#[test]
+fn mine_leaves_out_lessons_that_read_as_one_off_orders_unless_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            ("Running npm install.", "no, use pnpm not npm"),
+            (
+                "Opened a PR.",
+                "no, never merge https://github.com/acme/app/pull/478 push fix/exif-478 instead",
+            ),
+        ],
+    );
+    let texts = |args: &[&str]| -> Vec<String> {
+        let json: serde_json::Value = serde_json::from_str(&ok(&lorectl(home, args))).unwrap();
+        json.as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["text"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(texts(&["mem", "mine", "--json"]), ["no, use pnpm not npm"]);
+    assert_eq!(
+        texts(&["mem", "mine", "--json", "--all"]),
+        [
+            "no, use pnpm not npm",
+            "no, never merge https://github.com/acme/app/pull/478 push fix/exif-478 instead"
+        ]
+    );
+    let out = ok(&lorectl(home, &["mem", "mine"]));
+    assert!(
+        out.starts_with(
+            "1 lesson from 2 corrections, 1 more scored as one-off orders (--all shows them)."
+        ),
+        "{out}"
+    );
+}

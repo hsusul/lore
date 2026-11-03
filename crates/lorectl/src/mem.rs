@@ -51,6 +51,8 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
                       --min-overlap PERCENT (default 50): the share of
                       words two corrections need to be one lesson.
                       --max-chars N (default 300): longer turns are skipped
+                      --all: also list lessons scored below zero, which
+                      read as one-off orders
     eval              Score a policy for accepting proposals without you
                       against your own accepts and rejects; writes nothing
                       [--policy never|starting-bar, default never] [--json]
