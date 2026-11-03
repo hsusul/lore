@@ -133,6 +133,8 @@ Under each proposal, `mem inbox` prints its receipt: the archived session it cam
 
 `mem inbox` marks each proposal's source `(verified)` when the archive held that agent's session at the time the proposal was filed, and `(unverified)` otherwise. Proposals filed with `mem propose`, or before Lore recorded this, are unverified.
 
+`lorectl mem mine` reads the archive for corrections you made to an agent, such as "no, use pnpm not npm" or an instruction you had to repeat, and groups the ones you made in more than one session into lessons. Each lesson prints with its receipts: the sessions it came from, the date, what you said, and what the agent had just done. It is a dry run: it writes nothing. `--limit N` (default 20) and `--json` are optional.
+
 `lorectl mem eval` scores a policy for accepting proposals without you against the proposals you already accepted and rejected. It reports how many it would have taken off your hands, lists every one it would have accepted that you rejected, and says whether it clears a fixed bar. It accepts nothing and writes nothing. `--policy` is `never` (the default) or `starting-bar`.
 
 A script or an agent without MCP can file a proposal with `lorectl mem propose`. The body is read from stdin.

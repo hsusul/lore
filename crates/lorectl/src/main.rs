@@ -20,6 +20,7 @@ mod help;
 mod hook;
 mod mcp;
 mod mem;
+mod mine;
 mod query;
 mod receipt;
 mod review;
