@@ -156,22 +156,32 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let mut input = std::io::stdin().lock();
     // Piped answers are not echoed, so print them as a terminal would.
     let echo = !terminal;
-    let (mut n, go_on) = review_proposals(&mut out, &mut input, echo, &vault, &archive, &proposals);
+    let (accepted, go_on) =
+        review_proposals(&mut out, &mut input, echo, &vault, &archive, &proposals);
+    let mut kept = 0;
     if go_on {
         match lessons {
             Ok(lessons) => {
                 let _ = write!(out, "{}", header(&lessons, args.limit));
                 let shown = &lessons[..lessons.len().min(args.limit)];
-                n += review_lessons(&mut out, &mut input, echo, &vault, shown);
+                kept = review_lessons(&mut out, &mut input, echo, &vault, shown);
             }
             Err(error) => drop(writeln!(out, "Lessons    failed: {error}\n")),
         }
     }
+    let what = match (accepted, kept) {
+        (0, k) => format!("Kept {k} lesson{}", plural(k)),
+        (a, 0) => format!("Accepted {a} proposal{}", plural(a)),
+        (a, k) => format!(
+            "Accepted {a} proposal{} and kept {k} lesson{}",
+            plural(a),
+            plural(k)
+        ),
+    };
     let _ = writeln!(
         out,
-        "Kept {n} lesson{}. Your next Claude Code or Codex session will see them \
-         once Lore is connected (lorectl connect).",
-        plural(n)
+        "{what}. Your next Claude Code or Codex session will see them \
+         once Lore is connected (lorectl connect)."
     );
     Ok(exit::OK)
 }
