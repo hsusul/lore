@@ -137,6 +137,13 @@ fn parse_from(
             }
             "response_item" => {
                 let Some(p) = payload else { continue };
+                let kept;
+                let p = if carries_passthrough(p) {
+                    kept = without_passthrough(p.clone());
+                    &kept
+                } else {
+                    p
+                };
                 match p.get("type").and_then(Value::as_str).unwrap_or("") {
                     "message" => {
                         let msg = message_item(p, seq, ts, model.clone(), line_start);
@@ -604,6 +611,33 @@ fn tool_message(
         source_offset: Some(offset),
         metadata_json: None,
         parts: vec![part],
+    }
+}
+
+/// Internal metadata Codex attaches to response items, often large, that
+/// nothing in Lore reads. It is dropped before a payload is stored.
+const PASSTHROUGH: &str = "internal_chat_message_metadata_passthrough";
+
+fn carries_passthrough(v: &Value) -> bool {
+    match v {
+        Value::Object(map) => {
+            map.contains_key(PASSTHROUGH) || map.values().any(carries_passthrough)
+        }
+        Value::Array(items) => items.iter().any(carries_passthrough),
+        _ => false,
+    }
+}
+
+fn without_passthrough(v: Value) -> Value {
+    match v {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .filter(|(k, _)| k != PASSTHROUGH)
+                .map(|(k, v)| (k, without_passthrough(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(without_passthrough).collect()),
+        other => other,
     }
 }
 
