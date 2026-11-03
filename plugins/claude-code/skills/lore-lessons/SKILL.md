@@ -1,6 +1,7 @@
 ---
 name: lore-lessons
 description: Turn the corrections a person gave coding agents in past sessions into short lessons filed in the Lore inbox for review. Use when asked to find lessons, learn from past corrections, or mine Lore candidates.
+allowed-tools: mcp__plugin_lore_lore__recall_memory mcp__plugin_lore_lore__mine_candidates mcp__plugin_lore_lore__search_sessions
 ---
 
 # Lore lessons

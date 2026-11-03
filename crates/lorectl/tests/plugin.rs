@@ -354,14 +354,20 @@ fn the_lore_lessons_skill_names_only_what_the_lore_server_lists() {
     let codex = read_json(&repo_root().join("plugins/codex/.codex-plugin/plugin.json"));
     assert_eq!(codex["skills"], "./skills/");
 
-    for dir in ["plugins/claude-code", "plugins/codex"] {
+    for (dir, expected_keys) in [
+        (
+            "plugins/claude-code",
+            &["name", "description", "allowed-tools"][..],
+        ),
+        ("plugins/codex", &["name", "description"][..]),
+    ] {
         let path = repo_root().join(dir).join("skills/lore-lessons/SKILL.md");
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("{}: {e}", path.display()))
             .unwrap();
         let (fields, body) = skill_parts(&text);
         let keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, ["name", "description"], "{dir}");
+        assert_eq!(keys, expected_keys, "{dir}");
         assert_eq!(fields[0].1, "lore-lessons", "{dir}");
         assert!(!fields[1].1.is_empty(), "{dir} description");
 
@@ -390,10 +396,20 @@ fn the_lore_lessons_skill_names_only_what_the_lore_server_lists() {
     let skill = |dir: &str| {
         std::fs::read_to_string(repo_root().join(dir).join("skills/lore-lessons/SKILL.md")).unwrap()
     };
+    // Claude Code pre-approves the read-only tools under their plugin names,
+    // mcp__plugin_<plugin>_<server>__<tool>. Codex has no such field.
+    let allowed = "allowed-tools: mcp__plugin_lore_lore__recall_memory \
+                   mcp__plugin_lore_lore__mine_candidates \
+                   mcp__plugin_lore_lore__search_sessions\n";
+    let claude = skill("plugins/claude-code");
+    assert_eq!(claude.matches(allowed).count(), 1, "{claude}");
+    let plugin = read_json(&repo_root().join("plugins/claude-code/.claude-plugin/plugin.json"));
+    assert_eq!(plugin["name"], "lore");
+    let mcp = read_json(&repo_root().join("plugins/claude-code/.mcp.json"));
+    assert!(mcp["mcpServers"]["lore"].is_object());
     assert_eq!(
-        skill("plugins/claude-code"),
+        claude.replacen(allowed, "", 1),
         skill("plugins/codex"),
         "both plugins ship one skill"
     );
-
 }
