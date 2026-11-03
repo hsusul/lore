@@ -39,6 +39,9 @@ thiserror = "1"
 # on across a platform change.
 rustix = { version = "1", features = ["fs"] }
 serde_json = "1"
+# Substring search for the secret scanner's prefix rules. Already in the graph
+# via gix (bstr), same version; pure byte search, no I/O.
+memchr = "2"
 # RFC3339 timestamp parsing only (no networking/std feature creep).
 time = { version = "0.3", features = ["parsing"] }
 # Cross-platform watcher; default macOS backend is FSEvents.
