@@ -46,7 +46,10 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     mine              Lessons from corrections you made in more than one
                       session, each with its receipts; writes nothing
                       [--limit N, default 20] [--json]. Reads the archive.
-                      --propose ID... files those lessons into the inbox
+                      --propose ID... files those lessons into the inbox.
+                      --min-overlap PERCENT (default 50): the share of
+                      words two corrections need to be one lesson.
+                      --max-chars N (default 300): longer turns are skipped
     eval              Score a policy for accepting proposals without you
                       against your own accepts and rejects; writes nothing
                       [--policy never|starting-bar, default never] [--json]

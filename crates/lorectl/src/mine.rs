@@ -41,18 +41,20 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let mut parser = lexopt::Parser::from_args(&invocation.rest);
     let (mut limit, mut json) = (DEFAULT_LIMIT, invocation.json);
     let (mut propose, mut ids, mut vault_dir) = (false, Vec::new(), None::<PathBuf>);
+    let mut limits = mine::Limits::default();
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
             Short('h') | Long("help") => {
                 print!("{usage_text}");
                 return Ok(exit::OK);
             }
-            Long("limit") => {
-                let value = parser.value().map_err(|e| usage(e.to_string()))?;
-                let value = value.to_string_lossy();
-                limit = value.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
-                    usage(format!("--limit needs a positive number, got `{value}`"))
-                })?;
+            Long("limit") => limit = number(&mut parser, "--limit", 1..=usize::MAX)?,
+            Long("max-chars") => {
+                limits.max_chars = number(&mut parser, "--max-chars", 1..=usize::MAX)?;
+            }
+            Long("min-overlap") => {
+                let percent = number(&mut parser, "--min-overlap", 1..=100)?;
+                limits.min_overlap_per_mille = percent * 10;
             }
             Long("json") => json = true,
             Long("propose") => propose = true,
@@ -65,9 +67,10 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
         }
     }
     let conn = storage::open_read_only(&invocation.archive_dir()?.join(ARCHIVE_DB_FILENAME))?;
-    let candidates = mine::corrections(&conn).map_err(storage::StorageError::from)?;
+    let candidates =
+        mine::corrections_within(&conn, &limits).map_err(storage::StorageError::from)?;
     let total = candidates.len();
-    let mut lessons = mine::lessons(candidates);
+    let mut lessons = mine::lessons_within(candidates, &limits);
     if propose {
         return propose_lessons(&lessons, &ids, vault_dir.as_deref());
     }
@@ -82,6 +85,29 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     };
     let _ = std::io::stdout().lock().write_all(text.as_bytes());
     Ok(exit::OK)
+}
+
+/// The next argument as a whole number in `range`, or a usage error.
+fn number(
+    parser: &mut lexopt::Parser,
+    flag: &str,
+    range: std::ops::RangeInclusive<usize>,
+) -> Result<usize, CliError> {
+    let value = parser.value().map_err(|e| CliError::Usage(e.to_string()))?;
+    let value = value.to_string_lossy();
+    let (low, high) = (range.start(), range.end());
+    value
+        .parse()
+        .ok()
+        .filter(|n| range.contains(n))
+        .ok_or_else(|| {
+            let wanted = if *high == usize::MAX {
+                "a positive number".to_owned()
+            } else {
+                format!("a number from {low} to {high}")
+            };
+            CliError::Usage(format!("{flag} needs {wanted}, got `{value}`"))
+        })
 }
 
 fn day(candidate: &Candidate) -> String {

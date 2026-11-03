@@ -241,3 +241,41 @@ fn mine_propose_refuses_an_unknown_lesson_and_writes_nothing() {
     );
     assert!(!home.join("vault/_inbox").exists());
 }
+
+#[test]
+fn mine_takes_the_overlap_and_length_limits_from_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    // These two share 2 of 3 content words: 66%.
+    scanned(
+        home,
+        &[
+            ("Running npm install axios.", "no, use pnpm not npm"),
+            (
+                "Running npm install lodash.",
+                "wrong tool, use pnpm instead of npm",
+            ),
+        ],
+    );
+    let first = |out: String| out.lines().next().unwrap().to_owned();
+    assert_eq!(
+        first(ok(&lorectl(home, &["mem", "mine"]))),
+        "1 lesson from 2 corrections. A dry run: nothing was written."
+    );
+    assert_eq!(
+        first(ok(&lorectl(home, &["mem", "mine", "--min-overlap", "70"]))),
+        "0 lessons from 2 corrections. A dry run: nothing was written."
+    );
+    assert_eq!(
+        first(ok(&lorectl(home, &["mem", "mine", "--max-chars", "25"]))),
+        "0 lessons from 1 corrections. A dry run: nothing was written."
+    );
+    for bad in [
+        ["--min-overlap", "0"],
+        ["--min-overlap", "101"],
+        ["--max-chars", "x"],
+    ] {
+        let out = lorectl(home, &["mem", "mine", bad[0], bad[1]]);
+        assert_eq!(out.status.code(), Some(1), "{bad:?}");
+    }
+}
