@@ -49,6 +49,8 @@ MCP server (lorectl mcp [--archive <DIR>]):
     read_session      One archived session's text in order, paged
     recall_memory     Accepted notes for a repository, each with its freshness
     read_note         One note in full
+    mine_candidates   Corrections and rules the person gave agents, newest
+                      first, with receipts, for the agent to group and propose
     propose_memory    File a proposal in the vault's inbox, the only tool that
                       writes; review it with `lorectl mem inbox`
     Environment:

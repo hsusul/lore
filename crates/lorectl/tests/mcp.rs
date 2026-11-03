@@ -156,6 +156,7 @@ fn speaks_the_mcp_handshake() {
             "read_session",
             "recall_memory",
             "read_note",
+            "mine_candidates",
             "propose_memory"
         ]
     );

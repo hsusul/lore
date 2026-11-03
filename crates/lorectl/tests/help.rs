@@ -89,6 +89,7 @@ fn help_mcp_prints_the_mcp_page() {
             "    read_session ",
             "    recall_memory ",
             "    read_note ",
+            "    mine_candidates ",
             "    propose_memory ",
             "LORE_VAULT_DIR",
             "LORE_AGENT",
