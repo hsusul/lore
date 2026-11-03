@@ -798,7 +798,7 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let conn = open(&ctx.archive_dir)?;
     let found = mine::corrections(&conn).map_err(|e| e.to_string())?;
     let mut lessons = mine::lessons(found);
-    lessons.sort_by(|a, b| b.latest_ms.cmp(&a.latest_ms));
+    lessons.sort_by_key(|l| std::cmp::Reverse(l.latest_ms));
     lessons.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
     let mut candidates = Vec::new();
     for lesson in &lessons {
