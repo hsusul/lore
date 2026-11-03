@@ -187,7 +187,9 @@ sessions in the body and passing one of them as session_id. Leave out anything t
 redirected the task at hand. may_conflict_with lists later turns in the same repository about \
 the same command. Judge each one: if a later turn overrides the candidate, leave it out or say \
 it was overridden; a turn about something else is no conflict. Candidates that read as one-off \
-orders are left out and counted in left_out; pass all: true to see them. Replies are paged: while next_cursor is not null, call again \
+orders are left out and counted in left_out; pass all: true to see them. Each receipt names \
+its repository as repo, a name and the scope a note for it takes, or null; pass cwd to get the \
+current directory's as cwd_repo. Replies are paged: while next_cursor is not null, call again \
 with it, and read every page before you group anything.",
         input_schema: mine_schema,
         call: mine_candidates,
@@ -254,6 +256,10 @@ fn mine_schema() -> Value {
                 "default": MINE_DEFAULT_LIMIT
             },
             "cursor": { "type": "string", "description": "next_cursor from a previous call." },
+            "cwd": {
+                "type": "string",
+                "description": "Absolute path of the current directory, to name its repository as cwd_repo."
+            },
             "all": {
                 "type": "boolean",
                 "default": false,
@@ -814,6 +820,17 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
             .parse::<usize>()
             .map_err(|_| invalid_argument("cursor", "must be next_cursor from a previous call"))?,
     };
+    let cwd_repo = match string_arg(arguments, "cwd") {
+        None => Value::Null,
+        Some(cwd) if Path::new(cwd).is_absolute() => {
+            let context = RepoContext::discover(Path::new(cwd));
+            let name = context.name().map(|name| name.as_str().to_owned());
+            context
+                .key()
+                .map_or(Value::Null, |key| repo_json(name, key))
+        }
+        Some(_) => return Err(invalid_argument("cwd", "must be an absolute path")),
+    };
     let conn = open(&ctx.archive_dir)?;
     let found = mine::corrections(&conn).map_err(|e| e.to_string())?;
     let mut lessons = mine::lessons(found);
@@ -837,6 +854,7 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
             receipts.push(json!({
                 "session": r.session, "agent": r.agent,
                 "date": r.at_ms.and_then(crate::receipt::date),
+                "repo": session_repo(&conn, &r.session, r.repo.clone()),
                 "correction": redact(&r.text)?,
                 "before": r.preceding.as_deref().map(redact).transpose()?,
             }));
@@ -867,7 +885,32 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }
     let mut reply = page(&candidates, (next < total).then_some(next), total);
     reply["left_out"] = json!(left_out);
+    reply["cwd_repo"] = cwd_repo;
     Ok(reply)
+}
+
+/// `{"name", "scope"}` for a repository, where `scope` is the `repo:<key>`
+/// a note for it carries.
+fn repo_json(name: Option<String>, key: &lore_memory::note::RepoKey) -> Value {
+    json!({ "name": name, "scope": format!("repo:{}", key.as_str()) })
+}
+
+/// The repository a session worked in, from the origin URL the archive
+/// recorded for it, or null when it recorded none.
+fn session_repo(conn: &Connection, session: &str, name: Option<String>) -> Value {
+    let url: Option<String> = conn
+        .query_row(
+            "SELECT e.display_value FROM session_segment seg
+             JOIN repository_identity_evidence e ON e.repository_id = seg.repository_id
+             WHERE seg.session_id = ?1 AND e.kind = 'remote' AND e.display_value IS NOT NULL
+             ORDER BY e.last_seen_at DESC LIMIT 1",
+            [session],
+            |r| r.get(0),
+        )
+        .ok();
+    url.as_deref()
+        .and_then(lore_memory::repo::repo_key)
+        .map_or(Value::Null, |key| repo_json(name, &key))
 }
 
 /// One page of `mine_candidates`: the candidates, where the next page starts,
