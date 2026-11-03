@@ -133,7 +133,7 @@ Under each proposal, `mem inbox` prints its receipt: the archived session it cam
 
 `mem inbox` marks each proposal's source `(verified)` when the archive held that agent's session at the time the proposal was filed, and `(unverified)` otherwise. Proposals filed with `mem propose`, or before Lore recorded this, are unverified.
 
-`lorectl mem mine` reads the archive for corrections you made to an agent, such as "no, use pnpm not npm" or an instruction you had to repeat, and groups the ones you made in more than one session into lessons. Each lesson prints with its receipts: the sessions it came from, the date, what you said, and what the agent had just done. It is a dry run: it writes nothing. `--limit N` (default 20) and `--json` are optional.
+`lorectl mem mine` reads the archive for corrections you made to an agent, such as "no, use pnpm not npm" or an instruction you had to repeat, and groups the ones you made in more than one session into lessons. Each lesson prints with its receipts: the sessions it came from, the date, what you said, and what the agent had just done. It is a dry run: it writes nothing. `--limit N` (default 20) and `--json` are optional. Two limits tune what it finds: `--min-overlap PERCENT` (default 50) is how much of their words two corrections must share to be one lesson, and `--max-chars N` (default 300) is the longest turn still read as a correction. Pass the same limits with `--propose`, since they decide which lessons exist.
 
 `lorectl mem mine --propose <ID>...` files the lessons you name into the inbox, each with its receipts in the body, for you to accept or reject like any proposal. It never files the same lesson twice.
 

@@ -107,6 +107,29 @@ struct Turn {
 
 /// Every candidate in the archive, by session then turn. Read only.
 pub fn corrections(conn: &Connection) -> rusqlite::Result<Vec<Candidate>> {
+    corrections_within(conn, &Limits::default())
+}
+
+/// The two limits a person can tune while judging what the miner finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// A user turn longer than this many characters is not a correction.
+    pub max_chars: usize,
+    /// Candidates join one lesson at this word overlap, per mille, or more.
+    pub min_overlap_per_mille: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_chars: MAX_CHARS,
+            min_overlap_per_mille: LESSON_PER_MILLE,
+        }
+    }
+}
+
+/// [`corrections`] with `limits.max_chars` in place of the default.
+pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Result<Vec<Candidate>> {
     let mut statement = conn.prepare(TURNS)?;
     let mut rows = statement.query([])?;
     let mut turns: Vec<Turn> = Vec::new();
@@ -145,7 +168,7 @@ pub fn corrections(conn: &Connection) -> rusqlite::Result<Vec<Candidate>> {
         }
         let text = one_line(&turn.text);
         let words = content_words(&text);
-        let signal = if text.starts_with('<') || text.chars().count() > MAX_CHARS {
+        let signal = if text.starts_with('<') || text.chars().count() > limits.max_chars {
             None
         } else if before.is_some_and(|b| !b.user) && corrects(&text) {
             Some(Signal::Correction)
@@ -240,7 +263,13 @@ pub struct Lesson {
 /// one. Only lessons said in at least two sessions, at least one of them as
 /// a correction, are kept, most sessions first, then the most recent.
 #[must_use]
-pub fn lessons(mut candidates: Vec<Candidate>) -> Vec<Lesson> {
+pub fn lessons(candidates: Vec<Candidate>) -> Vec<Lesson> {
+    lessons_within(candidates, &Limits::default())
+}
+
+/// [`lessons`] with `limits.min_overlap_per_mille` in place of the default.
+#[must_use]
+pub fn lessons_within(mut candidates: Vec<Candidate>, limits: &Limits) -> Vec<Lesson> {
     candidates.sort_by(|a, b| (a.at_ms, &a.session, &a.text).cmp(&(b.at_ms, &b.session, &b.text)));
     let mut groups: Vec<Vec<(BTreeSet<String>, Candidate)>> = Vec::new();
     for candidate in candidates {
@@ -252,7 +281,7 @@ pub fn lessons(mut candidates: Vec<Candidate>) -> Vec<Lesson> {
             group
                 .iter()
                 .take(MATCH_MEMBERS)
-                .any(|(other, _)| overlap_per_mille(other, &words) >= LESSON_PER_MILLE)
+                .any(|(other, _)| overlap_per_mille(other, &words) >= limits.min_overlap_per_mille)
         });
         match joins {
             Some(at) => groups[at].push((words, candidate)),
