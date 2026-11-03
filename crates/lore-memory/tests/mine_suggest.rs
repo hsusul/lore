@@ -85,3 +85,23 @@ fn too_little_left_returns_the_original() {
     assert_eq!(suggest_rule(" ok, please "), "ok, please");
     assert_eq!(suggest_rule("yes do that please"), "yes do that please");
 }
+
+#[test]
+fn like_that_compares_stays() {
+    assert_eq!(
+        suggest_rule("make it look like the old dialog from now on"),
+        "Make it look like the old dialog"
+    );
+    assert_eq!(
+        suggest_rule("keep the button just like the old one"),
+        "Keep the button just like the old one"
+    );
+    assert_eq!(
+        suggest_rule("i like tabs not spaces in this repo"),
+        "I like tabs not spaces in this repo"
+    );
+    assert_eq!(
+        suggest_rule("run the tests like before you push"),
+        "Run the tests before you push"
+    );
+}

@@ -743,7 +743,8 @@ const TASK_FRAMES: &[&str] = &["go ahead"];
 /// leading acknowledgements and connectors ("yea sure, and also") and a
 /// request frame ("make sure that you", "can you", "please") are cut, then
 /// trailing filler ("please", "from now on", "going forward") and
-/// punctuation, then "like" and "just like" between two words. "dont" and
+/// punctuation, then "like" and "just like" used as filler between two words
+/// (not "look like the old one" or "I like tabs"). "dont" and
 /// "cant" get their apostrophes and the first letter is capitalized. Nothing
 /// else is reworded. A turn that opens with a task order ("go ahead"), or
 /// that leaves fewer than three words, comes back as it was, trimmed.
@@ -778,9 +779,10 @@ pub fn suggest_rule(text: &str) -> String {
     let mut kept = Vec::new();
     let mut i = 0;
     while i < words.len() {
-        if i > 0 && is(i, "just") && is(i + 1, "like") && i + 2 < words.len() {
+        let filler = |at: usize| !like_compares(words[i - 1], words[at + 1]);
+        if i > 0 && is(i, "just") && is(i + 1, "like") && i + 2 < words.len() && filler(i + 1) {
             i += 2;
-        } else if i > 0 && is(i, "like") && i + 1 < words.len() {
+        } else if i > 0 && is(i, "like") && i + 1 < words.len() && filler(i) {
             i += 1;
         } else {
             kept.push(contract(words[i]));
@@ -796,6 +798,26 @@ pub fn suggest_rule(text: &str) -> String {
         .next()
         .map(|first| first.to_uppercase().chain(chars).collect())
         .unwrap_or_default()
+}
+
+/// Whether "like" between `before` and `after` compares or is a verb, as in
+/// "look like the old one" or "I like tabs", rather than filler, as in
+/// "can you like run the tests".
+fn like_compares(before: &str, after: &str) -> bool {
+    const BEFORE: &[&str] = &[
+        "look", "looks", "looked", "looking", "feel", "feels", "sound", "sounds", "seem", "seems",
+        "is", "are", "was", "were", "be", "been", "i", "you", "we", "they", "would", "dont",
+        "don't",
+    ];
+    const AFTER: &[&str] = &[
+        "the", "a", "an", "this", "that", "these", "those", "my", "your", "our", "their", "its",
+        "his", "her",
+    ];
+    let lower = |w: &str| {
+        w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+            .to_lowercase()
+    };
+    BEFORE.contains(&lower(before).as_str()) || AFTER.contains(&lower(after).as_str())
 }
 
 /// `text` after the first of `openings` it starts with as whole words, and
