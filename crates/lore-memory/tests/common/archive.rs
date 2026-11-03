@@ -63,7 +63,10 @@ pub fn session_id(conn: &Connection, n: usize) -> String {
 /// One Claude Code transcript per `(session uuid, turns)`, each turn a
 /// `(role, text, timestamp)`, in `dir`, ingested into an in-memory archive.
 /// Resume and fork copies are two uuids with the same turns and timestamps.
-pub fn claude_archive(dir: &Path, sessions: &[(&str, &[(&str, &str, &str)])]) -> Connection {
+/// A Claude Code turn: role, text, and RFC 3339 timestamp.
+pub type Turn<'a> = (&'a str, &'a str, &'a str);
+
+pub fn claude_archive(dir: &Path, sessions: &[(&str, &[Turn<'_>])]) -> Connection {
     let project = dir.join("claude/projects/-repo-app");
     std::fs::create_dir_all(&project).unwrap();
     for (sid, turns) in sessions {
