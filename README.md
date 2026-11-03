@@ -181,6 +181,14 @@ args = ["mcp"]
 
 The vault is `~/Lore` by default. For another vault, set `LORE_VAULT_DIR` to an absolute path in the server's environment. For another archive, add `--archive /absolute/dir` to the arguments. Lore names the agent behind a proposal from `LORE_AGENT` in the server's environment, else from the name the client sends. If proposals fail with `agent_unknown`, set `LORE_AGENT=claude-code` or `LORE_AGENT=codex`.
 
+### Plugins
+
+`plugins/` holds a plugin for each agent. Each one runs `lorectl hook session-start` when a session starts. The agent passes its hook JSON on stdin, and the hook's output becomes context the session starts with: the repository's memory notes with their freshness labels, and a warning about agent work at risk. `lorectl` must be on `PATH`. The plugins do not add the MCP server, so add it as shown above.
+
+In Claude Code, run `/plugin marketplace add hsusul/lore`, then `/plugin install lore@lore`. For Codex, `plugins/codex` holds `.codex-plugin/plugin.json` and `hooks/hooks.json`.
+
+### Tools
+
 The server offers six tools. All but `propose_memory` are read only.
 
 - `search_sessions` searches the archive with the filters above. It returns up to 20 hits per call, each with a session id and a redacted snippet.
