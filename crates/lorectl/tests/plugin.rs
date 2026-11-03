@@ -17,8 +17,13 @@ fn repo_root() -> PathBuf {
 }
 
 fn read_json(path: &Path) -> Value {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    let where_ = path.display();
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("{where_}: {e}"))
+        .unwrap();
+    serde_json::from_str(&text)
+        .map_err(|e| format!("{where_}: {e}"))
+        .unwrap()
 }
 
 /// Every SessionStart command in a hooks file.
