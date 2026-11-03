@@ -104,7 +104,7 @@ fn archived_id(home: &Path, n: u32) -> String {
 
 const NEXT: &str = "\
 Next
-  Better lessons: in Claude Code, run /lore-lessons, then lorectl init again
+  Better lessons: in Claude Code, run /lore:lore-lessons, then lorectl init --review
   Keep one:       lorectl mem mine --propose <id>, then lorectl mem accept
   Connect agents: lorectl connect
 ";
