@@ -74,11 +74,12 @@ fn mem_propose_then_accept_writes_one_note() {
     let listed = ok(&lorectl(&vault, &["inbox"], ""));
     assert_eq!(
         listed,
-        format!("{id}  codex:s1  howto  repo:3f9a1c0b01234567  Prune worktrees\n")
+        format!("{id}  codex:s1 (unverified)  howto  repo:3f9a1c0b01234567  Prune worktrees\n")
     );
     let json = ok(&lorectl(&vault, &["inbox", "--json"], ""));
     let items: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(items[0]["anchors"][0]["lines"], "4-8");
+    assert_eq!(items[0]["source_verified"], false);
 
     let accepted = ok(&lorectl(&vault, &["accept", &id], ""));
     assert!(accepted.starts_with("accepted repos/3f9a1c0b01234567/prune-worktrees.md "));
@@ -245,12 +246,12 @@ fn mem_inbox_names_an_update_target_and_accept_refuses_another_scope() {
     let target = "updates -> repos/3f9a1c0b01234567/prune-worktrees.md";
     assert!(
         listed.contains(&format!(
-            "{same}  codex:s2  fact  repo:3f9a1c0b01234567  {target}\n"
+            "{same}  codex:s2 (unverified)  fact  repo:3f9a1c0b01234567  {target}\n"
         )),
         "{listed}"
     );
     assert!(
-        listed.contains(&format!("{global}  codex:s3  fact  global  {target}\n")),
+        listed.contains(&format!("{global}  codex:s3 (unverified)  fact  global  {target}\n")),
         "{listed}"
     );
     let before = head(&vault);
@@ -340,7 +341,7 @@ fn mem_accept_refuses_lines_appended_to_the_inbox_by_hand() {
     let listed = lorectl(&vault, &["inbox"], "");
     assert_eq!(
         ok(&listed),
-        format!("{id}  codex:s1  howto  repo:3f9a1c0b01234567  Prune worktrees\n")
+        format!("{id}  codex:s1 (unverified)  howto  repo:3f9a1c0b01234567  Prune worktrees\n")
     );
     let stderr = String::from_utf8_lossy(&listed.stderr);
     assert_eq!(stderr.matches(": refused: ").count(), 4, "{stderr}");

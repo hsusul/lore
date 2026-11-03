@@ -161,6 +161,8 @@ fn build(args: Args, body: String) -> Result<Proposal, CliError> {
         id: NoteId::generate(),
         agent: AgentKind::parse(&text(args.agent)).map_err(|e| field("agent", e))?,
         session: SessionId::parse(&text(args.session)).map_err(|e| field("session", e))?,
+        // `mem propose` never opens the archive, so it cannot vouch for one.
+        source_verified: false,
         note_type: NoteType::parse(&text(args.note_type)).map_err(|e| field("type", e))?,
         scope: match args.scope {
             Some(scope) => Scope::parse(&scope).map_err(|e| field("scope", e))?,
@@ -235,9 +237,14 @@ pub fn run(sub: &str, rest: &[String], json: bool, usage_text: &str) -> Result<u
                         },
                         _ => p.title.clone(),
                     };
+                    let checked = if p.source_verified {
+                        "verified"
+                    } else {
+                        "unverified"
+                    };
                     let _ = writeln!(
                         out,
-                        "{}  {}  {}  {}  {what}",
+                        "{}  {} ({checked})  {}  {}  {what}",
                         p.id.as_str(),
                         p.source(),
                         p.note_type.as_str(),

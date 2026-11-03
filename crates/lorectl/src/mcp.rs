@@ -719,6 +719,7 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         id: NoteId::generate(),
         agent,
         session,
+        source_verified,
         note_type,
         scope,
         title: string_arg(arguments, "title")
