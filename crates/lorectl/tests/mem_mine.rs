@@ -279,3 +279,46 @@ fn mine_takes_the_overlap_and_length_limits_from_flags() {
         assert_eq!(out.status.code(), Some(1), "{bad:?}");
     }
 }
+
+#[test]
+fn mine_marks_a_lesson_a_later_session_contradicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            ("Opened a PR.", "dont make a pr just push to main"),
+            ("Done.", "please open a PR for the exif branch"),
+        ],
+    );
+    let (s1, s2) = (session(home, 1), session(home, 2));
+    let out = ok(&lorectl(home, &["mem", "mine"]));
+    let id = out
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        out,
+        format!(
+            "1 lesson from 1 corrections. A dry run: nothing was written.\n\
+             {id}  1 conversation, latest 2026-08-01, possibly outdated\n\
+             \x20   \"dont make a pr just push to main\"\n\
+             \x20   - codex {s1} 2026-08-01: \"dont make a pr just push to main\"\n\
+             \x20     after: \"Opened a PR.\"\n\
+             \x20   - possibly outdated by codex {s2} 2026-08-02: \"please open a PR for the exif branch\"\n"
+        )
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "mine", "--json"]))).unwrap();
+    assert_eq!(
+        json[0]["outdated_by"],
+        serde_json::json!({
+            "session": s2, "agent": "codex", "date": "2026-08-02",
+            "text": "please open a PR for the exif branch",
+        })
+    );
+}

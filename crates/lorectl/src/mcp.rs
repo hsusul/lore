@@ -184,7 +184,8 @@ session, agent, date, what the person said, and what the agent had just done. Se
 candidates often say one thing in different words. Group them by meaning, write each group as \
 one short rule in plain words, and file each rule once with propose_memory, citing its \
 sessions in the body and passing one of them as session_id. Leave out anything that only \
-redirected the task at hand. Replies are paged: while next_cursor is not null, call again \
+redirected the task at hand. A candidate with possibly_outdated set was contradicted by a later \
+session; say so in the rule, or leave it out. Replies are paged: while next_cursor is not null, call again \
 with it, and read every page before you group anything.",
         input_schema: mine_schema,
         call: mine_candidates,
@@ -808,7 +809,8 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     };
     let conn = open(&ctx.archive_dir)?;
     let found = mine::corrections(&conn).map_err(|e| e.to_string())?;
-    let lessons = mine::lessons(found);
+    let mut lessons = mine::lessons(found);
+    mine::mark_outdated(&conn, &mut lessons).map_err(|e| e.to_string())?;
     let total = lessons.len();
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut candidates = Vec::new();
@@ -823,10 +825,18 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
                 "before": r.preceding.as_deref().map(redact).transpose()?,
             }));
         }
+        let outdated = match &lesson.outdated_by {
+            None => Value::Null,
+            Some(by) => json!({
+                "session": by.session, "agent": by.agent,
+                "date": by.at_ms.and_then(crate::receipt::date), "said": redact(&by.text)?,
+            }),
+        };
         candidates.push(json!({
             "text": redact(&lesson.text)?,
             "conversations": lesson.conversations,
             "receipts": receipts,
+            "possibly_outdated": outdated,
         }));
         let size = page(&candidates, Some(next + 1), total)
             .to_string()

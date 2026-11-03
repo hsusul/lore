@@ -210,6 +210,7 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
         json!({
             "text": "Stop asking me for permission",
             "conversations": 1,
+            "possibly_outdated": null,
             "receipts": [{
                 "session": session(home, 2), "agent": "codex", "date": "2026-08-02",
                 "correction": "Stop asking me for permission", "before": "Shall I run it?",
@@ -240,5 +241,27 @@ fn mine_candidates_without_an_archive_is_a_tool_error() {
             .unwrap()
             .contains("lorectl scan"),
         "{result}"
+    );
+}
+
+#[test]
+fn mine_candidates_says_when_a_later_session_contradicts_a_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            ("Opened a PR.", "dont make a pr just push to main"),
+            ("Done.", "please open a PR for the exif branch"),
+        ],
+    );
+    let (_, result) = mine(&home.join("archive"), json!({}));
+    let candidate = &result["structuredContent"]["candidates"][0];
+    assert_eq!(
+        candidate["possibly_outdated"],
+        json!({
+            "session": session(home, 2), "agent": "codex", "date": "2026-08-02",
+            "said": "please open a PR for the exif branch",
+        })
     );
 }
