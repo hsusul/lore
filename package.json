@@ -1,6 +1,6 @@
 {
   "name": "lore-ui",
-  "version": "0.0.0",
+  "version": "0.2.0",
   "description": "Lore desktop UI (React + TypeScript + Vite) over the generated Tauri IPC contract.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/hsusul/lore",
