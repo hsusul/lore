@@ -13,6 +13,9 @@
 //! against the decisions a person already made, offline. [`policy`] holds the
 //! policies it scores.
 //!
+//! The miner ([`mine`]) reads the archive for user turns that correct the
+//! agent, the raw material of a lesson.
+//!
 //! This crate has no network capability (`tests/no_network_in_memory.rs`,
 //! `scripts/egress-check.sh`). It spawns the `git` binary and nothing else.
 
@@ -20,6 +23,7 @@ pub mod anchor;
 pub mod eval;
 pub mod inbox;
 pub mod index;
+pub mod mine;
 pub mod note;
 pub mod policy;
 pub mod recall;
