@@ -281,3 +281,41 @@ fn mine_candidates_lists_later_turns_that_may_conflict() {
         }])
     );
 }
+
+#[test]
+fn mine_candidates_leaves_out_one_off_orders_unless_asked_for_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            ("Running npm install.", "no, use pnpm not npm"),
+            (
+                "Opened a PR.",
+                "no, never merge https://github.com/acme/app/pull/478 push fix/exif-478 instead",
+            ),
+        ],
+    );
+    let texts = |reply: &Value| -> Vec<String> {
+        reply["structuredContent"]["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["text"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (tool, default) = mine(&home.join("archive"), json!({}));
+    assert_eq!(texts(&default), ["no, use pnpm not npm"]);
+    assert_eq!(default["structuredContent"]["total"], 1);
+    assert_eq!(default["structuredContent"]["left_out"], 1);
+    assert_eq!(tool["inputSchema"]["properties"]["all"]["type"], "boolean");
+    let (_, all) = mine(&home.join("archive"), json!({ "all": true }));
+    assert_eq!(
+        texts(&all),
+        [
+            "no, use pnpm not npm",
+            "no, never merge https://github.com/acme/app/pull/478 push fix/exif-478 instead"
+        ]
+    );
+    assert_eq!(all["structuredContent"]["left_out"], 0);
+}

@@ -186,7 +186,8 @@ one short rule in plain words, and file each rule once with propose_memory, citi
 sessions in the body and passing one of them as session_id. Leave out anything that only \
 redirected the task at hand. may_conflict_with lists later turns in the same repository about \
 the same command. Judge each one: if a later turn overrides the candidate, leave it out or say \
-it was overridden; a turn about something else is no conflict. Replies are paged: while next_cursor is not null, call again \
+it was overridden; a turn about something else is no conflict. Candidates that read as one-off \
+orders are left out and counted in left_out; pass all: true to see them. Replies are paged: while next_cursor is not null, call again \
 with it, and read every page before you group anything.",
         input_schema: mine_schema,
         call: mine_candidates,
@@ -252,7 +253,12 @@ fn mine_schema() -> Value {
                 "maximum": MINE_MAX_LIMIT,
                 "default": MINE_DEFAULT_LIMIT
             },
-            "cursor": { "type": "string", "description": "next_cursor from a previous call." }
+            "cursor": { "type": "string", "description": "next_cursor from a previous call." },
+            "all": {
+                "type": "boolean",
+                "default": false,
+                "description": "Also return candidates that read as one-off orders."
+            }
         }
     })
 }
@@ -812,6 +818,15 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let found = mine::corrections(&conn).map_err(|e| e.to_string())?;
     let mut lessons = mine::lessons(found);
     mine::find_conflicts(&conn, &mut lessons).map_err(|e| e.to_string())?;
+    let before = lessons.len();
+    if !arguments
+        .get("all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        lessons.retain(|l| l.score >= 0);
+    }
+    let left_out = before - lessons.len();
     let total = lessons.len();
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut candidates = Vec::new();
@@ -850,7 +865,9 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         }
         next += 1;
     }
-    Ok(page(&candidates, (next < total).then_some(next), total))
+    let mut reply = page(&candidates, (next < total).then_some(next), total);
+    reply["left_out"] = json!(left_out);
+    Ok(reply)
 }
 
 /// One page of `mine_candidates`: the candidates, where the next page starts,

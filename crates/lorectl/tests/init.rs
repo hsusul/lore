@@ -127,8 +127,8 @@ fn init_creates_the_vault_scans_and_shows_the_lesson_then_reuses_both() {
         "Staged docs/notes.md with the rest.",
         "I told you, docs are never tracked in git",
     );
-    // A one-off task order, mined as a lesson by `mem mine` but with a rule
-    // score below 0 for the branch it names, so init leaves it out.
+    // A one-off task order, mined as a lesson but with a rule score below 0
+    // for the branch it names, so init and `mem mine` leave it out.
     for (n, day) in [(3, "2026-10-25"), (4, "2026-10-26")] {
         claude_session(
             home,
@@ -169,7 +169,10 @@ fn init_creates_the_vault_scans_and_shows_the_lesson_then_reuses_both() {
     );
     assert!(vault.join(".git").exists(), "init made no vault");
     let mined = String::from_utf8(lorectl(home, &["mem", "mine"]).stdout).unwrap();
-    assert!(mined.starts_with("2 lessons"), "{mined}");
+    assert!(
+        mined.starts_with("1 lesson from 4 corrections, 1 more scored as one-off orders"),
+        "{mined}"
+    );
 
     let second = masked(&lorectl(home, &["init", "--since", "7d", "--limit", "1"]));
     assert_eq!(

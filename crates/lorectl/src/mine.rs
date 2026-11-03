@@ -42,6 +42,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let (mut limit, mut json) = (DEFAULT_LIMIT, invocation.json);
     let (mut propose, mut ids, mut vault_dir) = (false, Vec::new(), None::<PathBuf>);
     let mut limits = mine::Limits::default();
+    let mut all = false;
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
             Short('h') | Long("help") => {
@@ -57,6 +58,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
                 limits.min_overlap_per_mille = percent * 10;
             }
             Long("json") => json = true,
+            Long("all") => all = true,
             Long("propose") => propose = true,
             Long("vault") => {
                 let value = parser.value().map_err(|e| usage(e.to_string()))?;
@@ -75,6 +77,11 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     if propose {
         return propose_lessons(&lessons, &ids, vault_dir.as_deref());
     }
+    let before = lessons.len();
+    if !all {
+        lessons.retain(|l| l.score >= 0);
+    }
+    let left_out = before - lessons.len();
     lessons.truncate(limit);
     let text = if json {
         format!(
@@ -82,7 +89,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
             Value::Array(lessons.iter().map(lesson_json).collect())
         )
     } else {
-        lessons_text(&lessons, total)
+        lessons_text(&lessons, total, left_out)
     };
     let _ = std::io::stdout().lock().write_all(text.as_bytes());
     Ok(exit::OK)
@@ -118,10 +125,17 @@ fn day(candidate: &Candidate) -> String {
         .unwrap_or_else(|| "undated".into())
 }
 
-fn lessons_text(lessons: &[Lesson], total: usize) -> String {
+/// The lessons as text; `left_out` lessons scored as one-off orders were
+/// not listed.
+fn lessons_text(lessons: &[Lesson], total: usize, left_out: usize) -> String {
     let plural = if lessons.len() == 1 { "" } else { "s" };
+    let more = if left_out == 0 {
+        String::new()
+    } else {
+        format!(", {left_out} more scored as one-off orders (--all shows them)")
+    };
     let mut out = format!(
-        "{} lesson{plural} from {total} corrections. A dry run: nothing was written.\n",
+        "{} lesson{plural} from {total} corrections{more}. A dry run: nothing was written.\n",
         lessons.len()
     );
     for lesson in lessons {
