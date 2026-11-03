@@ -152,7 +152,7 @@ fn excerpt(text: &str, wanted: &BTreeSet<String>) -> String {
 }
 
 /// Epoch milliseconds as a UTC `YYYY-MM-DD`.
-fn date(ms: i64) -> Option<String> {
+pub(crate) fn date(ms: i64) -> Option<String> {
     let at = OffsetDateTime::from_unix_timestamp(ms.div_euclid(1000)).ok()?;
     Some(at.date().to_string())
 }
