@@ -9,10 +9,14 @@
 //! Recall ([`recall`]) returns the notes for a directory's repository, each with
 //! a [`anchor::Freshness`] from checking its anchors against the working tree.
 //!
+//! Eval ([`eval`]) scores a policy for accepting proposals without a person
+//! against the decisions a person already made, offline.
+//!
 //! This crate has no network capability (`tests/no_network_in_memory.rs`,
 //! `scripts/egress-check.sh`). It spawns the `git` binary and nothing else.
 
 pub mod anchor;
+pub mod eval;
 pub mod inbox;
 pub mod index;
 pub mod note;
