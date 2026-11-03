@@ -64,6 +64,9 @@ const PHRASES: &[&str] = &[
     "stop ",
 ];
 
+/// Phrases that state a standing rule wherever they appear.
+const RULE_PHRASES: &[&str] = &["make sure", "please always", "from now on", "going forward"];
+
 /// Words that make a turn a rule for later work.
 const RULE_WORDS: &[&str] = &[
     "always",
@@ -115,6 +118,9 @@ pub enum Signal {
     Correction,
     /// It repeats an instruction given earlier in the session.
     Repeat,
+    /// It states a standing rule: "make sure", "please always", "from now on",
+    /// or "going forward".
+    Rule,
 }
 
 /// A user turn that corrects the agent, with where it was said.
@@ -232,6 +238,8 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
             None
         } else if before.is_some_and(|b| !b.user) && corrects(&text) {
             Some(Signal::Correction)
+        } else if has_rule_phrase(&text) {
+            Some(Signal::Rule)
         } else if words.len() >= MIN_REPEAT_WORDS
             && earlier
                 .iter()
@@ -273,6 +281,12 @@ fn is_invocation(text: &str) -> bool {
 fn is_question(text: &str) -> bool {
     let lower = text.trim().to_lowercase();
     lower.ends_with('?') || QUESTION_OPENERS.iter().any(|q| lower.starts_with(q))
+}
+
+/// Whether `text` uses a phrase that states a standing rule.
+fn has_rule_phrase(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    RULE_PHRASES.iter().any(|p| lower.contains(p))
 }
 
 /// Whether `text` reads as a correction.
@@ -322,6 +336,7 @@ pub fn states_rule(text: &str) -> bool {
             })
     });
     names_a_thing
+        || has_rule_phrase(&lower)
         || lower.contains("do not ")
         || use_x_not_y(&words)
         || words
@@ -423,7 +438,8 @@ fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
     // A turn re-sent across sessions with no correction among them is a task
     // the person repeats, not a lesson; one that never states a rule is a
     // redirect of the task at hand.
-    let corrected = receipts.iter().any(|r| r.signal == Signal::Correction);
+    let corrected =
+        (receipts.iter()).any(|r| matches!(r.signal, Signal::Correction | Signal::Rule));
     let rule = receipts.iter().find(|r| states_rule(&r.text))?.text.clone();
     if receipts.len() < MIN_SESSIONS || !corrected {
         return None;

@@ -161,7 +161,7 @@ fn lesson_json(lesson: &Lesson) -> Value {
             json!({
                 "session": r.session, "agent": r.agent, "date": r.at_ms.and_then(date),
                 "text": r.text, "after": r.preceding, "repo": r.repo,
-                "signal": match r.signal { Signal::Correction => "correction", Signal::Repeat => "repeat" },
+                "signal": match r.signal { Signal::Correction => "correction", Signal::Repeat => "repeat", Signal::Rule => "rule" },
             })
         })
         .collect();
