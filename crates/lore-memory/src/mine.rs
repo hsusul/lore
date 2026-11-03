@@ -17,6 +17,9 @@ use crate::policy::overlap_per_mille;
 /// Candidates join one lesson when their content words overlap at least this
 /// much, per mille.
 const LESSON_PER_MILLE: usize = 500;
+/// A candidate is compared with at most this many of a lesson's oldest
+/// members, so grouping stays linear in the number of candidates.
+const MATCH_MEMBERS: usize = 8;
 /// A lesson needs corrections from at least this many sessions.
 const MIN_SESSIONS: usize = 2;
 
@@ -231,8 +234,9 @@ pub struct Lesson {
     pub receipts: Vec<Candidate>,
 }
 
-/// Group `candidates` into lessons: a candidate joins the first lesson with a
-/// member whose content words overlap its own by at least half, else starts
+/// Group `candidates` into lessons: a candidate joins the first lesson with one
+/// of its first [`MATCH_MEMBERS`] members whose content words overlap its own
+/// by at least half, else starts
 /// one. Only lessons said in at least two sessions, at least one of them as
 /// a correction, are kept, most sessions first, then the most recent.
 #[must_use]
@@ -247,6 +251,7 @@ pub fn lessons(mut candidates: Vec<Candidate>) -> Vec<Lesson> {
         let joins = groups.iter().position(|group| {
             group
                 .iter()
+                .take(MATCH_MEMBERS)
                 .any(|(other, _)| overlap_per_mille(other, &words) >= LESSON_PER_MILLE)
         });
         match joins {
