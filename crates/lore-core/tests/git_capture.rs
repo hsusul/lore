@@ -140,33 +140,36 @@ fn capture_declines_relative_paths() {
     assert!(capture(Path::new("relative/repo")).is_none());
 }
 
+/// `path` as one single-quoted shell word.
+fn sh_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
+}
+
 #[test]
 fn hardened_fallback_neutralizes_hostile_executable_config() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
+    // A space in the path, as in a TMPDIR under "Application Support".
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("hostile repo");
+    std::fs::create_dir(&dir).unwrap();
+    let dir = dir.as_path();
+    init_repo(dir);
 
     // A hostile fsmonitor hook that runs on `git status` (a read) if honored.
-    let sentinel = dir.path().join("PWNED");
-    let evil = dir.path().join("evil.sh");
-    std::fs::write(
-        &evil,
-        format!("#!/bin/sh\ntouch \"{}\"\n", sentinel.display()),
-    )
-    .unwrap();
+    let sentinel = dir.join("PWNED");
+    let evil = dir.join("evil.sh");
+    std::fs::write(&evil, format!("#!/bin/sh\ntouch {}\n", sh_quote(&sentinel))).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&evil, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    git(
-        dir.path(),
-        &["config", "core.fsmonitor", evil.to_str().unwrap()],
-    );
+    // Git runs core.fsmonitor through the shell: quote the path.
+    git(dir, &["config", "core.fsmonitor", &sh_quote(&evil)]);
 
     // Control: plain git honors the hook, proving the vector is live here.
     let _ = Command::new("git")
         .args(["status", "--porcelain"])
-        .current_dir(dir.path())
+        .current_dir(dir)
         .output()
         .unwrap();
     assert!(
@@ -176,7 +179,7 @@ fn hardened_fallback_neutralizes_hostile_executable_config() {
     std::fs::remove_file(&sentinel).unwrap();
 
     // Hardened fallback: reads still succeed and the hook never executes.
-    let facts = capture_via_git(dir.path()).expect("hardened capture still reads the repo");
+    let facts = capture_via_git(dir).expect("hardened capture still reads the repo");
     assert_eq!(facts.branch.as_deref(), Some("main"));
     assert!(
         !sentinel.exists(),
