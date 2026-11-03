@@ -50,7 +50,10 @@ use crate::storage::{Result, StorageError};
 ///
 /// v9: the high-entropy rule skips paths and code identifiers, so archives
 /// drop those false findings only after a re-parse.
-pub const PARSER_VERSION: &str = "9";
+///
+/// v10: it also skips generated ids (MCP tool names, tool use and call ids,
+/// mangled symbols, build hashes), again only after a re-parse.
+pub const PARSER_VERSION: &str = "10";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.

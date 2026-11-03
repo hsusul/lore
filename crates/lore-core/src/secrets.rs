@@ -780,6 +780,9 @@ fn scan_entropy(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
         if looks_like_identifier(token.as_bytes()) {
             continue; // paths, URL paths, camelCase and snake_case names
         }
+        if is_structured_id(token) {
+            continue; // tool and call ids, mangled symbols, build hashes
+        }
         let severity = if near_secret_keyword(bytes, start) {
             Severity::Medium
         } else {
@@ -953,6 +956,53 @@ fn looks_like_identifier(token: &[u8]) -> bool {
         }
     }
     pieces > 0 && digit_runs * 2 <= pieces && wordy * 10 >= letters * 7 && letters * 2 >= pieces * 7
+}
+
+/// A generated identifier with a known shape, not a secret:
+/// - an MCP tool name, `mcp__<server id>__<tool>`;
+/// - a Claude Code tool use id, `toolu_<base62>`, or a Codex call id,
+///   `call_<base62>`;
+/// - `local_<uuid>`;
+/// - a Rust mangled symbol, `_R<uppercase>...` (v0) or `_ZN...` (legacy);
+/// - a file or crate name with a 16-hex build hash, `scan_ingest-d6de84c9490de3fb`.
+///
+/// A bare UUID is not one of these: some services issue UUID-shaped keys.
+fn is_structured_id(token: &str) -> bool {
+    let base62 = |rest: &str| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric());
+    if let Some(rest) = token.strip_prefix("mcp__") {
+        return rest.split_once("__").is_some_and(|(server, tool)| {
+            !server.is_empty() && !tool.is_empty() && looks_like_identifier(tool.as_bytes())
+        });
+    }
+    if let Some(rest) = token
+        .strip_prefix("toolu_")
+        .or_else(|| token.strip_prefix("call_"))
+    {
+        return base62(rest.strip_prefix("bdrk_").unwrap_or(rest));
+    }
+    if let Some(rest) = token.strip_prefix("local_") {
+        return is_uuid(rest);
+    }
+    if token.starts_with("_ZN")
+        || (token.starts_with("_R") && token.as_bytes().get(2).is_some_and(u8::is_ascii_uppercase))
+    {
+        return true;
+    }
+    token.rsplit_once('-').is_some_and(|(name, hash)| {
+        hash.len() == 16
+            && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            && looks_like_identifier(name.as_bytes())
+    })
+}
+
+/// `8-4-4-4-12` hex digits.
+fn is_uuid(text: &str) -> bool {
+    let groups: Vec<&str> = text.split('-').collect();
+    groups.len() == 5
+        && groups
+            .iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(g, len)| g.len() == len && g.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// Runs of letters, split again at camelCase: `CFXRegistrationPost` is
