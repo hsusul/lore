@@ -967,7 +967,9 @@ fn propose_memory_files_into_the_connection_inbox_as_claude_code() {
     let text = std::fs::read_to_string(vault.join(&inbox)).unwrap();
     assert_eq!(text.lines().count(), 1, "{text}");
     let mut line: Value = serde_json::from_str(text.trim_end()).unwrap();
-    let listed: Value = serde_json::from_str(&mem(home.path(), &["inbox", "--json"])).unwrap();
+    let mut listed: Value = serde_json::from_str(&mem(home.path(), &["inbox", "--json"])).unwrap();
+    let receipt = listed[0].as_object_mut().unwrap().remove("receipt");
+    assert_eq!(receipt, Some(json!({ "status": "no_archive" })));
     assert_eq!(listed, json!([line.clone()]));
     assert!(line["proposed_at"].take().is_string());
     assert_eq!(
@@ -1533,7 +1535,10 @@ fn an_archive_shaped_session_the_archive_lacks_is_stored_unverified() {
     assert_eq!(line["source_verified"], false);
     assert_eq!(
         mem(home.path(), &["inbox"]),
-        format!("{id}  claude-code:{fake} (unverified)  fact  global  T\n")
+        format!(
+            "{id}  claude-code:{fake} (unverified)  fact  global  T\n\
+             \x20   receipt: no archive yet; `lorectl scan` builds one\n"
+        )
     );
 }
 

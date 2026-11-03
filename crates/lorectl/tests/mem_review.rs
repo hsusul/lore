@@ -74,7 +74,10 @@ fn mem_propose_then_accept_writes_one_note() {
     let listed = ok(&lorectl(&vault, &["inbox"], ""));
     assert_eq!(
         listed,
-        format!("{id}  codex:s1 (unverified)  howto  repo:3f9a1c0b01234567  Prune worktrees\n")
+        format!(
+            "{id}  codex:s1 (unverified)  howto  repo:3f9a1c0b01234567  Prune worktrees\n\
+             \x20   receipt: no archive yet; `lorectl scan` builds one\n"
+        )
     );
     let json = ok(&lorectl(&vault, &["inbox", "--json"], ""));
     let items: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -343,7 +346,10 @@ fn mem_accept_refuses_lines_appended_to_the_inbox_by_hand() {
     let listed = lorectl(&vault, &["inbox"], "");
     assert_eq!(
         ok(&listed),
-        format!("{id}  codex:s1 (unverified)  howto  repo:3f9a1c0b01234567  Prune worktrees\n")
+        format!(
+            "{id}  codex:s1 (unverified)  howto  repo:3f9a1c0b01234567  Prune worktrees\n\
+             \x20   receipt: no archive yet; `lorectl scan` builds one\n"
+        )
     );
     let stderr = String::from_utf8_lossy(&listed.stderr);
     assert_eq!(stderr.matches(": refused: ").count(), 4, "{stderr}");

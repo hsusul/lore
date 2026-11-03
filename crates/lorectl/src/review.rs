@@ -17,6 +17,12 @@ use serde_json::Value;
 use time::OffsetDateTime;
 
 use crate::exit::{self, CliError};
+use crate::receipt::Archive;
+
+/// What a receipt's excerpt should match: the proposal's title and body.
+fn receipt_text(p: &Proposal) -> String {
+    format!("{}\n{}", p.title, p.body)
+}
 
 /// The subcommands this module owns.
 pub const SUBCOMMANDS: [&str; 5] = ["propose", "inbox", "accept", "reject", "retire"];
@@ -181,7 +187,14 @@ fn build(args: Args, body: String) -> Result<Proposal, CliError> {
 }
 
 /// Run one of [`SUBCOMMANDS`].
-pub fn run(sub: &str, rest: &[String], json: bool, usage_text: &str) -> Result<u8, CliError> {
+/// `archive` is where `inbox` looks for each proposal's receipt.
+pub fn run(
+    sub: &str,
+    rest: &[String],
+    json: bool,
+    usage_text: &str,
+    archive: Option<PathBuf>,
+) -> Result<u8, CliError> {
     let args = parse(sub, rest)?;
     if args.help {
         print!("{usage_text}");
@@ -220,11 +233,17 @@ pub fn run(sub: &str, rest: &[String], json: bool, usage_text: &str) -> Result<u
                     printable(&skipped.reason)
                 );
             }
+            let archive = Archive::open(archive.as_deref());
+            let receipt = |p: &Proposal| archive.receipt(p.session.as_str(), &receipt_text(p));
             if json {
                 let items: Vec<Value> = pending
                     .proposals
                     .iter()
-                    .filter_map(|p| serde_json::from_str(&p.to_line()).ok())
+                    .filter_map(|p| {
+                        let mut item: Value = serde_json::from_str(&p.to_line()).ok()?;
+                        item["receipt"] = receipt(p).json();
+                        Some(item)
+                    })
                     .collect();
                 let _ = writeln!(out, "{}", Value::Array(items));
             } else {
@@ -250,6 +269,7 @@ pub fn run(sub: &str, rest: &[String], json: bool, usage_text: &str) -> Result<u
                         p.note_type.as_str(),
                         p.scope,
                     );
+                    let _ = writeln!(out, "{}", receipt(p).line());
                 }
             }
         }
