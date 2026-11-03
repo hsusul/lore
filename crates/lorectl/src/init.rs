@@ -1,11 +1,13 @@
 //! `lorectl init`: the first run. Makes the vault, scans recent sessions into
-//! the archive, and shows the lessons in the person's corrections, each with a
-//! receipt. Safe to run again: the vault is reused and the scan ingests only
-//! what changed. A failure after the vault step is printed on that step's line
-//! and the next step still runs.
+//! the archive, lists the proposals agents left in the inbox, and shows the
+//! lessons in the person's corrections, each with a receipt. Safe to run
+//! again: the vault is reused and the scan ingests only what changed. A
+//! failure after the vault step is printed on that step's line and the next
+//! step still runs.
 //!
-//! On a terminal, or with `--review`, each lesson is offered in turn: accept
-//! the suggested rule, edit it, skip, or quit. A kept lesson is filed and
+//! On a terminal, or with `--review`, each pending proposal is offered first:
+//! accept, reject with a reason, skip, or quit. Then each lesson: accept the
+//! suggested rule, edit it, skip, or quit. A kept lesson is filed and
 //! accepted as a note in one step, so `mem eval` counts it as decided.
 
 use std::io::{BufRead, IsTerminal, Write};
@@ -15,20 +17,22 @@ use std::time::Instant;
 use lexopt::prelude::*;
 use lore_core::paths::{self, ARCHIVE_DB_FILENAME};
 use lore_core::storage::{self, StorageError};
+use lore_memory::inbox::Proposal;
 use lore_memory::mine::{self, Lesson};
+use lore_memory::review;
 use lore_memory::vault::{self, Init, Vault};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
-use crate::receipt::date;
+use crate::receipt::{date, Archive};
 
 const DEFAULT_SINCE: &str = "30d";
 const DEFAULT_LIMIT: usize = 5;
 
 const NEXT: &str = "\
 Next
+  Better lessons: in Claude Code, run /lore-lessons, then lorectl init again
   Keep one:       lorectl mem mine --propose <id>, then lorectl mem accept
-  Better wording: ask Claude Code or Codex to call mine_candidates and propose lessons
   Connect agents: lorectl connect
 ";
 
@@ -120,24 +124,144 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     };
     let _ = writeln!(out, "Archive    {line}");
 
-    match lessons(&archive_dir) {
-        Ok(lessons) if review && !lessons.is_empty() => {
-            let _ = write!(out, "{}", header(&lessons, args.limit));
-            let shown = &lessons[..lessons.len().min(args.limit)];
-            let mut input = std::io::stdin().lock();
-            // Piped answers are not echoed, so print them as a terminal would.
-            let n = review_lessons(&mut out, &mut input, !terminal, &vault, shown);
-            let _ = writeln!(
-                out,
-                "Kept {n} lesson{}. Your next Claude Code or Codex session will see them \
-                 once Lore is connected (lorectl connect).",
-                plural(n)
-            );
+    let proposals = match review::inbox(&vault) {
+        Ok(pending) => pending.proposals,
+        Err(error) => {
+            let _ = writeln!(out, "Inbox      failed: {error}\n");
+            Vec::new()
         }
-        Ok(lessons) => drop(write!(out, "{}{NEXT}", lessons_text(&lessons, args.limit))),
-        Err(error) => drop(write!(out, "Lessons    failed: {error}\n\n{NEXT}")),
+    };
+    let archive = Archive::open(Some(&archive_dir));
+    if !proposals.is_empty() {
+        let n = proposals.len();
+        let _ = writeln!(
+            out,
+            "Inbox      {n} proposal{} waiting for review:\n",
+            plural(n)
+        );
     }
+    let lessons = lessons(&archive_dir);
+    let has_lessons = matches!(&lessons, Ok(lessons) if !lessons.is_empty());
+    if !(review && (has_lessons || !proposals.is_empty())) {
+        for proposal in &proposals {
+            let _ = writeln!(out, "{}", proposal_text(proposal, &archive));
+        }
+        match lessons {
+            Ok(lessons) => drop(write!(out, "{}{NEXT}", lessons_text(&lessons, args.limit))),
+            Err(error) => drop(write!(out, "Lessons    failed: {error}\n\n{NEXT}")),
+        }
+        return Ok(exit::OK);
+    }
+
+    let mut input = std::io::stdin().lock();
+    // Piped answers are not echoed, so print them as a terminal would.
+    let echo = !terminal;
+    let (mut n, go_on) = review_proposals(&mut out, &mut input, echo, &vault, &archive, &proposals);
+    if go_on {
+        match lessons {
+            Ok(lessons) => {
+                let _ = write!(out, "{}", header(&lessons, args.limit));
+                let shown = &lessons[..lessons.len().min(args.limit)];
+                n += review_lessons(&mut out, &mut input, echo, &vault, shown);
+            }
+            Err(error) => drop(writeln!(out, "Lessons    failed: {error}\n")),
+        }
+    }
+    let _ = writeln!(
+        out,
+        "Kept {n} lesson{}. Your next Claude Code or Codex session will see them \
+         once Lore is connected (lorectl connect).",
+        plural(n)
+    );
     Ok(exit::OK)
+}
+
+/// One pending proposal: its id and title, its source, and the receipt
+/// `mem inbox` prints for it.
+fn proposal_text(proposal: &Proposal, archive: &Archive) -> String {
+    let checked = if proposal.source_verified {
+        "verified"
+    } else {
+        "unverified"
+    };
+    let text = crate::review::receipt_text(proposal);
+    let receipt = archive.receipt(proposal.session.as_str(), &text);
+    format!(
+        "  {}  {}\n      {} ({checked})\n  {}\n",
+        proposal.id.as_str(),
+        proposal.title,
+        proposal.source(),
+        receipt.line()
+    )
+}
+
+const INBOX_PROMPT: &str = "      [a]ccept  [r]eject  [s]kip  [q]uit ";
+const DEFAULT_REASON: &str = "rejected in lorectl init";
+
+enum Verdict {
+    Accept,
+    Reject(String),
+    Skip,
+}
+
+/// Offer each pending proposal in turn. Returns how many were accepted, and
+/// false when the person quit, so the lessons are not offered.
+fn review_proposals(
+    out: &mut impl Write,
+    input: &mut impl BufRead,
+    echo: bool,
+    vault: &Vault,
+    archive: &Archive,
+    proposals: &[Proposal],
+) -> (usize, bool) {
+    let mut accepted = 0;
+    for proposal in proposals {
+        let _ = write!(out, "{}", proposal_text(proposal, archive));
+        let Some(verdict) = decide(|prompt| answer(out, input, echo, prompt)) else {
+            let _ = writeln!(out);
+            return (accepted, false);
+        };
+        let id = proposal.id.as_str();
+        let done = match verdict {
+            Verdict::Accept => review::accept(vault, id, None).map(|done| {
+                accepted += 1;
+                let verb = if done.updated { "updated" } else { "accepted" };
+                format!("      {verb} {}\n", done.rel)
+            }),
+            Verdict::Reject(reason) => {
+                review::reject(vault, id, &reason).map(|_| "      rejected\n".to_owned())
+            }
+            Verdict::Skip => Ok(String::new()),
+        };
+        match done {
+            Ok(line) => drop(writeln!(out, "{line}")),
+            Err(error) => drop(writeln!(out, "      failed: {error}\n")),
+        }
+    }
+    (accepted, true)
+}
+
+/// What to do with a proposal, or `None` to stop. A stray answer is asked
+/// once more, then counts as a skip.
+fn decide(mut ask: impl FnMut(&str) -> Option<String>) -> Option<Verdict> {
+    for _ in 0..2 {
+        match ask(INBOX_PROMPT)?.as_str() {
+            "a" => return Some(Verdict::Accept),
+            "r" => {
+                let reason = ask("      reason: ")?;
+                let reason = if reason.is_empty() {
+                    DEFAULT_REASON.to_owned()
+                } else {
+                    reason
+                };
+                return Some(Verdict::Reject(reason));
+            }
+            "s" => return Some(Verdict::Skip),
+            "q" => return None,
+            _ => {}
+        }
+    }
+    Some(Verdict::Skip)
 }
 
 /// Create the vault, or report the one already there and its note count.

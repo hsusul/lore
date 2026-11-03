@@ -104,8 +104,8 @@ fn archived_id(home: &Path, n: u32) -> String {
 
 const NEXT: &str = "\
 Next
+  Better lessons: in Claude Code, run /lore-lessons, then lorectl init again
   Keep one:       lorectl mem mine --propose <id>, then lorectl mem accept
-  Better wording: ask Claude Code or Codex to call mine_candidates and propose lessons
   Connect agents: lorectl connect
 ";
 
@@ -457,4 +457,226 @@ fn review_q_stops_before_the_next_lesson() {
     ));
     assert!(plain.ends_with(NEXT), "{plain}");
     assert!(!plain.contains("[a]ccept"), "{plain}");
+}
+
+const INBOX_PROMPT: &str = "      [a]ccept  [r]eject  [s]kip  [q]uit ";
+const ELSEWHERE: &str = "elsewhere-1";
+
+/// File a proposal the way an agent without MCP does. Returns its id.
+fn propose(home: &Path, session: &str, title: &str, body: &str) -> String {
+    let args = [
+        "mem",
+        "propose",
+        "--agent",
+        "claude-code",
+        "--session",
+        session,
+        "--type",
+        "convention",
+        "--title",
+        title,
+    ];
+    let out = lorectl_in(home, &args, body);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let text = String::from_utf8(out.stdout).unwrap();
+    text.split_whitespace().nth(1).unwrap().to_owned()
+}
+
+/// A vault holding two pending proposals: one from an archived session that
+/// said nothing to mine, one from a session the archive never saw.
+fn two_proposals(home: &Path) -> (String, String) {
+    claude_session(
+        home,
+        1,
+        "2026-10-28",
+        "Tidied it.",
+        "thanks, that looks good",
+    );
+    assert_eq!(lorectl(home, &["mem", "init"]).status.code(), Some(0));
+    let native = "5e550000-0000-4000-8000-000000000001";
+    let tidy = propose(
+        home,
+        native,
+        "Tidy up the repository weekly",
+        "Tidy up the repository once a week.\n",
+    );
+    let friday = propose(
+        home,
+        ELSEWHERE,
+        "Never push on a Friday",
+        "Never push on a Friday.\n",
+    );
+    (tidy, friday)
+}
+
+/// The `Lore`, `Vault`, `Archive`, and `Inbox` lines of a first init over
+/// [`two_proposals`].
+fn inbox_header(home: &Path) -> String {
+    format!(
+        "Lore\n\
+         Vault      {}, 0 notes\n\
+         Archive    scanned 1 new session from the last 30d in N s\n\
+         Inbox      2 proposals waiting for review:\n\n",
+        home.join("vault").display()
+    )
+}
+
+fn tidy_block(home: &Path, id: &str) -> String {
+    format!(
+        "  {id}  Tidy up the repository weekly\n\
+         \x20     claude-code:5e550000-0000-4000-8000-000000000001 (unverified)\n\
+         \x20     from claude-code session {s}, 2026-10-28: \"tidy up the repository\"\n",
+        s = archived_id(home, 1)
+    )
+}
+
+fn friday_block(id: &str) -> String {
+    format!(
+        "  {id}  Never push on a Friday\n\
+         \x20     claude-code:{ELSEWHERE} (unverified)\n\
+         \x20     receipt: session {ELSEWHERE} is not in the archive\n"
+    )
+}
+
+fn pending(home: &Path) -> String {
+    String::from_utf8(lorectl(home, &["mem", "inbox"]).stdout).unwrap()
+}
+
+#[test]
+fn review_accepts_one_proposal_and_rejects_the_other_with_a_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let (tidy, friday) = two_proposals(home);
+    let vault = home.join("vault");
+
+    let out = masked(&lorectl_in(
+        home,
+        &["init", "--review"],
+        "a\nr\ntoo vague\n",
+    ));
+    assert_eq!(
+        out,
+        format!(
+            "{}{}{INBOX_PROMPT}a\n      accepted global/tidy-up-the-repository-weekly.md\n\n\
+             {}{INBOX_PROMPT}r\n      reason: too vague\n      rejected\n\n\
+             Lessons    none found in your sessions yet.\n\n{}",
+            inbox_header(home),
+            tidy_block(home, &tidy),
+            friday_block(&friday),
+            kept(1)
+        )
+    );
+    let note =
+        std::fs::read_to_string(vault.join("global/tidy-up-the-repository-weekly.md")).unwrap();
+    for line in [
+        "title: Tidy up the repository weekly",
+        "type: convention",
+        "Tidy up the repository once a week.",
+    ] {
+        assert!(note.lines().any(|l| l == line), "no `{line}` in\n{note}");
+    }
+    assert_eq!(git(&vault, &["status", "--porcelain"]), "");
+    assert_eq!(pending(home), "");
+    let decisions = std::fs::read_to_string(vault.join(".lore/decisions.jsonl")).unwrap();
+    assert!(
+        decisions.contains(&format!(
+            "\"decision\":\"rejected\",\"id\":\"{friday}\",\"reason\":\"too vague\""
+        )),
+        "{decisions}"
+    );
+    let eval = String::from_utf8(lorectl(home, &["mem", "eval"]).stdout).unwrap();
+    assert!(
+        eval.starts_with(
+            "Policy never, scored on 2 proposals you decided: 1 accepted, 1 rejected.\n"
+        ),
+        "{eval}"
+    );
+
+    // Nothing is pending now, so a second run has no Inbox step.
+    let again = masked(&lorectl(home, &["init"]));
+    assert_eq!(
+        again,
+        format!(
+            "Lore\n\
+             Vault      {}, 1 note\n\
+             Archive    no new sessions from the last 30d in N s\n\
+             Lessons    none found in your sessions yet.\n\n{NEXT}",
+            vault.display()
+        )
+    );
+}
+
+#[test]
+fn review_skip_leaves_a_proposal_pending_and_an_empty_reason_is_filled_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let (tidy, friday) = two_proposals(home);
+    let vault = home.join("vault");
+
+    let out = masked(&lorectl_in(home, &["init", "--review"], "s\nr\n\n"));
+    assert_eq!(
+        out,
+        format!(
+            "{}{}{INBOX_PROMPT}s\n\n{}{INBOX_PROMPT}r\n      reason: \n      rejected\n\n\
+             Lessons    none found in your sessions yet.\n\n{}",
+            inbox_header(home),
+            tidy_block(home, &tidy),
+            friday_block(&friday),
+            kept(0)
+        )
+    );
+    let decisions = std::fs::read_to_string(vault.join(".lore/decisions.jsonl")).unwrap();
+    assert!(
+        decisions.contains("\"reason\":\"rejected in lorectl init\""),
+        "{decisions}"
+    );
+    assert!(
+        !decisions.contains(&tidy),
+        "a skip was recorded: {decisions}"
+    );
+    let still = pending(home);
+    assert!(still.starts_with(&format!("{tidy}  ")), "{still}");
+    assert!(!still.contains(&friday), "{still}");
+    assert_eq!(git(&vault, &["rev-list", "--count", "HEAD"]), "1\n");
+}
+
+#[test]
+fn review_q_on_a_proposal_stops_the_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let (tidy, friday) = two_proposals(home);
+
+    let out = masked(&lorectl_in(home, &["init", "--review"], "q\na\n"));
+    assert_eq!(
+        out,
+        format!(
+            "{}{}{INBOX_PROMPT}q\n\n{}",
+            inbox_header(home),
+            tidy_block(home, &tidy),
+            kept(0)
+        )
+    );
+    let still = pending(home);
+    assert!(still.contains(&tidy) && still.contains(&friday), "{still}");
+}
+
+#[test]
+fn init_without_review_lists_pending_proposals_before_the_lessons() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let (tidy, friday) = two_proposals(home);
+
+    let out = masked(&lorectl(home, &["init"]));
+    assert_eq!(
+        out,
+        format!(
+            "{}{}\n{}\n\
+             Lessons    none found in your sessions yet.\n\n{NEXT}",
+            inbox_header(home),
+            tidy_block(home, &tidy),
+            friday_block(&friday),
+        )
+    );
+    let still = pending(home);
+    assert!(still.contains(&tidy) && still.contains(&friday), "{still}");
 }
