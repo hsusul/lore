@@ -41,7 +41,10 @@ use crate::storage::{Result, StorageError};
 ///
 /// v6: inline base64 payloads (screenshots, attachments, PDFs) move out of
 /// `content_json` into the blob store, so archives shrink only after a re-parse.
-pub const PARSER_VERSION: &str = "6";
+///
+/// v7: Codex tool payloads drop `internal_chat_message_metadata_passthrough`,
+/// so archives shed it only after a re-parse.
+pub const PARSER_VERSION: &str = "7";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
