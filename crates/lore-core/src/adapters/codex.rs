@@ -681,7 +681,8 @@ fn attach_tool_output(
                     Some(true)
                 }
             })
-        });
+        })
+        .or_else(|| exit_code_failed(p.get("output")?));
     let Some(idx) = call else {
         return Some(ParsedToolResult {
             native_call_id: call_id,
@@ -695,6 +696,49 @@ fn attach_tool_output(
     tc.output_text = output_text;
     tc.is_error = is_error;
     None
+}
+
+/// How many lines a Codex exec header can take before its `Output:` line.
+const EXEC_HEADER_LINES: usize = 8;
+
+/// Whether the exit code Codex wrote into a tool output's text is nonzero.
+/// `None` when the text carries no exit code.
+///
+/// Codex (codex-rs) does not mark a failed command anywhere but the text the
+/// model reads. Shell and `apply_patch` results start with an `Exit code: N`
+/// line; `exec_command` results carry `Process exited with code N` in a header
+/// that ends with an `Output:` line, and no exit code while the process runs.
+/// Older releases wrote a JSON object with `metadata.exit_code` instead. Only
+/// the header is read, so a command that prints `Exit code: 1` is not taken
+/// for its own result.
+fn exit_code_failed(output: &Value) -> Option<bool> {
+    let text = match output {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    if let Ok(Value::Object(json)) = serde_json::from_str::<Value>(&text) {
+        let code = json.get("metadata")?.get("exit_code")?.as_i64()?;
+        return Some(code != 0);
+    }
+    let header: Vec<&str> = text
+        .lines()
+        .take(EXEC_HEADER_LINES)
+        .take_while(|line| *line != "Output:")
+        .collect();
+    if header.len() == text.lines().take(EXEC_HEADER_LINES).count() {
+        return None; // no `Output:` line, so this is not an exec header
+    }
+    header.iter().find_map(|line| {
+        let code = line
+            .strip_prefix("Exit code: ")
+            .or_else(|| line.strip_prefix("Process exited with code "))?;
+        code.trim().parse::<i64>().ok().map(|code| code != 0)
+    })
 }
 
 /// Extract text from a JSON value that may be a string or a structured object.
@@ -941,6 +985,49 @@ mod tests {
         let content = "{\"type\":\"brand_new_type\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{}}\n";
         let s = CodexAdapter::new().parse_str(content, "fallback");
         assert_eq!(s.status, crate::model::ParseStatus::Partial);
+    }
+
+    #[test]
+    fn a_nonzero_exit_code_in_the_output_text_marks_the_call_failed() {
+        let s = CodexAdapter::new().parse_str(&fixture("tool_exit_codes.jsonl"), "fallback");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok);
+        let errors: Vec<(&str, Option<bool>)> = s
+            .tool_calls
+            .iter()
+            .map(|tc| (tc.native_call_id.as_str(), tc.is_error))
+            .collect();
+        assert_eq!(
+            errors,
+            [
+                ("call_1", Some(true)),  // shell, `Exit code: 1`
+                ("call_2", Some(false)), // `Exit code: 0`; the body's text is not the header
+                ("call_3", Some(true)),  // exec_command, `Process exited with code 2`
+                ("call_4", None),        // exec_command still running: no exit code yet
+                ("call_5", Some(true)),  // apply_patch, `Exit code: 1`
+                ("call_6", Some(false)), // apply_patch, `Exit code: 0`
+                ("call_7", Some(true)),  // older JSON form, `metadata.exit_code: 2`
+                ("call_8", Some(false)), // older JSON form, `metadata.exit_code: 0`
+                ("call_9", None),        // no exit code at all
+            ]
+        );
+    }
+
+    #[test]
+    fn a_top_level_status_still_wins_over_the_output_text() {
+        let line = |cid: &str, extra: &str| {
+            format!(
+                "{{\"type\":\"response_item\",\"timestamp\":\"2026-11-02T12:00:01.000Z\",\"payload\":{{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"{{}}\",\"call_id\":\"{cid}\"}}}}\n\
+                 {{\"type\":\"response_item\",\"timestamp\":\"2026-11-02T12:00:02.000Z\",\"payload\":{{\"type\":\"function_call_output\",\"call_id\":\"{cid}\",\"output\":\"Exit code: 1\\nOutput:\\n\"{extra}}}}}\n"
+            )
+        };
+        let text = format!(
+            "{}{}",
+            line("a", ",\"status\":\"completed\""),
+            line("b", ",\"exit_code\":0")
+        );
+        let s = CodexAdapter::new().parse_str(&text, "fallback");
+        let errors: Vec<Option<bool>> = s.tool_calls.iter().map(|tc| tc.is_error).collect();
+        assert_eq!(errors, [Some(false), Some(false)]);
     }
 
     #[test]

@@ -19,7 +19,8 @@
       "function_call.jsonl": "0.133.0",
       "patch_apply.jsonl": "0.133.0",
       "token_count.jsonl": "0.133.0",
-      "v0.136.0_sample.jsonl": "0.136.0"
+      "v0.136.0_sample.jsonl": "0.136.0",
+      "tool_exit_codes.jsonl": "synthetic, shaped like codex-rs at 2816088 (2026-11-02); call_7 and call_8 use the older JSON output form"
     }
   }
 }

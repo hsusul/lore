@@ -35,7 +35,10 @@ use crate::storage::{Result, StorageError};
 /// v4: a Claude subagent or resumed transcript gets its own session id, so
 /// sources whose rows replaced another transcript's session at v3 must be
 /// parsed again.
-pub const PARSER_VERSION: &str = "4";
+///
+/// v5: a Codex tool output whose text carries a nonzero exit code is a failed
+/// call, so `has:error` finds sessions ingested at v4 only after a re-parse.
+pub const PARSER_VERSION: &str = "5";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
