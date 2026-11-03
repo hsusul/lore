@@ -42,6 +42,9 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     accept <ID>       Write a proposal as a note, one commit [--as <slug>]
     reject <ID>       Decline a proposal --reason <TEXT>; the vault is untouched
     retire <NOTE>     Mark a note retired --reason <TEXT>, one commit
+    eval              Score a policy for accepting proposals without you
+                      against your own accepts and rejects; writes nothing
+                      [--policy never|starting-bar, default never] [--json]
     --vault <DIR>     Vault directory. Must be absolute
     Search and show pick up notes edited, renamed, or deleted by hand.
     Exit codes: 2 no vault, 5 vault busy, 7 note refused, 4 other failure.
@@ -151,6 +154,9 @@ fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
 /// Run `lorectl mem`.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let sub = invocation.operand.as_deref().unwrap_or_default();
+    if sub == "eval" {
+        return crate::eval::run(invocation, USAGE);
+    }
     if crate::review::SUBCOMMANDS.contains(&sub) {
         return crate::review::run(sub, &invocation.rest, invocation.json, USAGE);
     }
