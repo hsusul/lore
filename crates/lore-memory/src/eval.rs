@@ -2,14 +2,19 @@
 //!
 //! A policy looks at one proposal and says whether it would accept it without
 //! a person, or hold it for one. Scoring runs the policy over proposals a
-//! person already accepted or rejected and counts where it agreed. Nothing
-//! here reads the clock, the network, or the working tree, so the same cases
-//! always give the same report.
+//! person already accepted or rejected and counts where it agreed. Scoring
+//! reads nothing: not the clock, the network, or the working tree, so the same
+//! cases always give the same report.
+//!
+//! [`cases`] reads the labeled cases from a vault: the inbox's proposals and
+//! the decisions a person recorded with `lorectl mem accept` and `mem reject`.
 //!
 //! A policy never rejects. Holding is its only alternative to accepting, so a
 //! policy can only ever take work away from a person, never overrule them.
 
-use crate::inbox::Proposal;
+use crate::inbox::{self, Proposal};
+use crate::review::{self, Decision, ReviewError};
+use crate::vault::Vault;
 
 /// What a person decided about a proposal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +179,24 @@ pub fn score(policy: &dyn Policy, cases: &[Case]) -> Report {
         earlier.push(&case.proposal);
     }
     report
+}
+
+/// Every proposal in `vault`'s inbox a person accepted or rejected, labeled
+/// with that decision. Pending proposals, and inbox lines that are not valid
+/// proposals, are left out. Read only.
+pub fn cases(vault: &Vault) -> Result<Vec<Case>, ReviewError> {
+    let (proposals, _) = inbox::proposals(vault)?;
+    let decisions = review::decisions(vault)?;
+    Ok(proposals
+        .into_iter()
+        .filter_map(|proposal| {
+            let label = match decisions.get(&proposal.id)? {
+                Decision::Accepted { .. } => Label::Accept,
+                Decision::Rejected { .. } => Label::Reject,
+            };
+            Some(Case { proposal, label })
+        })
+        .collect())
 }
 
 fn ratio(part: usize, whole: usize) -> Option<f64> {
