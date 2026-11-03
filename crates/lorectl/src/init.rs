@@ -28,6 +28,8 @@ use crate::receipt::{date, Archive};
 
 const DEFAULT_SINCE: &str = "30d";
 const DEFAULT_LIMIT: usize = 5;
+/// Seconds init scans before it stops and shows lessons, newest files first.
+const DEFAULT_SCAN_SECONDS: u64 = 60;
 
 const NEXT: &str = "\
 Next
@@ -39,6 +41,7 @@ Next
 struct Args {
     since: String,
     limit: usize,
+    scan_seconds: u64,
     vault: Option<PathBuf>,
     archive: Option<PathBuf>,
     /// `--review` or `--no-review`, the last one given.
@@ -52,6 +55,7 @@ fn parse(invocation: &Invocation) -> Result<Option<Args>, CliError> {
     let mut args = Args {
         since: (invocation.since.clone()).unwrap_or_else(|| DEFAULT_SINCE.into()),
         limit: DEFAULT_LIMIT,
+        scan_seconds: DEFAULT_SCAN_SECONDS,
         vault: None,
         archive: invocation.archive.clone(),
         review: None,
@@ -68,6 +72,18 @@ fn parse(invocation: &Invocation) -> Result<Option<Args>, CliError> {
                     .into_owned();
                 args.limit = value.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
                     CliError::Usage(format!("--limit needs a positive number, got `{value}`"))
+                })?;
+            }
+            Long("scan-seconds") => {
+                let value = parser
+                    .value()
+                    .map_err(usage)?
+                    .to_string_lossy()
+                    .into_owned();
+                args.scan_seconds = value.parse().map_err(|_| {
+                    CliError::Usage(format!(
+                        "--scan-seconds needs a whole number, got `{value}`"
+                    ))
                 })?;
             }
             Long("vault") => args.vault = Some(parser.value().map_err(usage)?.into()),
@@ -106,10 +122,11 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     };
 
     let started = Instant::now();
-    let scanned = crate::scan::scan_into(&archive_dir, Some(since));
+    let deadline = started + std::time::Duration::from_secs(args.scan_seconds);
+    let scanned = crate::scan::scan_until(&archive_dir, Some(since), Some(deadline));
     let secs = started.elapsed().as_secs();
     let line = match scanned {
-        Ok((_, _, summary)) => {
+        Ok((_, _, summary, left)) => {
             let mut line = match summary.ingested {
                 0 => "no new sessions".to_owned(),
                 n => format!("scanned {n} new session{}", plural(n)),
@@ -117,6 +134,12 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             line.push_str(&format!(" from the last {window} in {secs} s"));
             if summary.failed > 0 {
                 line.push_str(&format!(", {} failed", summary.failed));
+            }
+            if left > 0 {
+                line.push_str(&format!(
+                    "; {left} more file{} waiting, `lorectl scan --since {window}` reads them",
+                    plural(left)
+                ));
             }
             line
         }

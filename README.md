@@ -27,7 +27,7 @@ export PATH="$PWD/target/release:$PATH"
 lorectl init
 ```
 
-`lorectl init` makes the vault at `~/Lore`, scans the sessions of the last 30 days, and shows the lessons it found in your corrections. It reads your Claude Code and Codex logs and never changes them. Put `target/release` on your `PATH` for good so agents can run `lorectl` too.
+`lorectl init` makes the vault at `~/Lore`, scans the sessions of the last 30 days for up to a minute, newest first, and shows the lessons it found in your corrections. Whatever it did not reach waits for the next `lorectl init` or `lorectl scan --since 30d`. It reads your Claude Code and Codex logs and never changes them. Put `target/release` on your `PATH` for good so agents can run `lorectl` too.
 
 Then, in Claude Code, install the plugin and let the agent write your lessons:
 

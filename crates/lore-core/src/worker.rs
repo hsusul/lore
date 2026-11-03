@@ -131,9 +131,30 @@ impl Worker {
         sink: &dyn ProgressSink,
         since: Option<std::time::SystemTime>,
     ) -> jobs::Result<DrainSummary> {
+        Ok(self.scan_until(sink, since, None)?.0)
+    }
+
+    /// [`Self::scan_since`] that starts no new source after `deadline`. The
+    /// sources not reached stay queued for the next scan, newest first, and
+    /// their count comes back with the summary. A scan cut short did not look
+    /// at everything, so it stamps nothing.
+    pub fn scan_until(
+        &self,
+        sink: &dyn ProgressSink,
+        since: Option<std::time::SystemTime>,
+        deadline: Option<std::time::Instant>,
+    ) -> jobs::Result<(DrainSummary, usize)> {
         let pipeline = self.pipeline();
         pipeline.enqueue_scan_since(sink, since)?;
-        let summary = self.drain_to_empty(&pipeline, sink)?;
+        let summary = self.drain_to_empty(&pipeline, sink, deadline)?;
+        let left = match deadline {
+            Some(_) => jobs::queue_depth(&self.conn)?.pending,
+            None => 0,
+        };
+        if left > 0 {
+            crate::storage::checkpoint(&self.conn);
+            return Ok((summary, left));
+        }
         // The scan finished, so record when Lore last looked. Done here rather
         // than in a caller so every scanning surface stamps it: the desktop
         // worker and `lorectl scan` reach this same line, and an archive filled
@@ -157,7 +178,7 @@ impl Worker {
         // this the WAL keeps that high-water mark for the life of the process.
         crate::storage::checkpoint(&self.conn);
         sink.emit(crate::pipeline::ProgressEvent::ScanFinished);
-        Ok(summary)
+        Ok((summary, 0))
     }
 
     /// Schedule ingest jobs for a batch of observed paths (e.g. debounced
@@ -217,10 +238,17 @@ impl Worker {
         &self,
         pipeline: &Pipeline<'_>,
         sink: &dyn ProgressSink,
+        deadline: Option<std::time::Instant>,
     ) -> jobs::Result<DrainSummary> {
         let mut total = DrainSummary::default();
         loop {
-            let batch = pipeline.drain(sink, self.cfg.drain_batch)?;
+            // With a deadline, one source at a time, so none starts after it.
+            let max = match deadline {
+                Some(at) if std::time::Instant::now() >= at => break,
+                Some(_) => 1,
+                None => self.cfg.drain_batch,
+            };
+            let batch = pipeline.drain(sink, max)?;
             let made_progress = batch.processed() > 0 || batch.requeued > 0;
             total.ingested += batch.ingested;
             total.skipped += batch.skipped;

@@ -44,10 +44,12 @@ fn masked(o: &Output) -> String {
         String::from_utf8_lossy(&o.stderr)
     );
     let text = String::from_utf8(o.stdout.clone()).unwrap();
+    // The scan's seconds, wherever they sit on the Archive line.
     text.lines()
-        .map(|line| match line.rsplit_once(" in ") {
-            Some((head, tail)) if line.starts_with("Archive") && tail.ends_with(" s") => {
-                format!("{head} in N s\n")
+        .map(|line| match line.split_once(" in ") {
+            Some((head, tail)) if line.starts_with("Archive") => {
+                let rest = tail.split_once(" s").map_or("", |(_, rest)| rest);
+                format!("{head} in N s{rest}\n")
             }
             _ => format!("{line}\n"),
         })
@@ -768,4 +770,33 @@ fn the_last_line_counts_accepted_proposals_apart_from_kept_lessons() {
     // skip the second.
     let out = masked(&lorectl_in(home, &["init", "--review"], "a\ns\na\ns\n"));
     assert!(out.ends_with(&done(1, 1)), "{out}");
+}
+
+#[test]
+fn init_stops_scanning_at_its_time_budget_and_says_what_is_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_lessons(home);
+    let vault = home.join("vault");
+    let first = masked(&lorectl(
+        home,
+        &["init", "--no-review", "--scan-seconds", "0"],
+    ));
+    assert_eq!(
+        first,
+        format!(
+            "Lore\n\
+             Vault      created {}\n\
+             Archive    no new sessions from the last 30d in N s; 4 more files waiting, \
+             `lorectl scan --since 30d` reads them\n\
+             Lessons    none found in your sessions yet.\n\n{NEXT}",
+            vault.display()
+        )
+    );
+    // The next run picks the waiting files up.
+    let second = masked(&lorectl(home, &["init", "--no-review"]));
+    assert!(
+        second.contains("Archive    scanned 4 new sessions from the last 30d in N s\n"),
+        "{second}"
+    );
 }
