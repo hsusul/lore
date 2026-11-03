@@ -106,7 +106,7 @@ fn mine_prints_each_lesson_with_its_receipts_and_writes_nothing() {
             "2 lessons from 5 corrections. A dry run: nothing was written.\n\
              {first}  3 conversations, latest 2026-08-05\n\
              \x20   \"I told you, pnpm not npm\"\n\
-             \x20   suggested: I told you, pnpm not npm\n\
+             \x20   suggested: Pnpm not npm\n\
              \x20   - codex {s5} 2026-08-05: \"I told you, pnpm not npm\"\n\
              \x20     after: \"npm install dayjs done.\"\n\
              \x20   - codex {s3} 2026-08-03: \"wrong tool, use pnpm instead of npm\"\n\

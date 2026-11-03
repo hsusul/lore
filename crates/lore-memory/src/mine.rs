@@ -724,6 +724,17 @@ pub fn find_conflicts(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Re
 const ACKS: &[&str] = &[
     "yes", "yea", "yeah", "ok", "okay", "sure", "do that", "and", "also", "so", "then",
 ];
+/// Words that open a correction and are cut only before a comma, since "no"
+/// alone is often the rule itself ("no mocks, hit the real database").
+const CORRECTION_OPENERS: &[&str] = &[
+    "i told you",
+    "i said",
+    "actually",
+    "nope",
+    "nah",
+    "wait",
+    "no",
+];
 /// Request frames that open a rule, longest first.
 const FRAMES: &[&str] = &[
     "make sure that you",
@@ -740,7 +751,8 @@ const TRAILING: &[&str] = &["please", "from now on", "going forward"];
 const TASK_FRAMES: &[&str] = &["go ahead"];
 
 /// A lesson's rule in the person's own words, cleaned up by fixed rules:
-/// leading acknowledgements and connectors ("yea sure, and also") and a
+/// leading acknowledgements and connectors ("yea sure, and also"), a
+/// correction opener before a comma ("no,", "I told you,"), and a
 /// request frame ("make sure that you", "can you", "please") are cut, then
 /// trailing filler ("please", "from now on", "going forward") and
 /// punctuation, then "like" and "just like" used as filler between two words
@@ -752,8 +764,14 @@ const TASK_FRAMES: &[&str] = &["go ahead"];
 pub fn suggest_rule(text: &str) -> String {
     let original = text.trim();
     let mut rest = original;
-    while let Some(after) = strip_opening(rest, ACKS) {
-        rest = after;
+    loop {
+        if let Some(after) = strip_opening(rest, ACKS) {
+            rest = after;
+        } else if let Some(after) = strip_before_comma(rest, CORRECTION_OPENERS) {
+            rest = after;
+        } else {
+            break;
+        }
     }
     while let Some(after) = strip_opening(rest, FRAMES) {
         rest = after;
@@ -832,6 +850,17 @@ fn strip_opening<'a>(text: &'a str, openings: &[&str]) -> Option<&'a str> {
                 .next()
                 .is_none_or(|c| c.is_whitespace() || c == ','))
         .then(|| after.trim_start_matches(|c: char| c.is_whitespace() || c == ','))
+    })
+}
+
+/// `text` after the first of `openings` it starts with when a comma follows
+/// it, or `None`.
+fn strip_before_comma<'a>(text: &'a str, openings: &[&str]) -> Option<&'a str> {
+    openings.iter().find_map(|opening| {
+        let head = text.get(..opening.len())?;
+        let after = text.get(opening.len()..)?.strip_prefix(',')?;
+        head.eq_ignore_ascii_case(opening)
+            .then(|| after.trim_start())
     })
 }
 

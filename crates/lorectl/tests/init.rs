@@ -151,7 +151,7 @@ fn init_creates_the_vault_scans_and_shows_the_lesson_then_reuses_both() {
          \n\
          \x20 {id}  2 conversations, latest 2026-10-28\n\
          \x20     \"I told you, docs are never tracked in git\"\n\
-         \x20     suggested: I told you, docs are never tracked in git\n\
+         \x20     suggested: Docs are never tracked in git\n\
          \x20     - claude-code {s2} 2026-10-28: \"I told you, docs are never tracked in git\"\n\
          \n",
         s2 = archived_id(home, 2),
