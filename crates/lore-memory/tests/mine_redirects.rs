@@ -32,7 +32,7 @@ fn redirects_said_in_many_sessions_are_not_lessons() {
     );
     let texts: Vec<(String, usize)> = lessons(corrections(&conn).unwrap())
         .into_iter()
-        .map(|l| (l.text, l.sessions))
+        .map(|l| (l.text, l.conversations))
         .collect();
     assert_eq!(
         texts,

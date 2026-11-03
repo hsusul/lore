@@ -104,13 +104,13 @@ fn mine_prints_each_lesson_with_its_receipts_and_writes_nothing() {
         out,
         format!(
             "2 lessons from 5 corrections. A dry run: nothing was written.\n\
-             {first}  3 sessions, latest 2026-08-05\n\
+             {first}  3 conversations, latest 2026-08-05\n\
              \x20   \"I told you, pnpm not npm\"\n\
              \x20   - codex {s5} 2026-08-05: \"I told you, pnpm not npm\"\n\
              \x20     after: \"npm install dayjs done.\"\n\
              \x20   - codex {s3} 2026-08-03: \"wrong tool, use pnpm instead of npm\"\n\
              \x20   - codex {s1} 2026-08-01: \"no, use pnpm not npm\"\n\
-             {second}  2 sessions, latest 2026-08-04\n\
+             {second}  2 conversations, latest 2026-08-04\n\
              \x20   \"stop editing the generated files\"\n\
              \x20   - codex {s4} 2026-08-04: \"stop editing the generated files\"\n\
              \x20     after: \"Edited src/gen.rs.\"\n\
@@ -129,7 +129,7 @@ fn mine_prints_each_lesson_with_its_receipts_and_writes_nothing() {
     let json: serde_json::Value = serde_json::from_str(&one).unwrap();
     assert_eq!(json.as_array().unwrap().len(), 1);
     assert_eq!(json[0]["id"], first.as_str());
-    assert_eq!(json[0]["sessions"], 3);
+    assert_eq!(json[0]["conversations"], 3);
     assert_eq!(json[0]["text"], "I told you, pnpm not npm");
     assert_eq!(
         json[0]["receipts"][0],
@@ -200,7 +200,7 @@ fn mine_propose_files_a_chosen_lesson_with_its_receipts_once() {
         item["body"],
         format!(
             "I told you, pnpm not npm\n\n\
-             Mined by `lorectl mem mine` (lesson {pnpm}) from corrections in 2 sessions:\n\
+             Mined by `lorectl mem mine` (lesson {pnpm}) from corrections in 2 conversations:\n\
              - 2026-08-03 codex {s3}: \"I told you, pnpm not npm\", after \"npm install dayjs done.\"\n\
              - 2026-08-01 codex {s1}: \"no, use pnpm not npm\", after \"Running npm install axios.\"\n"
         )
@@ -264,11 +264,11 @@ fn mine_takes_the_overlap_and_length_limits_from_flags() {
     );
     assert_eq!(
         first(ok(&lorectl(home, &["mem", "mine", "--min-overlap", "70"]))),
-        "0 lessons from 2 corrections. A dry run: nothing was written."
+        "2 lessons from 2 corrections. A dry run: nothing was written."
     );
     assert_eq!(
         first(ok(&lorectl(home, &["mem", "mine", "--max-chars", "25"]))),
-        "0 lessons from 1 corrections. A dry run: nothing was written."
+        "1 lesson from 1 corrections. A dry run: nothing was written."
     );
     for bad in [
         ["--min-overlap", "0"],

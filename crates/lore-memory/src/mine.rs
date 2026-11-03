@@ -21,8 +21,6 @@ const LESSON_PER_MILLE: usize = 500;
 /// A candidate is compared with at most this many of a lesson's oldest
 /// members, so grouping stays linear in the number of candidates.
 const MATCH_MEMBERS: usize = 8;
-/// A lesson needs corrections from at least this many sessions.
-const MIN_SESSIONS: usize = 2;
 
 /// A correction longer than this is a new task that happens to say "no".
 const MAX_CHARS: usize = 300;
@@ -371,15 +369,16 @@ fn stem(word: &str) -> String {
     word.to_owned()
 }
 
-/// Candidates from different sessions that say the same thing.
+/// Candidates that say the same thing, from one conversation or several.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lesson {
     /// Ten hex characters, the same for as long as its oldest receipt is.
     pub id: String,
     /// The newest receipt's text that states a rule.
     pub text: String,
-    /// Distinct sessions among the receipts.
-    pub sessions: usize,
+    /// Distinct conversations among the receipts. A resume or fork copy of a
+    /// conversation is not counted again.
+    pub conversations: usize,
     pub latest_ms: Option<i64>,
     /// The newest candidate from each session, newest first.
     pub receipts: Vec<Candidate>,
@@ -387,9 +386,10 @@ pub struct Lesson {
 
 /// Group `candidates` into lessons: a candidate joins the first lesson with one
 /// of its first [`MATCH_MEMBERS`] members whose content words overlap its own
-/// by at least half, else starts
-/// one. Only lessons said in at least two sessions, at least one of them as
-/// a correction, are kept, most sessions first, then the most recent.
+/// by at least half, else starts one. A lesson is kept when one of its
+/// receipts is a correction or a rule and one states a rule. Lessons said in
+/// more conversations come first, so one said once ranks below every repeated
+/// one; then the most recent.
 #[must_use]
 pub fn lessons(candidates: Vec<Candidate>) -> Vec<Lesson> {
     lessons_within(candidates, &Limits::default())
@@ -422,11 +422,14 @@ pub fn lessons_within(mut candidates: Vec<Candidate>, limits: &Limits) -> Vec<Le
         }
     }
     let mut found: Vec<Lesson> = groups.into_iter().filter_map(lesson).collect();
-    found.sort_by(|a, b| (b.sessions, b.latest_ms, &a.id).cmp(&(a.sessions, a.latest_ms, &b.id)));
+    found.sort_by(|a, b| {
+        (b.conversations, b.latest_ms, &a.id).cmp(&(a.conversations, a.latest_ms, &b.id))
+    });
     found
 }
 
-/// One group, oldest first, as a lesson, or `None` below [`MIN_SESSIONS`].
+/// One group, oldest first, as a lesson, or `None` when it holds no correction
+/// or states no rule.
 fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
     let oldest = group.first()?.1.clone();
     let mut receipts: Vec<Candidate> = Vec::new();
@@ -441,14 +444,14 @@ fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
     let corrected =
         (receipts.iter()).any(|r| matches!(r.signal, Signal::Correction | Signal::Rule));
     let rule = receipts.iter().find(|r| states_rule(&r.text))?.text.clone();
-    if receipts.len() < MIN_SESSIONS || !corrected {
+    if !corrected {
         return None;
     }
     let hash = blake3::hash(format!("{}\n{}", oldest.session, oldest.text).as_bytes());
     Some(Lesson {
         id: hash.to_hex()[..10].to_owned(),
         text: rule,
-        sessions: receipts.len(),
+        conversations: receipts.len(),
         latest_ms: receipts[0].at_ms,
         receipts,
     })
