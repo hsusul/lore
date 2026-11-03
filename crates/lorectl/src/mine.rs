@@ -126,9 +126,10 @@ fn lessons_text(lessons: &[Lesson], total: usize) -> String {
     for lesson in lessons {
         let newest = &lesson.receipts[0];
         out.push_str(&format!(
-            "{}  {} sessions, latest {}",
+            "{}  {} conversation{}, latest {}",
             lesson.id,
-            lesson.sessions,
+            lesson.conversations,
+            if lesson.conversations == 1 { "" } else { "s" },
             day(newest)
         ));
         if let Some(repo) = &newest.repo {
@@ -166,7 +167,7 @@ fn lesson_json(lesson: &Lesson) -> Value {
         })
         .collect();
     json!({
-        "id": lesson.id, "text": lesson.text, "sessions": lesson.sessions,
+        "id": lesson.id, "text": lesson.text, "conversations": lesson.conversations,
         "receipts": receipts,
     })
 }
@@ -218,8 +219,10 @@ fn proposal(lesson: &Lesson, marker: &str) -> Result<Proposal, CliError> {
     let newest = &lesson.receipts[0];
     let bad = |e: lore_memory::note::InvalidValue| CliError::Usage(e.to_string());
     let mut body = format!(
-        "{}\n\nMined by `lorectl mem mine` {marker} from corrections in {} sessions:\n",
-        lesson.text, lesson.sessions
+        "{}\n\nMined by `lorectl mem mine` {marker} from corrections in {} conversation{}:\n",
+        lesson.text,
+        lesson.conversations,
+        if lesson.conversations == 1 { "" } else { "s" }
     );
     for receipt in lesson.receipts.iter().take(PROPOSED_RECEIPTS) {
         body.push_str(&format!(

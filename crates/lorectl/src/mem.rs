@@ -43,8 +43,9 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     accept <ID>       Write a proposal as a note, one commit [--as <slug>]
     reject <ID>       Decline a proposal --reason <TEXT>; the vault is untouched
     retire <NOTE>     Mark a note retired --reason <TEXT>, one commit
-    mine              Lessons from corrections you made in more than one
-                      session, each with its receipts; writes nothing
+    mine              Lessons from corrections and rules you gave agents,
+                      most conversations first, each with its receipts;
+                      writes nothing
                       [--limit N, default 20] [--json]. Reads the archive.
                       --propose ID... files those lessons into the inbox.
                       --min-overlap PERCENT (default 50): the share of

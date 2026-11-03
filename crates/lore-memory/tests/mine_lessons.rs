@@ -50,7 +50,7 @@ fn corrections_from_two_or_more_sessions_become_a_ranked_lesson() {
         .iter()
         .map(|l| {
             let sessions = l.receipts.iter().map(|r| r.session.clone()).collect();
-            (l.sessions, l.text.as_str(), sessions)
+            (l.conversations, l.text.as_str(), sessions)
         })
         .collect();
     let s = |n| archive::session_id(&conn, n);
@@ -70,7 +70,7 @@ fn corrections_from_two_or_more_sessions_become_a_ranked_lesson() {
 }
 
 #[test]
-fn a_correction_said_in_one_session_only_is_not_a_lesson() {
+fn two_corrections_in_one_session_are_one_conversation() {
     let dir = tempfile::tempdir().unwrap();
     let conn = archive::codex_archive(
         dir.path(),
@@ -83,7 +83,10 @@ fn a_correction_said_in_one_session_only_is_not_a_lesson() {
         ]],
     );
     assert_eq!(corrections(&conn).unwrap().len(), 2);
-    assert!(lessons(corrections(&conn).unwrap()).is_empty());
+    let found = lessons(corrections(&conn).unwrap());
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].conversations, 1);
+    assert_eq!(found[0].text, "I said pnpm not npm");
 }
 
 #[test]
@@ -114,7 +117,7 @@ fn repeats_alone_are_not_a_lesson_and_word_forms_still_group() {
     let found = lessons(corrections(&conn).unwrap());
     let texts: Vec<(&str, usize)> = found
         .iter()
-        .map(|l| (l.text.as_str(), l.sessions))
+        .map(|l| (l.text.as_str(), l.conversations))
         .collect();
     assert_eq!(texts, [("stop editing the generated file", 2)]);
 }

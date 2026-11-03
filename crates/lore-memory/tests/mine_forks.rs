@@ -35,7 +35,13 @@ fn a_forked_copy_of_one_conversation_is_not_a_second_session() {
         2,
         "both copies are archived"
     );
-    assert_eq!(lessons(corrections(&conn).unwrap()), Vec::new());
+    let found = lessons(corrections(&conn).unwrap());
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        found[0].conversations, 1,
+        "the copy is the same conversation"
+    );
+    assert_eq!(found[0].receipts.len(), 1);
 }
 
 #[test]
@@ -60,7 +66,7 @@ fn a_real_second_conversation_still_counts_once_beside_the_copies() {
     );
     let found = lessons(corrections(&conn).unwrap());
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].sessions, 2);
+    assert_eq!(found[0].conversations, 2);
     let sessions: Vec<&str> = found[0]
         .receipts
         .iter()
