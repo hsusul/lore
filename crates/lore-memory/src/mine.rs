@@ -271,6 +271,11 @@ pub fn lessons(candidates: Vec<Candidate>) -> Vec<Lesson> {
 #[must_use]
 pub fn lessons_within(mut candidates: Vec<Candidate>, limits: &Limits) -> Vec<Lesson> {
     candidates.sort_by(|a, b| (a.at_ms, &a.session, &a.text).cmp(&(b.at_ms, &b.session, &b.text)));
+    // A resume or fork copies the conversation into a new session, user turns
+    // and timestamps included. Keep one copy of each, so copies of one
+    // conversation never count as two sessions. The earliest session id wins.
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|c| c.at_ms.is_none() || seen.insert((c.at_ms, c.text.to_lowercase())));
     let mut groups: Vec<Vec<(BTreeSet<String>, Candidate)>> = Vec::new();
     for candidate in candidates {
         let words = content_words(&candidate.text);
