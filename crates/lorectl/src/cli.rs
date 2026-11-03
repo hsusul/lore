@@ -21,6 +21,8 @@ use crate::exit::CliError;
 /// Every variant here is a promise about the *surface*, not the behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    /// First run: the vault, a scan of recent sessions, and their lessons.
+    Init,
     /// Ingest new agent sessions into the archive.
     Scan,
     /// Summarize archived agent work against the current repository.
@@ -43,6 +45,7 @@ pub enum Command {
 
 /// Every command, in the order `--help` lists them.
 pub const COMMANDS: &[Command] = &[
+    Command::Init,
     Command::Scan,
     Command::Status,
     Command::Inspect,
@@ -59,6 +62,7 @@ impl Command {
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
+            Command::Init => "init",
             Command::Scan => "scan",
             Command::Status => "status",
             Command::Inspect => "inspect",
@@ -75,6 +79,7 @@ impl Command {
     #[must_use]
     pub fn summary(self) -> &'static str {
         match self {
+            Command::Init => "First run: make the vault, scan recent sessions, show lessons",
             Command::Scan => "Ingest new agent sessions into the archive",
             Command::Status => "Summarize archived work against the current repository",
             Command::Inspect => "Show one archived session in detail",
@@ -92,7 +97,8 @@ impl Command {
     #[must_use]
     pub fn is_implemented(self) -> bool {
         match self {
-            Command::Scan
+            Command::Init
+            | Command::Scan
             | Command::Search
             | Command::Inspect
             | Command::Status
@@ -117,7 +123,9 @@ impl Command {
             Command::Hook => Some("EVENT"),
             Command::Skills => Some("SUBCOMMAND"),
             Command::Mem => Some("SUBCOMMAND"),
-            Command::Scan | Command::Status | Command::Report | Command::Mcp => None,
+            Command::Init | Command::Scan | Command::Status | Command::Report | Command::Mcp => {
+                None
+            }
         }
     }
 
@@ -157,7 +165,7 @@ pub struct Invocation {
     pub since: Option<String>,
     /// The command's operand, when it takes one (a search query, a session id).
     pub operand: Option<String>,
-    /// Everything after `mem <SUBCOMMAND>`, parsed by the `mem` command itself.
+    /// Everything after `mem <SUBCOMMAND>` or `init`, parsed by that command.
     pub rest: Vec<String>,
     /// What to do.
     pub action: Action,
@@ -231,6 +239,13 @@ where
                     Command::from_name(&name)
                         .ok_or_else(|| CliError::Usage(format!("unknown command `{name}`")))?,
                 );
+                if command == Some(Command::Init) {
+                    rest = parser
+                        .raw_args()
+                        .map_err(usage)?
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect();
+                }
             }
             // One operand, after the command. A second is refused rather than
             // ignored: silently dropping an argument someone typed is how a
@@ -275,9 +290,9 @@ where
                     }
                     _ => {}
                 }
-                if since.is_some() && command != Command::Scan {
+                if since.is_some() && !matches!(command, Command::Scan | Command::Init) {
                     return Err(CliError::Usage(
-                        "--since works only with `lorectl scan`".into(),
+                        "--since works only with `lorectl scan` and `lorectl init`".into(),
                     ));
                 }
                 Action::Run(command)
@@ -365,7 +380,7 @@ mod tests {
             .collect();
         assert_eq!(
             implemented,
-            ["scan", "status", "inspect", "search", "hook", "mcp", "skills", "mem"]
+            ["init", "scan", "status", "inspect", "search", "hook", "mcp", "skills", "mem"]
         );
     }
 
@@ -399,7 +414,13 @@ mod tests {
     #[test]
     fn a_command_that_takes_no_operand_refuses_a_stray_one() {
         // Ignoring it would let `lorectl scan something` look like it worked.
-        for command in COMMANDS.iter().filter(|c| c.operand().is_none()) {
+        // `init` parses its own flags, and refuses a stray operand there
+        // (tests/init.rs).
+        let own_flags = |c: &&Command| **c == Command::Init;
+        for command in COMMANDS
+            .iter()
+            .filter(|c| c.operand().is_none() && !own_flags(c))
+        {
             let error = parse([command.name(), "stray"]).unwrap_err();
             assert_eq!(exit::exit_code(&error), USAGE);
         }
