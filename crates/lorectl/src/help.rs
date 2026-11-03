@@ -20,6 +20,7 @@ pub fn usage_for(topic: Option<Command>) -> String {
         Some(Command::Skills) => SKILLS_USAGE.to_string(),
         Some(Command::Mcp) => MCP_USAGE.to_string(),
         Some(Command::Hook) => HOOK_USAGE.to_string(),
+        Some(Command::Connect) => CONNECT_USAGE.to_string(),
         _ => usage(),
     }
 }
@@ -73,6 +74,17 @@ Hooks (lorectl hook <EVENT> [--archive <DIR>]):
     Run by an agent, not a person. It never scans, and it writes nothing
     but the vault's rebuildable index. Every failure, and any other EVENT,
     exits 0 in silence, so a session never stalls on Lore.
+";
+
+/// `lorectl help connect`.
+const CONNECT_USAGE: &str = "\
+Connect (lorectl connect):
+    Whether Claude Code and Codex run `lorectl mcp` and `lorectl hook
+    session-start`, and the exact command or config to add each one missing.
+    Reads .claude.json and settings.json, and Codex's config.toml and
+    hooks.json. CLAUDE_CONFIG_DIR and CODEX_HOME set where it looks;
+    otherwise ~/.claude and ~/.codex.
+    Never writes any agent config and never runs claude or codex. Exits 0.
 ";
 
 /// The full usage text.

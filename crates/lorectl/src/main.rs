@@ -14,6 +14,7 @@
 //! `--help` marks which is which so the listing cannot flatter the binary.
 
 mod cli;
+mod connect;
 mod eval;
 mod exit;
 mod help;
@@ -72,6 +73,7 @@ fn run() -> Result<u8, CliError> {
         Action::Run(cli::Command::Search) => query::search(&invocation),
         Action::Run(cli::Command::Inspect) => query::inspect(&invocation),
         Action::Run(cli::Command::Skills) => skills::run(&invocation),
+        Action::Run(cli::Command::Connect) => Ok(connect::run()),
         Action::Run(command) => {
             // Resolve the archive location before refusing the command, so a
             // bad `--archive` is reported as the bad `--archive` it is rather

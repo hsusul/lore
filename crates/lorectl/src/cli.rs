@@ -41,6 +41,8 @@ pub enum Command {
     Skills,
     /// Memory notes in a git vault.
     Mem,
+    /// Whether Claude Code and Codex are connected to Lore, and how to.
+    Connect,
 }
 
 /// Every command, in the order `--help` lists them.
@@ -54,6 +56,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Mcp,
     Command::Skills,
     Command::Mem,
+    Command::Connect,
     Command::Report,
 ];
 
@@ -72,6 +75,7 @@ impl Command {
             Command::Mcp => "mcp",
             Command::Skills => "skills",
             Command::Mem => "mem",
+            Command::Connect => "connect",
         }
     }
 
@@ -89,6 +93,7 @@ impl Command {
             Command::Mcp => "MCP server on stdin/stdout; run by an agent, not a person",
             Command::Skills => "`ls` every agent skill folder, or `doctor` to report problems",
             Command::Mem => "Memory notes in a git vault; see Memory below",
+            Command::Connect => "Show whether Claude Code and Codex use Lore, and how to connect",
         }
     }
 
@@ -105,7 +110,8 @@ impl Command {
             | Command::Hook
             | Command::Mcp
             | Command::Skills
-            | Command::Mem => true,
+            | Command::Mem
+            | Command::Connect => true,
             Command::Report => false,
         }
     }
@@ -123,9 +129,12 @@ impl Command {
             Command::Hook => Some("EVENT"),
             Command::Skills => Some("SUBCOMMAND"),
             Command::Mem => Some("SUBCOMMAND"),
-            Command::Init | Command::Scan | Command::Status | Command::Report | Command::Mcp => {
-                None
-            }
+            Command::Init
+            | Command::Scan
+            | Command::Status
+            | Command::Report
+            | Command::Mcp
+            | Command::Connect => None,
         }
     }
 
@@ -380,7 +389,10 @@ mod tests {
             .collect();
         assert_eq!(
             implemented,
-            ["init", "scan", "status", "inspect", "search", "hook", "mcp", "skills", "mem"]
+            [
+                "init", "scan", "status", "inspect", "search", "hook", "mcp", "skills", "mem",
+                "connect"
+            ]
         );
     }
 
