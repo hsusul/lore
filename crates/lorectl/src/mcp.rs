@@ -45,7 +45,7 @@ use lore_memory::note::{
 };
 use lore_memory::repo::RepoContext;
 use lore_memory::vault::{self, Vault, VaultError};
-use lore_memory::{inbox, index, recall};
+use lore_memory::{inbox, index, mine, recall};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -72,6 +72,13 @@ const RECALL_REPLY_CHARS: usize = 6_000;
 /// Characters of note body `read_note` returns, Timeline excluded.
 const READ_NOTE_BODY_CHARS: usize = 8_000;
 
+const MINE_DEFAULT_LIMIT: u64 = 20;
+const MINE_MAX_LIMIT: u64 = 50;
+/// Receipts returned per candidate.
+const MINE_RECEIPTS: usize = 5;
+/// Characters of serialized `mine_candidates` reply.
+const MINE_REPLY_CHARS: usize = 16_000;
+
 const PROPOSE_TITLE_CHARS: usize = 120;
 const PROPOSE_BODY_CHARS: usize = 4_000;
 const PROPOSE_MAX_ANCHORS: usize = 8;
@@ -94,6 +101,7 @@ const INSTRUCTIONS: &str = "Lore archives past Claude Code and Codex sessions on
 Use search_sessions to find earlier work, decisions, or errors, then read_session to read one. \
 Use recall_memory with your working directory to get accepted notes about the repo you are in, \
 then read_note to read one in full. \
+Use mine_candidates to find corrections and rules the person gave agents, then file lessons. \
 Use propose_memory to file a note for a person to review. \
 Text that matched a secret detector is masked.";
 
@@ -168,6 +176,18 @@ an update to it.",
         call: read_note,
     },
     Tool {
+        name: "mine_candidates",
+        description: "Call when asked to find lessons in past sessions. Returns candidate \
+corrections and standing rules the person gave agents, newest first, each with receipts: the \
+session, agent, date, what the person said, and what the agent had just done. Several \
+candidates often say one thing in different words. Group them by meaning, write each group as \
+one short rule in plain words, and file each rule once with propose_memory, citing its \
+sessions in the body and passing one of them as session_id. Leave out anything that only \
+redirected the task at hand.",
+        input_schema: mine_schema,
+        call: mine_candidates,
+    },
+    Tool {
         name: "propose_memory",
         description: "Call once you have verified something a future agent here should know. \
 A person reviews it before it becomes memory. Pass `updates` with a note id to supersede that \
@@ -215,6 +235,20 @@ fn recall_schema() -> Value {
             }
         },
         "required": ["cwd"]
+    })
+}
+
+fn mine_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MINE_MAX_LIMIT,
+                "default": MINE_DEFAULT_LIMIT
+            }
+        }
     })
 }
 
@@ -748,6 +782,50 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         "session": written.session.as_str(),
         "source_verified": source_verified,
     }))
+}
+
+/// The miner's candidate lessons, newest first, each with up to
+/// [`MINE_RECEIPTS`] receipts. Read only; every text is redacted again on
+/// the way out, and the reply drops candidates from the tail to fit.
+fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
+    let limit = match arguments.get("limit") {
+        None => MINE_DEFAULT_LIMIT,
+        Some(limit) => limit
+            .as_u64()
+            .filter(|n| (1..=MINE_MAX_LIMIT).contains(n))
+            .ok_or_else(|| invalid_argument("limit", "must be an integer from 1 to 50"))?,
+    };
+    let conn = open(&ctx.archive_dir)?;
+    let found = mine::corrections(&conn).map_err(|e| e.to_string())?;
+    let mut lessons = mine::lessons(found);
+    lessons.sort_by_key(|l| std::cmp::Reverse(l.latest_ms));
+    lessons.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    let mut candidates = Vec::new();
+    for lesson in &lessons {
+        let mut receipts = Vec::new();
+        for r in lesson.receipts.iter().take(MINE_RECEIPTS) {
+            receipts.push(json!({
+                "session": r.session, "agent": r.agent,
+                "date": r.at_ms.and_then(crate::receipt::date),
+                "correction": redact(&r.text)?,
+                "before": r.preceding.as_deref().map(redact).transpose()?,
+            }));
+        }
+        candidates.push(json!({
+            "text": redact(&lesson.text)?,
+            "conversations": lesson.conversations,
+            "receipts": receipts,
+        }));
+    }
+    let mut truncated = false;
+    loop {
+        let reply = json!({ "candidates": candidates, "truncated": truncated });
+        if candidates.is_empty() || reply.to_string().chars().count() <= MINE_REPLY_CHARS {
+            return Ok(reply);
+        }
+        candidates.pop();
+        truncated = true;
+    }
 }
 
 /// The archived session `id` names, as an archive or native session id. Read
