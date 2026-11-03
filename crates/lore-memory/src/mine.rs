@@ -190,29 +190,7 @@ impl Default for Limits {
 
 /// [`corrections`] with `limits.max_chars` in place of the default.
 pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Result<Vec<Candidate>> {
-    let mut statement = conn.prepare(TURNS)?;
-    let mut rows = statement.query([])?;
-    let mut turns: Vec<Turn> = Vec::new();
-    while let Some(row) = rows.next()? {
-        let (session, seq): (String, i64) = (row.get(0)?, row.get(2)?);
-        let text: String = row.get(5)?;
-        match turns.last_mut() {
-            Some(last) if last.session == session && last.seq == seq => {
-                last.text.push(' ');
-                last.text.push_str(&text);
-            }
-            _ => turns.push(Turn {
-                agent: row.get(1)?,
-                user: row.get::<_, String>(3)? == "user",
-                at_ms: row.get(4)?,
-                repo: row.get(6)?,
-                repo_path: row.get(7)?,
-                session,
-                seq,
-                text,
-            }),
-        }
-    }
+    let turns = read_turns(conn)?;
     let mut found = Vec::new();
     let mut earlier: Vec<BTreeSet<String>> = Vec::new();
     for (i, turn) in turns.iter().enumerate() {
@@ -264,6 +242,35 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
         earlier.push(words);
     }
     Ok(found)
+}
+
+/// Every user and assistant message in the archive, its parts' text joined,
+/// in session then turn order.
+fn read_turns(conn: &Connection) -> rusqlite::Result<Vec<Turn>> {
+    let mut statement = conn.prepare(TURNS)?;
+    let mut rows = statement.query([])?;
+    let mut turns: Vec<Turn> = Vec::new();
+    while let Some(row) = rows.next()? {
+        let (session, seq): (String, i64) = (row.get(0)?, row.get(2)?);
+        let text: String = row.get(5)?;
+        match turns.last_mut() {
+            Some(last) if last.session == session && last.seq == seq => {
+                last.text.push(' ');
+                last.text.push_str(&text);
+            }
+            _ => turns.push(Turn {
+                agent: row.get(1)?,
+                user: row.get::<_, String>(3)? == "user",
+                at_ms: row.get(4)?,
+                repo: row.get(6)?,
+                repo_path: row.get(7)?,
+                session,
+                seq,
+                text,
+            }),
+        }
+    }
+    Ok(turns)
 }
 
 /// Whether `text` starts by invoking a skill, `[$name](path) ...`, or a slash
@@ -469,6 +476,8 @@ pub struct Lesson {
     pub latest_ms: Option<i64>,
     /// The newest candidate from each session, newest first.
     pub receipts: Vec<Candidate>,
+    /// A later user turn that says the opposite, set by [`mark_outdated`].
+    pub outdated_by: Option<Candidate>,
 }
 
 /// Group `candidates` into lessons: a candidate joins the first lesson with one
@@ -551,7 +560,97 @@ fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
             .unwrap_or(0),
         latest_ms: receipts[0].at_ms,
         receipts,
+        outdated_by: None,
     })
+}
+
+/// Command families a lesson can be about, each with the words that name it.
+const FAMILIES: &[(&str, &[&str])] = &[
+    ("pr", &["pr", "prs", "pull request", "pull requests"]),
+    ("push", &["push"]),
+    ("commit", &["commit", "commits"]),
+    ("branch", &["branch", "branches"]),
+    ("merge", &["merge"]),
+    ("rebase", &["rebase"]),
+    ("tests", &["test", "tests"]),
+    ("mocks", &["mock", "mocks", "mocking"]),
+    ("docs", &["docs", "documentation"]),
+    ("permission", &["permission", "permissions"]),
+];
+/// Words that turn a clause into "do not".
+const NEGATIONS: &[&str] = &[
+    "no", "not", "don't", "dont", "never", "stop", "skip", "without", "avoid", "do not",
+];
+
+/// The clauses of `text`, lowercase, each padded with spaces for whole-word
+/// matching. Clauses end at punctuation, "just", "but", and "instead".
+fn clauses(text: &str) -> Vec<String> {
+    let lower = text.to_lowercase();
+    lower
+        .split(|c: char| ",.;!?".contains(c))
+        .flat_map(|c| c.split(" just "))
+        .flat_map(|c| c.split(" but "))
+        .flat_map(|c| c.split(" instead "))
+        .map(|c| format!(" {} ", tokens(c).join(" ")))
+        .collect()
+}
+
+fn names(clause: &str, word: &str) -> bool {
+    clause.contains(&format!(" {word} "))
+}
+
+/// The first command family `text` names, and whether the clause naming it
+/// is negative: it holds "don't", "never", "stop", or another negation.
+fn stance(text: &str) -> Option<(&'static str, bool)> {
+    clauses(text).iter().find_map(|clause| {
+        let (family, _) = FAMILIES
+            .iter()
+            .find(|(_, words)| words.iter().any(|w| names(clause, w)))?;
+        Some((*family, NEGATIONS.iter().any(|n| names(clause, n))))
+    })
+}
+
+/// Whether the first clause of `text` that names `family` is negative, or
+/// `None` when no clause names it.
+fn stance_on(text: &str, family: &str) -> Option<bool> {
+    let words = FAMILIES.iter().find(|(f, _)| *f == family)?.1;
+    let clause = clauses(text)
+        .into_iter()
+        .find(|clause| words.iter().any(|w| names(clause, w)))?;
+    Some(NEGATIONS.iter().any(|n| names(&clause, n)))
+}
+
+/// Mark each lesson that a later user turn contradicts: a turn in a session
+/// none of its receipts came from, newer than its newest receipt, about the
+/// same command family with the opposite stance ("dont make a pr" against
+/// "open a PR"). The newest such turn is kept as the receipt. A first
+/// version: it reads words, not meaning. Read only.
+pub fn mark_outdated(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Result<()> {
+    let turns = read_turns(conn)?;
+    for lesson in lessons.iter_mut() {
+        let (Some((family, negative)), Some(after)) = (stance(&lesson.text), lesson.latest_ms)
+        else {
+            continue;
+        };
+        lesson.outdated_by = turns
+            .iter()
+            .filter(|t| t.user && t.at_ms.is_some_and(|at| at > after))
+            .filter(|t| !lesson.receipts.iter().any(|r| r.session == t.session))
+            .filter(|t| t.text.chars().count() <= MAX_CHARS)
+            .filter(|t| stance_on(&t.text, family) == Some(!negative))
+            .max_by_key(|t| t.at_ms)
+            .map(|t| Candidate {
+                session: t.session.clone(),
+                agent: t.agent.clone(),
+                repo: t.repo.clone(),
+                repo_path: t.repo_path.clone(),
+                at_ms: t.at_ms,
+                text: one_line(&t.text),
+                preceding: None,
+                signal: Signal::Correction,
+            });
+    }
+    Ok(())
 }
 
 fn one_line(text: &str) -> String {

@@ -71,6 +71,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
         mine::corrections_within(&conn, &limits).map_err(storage::StorageError::from)?;
     let total = candidates.len();
     let mut lessons = mine::lessons_within(candidates, &limits);
+    mine::mark_outdated(&conn, &mut lessons).map_err(storage::StorageError::from)?;
     if propose {
         return propose_lessons(&lessons, &ids, vault_dir.as_deref());
     }
@@ -135,6 +136,9 @@ fn lessons_text(lessons: &[Lesson], total: usize) -> String {
         if let Some(repo) = &newest.repo {
             out.push_str(&format!(", repo {repo}"));
         }
+        if lesson.outdated_by.is_some() {
+            out.push_str(", possibly outdated");
+        }
         out.push_str(&format!("\n    \"{}\"\n", lesson.text));
         for (i, receipt) in lesson.receipts.iter().take(SHOWN_RECEIPTS).enumerate() {
             out.push_str(&format!(
@@ -151,6 +155,15 @@ fn lessons_text(lessons: &[Lesson], total: usize) -> String {
         let more = lesson.receipts.len().saturating_sub(SHOWN_RECEIPTS);
         if more > 0 {
             out.push_str(&format!("    - and {more} more sessions\n"));
+        }
+        if let Some(by) = &lesson.outdated_by {
+            out.push_str(&format!(
+                "    - possibly outdated by {} {} {}: \"{}\"\n",
+                by.agent,
+                by.session,
+                day(by),
+                by.text
+            ));
         }
     }
     out
@@ -169,6 +182,10 @@ fn lesson_json(lesson: &Lesson) -> Value {
     json!({
         "id": lesson.id, "text": lesson.text, "conversations": lesson.conversations,
         "receipts": receipts,
+        "outdated_by": lesson.outdated_by.as_ref().map(|by| json!({
+            "session": by.session, "agent": by.agent, "date": by.at_ms.and_then(date),
+            "text": by.text,
+        })),
     })
 }
 
