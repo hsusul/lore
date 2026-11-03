@@ -1,0 +1,204 @@
+//! The corrections miner: user turns in the archive that correct the agent.
+//!
+//! It reads only the archive's redacted search projection, so every text it
+//! returns is what `lorectl search` could show. Signals are fixed rules on the
+//! words, never a model: a short user turn right after an assistant turn that
+//! opens with or contains a correction ("no", "don't", "instead", "use X not
+//! Y", "I told you"), or a user turn that repeats an instruction the person
+//! already gave earlier in the same session. It writes nothing.
+
+use std::collections::BTreeSet;
+
+use rusqlite::Connection;
+
+use crate::policy::overlap_per_mille;
+
+/// A correction longer than this is a new task that happens to say "no".
+const MAX_CHARS: usize = 300;
+/// Characters kept of the assistant turn a correction answers.
+const PRECEDING_CHARS: usize = 200;
+/// A repeat shares at least this much of its words, per mille, with an
+/// earlier user turn, and has at least `MIN_REPEAT_WORDS` of them.
+const REPEAT_PER_MILLE: usize = 700;
+const MIN_REPEAT_WORDS: usize = 4;
+
+/// The first words that open a correction.
+const OPENERS: &[&str] = &[
+    "no", "nope", "stop", "wrong", "don't", "dont", "never", "actually", "instead", "wait",
+];
+/// Phrases that mark a correction anywhere in a short turn.
+const PHRASES: &[&str] = &[
+    "don't ",
+    "do not ",
+    " instead",
+    "wrong",
+    "i told you",
+    "i said ",
+    "not what i",
+    "that's not",
+    "thats not",
+    "you should have",
+    "why did you",
+    "stop ",
+];
+
+/// Why a user turn is a candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signal {
+    /// It corrects the assistant turn before it.
+    Correction,
+    /// It repeats an instruction given earlier in the session.
+    Repeat,
+}
+
+/// A user turn that corrects the agent, with where it was said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    /// The archive session id.
+    pub session: String,
+    /// `claude-code` or `codex`.
+    pub agent: String,
+    /// The repository's display name, when the archive linked one.
+    pub repo: Option<String>,
+    /// The repository's path on this machine, when known.
+    pub repo_path: Option<String>,
+    /// Epoch milliseconds.
+    pub at_ms: Option<i64>,
+    /// The user's turn, redacted, on one line.
+    pub text: String,
+    /// The assistant turn it answers, redacted, cut short.
+    pub preceding: Option<String>,
+    pub signal: Signal,
+}
+
+const TURNS: &str = "SELECT m.session_id, s.agent_id, m.seq, m.role, m.ts, sd.redacted_text,
+        r.display_name, r.primary_path
+    FROM message m
+    JOIN agent_session s ON s.id = m.session_id
+    JOIN message_part p ON p.message_id = m.id AND p.kind = 'text'
+    JOIN search_document sd ON sd.session_id = m.session_id
+        AND sd.source_kind = 'message_part' AND sd.source_id = p.id
+    LEFT JOIN session_segment seg ON seg.id = m.segment_id
+    LEFT JOIN repository r ON r.id = seg.repository_id
+    WHERE m.role IN ('user', 'assistant') AND m.is_sidechain = 0
+    ORDER BY m.session_id, m.seq, p.ordinal";
+
+/// One message: its parts' text joined.
+struct Turn {
+    session: String,
+    agent: String,
+    seq: i64,
+    user: bool,
+    at_ms: Option<i64>,
+    text: String,
+    repo: Option<String>,
+    repo_path: Option<String>,
+}
+
+/// Every candidate in the archive, by session then turn. Read only.
+pub fn corrections(conn: &Connection) -> rusqlite::Result<Vec<Candidate>> {
+    let mut statement = conn.prepare(TURNS)?;
+    let mut rows = statement.query([])?;
+    let mut turns: Vec<Turn> = Vec::new();
+    while let Some(row) = rows.next()? {
+        let (session, seq): (String, i64) = (row.get(0)?, row.get(2)?);
+        let text: String = row.get(5)?;
+        match turns.last_mut() {
+            Some(last) if last.session == session && last.seq == seq => {
+                last.text.push(' ');
+                last.text.push_str(&text);
+            }
+            _ => turns.push(Turn {
+                agent: row.get(1)?,
+                user: row.get::<_, String>(3)? == "user",
+                at_ms: row.get(4)?,
+                repo: row.get(6)?,
+                repo_path: row.get(7)?,
+                session,
+                seq,
+                text,
+            }),
+        }
+    }
+    let mut found = Vec::new();
+    let mut earlier: Vec<BTreeSet<String>> = Vec::new();
+    for (i, turn) in turns.iter().enumerate() {
+        let before = i
+            .checked_sub(1)
+            .map(|j| &turns[j])
+            .filter(|b| b.session == turn.session);
+        if before.is_none() {
+            earlier.clear();
+        }
+        if !turn.user {
+            continue;
+        }
+        let text = one_line(&turn.text);
+        let words = content_words(&text);
+        let signal = if text.starts_with('<') || text.chars().count() > MAX_CHARS {
+            None
+        } else if before.is_some_and(|b| !b.user) && corrects(&text) {
+            Some(Signal::Correction)
+        } else if words.len() >= MIN_REPEAT_WORDS
+            && earlier
+                .iter()
+                .any(|e| overlap_per_mille(e, &words) >= REPEAT_PER_MILLE)
+        {
+            Some(Signal::Repeat)
+        } else {
+            None
+        };
+        if let Some(signal) = signal {
+            found.push(Candidate {
+                session: turn.session.clone(),
+                agent: turn.agent.clone(),
+                repo: turn.repo.clone(),
+                repo_path: turn.repo_path.clone(),
+                at_ms: turn.at_ms,
+                preceding: before
+                    .filter(|b| !b.user)
+                    .map(|b| one_line(&b.text).chars().take(PRECEDING_CHARS).collect()),
+                text,
+                signal,
+            });
+        }
+        earlier.push(words);
+    }
+    Ok(found)
+}
+
+/// Whether `text` reads as a correction.
+fn corrects(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|t| !t.is_empty())
+        .collect();
+    // "no worries" and "no problem" open a turn without correcting anything.
+    let opener = tokens.first().is_some_and(|t| OPENERS.contains(t))
+        && !matches!(tokens.get(1), Some(&("worries" | "problem")));
+    let use_not = tokens
+        .windows(4)
+        .any(|w| w[0] == "use" && (w[2] == "not" || w[2] == "instead"));
+    opener || use_not || PHRASES.iter().any(|p| format!(" {lower} ").contains(p))
+}
+
+/// Words that say what a turn is about: lowercase, three or more letters or
+/// digits, without the words every correction shares.
+#[must_use]
+pub fn content_words(text: &str) -> BTreeSet<String> {
+    const COMMON: &[&str] = &[
+        "the", "and", "but", "not", "don't", "dont", "you", "your", "please", "this", "that",
+        "with", "for", "use", "instead", "stop", "wrong", "told", "said", "again", "just", "nope",
+        "never", "actually", "wait", "it's", "its", "are", "was", "should", "have",
+    ];
+    text.to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|w| w.chars().count() >= 3 && !COMMON.contains(w))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}

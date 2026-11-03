@@ -77,7 +77,7 @@ fn words(proposal: &Proposal) -> BTreeSet<String> {
 }
 
 /// Shared words over all words, per mille. 0 when both are empty.
-fn overlap_per_mille(a: &BTreeSet<String>, b: &BTreeSet<String>) -> usize {
+pub(crate) fn overlap_per_mille(a: &BTreeSet<String>, b: &BTreeSet<String>) -> usize {
     let union = a.union(b).count();
     (a.intersection(b).count() * 1000)
         .checked_div(union)
