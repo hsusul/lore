@@ -342,6 +342,91 @@ pub fn states_rule(text: &str) -> bool {
             .any(|w| RULE_WORDS.contains(w) || TOOLS.contains(w))
 }
 
+/// Phrases that make a turn read as a standing rule.
+const STANDING: &[&str] = &[
+    "from now on",
+    "going forward",
+    "always",
+    "never",
+    "make sure",
+];
+/// First words of a one-off task order.
+const TASK_VERBS: &[&str] = &[
+    "push",
+    "open",
+    "merge",
+    "ship",
+    "deploy",
+    "rebase",
+    "commit",
+    "create",
+    "fix",
+    "close",
+    "review",
+    "revert",
+    "release",
+    "checkout",
+    "cherry-pick",
+    "tag",
+];
+
+/// How much `text` reads like a standing rule rather than a one-off task
+/// order. Fixed and explainable: +2 for a standing phrase ("from now on",
+/// "always", "never", "make sure", "going forward"), +1 when it names no
+/// specific artifact, -3 for each PR or issue number (`#478`, `issue 12`) and
+/// each branch-shaped token (a slash and no file extension), and -2 when it
+/// opens with a task verb ("push", "merge", "fix", ...) and names an artifact.
+#[must_use]
+pub fn rule_score(text: &str) -> i32 {
+    let lower = text.to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split_whitespace()
+        .map(|t| t.trim_matches(|c: char| ",.;:!?()\"'`".contains(c)))
+        .filter(|t| !t.is_empty())
+        .collect();
+    let digits = |t: &str| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit());
+    let numbers = tokens
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            t.strip_prefix('#').is_some_and(digits)
+                || (matches!(**t, "issue" | "issues" | "pr" | "pull")
+                    && tokens.get(i + 1).is_some_and(|n| digits(n)))
+        })
+        .count();
+    let has_extension = |t: &str| {
+        t.rsplit_once('.').is_some_and(|(stem, ext)| {
+            !stem.is_empty()
+                && (1..=5).contains(&ext.len())
+                && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        })
+    };
+    let branches = tokens
+        .iter()
+        .filter(|t| {
+            t.contains('/')
+                && !t.starts_with(['/', '~', '.'])
+                && !has_extension(t)
+                && t.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_/".contains(c))
+        })
+        .count();
+    let paths = tokens.iter().filter(|t| has_extension(t)).count();
+    let artifacts = numbers + branches + paths;
+    let mut score = 0;
+    if STANDING.iter().any(|p| lower.contains(p)) {
+        score += 2;
+    }
+    if artifacts == 0 {
+        score += 1;
+    }
+    score -= 3 * i32::try_from(numbers + branches).unwrap_or(i32::MAX / 3);
+    if artifacts > 0 && tokens.first().is_some_and(|t| TASK_VERBS.contains(t)) {
+        score -= 2;
+    }
+    score
+}
+
 /// Words that say what a turn is about: lowercase, three or more letters or
 /// digits, without the words every correction shares.
 #[must_use]
@@ -379,6 +464,8 @@ pub struct Lesson {
     /// Distinct conversations among the receipts. A resume or fork copy of a
     /// conversation is not counted again.
     pub conversations: usize,
+    /// The best [`rule_score`] among the receipts.
+    pub score: i32,
     pub latest_ms: Option<i64>,
     /// The newest candidate from each session, newest first.
     pub receipts: Vec<Candidate>,
@@ -387,9 +474,9 @@ pub struct Lesson {
 /// Group `candidates` into lessons: a candidate joins the first lesson with one
 /// of its first [`MATCH_MEMBERS`] members whose content words overlap its own
 /// by at least half, else starts one. A lesson is kept when one of its
-/// receipts is a correction or a rule and one states a rule. Lessons said in
-/// more conversations come first, so one said once ranks below every repeated
-/// one; then the most recent.
+/// receipts is a correction or a rule and one states a rule. Lessons that
+/// read most like a standing rule ([`rule_score`]) come first, then those
+/// said in more conversations, then the most recent.
 #[must_use]
 pub fn lessons(candidates: Vec<Candidate>) -> Vec<Lesson> {
     lessons_within(candidates, &Limits::default())
@@ -423,7 +510,12 @@ pub fn lessons_within(mut candidates: Vec<Candidate>, limits: &Limits) -> Vec<Le
     }
     let mut found: Vec<Lesson> = groups.into_iter().filter_map(lesson).collect();
     found.sort_by(|a, b| {
-        (b.conversations, b.latest_ms, &a.id).cmp(&(a.conversations, a.latest_ms, &b.id))
+        (b.score, b.conversations, b.latest_ms, &a.id).cmp(&(
+            a.score,
+            a.conversations,
+            a.latest_ms,
+            &b.id,
+        ))
     });
     found
 }
@@ -452,6 +544,11 @@ fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
         id: hash.to_hex()[..10].to_owned(),
         text: rule,
         conversations: receipts.len(),
+        score: receipts
+            .iter()
+            .map(|r| rule_score(&r.text))
+            .max()
+            .unwrap_or(0),
         latest_ms: receipts[0].at_ms,
         receipts,
     })

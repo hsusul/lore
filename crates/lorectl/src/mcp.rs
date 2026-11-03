@@ -178,7 +178,8 @@ an update to it.",
     Tool {
         name: "mine_candidates",
         description: "Call when asked to find lessons in past sessions. Returns candidate \
-corrections and standing rules the person gave agents, newest first, each with receipts: the \
+corrections and standing rules the person gave agents, those that read most like a standing \
+rule first, each with receipts: the \
 session, agent, date, what the person said, and what the agent had just done. Several \
 candidates often say one thing in different words. Group them by meaning, write each group as \
 one short rule in plain words, and file each rule once with propose_memory, citing its \
@@ -786,7 +787,7 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }))
 }
 
-/// The miner's candidate lessons, newest first, each with up to
+/// The miner's candidate lessons, in [`mine::lessons`] order, each with up to
 /// [`MINE_RECEIPTS`] receipts, a page at a time. A page ends at `limit` or
 /// before it would pass [`MINE_REPLY_CHARS`], and `next_cursor` says where
 /// the next one starts. Read only; every text is redacted again on the way
@@ -807,8 +808,7 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     };
     let conn = open(&ctx.archive_dir)?;
     let found = mine::corrections(&conn).map_err(|e| e.to_string())?;
-    let mut lessons = mine::lessons(found);
-    lessons.sort_by_key(|l| std::cmp::Reverse(l.latest_ms));
+    let lessons = mine::lessons(found);
     let total = lessons.len();
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut candidates = Vec::new();
