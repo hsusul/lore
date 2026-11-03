@@ -260,6 +260,14 @@ fn an_archive_indexed_by_the_insert_trigger_stays_in_sync_after_migration_0015()
     let archive = Archive::new();
     let quokka = user("s-a", "u1", "Tune the quokka cache");
     archive.ingest("a.jsonl", &quokka);
+    // Undo the migrations after 15 too, so the archive is schema 14.
+    let later_indexes: String = include_str!("../migrations/0017_fk_indexes.sql")
+        .lines()
+        .filter_map(|line| line.strip_prefix("CREATE INDEX "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(|name| format!("DROP INDEX {name};"))
+        .collect();
+    archive.conn.execute_batch(&later_indexes).unwrap();
     archive
         .conn
         .execute_batch(
