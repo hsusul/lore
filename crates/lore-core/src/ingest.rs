@@ -47,7 +47,10 @@ use crate::storage::{Result, StorageError};
 ///
 /// v8: a tool call's output is stored once, as its result part's text, not
 /// again in `tool_call.output_text`.
-pub const PARSER_VERSION: &str = "8";
+///
+/// v9: the high-entropy rule skips paths and code identifiers, so archives
+/// drop those false findings only after a re-parse.
+pub const PARSER_VERSION: &str = "9";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.

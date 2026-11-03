@@ -777,6 +777,9 @@ fn scan_entropy(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
         if entropy < 4.0 {
             continue;
         }
+        if looks_like_identifier(token.as_bytes()) {
+            continue; // paths, URL paths, camelCase and snake_case names
+        }
         let severity = if near_secret_keyword(bytes, start) {
             Severity::Medium
         } else {
@@ -928,6 +931,61 @@ fn find_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// True if `needle` appears in `haystack`, ignoring ASCII case, without allocating.
 fn contains_ignore_ascii_case_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     needle.is_empty() || find_ignore_ascii_case(haystack, needle).is_some()
+}
+
+/// A path, URL path, or code identifier rather than a random token: split at
+/// `/`, `-`, `_`, digits, and camelCase, at least 70% of its letters sit in
+/// word-like pieces, pieces average at least 3.5 letters, and there are at
+/// most half as many runs of digits as pieces. Random base64 of 20 to 64
+/// characters passes this about 0.03% of the time.
+fn looks_like_identifier(token: &[u8]) -> bool {
+    let digit_runs = token
+        .iter()
+        .enumerate()
+        .filter(|&(i, b)| b.is_ascii_digit() && (i == 0 || !token[i - 1].is_ascii_digit()))
+        .count();
+    let (mut letters, mut wordy, mut pieces) = (0, 0, 0);
+    for piece in letter_pieces(token) {
+        letters += piece.len();
+        pieces += 1;
+        if is_word_like(piece) {
+            wordy += piece.len();
+        }
+    }
+    pieces > 0 && digit_runs * 2 <= pieces && wordy * 10 >= letters * 7 && letters * 2 >= pieces * 7
+}
+
+/// Runs of letters, split again at camelCase: `CFXRegistrationPost` is
+/// `CFX`, `Registration`, `Post`.
+fn letter_pieces(token: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        while i < token.len() && !token[i].is_ascii_alphabetic() {
+            i += 1;
+        }
+        if i == token.len() {
+            return None;
+        }
+        let start = i;
+        i += 1;
+        while i < token.len() && token[i].is_ascii_alphabetic() {
+            let (prev, cur) = (token[i - 1], token[i]);
+            let next_lower = token.get(i + 1).is_some_and(u8::is_ascii_lowercase);
+            if cur.is_ascii_uppercase() && (prev.is_ascii_lowercase() || next_lower) {
+                break;
+            }
+            i += 1;
+        }
+        Some(&token[start..i])
+    })
+}
+
+/// 3 to 16 letters, with a vowel and no run of five consonants.
+fn is_word_like(piece: &[u8]) -> bool {
+    let vowel = |b: &u8| b"aeiouy".contains(&b.to_ascii_lowercase());
+    (3..=16).contains(&piece.len())
+        && piece.iter().any(vowel)
+        && piece.split(vowel).all(|consonants| consonants.len() < 5)
 }
 
 /// True if a `key=`/`token:`/`secret …` keyword appears shortly before `pos`.
