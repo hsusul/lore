@@ -5,7 +5,7 @@
 //! words, never a model: a short user turn right after an assistant turn that
 //! opens with or contains a correction ("no", "don't", "instead", "use X not
 //! Y", "I told you"), or a user turn that repeats an instruction the person
-//! already gave earlier in the same session. [`lessons`] groups candidates
+//! already gave earlier in the same session. A question is neither. [`lessons`] groups candidates
 //! that say the same thing across sessions. It writes nothing.
 
 use std::collections::BTreeSet;
@@ -34,7 +34,19 @@ const MIN_REPEAT_WORDS: usize = 4;
 
 /// The first words that open a correction.
 const OPENERS: &[&str] = &[
-    "no", "nope", "stop", "wrong", "don't", "dont", "never", "actually", "instead", "wait",
+    "no", "nope", "stop", "wrong", "don't", "dont", "never", "actually", "instead",
+];
+/// Openings of a question, which asks rather than corrects.
+const QUESTION_OPENERS: &[&str] = &[
+    "what ",
+    "what's ",
+    "why ",
+    "how ",
+    "wait so",
+    "wait but",
+    "can you",
+    "could you",
+    "is it",
 ];
 /// Phrases that mark a correction anywhere in a short turn.
 const PHRASES: &[&str] = &[
@@ -48,7 +60,6 @@ const PHRASES: &[&str] = &[
     "that's not",
     "thats not",
     "you should have",
-    "why did you",
     "stop ",
 ];
 
@@ -168,7 +179,10 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
         }
         let text = one_line(&turn.text);
         let words = content_words(&text);
-        let signal = if text.starts_with('<') || text.chars().count() > limits.max_chars {
+        let signal = if text.starts_with('<')
+            || text.chars().count() > limits.max_chars
+            || is_question(&text)
+        {
             None
         } else if before.is_some_and(|b| !b.user) && corrects(&text) {
             Some(Signal::Correction)
@@ -198,6 +212,13 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
         earlier.push(words);
     }
     Ok(found)
+}
+
+/// Whether `text` asks something: it ends with a question mark, or opens the
+/// way a question does.
+fn is_question(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+    lower.ends_with('?') || QUESTION_OPENERS.iter().any(|q| lower.starts_with(q))
 }
 
 /// Whether `text` reads as a correction.
