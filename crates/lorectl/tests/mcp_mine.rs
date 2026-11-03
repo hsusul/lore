@@ -15,9 +15,10 @@ const TOKEN: &str = concat!("ghp_", "Zq7Lm2Xc9Vb4Nk8Rt1Yw6Pd3Fs5Gh0Jk2Lm4Q");
 /// on 2026-08-01, -02, ..., scanned into `home/archive`.
 fn scanned(home: &Path, sessions: &[(&str, &str)]) {
     for (i, (assistant, user)) in sessions.iter().enumerate() {
-        let day = home.join(format!("codex/sessions/2026/08/{:02}", i + 1));
+        let (month, date) = (8 + i / 28, i % 28 + 1);
+        let day = home.join(format!("codex/sessions/2026/{month:02}/{date:02}"));
         std::fs::create_dir_all(&day).unwrap();
-        let ts = |s: usize| format!("2026-08-{:02}T10:00:{s:02}.000Z", i + 1);
+        let ts = |s: usize| format!("2026-{month:02}-{date:02}T10:00:{s:02}.000Z");
         let item = |s: usize, role: &str, kind: &str, text: &str| {
             json!({"type": "response_item", "timestamp": ts(s), "payload": {
                 "type": "message", "role": role, "content": [{"type": kind, "text": text}]}})
@@ -56,6 +57,70 @@ fn session(home: &Path, n: usize) -> String {
         |r| r.get(0),
     )
     .unwrap()
+}
+
+/// Sixty corrections that share no words, each with an agent turn long
+/// enough that they cannot all fit in one reply.
+fn sixty(home: &Path) {
+    let filler = "and keep the rest of the module exactly as it was before. ".repeat(3);
+    let texts: Vec<(String, String)> = (0..60)
+        .map(|n| {
+            let word = |k: usize| format!("w{n}x{k}");
+            let words: Vec<String> = (1..=12).map(word).collect();
+            (
+                format!("Editing {} now, {filler}", word(0)),
+                format!("never touch {}", words.join(" ")),
+            )
+        })
+        .collect();
+    let pairs: Vec<(&str, &str)> = texts
+        .iter()
+        .map(|(a, u)| (a.as_str(), u.as_str()))
+        .collect();
+    scanned(home, &pairs);
+}
+
+#[test]
+fn mine_candidates_pages_through_every_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    sixty(home);
+    let (tool, _) = mine(&home.join("archive"), json!({}));
+    let description = tool["description"].as_str().unwrap();
+    assert!(description.contains("next_cursor"), "{description}");
+    assert!(description.contains("every page"), "{description}");
+
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let mut arguments = json!({ "limit": 50 });
+        if let Some(cursor) = &cursor {
+            arguments["cursor"] = json!(cursor);
+        }
+        let (_, result) = mine(&home.join("archive"), arguments);
+        let reply = &result["structuredContent"];
+        assert!(
+            reply.to_string().chars().count() <= 16_000,
+            "page {pages} too big"
+        );
+        assert_eq!(reply["total"], 60);
+        for candidate in reply["candidates"].as_array().unwrap() {
+            seen.push(candidate["text"].as_str().unwrap().to_owned());
+        }
+        pages += 1;
+        match reply["next_cursor"].as_str() {
+            Some(next) => cursor = Some(next.to_owned()),
+            None => break,
+        }
+    }
+    assert!(pages > 1, "sixty long candidates fit in one page");
+    let distinct: std::collections::BTreeSet<&String> = seen.iter().collect();
+    assert_eq!((seen.len(), distinct.len()), (60, 60));
+
+    let (_, bad) = mine(&home.join("archive"), json!({ "cursor": "x" }));
+    assert_eq!(bad["isError"], true);
+    assert_eq!(bad["structuredContent"]["field"], "cursor");
 }
 
 /// One `mine_candidates` call over stdio, and the `tools/list` entry for it.
@@ -151,7 +216,8 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
             }],
         })
     );
-    assert_eq!(reply["truncated"], false);
+    assert_eq!(reply["next_cursor"], Value::Null);
+    assert_eq!(reply["total"], 2);
 
     let (_, one) = mine(&home.join("archive"), json!({ "limit": 1 }));
     assert_eq!(
