@@ -136,6 +136,9 @@ Options:
                       such as 30d, 12h, or 90m, newest first. With `init`:
                       the window to scan, default 30d.
     --limit <N>       With `init`: lessons to show, default 5.
+    --review          With `init`: offer each lesson to keep, skip, or edit.
+                      On by default when stdin is a terminal; `--no-review`
+                      turns it off.
     --vault <DIR>     With `init` and `mem`: the vault directory.
     -h, --help        Print this help.
     -V, --version     Print the version.

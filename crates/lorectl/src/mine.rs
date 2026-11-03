@@ -18,7 +18,7 @@ use lore_memory::inbox::{self, Proposal};
 use lore_memory::mine::{self, Candidate, Lesson, Signal};
 use lore_memory::note::{AgentKind, NoteId, NoteType, Scope, SessionId};
 use lore_memory::repo::RepoContext;
-use lore_memory::review::ReviewError;
+use lore_memory::review::{self, ReviewError};
 use lore_memory::vault::{self, Vault};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -215,13 +215,11 @@ fn propose_lessons(
     let (filed, _) = inbox::proposals(&vault).map_err(ReviewError::from)?;
     let mut out = std::io::stdout().lock();
     for lesson in chosen {
-        let marker = format!("(lesson {})", lesson.id);
-        if filed.iter().any(|p| p.body.contains(&marker)) {
+        if is_filed(&filed, lesson) {
             let _ = writeln!(out, "already proposed lesson {}", lesson.id);
             continue;
         }
-        let written =
-            inbox::propose(&vault, proposal(lesson, &marker)?).map_err(ReviewError::from)?;
+        let written = inbox::propose(&vault, proposal(lesson)?).map_err(ReviewError::from)?;
         let _ = writeln!(
             out,
             "proposed {} {}/{} for lesson {}",
@@ -234,7 +232,30 @@ fn propose_lessons(
     Ok(exit::OK)
 }
 
-fn proposal(lesson: &Lesson, marker: &str) -> Result<Proposal, CliError> {
+/// The tag a lesson's proposal body carries, so one lesson is filed once.
+fn marker(lesson: &Lesson) -> String {
+    format!("(lesson {})", lesson.id)
+}
+
+/// True when one of the `filed` proposals came from `lesson`, whatever was
+/// decided about it since.
+pub fn is_filed(filed: &[Proposal], lesson: &Lesson) -> bool {
+    let marker = marker(lesson);
+    filed.iter().any(|p| p.body.contains(&marker))
+}
+
+/// File `lesson` with `title` the way `--propose` does, then accept it as
+/// `lorectl mem accept` does: one commit, and the decision recorded for
+/// `mem eval`. Returns the note's vault path.
+pub fn keep(vault: &Vault, lesson: &Lesson, title: &str) -> Result<String, CliError> {
+    let mut proposal = proposal(lesson)?;
+    proposal.title = title.chars().take(TITLE_CHARS).collect();
+    let written = inbox::propose(vault, proposal).map_err(ReviewError::from)?;
+    Ok(review::accept(vault, written.id.as_str(), None)?.rel)
+}
+
+fn proposal(lesson: &Lesson) -> Result<Proposal, CliError> {
+    let marker = marker(lesson);
     let newest = &lesson.receipts[0];
     let bad = |e: lore_memory::note::InvalidValue| CliError::Usage(e.to_string());
     let mut body = format!(

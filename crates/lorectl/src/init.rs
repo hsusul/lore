@@ -3,8 +3,12 @@
 //! receipt. Safe to run again: the vault is reused and the scan ingests only
 //! what changed. A failure after the vault step is printed on that step's line
 //! and the next step still runs.
+//!
+//! On a terminal, or with `--review`, each lesson is offered in turn: accept
+//! the suggested rule, edit it, skip, or quit. A kept lesson is filed and
+//! accepted as a note in one step, so `mem eval` counts it as decided.
 
-use std::io::Write;
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -33,6 +37,8 @@ struct Args {
     limit: usize,
     vault: Option<PathBuf>,
     archive: Option<PathBuf>,
+    /// `--review` or `--no-review`, the last one given.
+    review: Option<bool>,
 }
 
 /// The flags after `init`. `None` when help was asked for.
@@ -44,6 +50,7 @@ fn parse(invocation: &Invocation) -> Result<Option<Args>, CliError> {
         limit: DEFAULT_LIMIT,
         vault: None,
         archive: invocation.archive.clone(),
+        review: None,
     };
     while let Some(arg) = parser.next().map_err(usage)? {
         match arg {
@@ -61,6 +68,8 @@ fn parse(invocation: &Invocation) -> Result<Option<Args>, CliError> {
             }
             Long("vault") => args.vault = Some(parser.value().map_err(usage)?.into()),
             Long("archive") => args.archive = Some(parser.value().map_err(usage)?.into()),
+            Long("review") => args.review = Some(true),
+            Long("no-review") => args.review = Some(false),
             other => return Err(usage(other.unexpected())),
         }
     }
@@ -76,16 +85,21 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let (window, since) = crate::scan::window(&args.since)?;
     let archive_dir = paths::archive_dir(args.archive.as_deref())?;
     let vault_dir = vault::resolve_dir(args.vault.as_deref())?;
+    let terminal = std::io::stdin().is_terminal();
+    let review = args.review.unwrap_or(terminal);
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "Lore");
 
-    match vault_step(&vault_dir) {
-        Ok(line) => drop(writeln!(out, "Vault      {line}")),
+    let vault = match vault_step(&vault_dir) {
+        Ok((vault, line)) => {
+            let _ = writeln!(out, "Vault      {line}");
+            vault
+        }
         Err(error) => {
             let _ = writeln!(out, "Vault      failed: {error}");
             return Ok(exit::exit_code(&error));
         }
-    }
+    };
 
     let started = Instant::now();
     let scanned = crate::scan::scan_into(&archive_dir, Some(since));
@@ -106,22 +120,116 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     };
     let _ = writeln!(out, "Archive    {line}");
 
-    let lessons = match lessons(&archive_dir) {
-        Ok(lessons) => lessons_text(&lessons, args.limit),
-        Err(error) => format!("Lessons    failed: {error}\n\n"),
-    };
-    let _ = write!(out, "{lessons}{NEXT}");
+    match lessons(&archive_dir) {
+        Ok(lessons) if review && !lessons.is_empty() => {
+            let _ = write!(out, "{}", header(&lessons, args.limit));
+            let shown = &lessons[..lessons.len().min(args.limit)];
+            let mut input = std::io::stdin().lock();
+            // Piped answers are not echoed, so print them as a terminal would.
+            let n = review_lessons(&mut out, &mut input, !terminal, &vault, shown);
+            let _ = writeln!(
+                out,
+                "Kept {n} lesson{}. Your next Claude Code or Codex session will see them \
+                 once Lore is connected (lorectl connect).",
+                plural(n)
+            );
+        }
+        Ok(lessons) => drop(write!(out, "{}{NEXT}", lessons_text(&lessons, args.limit))),
+        Err(error) => drop(write!(out, "Lessons    failed: {error}\n\n{NEXT}")),
+    }
     Ok(exit::OK)
 }
 
 /// Create the vault, or report the one already there and its note count.
-fn vault_step(dir: &Path) -> Result<String, CliError> {
+fn vault_step(dir: &Path) -> Result<(Vault, String), CliError> {
     let (vault, init) = Vault::init(dir)?;
     if init == Init::Created {
-        return Ok(format!("created {}", dir.display()));
+        return Ok((vault, format!("created {}", dir.display())));
     }
     let notes = vault.index().and_then(|index| Ok(index.len()?))?;
-    Ok(format!("{}, {notes} note{}", dir.display(), plural(notes)))
+    let line = format!("{}, {notes} note{}", dir.display(), plural(notes));
+    Ok((vault, line))
+}
+
+const PROMPT: &str = "      [a]ccept  [e]dit  [s]kip  [q]uit ";
+
+/// Offer each lesson in turn and keep the ones accepted. A lesson filed
+/// before is shown as kept and not offered. Returns how many were kept.
+fn review_lessons(
+    out: &mut impl Write,
+    input: &mut impl BufRead,
+    echo: bool,
+    vault: &Vault,
+    lessons: &[Lesson],
+) -> usize {
+    // An unreadable inbox reads as empty; filing then reports the error.
+    let filed = lore_memory::inbox::proposals(vault).map_or_else(|_| Vec::new(), |(p, _)| p);
+    let mut kept = 0;
+    for lesson in lessons {
+        let _ = write!(out, "{}", lesson_text(lesson));
+        if crate::mine::is_filed(&filed, lesson) {
+            let _ = writeln!(out, "      (already kept)\n");
+            continue;
+        }
+        let suggested = mine::suggest_rule(&lesson.text);
+        let Some(title) = choose(|prompt| answer(out, input, echo, prompt), suggested) else {
+            let _ = writeln!(out);
+            break;
+        };
+        if let Some(title) = title {
+            match crate::mine::keep(vault, lesson, &title) {
+                Ok(rel) => {
+                    kept += 1;
+                    let _ = writeln!(out, "      kept {rel}");
+                }
+                Err(error) => drop(writeln!(out, "      failed: {error}")),
+            }
+        }
+        let _ = writeln!(out);
+    }
+    kept
+}
+
+/// The title to keep a lesson under, `Some(None)` to skip it, or `None` to
+/// stop. A stray answer is asked once more, then counts as a skip.
+fn choose(
+    mut ask: impl FnMut(&str) -> Option<String>,
+    suggested: String,
+) -> Option<Option<String>> {
+    for _ in 0..2 {
+        match ask(PROMPT)?.as_str() {
+            "a" => return Some(Some(suggested)),
+            "e" => {
+                let text = ask("      rule: ")?;
+                return Some(Some(if text.is_empty() { suggested } else { text }));
+            }
+            "s" => return Some(None),
+            "q" => return None,
+            _ => {}
+        }
+    }
+    Some(None)
+}
+
+/// Print `prompt` and read one trimmed line. `None` at the end of input.
+fn answer(
+    out: &mut impl Write,
+    input: &mut impl BufRead,
+    echo: bool,
+    prompt: &str,
+) -> Option<String> {
+    let _ = write!(out, "{prompt}");
+    let _ = out.flush();
+    let mut line = String::new();
+    if input.read_line(&mut line).unwrap_or(0) == 0 {
+        let _ = writeln!(out);
+        return None;
+    }
+    let line = line.trim().to_owned();
+    if echo {
+        let _ = writeln!(out, "{line}");
+    }
+    Some(line)
 }
 
 /// Every mined lesson with a rule score of 0 or more, in the miner's order.
@@ -135,37 +243,50 @@ fn lessons(archive_dir: &Path) -> Result<Vec<Lesson>, CliError> {
 }
 
 fn lessons_text(lessons: &[Lesson], limit: usize) -> String {
+    let mut out = header(lessons, limit);
+    for lesson in lessons.iter().take(limit) {
+        out.push_str(&lesson_text(lesson));
+        out.push('\n');
+    }
+    out
+}
+
+/// The `Lessons` line, and the blank line after it.
+fn header(lessons: &[Lesson], limit: usize) -> String {
     let count = lessons.len();
     if count == 0 {
         return "Lessons    none found in your sessions yet.\n\n".into();
     }
-    let mut out = format!(
-        "Lessons    {count} candidate{} from your corrections",
-        plural(count)
-    );
-    out.push_str(&if count > limit {
-        format!(". The top {limit}:\n\n")
+    let shown = if count > limit {
+        format!(". The top {limit}:")
     } else {
-        ":\n\n".into()
-    });
-    for lesson in lessons.iter().take(limit) {
-        let newest = &lesson.receipts[0];
-        let day = newest
-            .at_ms
-            .and_then(date)
-            .unwrap_or_else(|| "undated".into());
-        out.push_str(&format!(
-            "  {}  {} conversation{}, latest {day}\n      \"{}\"\n      - {} {} {day}: \"{}\"\n\n",
-            lesson.id,
-            lesson.conversations,
-            plural(lesson.conversations),
-            lesson.text,
-            newest.agent,
-            newest.session,
-            newest.text,
-        ));
-    }
-    out
+        ":".into()
+    };
+    format!(
+        "Lessons    {count} candidate{} from your corrections{shown}\n\n",
+        plural(count)
+    )
+}
+
+/// One lesson: its id, the person's words, the suggested rule, and the
+/// newest receipt.
+fn lesson_text(lesson: &Lesson) -> String {
+    let newest = &lesson.receipts[0];
+    let day = newest
+        .at_ms
+        .and_then(date)
+        .unwrap_or_else(|| "undated".into());
+    format!(
+        "  {}  {} conversation{}, latest {day}\n      \"{}\"\n      suggested: {}\n      - {} {} {day}: \"{}\"\n",
+        lesson.id,
+        lesson.conversations,
+        plural(lesson.conversations),
+        lesson.text,
+        mine::suggest_rule(&lesson.text),
+        newest.agent,
+        newest.session,
+        newest.text,
+    )
 }
 
 fn plural(n: usize) -> &'static str {
