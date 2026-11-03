@@ -251,7 +251,9 @@ fn mem_inbox_names_an_update_target_and_accept_refuses_another_scope() {
         "{listed}"
     );
     assert!(
-        listed.contains(&format!("{global}  codex:s3 (unverified)  fact  global  {target}\n")),
+        listed.contains(&format!(
+            "{global}  codex:s3 (unverified)  fact  global  {target}\n"
+        )),
         "{listed}"
     );
     let before = head(&vault);
