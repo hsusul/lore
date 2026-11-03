@@ -349,14 +349,9 @@ pub fn states_rule(text: &str) -> bool {
             .any(|w| RULE_WORDS.contains(w) || TOOLS.contains(w))
 }
 
-/// Phrases that make a turn read as a standing rule.
-const STANDING: &[&str] = &[
-    "from now on",
-    "going forward",
-    "always",
-    "never",
-    "make sure",
-];
+/// Phrases that make a turn read as a standing rule. "make sure" counts for
+/// less when the same turn holds a task verb (see [`rule_score`]).
+const STANDING: &[&str] = &["from now on", "going forward", "always", "never"];
 /// First words of a one-off task order.
 const TASK_VERBS: &[&str] = &[
     "push",
@@ -379,10 +374,12 @@ const TASK_VERBS: &[&str] = &[
 
 /// How much `text` reads like a standing rule rather than a one-off task
 /// order. Fixed and explainable: +2 for a standing phrase ("from now on",
-/// "always", "never", "make sure", "going forward"), +1 when it names no
-/// specific artifact, -3 for each PR or issue number (`#478`, `issue 12`) and
-/// each branch-shaped token (a slash and no file extension), and -2 when it
-/// opens with a task verb ("push", "merge", "fix", ...) and names an artifact.
+/// "always", "never", "going forward"), or for "make sure" alone, which earns
+/// only +1 when the turn also holds a task verb; +1 when it names no specific
+/// artifact; -3 for each PR or issue number (`#478`, `issue 12`), each
+/// branch-shaped token (a slash and no file extension), each URL, and each
+/// span the secret scan masked; and -2 when it opens with a task verb
+/// ("push", "merge", "fix", ...) and names an artifact.
 #[must_use]
 pub fn rule_score(text: &str) -> i32 {
     let lower = text.to_lowercase();
@@ -411,18 +408,27 @@ pub fn rule_score(text: &str) -> i32 {
     let branches = tokens
         .iter()
         .filter(|t| {
-            t.contains('/')
+            let branch = t.contains('/')
                 && !t.starts_with(['/', '~', '.'])
                 && !has_extension(t)
                 && t.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_/".contains(c))
+                    .all(|c| c.is_ascii_alphanumeric() || "-_/".contains(c));
+            // A URL and a span the secret scan masked name one artifact as
+            // surely as a branch does.
+            branch || t.contains("://") || t.contains("«redacted:")
         })
         .count();
-    let paths = tokens.iter().filter(|t| has_extension(t)).count();
+    let paths = tokens
+        .iter()
+        .filter(|t| has_extension(t) && !t.contains("://") && !t.contains("«redacted:"))
+        .count();
     let artifacts = numbers + branches + paths;
     let mut score = 0;
+    let task_verb = tokens.iter().any(|t| TASK_VERBS.contains(t));
     if STANDING.iter().any(|p| lower.contains(p)) {
         score += 2;
+    } else if lower.contains("make sure") {
+        score += if task_verb { 1 } else { 2 };
     }
     if artifacts == 0 {
         score += 1;

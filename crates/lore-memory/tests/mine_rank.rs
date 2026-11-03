@@ -57,6 +57,36 @@ fn a_standing_rule_ranks_above_a_newer_repeated_task_order() {
 }
 
 #[test]
+fn redacted_tokens_urls_and_task_verbs_lower_the_score() {
+    let scores: Vec<(&str, i32)> = [
+        "make sure you merge the PR at «redacted:high-entropy» before lunch",
+        "always check https://github.com/acme/app/pull/478 first",
+        "make sure to commit and push every little step",
+        "make sure that docs are never tracked",
+        "make sure the readme stays short",
+    ]
+    .iter()
+    .map(|t| (*t, rule_score(t)))
+    .collect();
+    assert_eq!(
+        scores,
+        [
+            (
+                "make sure you merge the PR at «redacted:high-entropy» before lunch",
+                -2
+            ),
+            (
+                "always check https://github.com/acme/app/pull/478 first",
+                -1
+            ),
+            ("make sure to commit and push every little step", 2),
+            ("make sure that docs are never tracked", 3),
+            ("make sure the readme stays short", 3),
+        ]
+    );
+}
+
+#[test]
 fn the_rule_score_is_fixed_and_explainable() {
     let scores: Vec<(&str, i32)> = [
         "from now on run the formatter first",
