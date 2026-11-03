@@ -214,6 +214,7 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
             "may_conflict_with": [],
             "receipts": [{
                 "session": session(home, 2), "agent": "codex", "date": "2026-08-02",
+                "repo": null,
                 "correction": "Stop asking me for permission", "before": "Shall I run it?",
             }],
         })
@@ -318,4 +319,100 @@ fn mine_candidates_leaves_out_one_off_orders_unless_asked_for_all() {
         ]
     );
     assert_eq!(all["structuredContent"]["left_out"], 0);
+}
+
+/// One Codex session per `(cwd, agent action, user turn)`, scanned.
+fn scanned_in(home: &Path, sessions: &[(&Path, &str, &str)]) {
+    for (i, (cwd, assistant, user)) in sessions.iter().enumerate() {
+        let day = home.join(format!("codex/sessions/2026/08/{:02}", i + 1));
+        std::fs::create_dir_all(&day).unwrap();
+        let ts = |s: usize| format!("2026-08-{:02}T10:00:{s:02}.000Z", i + 1);
+        let item = |s: usize, role: &str, kind: &str, text: &str| {
+            json!({"type": "response_item", "timestamp": ts(s), "payload": {
+                "type": "message", "role": role, "content": [{"type": kind, "text": text}]}})
+        };
+        let lines = [
+            json!({"type": "session_meta", "timestamp": ts(0), "payload": {
+                "id": format!("019e0000-0000-7000-8000-{:012x}", i + 1), "cwd": cwd,
+                "cli_version": "0.133.0", "model_provider": "openai"}}),
+            item(1, "user", "input_text", "go ahead"),
+            item(2, "assistant", "output_text", assistant),
+            item(3, "user", "input_text", user),
+        ];
+        let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(day.join(format!("rollout-{:012x}.jsonl", i + 1)), body).unwrap();
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["scan", "--archive"])
+        .arg(home.join("archive"))
+        .env("CLAUDE_CONFIG_DIR", home.join("claude"))
+        .env("CODEX_HOME", home.join("codex"))
+        .env_remove("LORE_ARCHIVE_DIR")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn mine_candidates_names_each_receipts_repository_and_the_cwd_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let repo = home.join("app");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["remote", "add", "origin", "git@github.com:hsusul/lore.git"],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let elsewhere = home.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    scanned_in(
+        home,
+        &[
+            (&repo, "Running npm install.", "no, use pnpm not npm"),
+            (
+                &elsewhere,
+                "Editing src/generated/schema.rs.",
+                "never hand edit generated files",
+            ),
+        ],
+    );
+    let lore = json!({ "name": "lore", "scope": "repo:81444c90f1ff44ac" });
+    let receipt_repos = |reply: &Value| -> Vec<(String, Value)> {
+        reply["structuredContent"]["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["text"].as_str().unwrap().to_owned(),
+                    c["receipts"][0]["repo"].clone(),
+                )
+            })
+            .collect()
+    };
+    let (tool, here) = mine(&home.join("archive"), json!({ "cwd": repo }));
+    assert_eq!(tool["inputSchema"]["properties"]["cwd"]["type"], "string");
+    assert_eq!(here["structuredContent"]["cwd_repo"], lore);
+    let mut repos = receipt_repos(&here);
+    repos.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        repos,
+        [
+            ("never hand edit generated files".to_owned(), Value::Null),
+            ("no, use pnpm not npm".to_owned(), lore),
+        ]
+    );
+    let (_, anywhere) = mine(&home.join("archive"), json!({}));
+    assert_eq!(anywhere["structuredContent"]["cwd_repo"], Value::Null);
 }
