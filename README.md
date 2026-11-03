@@ -187,6 +187,8 @@ The vault is `~/Lore` by default. For another vault, set `LORE_VAULT_DIR` to an 
 
 In Claude Code, run `/plugin marketplace add hsusul/lore`, then `/plugin install lore@lore`. For Codex, `plugins/codex` holds `.codex-plugin/plugin.json` and `hooks/hooks.json`.
 
+Each plugin also ships the `lore-lessons` skill (`/lore:lore-lessons` in Claude Code). The agent reads every `mine_candidates` page, groups your past corrections by meaning, and files each rule once with its receipts as a proposal. Then run `lorectl init --review` to accept or reject them.
+
 ### Tools
 
 The server offers six tools. All but `propose_memory` are read only.

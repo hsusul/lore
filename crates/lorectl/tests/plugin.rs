@@ -4,6 +4,7 @@
 #![cfg(unix)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -264,4 +265,135 @@ fn the_plugin_mcp_server_files_proposals_as_its_own_agent() {
             "{dir}: {inbox}"
         );
     }
+}
+
+/// The `tools/list` reply of the real `lorectl mcp` server.
+fn listed_tools(home: &Path) -> Vec<Value> {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .arg("mcp")
+        .env("HOME", home)
+        .env("LORE_VAULT_DIR", home.join("vault"))
+        .env("LORE_ARCHIVE_DIR", home.join("archive"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut pipe = child.stdin.take().unwrap();
+    for m in [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "clientInfo": {"name": "claude-code"}}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    ] {
+        writeln!(pipe, "{m}").unwrap();
+    }
+    drop(pipe);
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let reply: Value = serde_json::from_str(stdout.lines().nth(1).unwrap()).unwrap();
+    reply["result"]["tools"].as_array().unwrap().clone()
+}
+
+/// Every identifier-like word in `value`, keys and strings alike.
+fn words(value: &Value, out: &mut BTreeSet<String>) {
+    fn add(text: &str, out: &mut BTreeSet<String>) {
+        let parts = text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+        out.extend(parts.filter(|w| !w.is_empty()).map(str::to_owned));
+    }
+    match value {
+        Value::String(s) => add(s, out),
+        Value::Array(items) => items.iter().for_each(|v| words(v, out)),
+        Value::Object(map) => {
+            for (k, v) in map {
+                add(k, out);
+                words(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A SKILL.md's frontmatter fields in order, and its body.
+fn skill_parts(text: &str) -> (Vec<(String, String)>, String) {
+    let rest = text
+        .strip_prefix("---\n")
+        .expect("frontmatter opens the file");
+    let (front, body) = rest.split_once("\n---\n").expect("frontmatter closes");
+    let fields = front
+        .lines()
+        .map(|line| {
+            let (key, value) = line.split_once(':').expect("key: value");
+            (key.to_owned(), value.trim().to_owned())
+        })
+        .collect();
+    (fields, body.to_owned())
+}
+
+/// The names a skill body leans on: every word quoted in backticks that is
+/// a lowercase identifier, and every snake_case word anywhere.
+fn named_identifiers(body: &str) -> BTreeSet<String> {
+    let ident = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c == '_');
+    let quoted = body.split('`').skip(1).step_by(2).filter(|w| ident(w));
+    let snake = body
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| w.contains('_') && ident(w));
+    quoted.chain(snake).map(str::to_owned).collect()
+}
+
+#[test]
+fn the_lore_lessons_skill_names_only_what_the_lore_server_lists() {
+    let home = tempfile::tempdir().unwrap();
+    let tools = listed_tools(home.path());
+    let tool_names: BTreeSet<String> = tools
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    let mut vocabulary = BTreeSet::new();
+    words(&Value::Array(tools), &mut vocabulary);
+
+    let codex = read_json(&repo_root().join("plugins/codex/.codex-plugin/plugin.json"));
+    assert_eq!(codex["skills"], "./skills/");
+
+    for dir in ["plugins/claude-code", "plugins/codex"] {
+        let path = repo_root().join(dir).join("skills/lore-lessons/SKILL.md");
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))
+            .unwrap();
+        let (fields, body) = skill_parts(&text);
+        let keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["name", "description"], "{dir}");
+        assert_eq!(fields[0].1, "lore-lessons", "{dir}");
+        assert!(!fields[1].1.is_empty(), "{dir} description");
+
+        let named = named_identifiers(&body);
+        let tools_named: Vec<&str> = named
+            .iter()
+            .filter(|w| tool_names.contains(*w))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            tools_named,
+            [
+                "mine_candidates",
+                "propose_memory",
+                "recall_memory",
+                "search_sessions"
+            ],
+            "{dir}"
+        );
+        let unknown: Vec<&String> = named.iter().filter(|w| !vocabulary.contains(*w)).collect();
+        assert!(
+            unknown.is_empty(),
+            "{dir} names what lorectl mcp does not list: {unknown:?}"
+        );
+    }
+    let skill = |dir: &str| {
+        std::fs::read_to_string(repo_root().join(dir).join("skills/lore-lessons/SKILL.md")).unwrap()
+    };
+    assert_eq!(
+        skill("plugins/claude-code"),
+        skill("plugins/codex"),
+        "both plugins ship one skill"
+    );
+
 }
