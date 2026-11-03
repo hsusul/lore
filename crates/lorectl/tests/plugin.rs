@@ -251,6 +251,7 @@ fn the_plugin_mcp_server_files_proposals_as_its_own_agent() {
                 "read_session",
                 "recall_memory",
                 "read_note",
+                "mine_candidates",
                 "propose_memory"
             ],
             "{dir}"
