@@ -138,8 +138,17 @@ impl Worker {
         // than in a caller so every scanning surface stamps it: the desktop
         // worker and `lorectl scan` reach this same line, and an archive filled
         // by one must not look unscanned to the other.
-        if since.is_none() {
-            let _ = crate::settings::record_scan_completed(&self.conn, now_ms());
+        match since {
+            None => {
+                let _ = crate::settings::record_scan_completed(&self.conn, now_ms());
+            }
+            Some(since) => {
+                let since_ms = since
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+                let _ =
+                    crate::settings::record_window_scan_completed(&self.conn, now_ms(), since_ms);
+            }
         }
 
         // The queue is empty and no transaction is open — the one moment a

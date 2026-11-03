@@ -614,3 +614,53 @@ fn committing_that_work_clears_the_finding() {
     ));
     assert!(rendered.starts_with("nothing at risk"), "{rendered}");
 }
+
+#[test]
+fn a_windowed_scan_says_when_and_how_far_back_it_looked() {
+    let repo = repo();
+    let homes = empty_homes();
+    seed_codex_session_in(repo.path(), homes.path());
+    let archive = tempfile::tempdir().unwrap();
+    let scan = lorectl_in(
+        repo.path(),
+        archive.path(),
+        homes.path(),
+        &["scan", "--since", "30d"],
+    );
+    assert_eq!(code(&scan), 0, "{}", String::from_utf8_lossy(&scan.stderr));
+
+    let text = stdout(&lorectl_in(
+        repo.path(),
+        archive.path(),
+        homes.path(),
+        &["status"],
+    ));
+    let line = text.lines().find(|l| l.starts_with("last scan")).unwrap();
+    // The date is 30 days before today; mask its digits.
+    let masked: String = line
+        .chars()
+        .map(|c| if c.is_ascii_digit() { 'N' } else { c })
+        .collect();
+    assert_eq!(
+        masked,
+        "last scan   less than a minute ago, of files modified since NNNN-NN-NN only; \
+         `lorectl scan` reads the rest"
+    );
+    let json: serde_json::Value = serde_json::from_slice(
+        &lorectl_in(
+            repo.path(),
+            archive.path(),
+            homes.path(),
+            &["status", "--json"],
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert!(json["last_scan_completed_at_ms"].is_null(), "{json}");
+    let window = &json["last_window_scan"];
+    let (at, since) = (
+        window["completed_at_ms"].as_i64().unwrap(),
+        window["since_ms"].as_i64().unwrap(),
+    );
+    assert!((29..=31).contains(&((at - since) / 86_400_000)), "{json}");
+}
