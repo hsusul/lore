@@ -278,7 +278,8 @@ fn vault_step(dir: &Path) -> Result<(Vault, String), CliError> {
 const PROMPT: &str = "      [a]ccept  [e]dit  [s]kip  [q]uit ";
 
 /// Offer each lesson in turn and keep the ones accepted. A lesson filed
-/// before is shown as kept and not offered. Returns how many were kept.
+/// before is not offered; its line says whether it was kept, is waiting in
+/// the inbox, or was rejected. Returns how many were kept.
 fn review_lessons(
     out: &mut impl Write,
     input: &mut impl BufRead,
@@ -288,11 +289,12 @@ fn review_lessons(
 ) -> usize {
     // An unreadable inbox reads as empty; filing then reports the error.
     let filed = lore_memory::inbox::proposals(vault).map_or_else(|_| Vec::new(), |(p, _)| p);
+    let decisions = review::decisions(vault).unwrap_or_default();
     let mut kept = 0;
     for lesson in lessons {
         let _ = write!(out, "{}", lesson_text(lesson));
-        if crate::mine::is_filed(&filed, lesson) {
-            let _ = writeln!(out, "      (already kept)\n");
+        if let Some(state) = filed_state(&filed, &decisions, lesson) {
+            let _ = writeln!(out, "      ({state})\n");
             continue;
         }
         let suggested = mine::suggest_rule(&lesson.text);
@@ -312,6 +314,27 @@ fn review_lessons(
         let _ = writeln!(out);
     }
     kept
+}
+
+/// What became of `lesson` if it was filed before: "already kept" when a
+/// proposal from it was accepted, else "in the inbox" while one is pending,
+/// else "rejected". `None` when it was never filed.
+fn filed_state(
+    filed: &[Proposal],
+    decisions: &std::collections::HashMap<lore_memory::note::NoteId, review::Decision>,
+    lesson: &Lesson,
+) -> Option<&'static str> {
+    let rank = |p: &Proposal| match decisions.get(&p.id) {
+        Some(review::Decision::Accepted { .. }) => 0,
+        None => 1,
+        Some(review::Decision::Rejected { .. }) => 2,
+    };
+    let best = filed
+        .iter()
+        .filter(|p| crate::mine::came_from(p, lesson))
+        .map(rank)
+        .min()?;
+    Some(["already kept", "in the inbox", "rejected"][best])
 }
 
 /// The title to keep a lesson under, `Some(None)` to skip it, or `None` to

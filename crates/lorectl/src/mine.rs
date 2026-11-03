@@ -254,8 +254,12 @@ fn marker(lesson: &Lesson) -> String {
 /// True when one of the `filed` proposals came from `lesson`, whatever was
 /// decided about it since.
 pub fn is_filed(filed: &[Proposal], lesson: &Lesson) -> bool {
-    let marker = marker(lesson);
-    filed.iter().any(|p| p.body.contains(&marker))
+    filed.iter().any(|p| came_from(p, lesson))
+}
+
+/// Whether `proposal` was filed from `lesson`.
+pub fn came_from(proposal: &Proposal, lesson: &Lesson) -> bool {
+    proposal.body.contains(&marker(lesson))
 }
 
 /// File `lesson` with `title` the way `--propose` does, then accept it as
