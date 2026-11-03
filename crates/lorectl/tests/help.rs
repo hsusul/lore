@@ -151,3 +151,50 @@ fn the_version_is_set_and_matches_the_desktop_app_and_ui() {
     assert_eq!(json("package.json")["version"], "0.2.0");
     assert_eq!(json("package-lock.json")["version"], "0.2.0");
 }
+
+/// Every `lorectl` command in the README's "Get started" section, and each of
+/// its flags, is one `lorectl --help` lists, and the first run's steps come
+/// in an order that works: the archive and vault exist before the agent mines.
+#[test]
+fn the_readme_first_run_uses_only_commands_the_cli_lists() {
+    let readme =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md")).unwrap();
+    let start = readme
+        .find("\n## Get started\n")
+        .expect("README has a Get started section");
+    let section = &readme[start + 1..];
+    let section = &section[..section[3..]
+        .find("\n## ")
+        .map_or(section.len(), |end| end + 3)];
+    let help = help_text(&["--help"]);
+    let commands: Vec<&str> = section
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("lorectl "))
+        .collect();
+    assert!(!commands.is_empty(), "{section}");
+    for command in &commands {
+        let words: Vec<&str> = command
+            .split_whitespace()
+            .take_while(|w| *w != "#")
+            .collect();
+        let sub = words[1];
+        assert!(
+            help.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{sub} "))),
+            "`{command}`: no `{sub}` in --help"
+        );
+        for flag in words.iter().filter(|w| w.starts_with("--")) {
+            assert!(help.contains(flag), "`{command}`: no `{flag}` in --help");
+        }
+    }
+    let at = |needle: &str| {
+        section
+            .find(needle)
+            .unwrap_or_else(|| panic!("no `{needle}`:\n{section}"))
+    };
+    assert!(at("cargo build --release -p lorectl") < at("lorectl init\n"));
+    assert!(at("lorectl init\n") < at("/plugin install lore@lore"));
+    assert!(at("/plugin install lore@lore") < at("/lore:lore-lessons"));
+    assert!(at("/lore:lore-lessons") < at("lorectl init --review"));
+}

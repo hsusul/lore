@@ -17,16 +17,33 @@ Three rules hold the design together.
 - Agents only propose. A person accepts. Agents never get delete.
 - Every recalled note says whether the code it points at still matches. A stale note is labelled, not silently served.
 
-## Install
+## Get started
 
-Lore is early. There is no signed build. The newest GitHub release, v0.1.1, predates the current code, so build from source. You need Rust. `rust-toolchain.toml` pins the toolchain, and rustup selects it.
+Lore is early. There is no signed build, so build from source. You need Rust and git. `rust-toolchain.toml` pins the toolchain, and rustup selects it.
 
 ```bash
 cargo build --release -p lorectl
-target/release/lorectl --help
+export PATH="$PWD/target/release:$PATH"
+lorectl init
 ```
 
-Put `target/release/lorectl` on your `PATH`. The examples below assume it is there. `lorectl help mem` prints the memory commands alone.
+`lorectl init` makes the vault at `~/Lore`, scans the sessions of the last 30 days, and shows the lessons it found in your corrections. It reads your Claude Code and Codex logs and never changes them. Put `target/release` on your `PATH` for good so agents can run `lorectl` too.
+
+Then, in Claude Code, install the plugin and let the agent write your lessons:
+
+```text
+/plugin marketplace add hsusul/lore
+/plugin install lore@lore
+/lore:lore-lessons
+```
+
+The agent reads every candidate Lore mined, groups the ones that mean the same thing, and files each rule with its receipts, the sessions it came from. Nothing becomes a note until you accept it:
+
+```bash
+lorectl init --review
+```
+
+Accept, edit, or skip each one. From the next session on, the plugin shows the accepted notes for the repository at session start, each with a freshness label. `lorectl connect` says whether Claude Code and Codex are connected, and prints what to add for one that is not. `lorectl help mem` prints the memory commands alone.
 
 The desktop app is a second front end over the same archive. It needs Node.js 20, the Xcode command-line tools, and the Tauri 2 prerequisites for macOS. Run it with `npm run tauri dev`.
 
