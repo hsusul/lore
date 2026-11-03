@@ -476,8 +476,9 @@ pub struct Lesson {
     pub latest_ms: Option<i64>,
     /// The newest candidate from each session, newest first.
     pub receipts: Vec<Candidate>,
-    /// A later user turn that says the opposite, set by [`mark_outdated`].
-    pub outdated_by: Option<Candidate>,
+    /// Later user turns about the same command in the same repository, newest
+    /// first, set by [`find_conflicts`]. Candidates to judge, not verdicts.
+    pub conflicts: Vec<Candidate>,
 }
 
 /// Group `candidates` into lessons: a candidate joins the first lesson with one
@@ -560,7 +561,7 @@ fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
             .unwrap_or(0),
         latest_ms: receipts[0].at_ms,
         receipts,
-        outdated_by: None,
+        conflicts: Vec::new(),
     })
 }
 
@@ -577,11 +578,6 @@ const FAMILIES: &[(&str, &[&str])] = &[
     ("docs", &["docs", "documentation"]),
     ("permission", &["permission", "permissions"]),
 ];
-/// Words that turn a clause into "do not".
-const NEGATIONS: &[&str] = &[
-    "no", "not", "don't", "dont", "never", "stop", "skip", "without", "avoid", "do not",
-];
-
 /// The clauses of `text`, lowercase, each padded with spaces for whole-word
 /// matching. Clauses end at punctuation, "just", "but", and "instead".
 fn clauses(text: &str) -> Vec<String> {
@@ -595,50 +591,50 @@ fn clauses(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn names(clause: &str, word: &str) -> bool {
-    clause.contains(&format!(" {word} "))
+/// Whether `text` names `family` by one of its words.
+fn names_family(text: &str, words: &[&str]) -> bool {
+    clauses(text)
+        .iter()
+        .any(|clause| words.iter().any(|w| clause.contains(&format!(" {w} "))))
 }
 
-/// The first command family `text` names, and whether the clause naming it
-/// is negative: it holds "don't", "never", "stop", or another negation.
-fn stance(text: &str) -> Option<(&'static str, bool)> {
-    clauses(text).iter().find_map(|clause| {
-        let (family, _) = FAMILIES
+/// The words of the first command family `text` names.
+fn family_of(text: &str) -> Option<&'static [&'static str]> {
+    let clauses = clauses(text);
+    clauses.iter().find_map(|clause| {
+        let (_, words) = FAMILIES
             .iter()
-            .find(|(_, words)| words.iter().any(|w| names(clause, w)))?;
-        Some((*family, NEGATIONS.iter().any(|n| names(clause, n))))
+            .find(|(_, words)| words.iter().any(|w| clause.contains(&format!(" {w} "))))?;
+        Some(*words)
     })
 }
 
-/// Whether the first clause of `text` that names `family` is negative, or
-/// `None` when no clause names it.
-fn stance_on(text: &str, family: &str) -> Option<bool> {
-    let words = FAMILIES.iter().find(|(f, _)| *f == family)?.1;
-    let clause = clauses(text)
-        .into_iter()
-        .find(|clause| words.iter().any(|w| names(clause, w)))?;
-    Some(NEGATIONS.iter().any(|n| names(&clause, n)))
-}
+/// Turns listed beside one lesson, at most.
+const MAX_CONFLICTS: usize = 3;
 
-/// Mark each lesson that a later user turn contradicts: a turn in a session
-/// none of its receipts came from, newer than its newest receipt, about the
-/// same command family with the opposite stance ("dont make a pr" against
-/// "open a PR"). The newest such turn is kept as the receipt. A first
-/// version: it reads words, not meaning. Read only.
-pub fn mark_outdated(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Result<()> {
+/// List, beside each lesson, the later user turns that may conflict with it:
+/// turns in the same repository, newer than its newest receipt, from a
+/// session none of its receipts came from, that name the same command family
+/// (PR, push, commit, branch, merge, rebase, tests, mocks, docs, permission).
+/// At most [`MAX_CONFLICTS`], newest first. Lore does not decide whether a
+/// turn overrides the lesson; that takes reading it. Read only.
+pub fn find_conflicts(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Result<()> {
     let turns = read_turns(conn)?;
     for lesson in lessons.iter_mut() {
-        let (Some((family, negative)), Some(after)) = (stance(&lesson.text), lesson.latest_ms)
-        else {
+        let (Some(words), Some(after)) = (family_of(&lesson.text), lesson.latest_ms) else {
             continue;
         };
-        lesson.outdated_by = turns
+        let repo = lesson.receipts.first().and_then(|r| r.repo.clone());
+        let mut later: Vec<&Turn> = turns
             .iter()
-            .filter(|t| t.user && t.at_ms.is_some_and(|at| at > after))
+            .filter(|t| t.user && t.at_ms.is_some_and(|at| at > after) && t.repo == repo)
             .filter(|t| !lesson.receipts.iter().any(|r| r.session == t.session))
-            .filter(|t| t.text.chars().count() <= MAX_CHARS)
-            .filter(|t| stance_on(&t.text, family) == Some(!negative))
-            .max_by_key(|t| t.at_ms)
+            .filter(|t| t.text.chars().count() <= MAX_CHARS && names_family(&t.text, words))
+            .collect();
+        later.sort_by_key(|t| std::cmp::Reverse(t.at_ms));
+        lesson.conflicts = later
+            .into_iter()
+            .take(MAX_CONFLICTS)
             .map(|t| Candidate {
                 session: t.session.clone(),
                 agent: t.agent.clone(),
@@ -648,7 +644,8 @@ pub fn mark_outdated(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Res
                 text: one_line(&t.text),
                 preceding: None,
                 signal: Signal::Correction,
-            });
+            })
+            .collect();
     }
     Ok(())
 }
