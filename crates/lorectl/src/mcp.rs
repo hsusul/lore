@@ -205,7 +205,8 @@ fn recall_schema() -> Value {
         "type": "object",
         "properties": {
             "cwd": { "type": "string", "description": "Absolute path you are working in." },
-            "query": { "type": "string", "description": "Words the notes should match." },
+            "query": { "type": "string",
+                "description": "Words the notes should match. Omit to get every note for the repo." },
             "limit": {
                 "type": "integer",
                 "minimum": 1,
@@ -213,7 +214,7 @@ fn recall_schema() -> Value {
                 "default": RECALL_DEFAULT_LIMIT
             }
         },
-        "required": ["cwd", "query"]
+        "required": ["cwd"]
     })
 }
 
@@ -493,14 +494,19 @@ fn read_session(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
 }
 
 /// Recall never creates a vault: none yet is a normal state, not an error.
+/// Without words to match, it returns every note that applies at `cwd`.
 fn recall_memory(_ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let cwd = string_arg(arguments, "cwd")
         .map(Path::new)
         .filter(|cwd| cwd.is_absolute())
         .ok_or_else(|| invalid_argument("cwd", "must be an absolute path"))?;
-    let query_text = string_arg(arguments, "query")
-        .filter(|q| q.chars().any(char::is_alphanumeric))
-        .ok_or_else(|| invalid_argument("query", "must contain at least one word"))?;
+    // No query, or one with no words, recalls every note in scope.
+    let query_text = match arguments.get("query") {
+        None => "",
+        Some(query) => query
+            .as_str()
+            .ok_or_else(|| invalid_argument("query", "must be a string"))?,
+    };
     let limit = match arguments.get("limit") {
         None => RECALL_DEFAULT_LIMIT,
         Some(limit) => limit

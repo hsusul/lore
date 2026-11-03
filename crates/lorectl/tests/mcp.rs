@@ -443,6 +443,59 @@ fn recall_memory_labels_a_fresh_note_and_returns_no_notes_for_no_match() {
 }
 
 #[test]
+fn recall_memory_without_words_returns_every_note_in_scope() {
+    let home = memory_home();
+    let repo = home.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:hsusul/lore.git"],
+    );
+    std::fs::write(repo.join("src/a.rs"), "fn retry() {}\n").unwrap();
+    let cwd = repo.to_str().unwrap();
+    add_note(home.path(), REPO_NOTE, &["--cwd", cwd]);
+    let vault = home.path().join("vault");
+    let expected = json!({
+        "vault": "ok",
+        "notes": [{
+            "id": "01JC9V6Q4M8K2T7X3N5R0B1H6D",
+            "title": "Retry the migration",
+            "scope": "repo:81444c90f1ff44ac",
+            "freshness": "fresh",
+            "excerpt": "Retry a failed migration once.",
+        }],
+        "truncated": false,
+    });
+
+    for arguments in [
+        json!({ "cwd": cwd }),
+        json!({ "cwd": cwd, "query": "" }),
+        json!({ "cwd": cwd, "query": "--" }),
+    ] {
+        let reply = recall(home.path(), &vault, arguments.clone());
+        assert_eq!(structured(&reply), &expected, "{arguments}");
+    }
+}
+
+#[test]
+fn recall_memory_schema_requires_only_cwd() {
+    let archive = tempfile::tempdir().unwrap();
+    let replies = converse(archive.path(), &[request(1, "tools/list", json!({}))]);
+    let recall = replies[0]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "recall_memory")
+        .unwrap();
+    assert_eq!(recall["inputSchema"]["required"], json!(["cwd"]));
+    assert_eq!(
+        recall["inputSchema"]["properties"]["query"]["description"],
+        "Words the notes should match. Omit to get every note for the repo."
+    );
+}
+
+#[test]
 fn recall_memory_labels_anchors_outside_their_repo_as_unchecked() {
     let home = memory_home();
     let note = "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6F\ntype: fact\ntitle: Migrations keep a log\n\
@@ -553,9 +606,9 @@ fn recall_memory_rejects_bad_arguments_with_a_code_and_a_fix() {
             "must be an absolute path",
         ),
         (
-            json!({ "cwd": cwd, "query": "--" }),
+            json!({ "cwd": cwd, "query": 5 }),
             "query",
-            "must contain at least one word",
+            "must be a string",
         ),
     ];
     for (arguments, field, problem) in cases {
