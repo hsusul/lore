@@ -48,6 +48,8 @@ dist-ssr/
 !crates/lore-skills/fixtures/**/*.md
 # Memory fixture notes are test data, not documentation.
 !/crates/lore-memory/fixtures/**/*.md
+# Plugin skills are agent instructions the plugins ship, not documentation.
+!/plugins/*/skills/*/SKILL.md
 /docs/
 
 # Local agent instructions and design previews
