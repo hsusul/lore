@@ -253,8 +253,19 @@ fn ids(out: &str) -> Vec<String> {
 }
 
 fn kept(n: usize) -> String {
-    let s = if n == 1 { "" } else { "s" };
-    format!("Kept {n} lesson{s}. Your next Claude Code or Codex session will see them once Lore is connected (lorectl connect).\n")
+    done(0, n)
+}
+
+/// init's last line after accepting `accepted` proposals and keeping `kept`
+/// lessons.
+fn done(accepted: usize, kept: usize) -> String {
+    let s = |n: usize| if n == 1 { "" } else { "s" };
+    let what = match (accepted, kept) {
+        (0, k) => format!("Kept {k} lesson{}", s(k)),
+        (a, 0) => format!("Accepted {a} proposal{}", s(a)),
+        (a, k) => format!("Accepted {a} proposal{} and kept {k} lesson{}", s(a), s(k)),
+    };
+    format!("{what}. Your next Claude Code or Codex session will see them once Lore is connected (lorectl connect).\n")
 }
 
 fn git(vault: &Path, args: &[&str]) -> String {
@@ -563,7 +574,7 @@ fn review_accepts_one_proposal_and_rejects_the_other_with_a_reason() {
             inbox_header(home),
             tidy_block(home, &tidy),
             friday_block(&friday),
-            kept(1)
+            done(1, 0)
         )
     );
     let note =
@@ -745,4 +756,16 @@ fn review_says_a_lesson_was_rejected_or_is_waiting_instead_of_kept() {
         out.contains(&format!("{fmt_block}      (in the inbox)\n\n")),
         "{out}"
     );
+}
+
+#[test]
+fn the_last_line_counts_accepted_proposals_apart_from_kept_lessons() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_proposals(home);
+    two_lessons(home);
+    // Accept the first proposal, skip the second, keep the first lesson,
+    // skip the second.
+    let out = masked(&lorectl_in(home, &["init", "--review"], "a\ns\na\ns\n"));
+    assert!(out.ends_with(&done(1, 1)), "{out}");
 }
