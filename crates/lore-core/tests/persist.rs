@@ -94,15 +94,19 @@ fn tool_call_file_event_and_git_observation_persist() {
     let (_bd, blobs) = blob_store();
     let sid = persist_fixture(&conn, &blobs, "tool_use.jsonl");
 
-    let (name, is_err, out): (String, i64, String) = conn
+    // The output is stored once, as the text of the call's result part.
+    let (name, is_err, copy, out): (String, i64, Option<String>, String) = conn
         .query_row(
-            "SELECT name, is_error, output_text FROM tool_call WHERE session_id = ?1",
+            "SELECT t.name, t.is_error, t.output_text, p.text
+             FROM tool_call t JOIN message_part p ON p.id = t.result_part_id
+             WHERE t.session_id = ?1",
             [&sid],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .unwrap();
     assert_eq!(name, "Edit");
     assert_eq!(is_err, 0);
+    assert_eq!(copy, None);
     assert_eq!(out, "File edited successfully");
 
     let (path, kind): (String, String) = conn
