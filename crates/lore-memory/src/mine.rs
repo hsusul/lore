@@ -656,6 +656,113 @@ pub fn find_conflicts(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Re
     Ok(())
 }
 
+/// Acknowledgements and connectors that open a turn, cut by [`suggest_rule`].
+const ACKS: &[&str] = &[
+    "yes", "yea", "yeah", "ok", "okay", "sure", "do that", "and", "also", "so", "then",
+];
+/// Request frames that open a rule, longest first.
+const FRAMES: &[&str] = &[
+    "make sure that you",
+    "make sure that",
+    "make sure you",
+    "make sure",
+    "can you",
+    "could you",
+    "please",
+];
+/// Filler that ends a rule.
+const TRAILING: &[&str] = &["please", "from now on", "going forward"];
+/// Openings of a one-off task order, which no rule is suggested for.
+const TASK_FRAMES: &[&str] = &["go ahead"];
+
+/// A lesson's rule in the person's own words, cleaned up by fixed rules:
+/// leading acknowledgements and connectors ("yea sure, and also") and a
+/// request frame ("make sure that you", "can you", "please") are cut, then
+/// trailing filler ("please", "from now on", "going forward") and
+/// punctuation, then "like" and "just like" between two words. "dont" and
+/// "cant" get their apostrophes and the first letter is capitalized. Nothing
+/// else is reworded. A turn that opens with a task order ("go ahead"), or
+/// that leaves fewer than three words, comes back as it was, trimmed.
+#[must_use]
+pub fn suggest_rule(text: &str) -> String {
+    let original = text.trim();
+    let mut rest = original;
+    while let Some(after) = strip_opening(rest, ACKS) {
+        rest = after;
+    }
+    while let Some(after) = strip_opening(rest, FRAMES) {
+        rest = after;
+    }
+    if strip_opening(rest, TASK_FRAMES).is_some() {
+        return original.to_owned();
+    }
+    loop {
+        let trimmed = rest.trim_end_matches(|c: char| c.is_whitespace() || ",.;:!?".contains(c));
+        let cut = TRAILING.iter().find_map(|filler| {
+            let at = trimmed.len().checked_sub(filler.len())?;
+            let (head, tail) = (trimmed.get(..at)?, trimmed.get(at..)?);
+            (tail.eq_ignore_ascii_case(filler) && (head.is_empty() || head.ends_with([' ', ','])))
+                .then_some(head)
+        });
+        rest = cut.unwrap_or(trimmed);
+        if cut.is_none() {
+            break;
+        }
+    }
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let is = |i: usize, word: &str| words.get(i).is_some_and(|w| w.eq_ignore_ascii_case(word));
+    let mut kept = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        if i > 0 && is(i, "just") && is(i + 1, "like") && i + 2 < words.len() {
+            i += 2;
+        } else if i > 0 && is(i, "like") && i + 1 < words.len() {
+            i += 1;
+        } else {
+            kept.push(contract(words[i]));
+            i += 1;
+        }
+    }
+    if kept.len() < 3 {
+        return original.to_owned();
+    }
+    let joined = kept.join(" ");
+    let mut chars = joined.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// `text` after the first of `openings` it starts with as whole words, and
+/// any commas after it, or `None`.
+fn strip_opening<'a>(text: &'a str, openings: &[&str]) -> Option<&'a str> {
+    openings.iter().find_map(|opening| {
+        let head = text.get(..opening.len())?;
+        let after = text.get(opening.len()..)?;
+        (head.eq_ignore_ascii_case(opening)
+            && after
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_whitespace() || c == ','))
+        .then(|| after.trim_start_matches(|c: char| c.is_whitespace() || c == ','))
+    })
+}
+
+/// `word` with the apostrophe put back when it is "dont" or "cant".
+fn contract(word: &str) -> String {
+    match (word.get(..3), word.get(3..4), word.get(4..)) {
+        (Some(stem), Some(t), Some(tail))
+            if ["don", "can"].iter().any(|s| stem.eq_ignore_ascii_case(s))
+                && t.eq_ignore_ascii_case("t")
+                && !tail.starts_with(char::is_alphanumeric) =>
+        {
+            format!("{stem}'{t}{tail}")
+        }
+        _ => word.to_owned(),
+    }
+}
+
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }

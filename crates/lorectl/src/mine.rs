@@ -136,7 +136,11 @@ fn lessons_text(lessons: &[Lesson], total: usize) -> String {
         if let Some(repo) = &newest.repo {
             out.push_str(&format!(", repo {repo}"));
         }
-        out.push_str(&format!("\n    \"{}\"\n", lesson.text));
+        out.push_str(&format!(
+            "\n    \"{}\"\n    suggested: {}\n",
+            lesson.text,
+            mine::suggest_rule(&lesson.text)
+        ));
         for (i, receipt) in lesson.receipts.iter().take(SHOWN_RECEIPTS).enumerate() {
             out.push_str(&format!(
                 "    - {} {} {}: \"{}\"\n",
@@ -177,7 +181,8 @@ fn lesson_json(lesson: &Lesson) -> Value {
         })
         .collect();
     json!({
-        "id": lesson.id, "text": lesson.text, "conversations": lesson.conversations,
+        "id": lesson.id, "text": lesson.text, "suggested_rule": mine::suggest_rule(&lesson.text),
+        "conversations": lesson.conversations,
         "receipts": receipts,
         "may_conflict_with": lesson.conflicts.iter().map(|later| json!({
             "session": later.session, "agent": later.agent, "date": later.at_ms.and_then(date),
