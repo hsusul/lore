@@ -44,7 +44,10 @@ use crate::storage::{Result, StorageError};
 ///
 /// v7: Codex tool payloads drop `internal_chat_message_metadata_passthrough`,
 /// so archives shed it only after a re-parse.
-pub const PARSER_VERSION: &str = "7";
+///
+/// v8: a tool call's output is stored once, as its result part's text, not
+/// again in `tool_call.output_text`.
+pub const PARSER_VERSION: &str = "8";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
@@ -541,7 +544,9 @@ fn insert_rows(
                 tc.native_call_id,
                 tc.name,
                 tc.input_json,
-                tc.output_text,
+                // The output is the result part's text; keep a copy only
+                // when there is no result part to hold it.
+                tc.output_text.as_ref().filter(|_| result_part_id.is_none()),
                 tc.is_error,
                 tc.duration_ms,
             ],
@@ -767,12 +772,11 @@ fn append_rows(
         let (seq, ordinal) = result.result_ref;
         let message_id = det_id("m", &[session_id, &seq.to_string()]);
         tx.execute(
-            "UPDATE tool_call SET result_part_id = ?2, output_text = ?3, is_error = ?4
+            "UPDATE tool_call SET result_part_id = ?2, output_text = NULL, is_error = ?3
              WHERE id = ?1",
             params![
                 det_id("t", &[session_id, &result.native_call_id]),
                 det_id("p", &[&message_id, &ordinal.to_string()]),
-                result.output_text,
                 result.is_error,
             ],
         )?;
