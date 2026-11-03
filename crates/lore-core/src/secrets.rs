@@ -894,13 +894,15 @@ fn run_until(bytes: &[u8], start: usize, stop: impl Fn(u8) -> bool) -> usize {
     i - start
 }
 
+/// Position of `needle` in `haystack`. A real substring search, not a
+/// window-by-window compare: every detector
+/// calls this once per prefix over every document, so its cost is paid for
+/// each byte of history many times over.
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
+    if needle.is_empty() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+    memchr::memmem::find(haystack, needle)
 }
 
 /// Position of `needle` in `haystack`, ignoring ASCII case, without allocating.
@@ -976,6 +978,52 @@ fn fingerprint(rule: &str, value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The search every scanner used before `find` was made fast: each
+    /// window compared in turn. `find` must agree with it everywhere.
+    fn naive_find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() || needle.len() > haystack.len() {
+            return None;
+        }
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    #[test]
+    fn find_agrees_with_a_window_by_window_search() {
+        let haystacks: [&[u8]; 6] = [
+            b"",
+            b"a",
+            b"ghp_ghp_ghp_",
+            "caf\u{e9} sk-ant- token sk-ant-xyz".as_bytes(),
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+            b"xoxb-12-34 xoxb- AKIA AKIA",
+        ];
+        let needles: [&[u8]; 8] = [
+            b"",
+            b"a",
+            b"ab",
+            b"ghp_",
+            b"sk-ant-",
+            b"xoxb-",
+            b"AKIA",
+            b"not-there",
+        ];
+        for haystack in haystacks {
+            for needle in needles {
+                for from in 0..=haystack.len() {
+                    assert_eq!(
+                        find(&haystack[from..], needle),
+                        naive_find(&haystack[from..], needle),
+                        "{haystack:?} {needle:?} from {from}"
+                    );
+                }
+            }
+        }
+        // A long text with the needle only at the very end.
+        let mut long = vec![b'x'; 1 << 20];
+        long.extend_from_slice(b"ghp_");
+        assert_eq!(find(&long, b"ghp_"), Some(1 << 20));
+    }
 
     // Synthetic secrets are assembled from split parts so no complete
     // provider-format token is ever a contiguous literal in the source. The

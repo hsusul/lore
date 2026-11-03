@@ -2855,6 +2855,7 @@ dependencies = [
  "dirs",
  "gix",
  "lore-ipc",
+ "memchr",
  "notify",
  "proptest",
  "rusqlite",
