@@ -44,7 +44,7 @@ pub fn codex_archive(dir: &Path, sessions: &[&[(&str, &str)]]) -> Connection {
     let registry = AdapterRegistry::v0();
     let found = discover(&registry, &config);
     let conn = lore_core::storage::open_in_memory().unwrap();
-    let blobs = BlobStore::open(&dir.join("blobs")).unwrap();
+    let blobs = BlobStore::open(dir.join("blobs")).unwrap();
     let report = ingest_discovered(&conn, &registry, &found.sessions, &blobs);
     assert!(report.failures.is_empty(), "{:?}", report.failures.len());
     conn

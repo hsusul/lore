@@ -7,6 +7,16 @@ mod archive;
 
 use lore_memory::mine::{corrections, Signal};
 
+/// What a test checks of a candidate.
+type Seen = (
+    String,
+    String,
+    Option<String>,
+    Option<i64>,
+    Signal,
+    Option<String>,
+);
+
 #[test]
 fn a_user_turn_that_corrects_the_previous_assistant_turn_is_a_candidate() {
     let dir = tempfile::tempdir().unwrap();
@@ -31,14 +41,7 @@ fn a_user_turn_that_corrects_the_previous_assistant_turn_is_a_candidate() {
         ],
     );
     let found = corrections(&conn).unwrap();
-    let got: Vec<(
-        String,
-        String,
-        Option<String>,
-        Option<i64>,
-        Signal,
-        Option<String>,
-    )> = found
+    let got: Vec<Seen> = found
         .into_iter()
         .map(|c| (c.session, c.text, c.preceding, c.at_ms, c.signal, c.repo))
         .collect();
