@@ -18,6 +18,7 @@ mod eval;
 mod exit;
 mod help;
 mod hook;
+mod init;
 mod mcp;
 mod mem;
 mod mine;
@@ -62,6 +63,7 @@ fn run() -> Result<u8, CliError> {
             eprint!("{}", help::usage());
             Ok(exit::USAGE)
         }
+        Action::Run(cli::Command::Init) => init::run(&invocation),
         Action::Run(cli::Command::Scan) => scan::run(&invocation),
         Action::Run(cli::Command::Status) => status::run(&invocation),
         Action::Run(cli::Command::Hook) => hook::run(&invocation),

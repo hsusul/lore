@@ -47,37 +47,7 @@ use crate::exit::{self, CliError};
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let since = invocation.since.as_deref().map(window).transpose()?;
     let archive_dir = invocation.archive_dir()?;
-    std::fs::create_dir_all(&archive_dir).map_err(|_| CliError::Storage(StorageError::Io))?;
-
-    // Before anything opens the database. See the module docs.
-    let _lock = ScanLock::acquire(&archive_dir)?;
-
-    let db_path = archive_dir.join(ARCHIVE_DB_FILENAME);
-    let conn = storage::open(&db_path)?;
-    let blobs = BlobStore::open(archive_dir.join(BLOBS_DIRNAME))?;
-    let registry = AdapterRegistry::v0();
-    let config = source_roots::discovery_config(&conn, &registry)?;
-
-    // A dedicated worker connection, exactly as the desktop app does: WAL lets
-    // the two coexist, and `Worker` owns its connection for its lifetime.
-    let worker = worker::open_worker(
-        &db_path,
-        AdapterRegistry::v0(),
-        blobs,
-        config,
-        WorkerConfig::default(),
-    )?;
-
-    // Safe here only because the lock is held: without it this would reclaim a
-    // concurrently-running writer's jobs.
-    let recovered = worker.recover()?;
-    let summary = worker.scan_since(&NullSink, since.as_ref().map(|(_, at)| *at))?;
-
-    // Close the worker's connection before stamping, so the write below is the
-    // only one open. Not required for correctness — WAL permits both, and the
-    // worker is idle by now — but it keeps "the scan is over" a fact about the
-    // process rather than a claim about the worker's internal state.
-    drop(worker);
+    let (conn, recovered, summary) = scan_into(&archive_dir, since.as_ref().map(|(_, at)| *at))?;
 
     // `Worker::scan` already stamped completion; read it back so the report
     // shows exactly what a later `status` will read, rather than a second clock
@@ -99,9 +69,51 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     Ok(exit::OK)
 }
 
+/// Scan every configured source root into the archive at `archive_dir`,
+/// creating it if need be, and only sources modified since `since` when
+/// given. Returns the archive connection, the recovered job count, and what
+/// the scan did. `lorectl init` scans through this too.
+pub(crate) fn scan_into(
+    archive_dir: &Path,
+    since: Option<std::time::SystemTime>,
+) -> Result<(rusqlite::Connection, usize, DrainSummary), CliError> {
+    std::fs::create_dir_all(archive_dir).map_err(|_| CliError::Storage(StorageError::Io))?;
+
+    // Before anything opens the database. See the module docs.
+    let _lock = ScanLock::acquire(archive_dir)?;
+
+    let db_path = archive_dir.join(ARCHIVE_DB_FILENAME);
+    let conn = storage::open(&db_path)?;
+    let blobs = BlobStore::open(archive_dir.join(BLOBS_DIRNAME))?;
+    let registry = AdapterRegistry::v0();
+    let config = source_roots::discovery_config(&conn, &registry)?;
+
+    // A dedicated worker connection, exactly as the desktop app does: WAL lets
+    // the two coexist, and `Worker` owns its connection for its lifetime.
+    let worker = worker::open_worker(
+        &db_path,
+        AdapterRegistry::v0(),
+        blobs,
+        config,
+        WorkerConfig::default(),
+    )?;
+
+    // Safe here only because the lock is held: without it this would reclaim a
+    // concurrently-running writer's jobs.
+    let recovered = worker.recover()?;
+    let summary = worker.scan_since(&NullSink, since)?;
+
+    // Close the worker's connection before stamping, so the write below is the
+    // only one open. Not required for correctness — WAL permits both, and the
+    // worker is idle by now — but it keeps "the scan is over" a fact about the
+    // process rather than a claim about the worker's internal state.
+    drop(worker);
+    Ok((conn, recovered, summary))
+}
+
 /// `--since` as given and the moment it reaches back to: a whole number of
 /// days, hours, or minutes, such as `30d`, `12h`, or `90m`.
-fn window(given: &str) -> Result<(String, std::time::SystemTime), CliError> {
+pub(crate) fn window(given: &str) -> Result<(String, std::time::SystemTime), CliError> {
     let bad = || CliError::Usage(format!("--since `{given}` must be like 30d, 12h, or 90m"));
     let unit = match given.chars().last() {
         Some('d') => 86_400,

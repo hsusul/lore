@@ -133,7 +133,10 @@ Options:
     --json            Machine-readable output where a command supports it.
     --patch           With `inspect`: also print each recorded patch.
     --since <DUR>     With `scan`: only sources modified in the last DUR,
-                      such as 30d, 12h, or 90m, newest first.
+                      such as 30d, 12h, or 90m, newest first. With `init`:
+                      the window to scan, default 30d.
+    --limit <N>       With `init`: lessons to show, default 5.
+    --vault <DIR>     With `init` and `mem`: the vault directory.
     -h, --help        Print this help.
     -V, --version     Print the version.
 
