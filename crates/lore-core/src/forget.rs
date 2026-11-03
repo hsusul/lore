@@ -119,6 +119,7 @@ fn orphan_blobs(tx: &Connection) -> Result<Vec<(String, String)>> {
         "SELECT id, storage_relpath FROM blob WHERE id NOT IN (
             SELECT patch_blob_id FROM file_event   WHERE patch_blob_id  IS NOT NULL
             UNION SELECT blob_id  FROM message_part WHERE blob_id        IS NOT NULL
+            UNION SELECT blob_id  FROM part_blob
             UNION SELECT input_blob_id  FROM tool_call WHERE input_blob_id  IS NOT NULL
             UNION SELECT output_blob_id FROM tool_call WHERE output_blob_id IS NOT NULL
             UNION SELECT diff_blob_id FROM git_observation WHERE diff_blob_id IS NOT NULL

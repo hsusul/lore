@@ -38,7 +38,10 @@ use crate::storage::{Result, StorageError};
 ///
 /// v5: a Codex tool output whose text carries a nonzero exit code is a failed
 /// call, so `has:error` finds sessions ingested at v4 only after a re-parse.
-pub const PARSER_VERSION: &str = "5";
+///
+/// v6: inline base64 payloads (screenshots, attachments, PDFs) move out of
+/// `content_json` into the blob store, so archives shrink only after a re-parse.
+pub const PARSER_VERSION: &str = "6";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
@@ -57,7 +60,9 @@ pub fn persist_session(
     // Blob files are content-addressed and finalized on disk before the write
     // transaction opens (DATA_MODEL.md §3); the row that references them commits
     // atomically with the normalized rows below.
-    let patch_blobs = stage_patch_blobs(blobs, parsed)?;
+    let mut parsed = parsed.clone();
+    let patch_blobs = stage_blobs(blobs, &mut parsed)?;
+    let parsed = &parsed;
     // Serialize with other archive writers (e.g. UI folder writes) so the two
     // connections never contend on SQLite's write lock. Taken after blob staging
     // so file I/O stays outside the lock.
@@ -72,15 +77,46 @@ pub fn persist_session(
 /// one, keeping the result index-aligned with `parsed.file_events`. Staging is
 /// done before any transaction opens so the write lock is not held during file
 /// I/O.
-fn stage_patch_blobs(blobs: &BlobStore, parsed: &ParsedSession) -> Result<Vec<Option<StagedBlob>>> {
-    parsed
+fn stage_blobs(blobs: &BlobStore, parsed: &mut ParsedSession) -> Result<Staged> {
+    let payloads = crate::payloads::externalize(parsed, blobs)?;
+    let patches = parsed
         .file_events
         .iter()
         .map(|fe| match &fe.patch_text {
             Some(text) => blobs.stage(text.as_bytes()).map(Some),
             None => Ok(None),
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    Ok(Staged { patches, payloads })
+}
+
+/// Blob files written before a session's transaction opens: recorded patches,
+/// index-aligned with `file_events`, and inline payloads moved out of part
+/// JSON ([`crate::payloads`]).
+struct Staged {
+    patches: Vec<Option<StagedBlob>>,
+    payloads: Vec<crate::payloads::Moved>,
+}
+
+/// Record a row for each payload moved out of part JSON, and link it to the
+/// part that holds its reference. A payload is never scanned or indexed, so
+/// its row is `opaque_excluded` from the start.
+fn link_payloads(tx: &Connection, session_id: &str, staged: &Staged) -> Result<()> {
+    for moved in &staged.payloads {
+        let blob_id = BlobStore::reference(tx, &moved.staged, &moved.media_type)?;
+        tx.execute(
+            "UPDATE blob SET scan_state = 'opaque_excluded' WHERE id = ?1",
+            [&blob_id],
+        )?;
+        let (seq, ordinal) = moved.part;
+        let message_id = det_id("m", &[session_id, &seq.to_string()]);
+        let part_id = det_id("p", &[&message_id, &ordinal.to_string()]);
+        tx.execute(
+            "INSERT OR IGNORE INTO part_blob (part_id, blob_id) VALUES (?1, ?2)",
+            params![part_id, blob_id],
+        )?;
+    }
+    Ok(())
 }
 
 /// Write all normalized rows for a session into the caller-owned transaction
@@ -93,8 +129,9 @@ fn persist_rows(
     agent_name: &str,
     parsed: &ParsedSession,
     source_artifact_id: Option<&str>,
-    patch_blobs: &[Option<StagedBlob>],
+    staged: &Staged,
 ) -> Result<String> {
+    let patch_blobs = &staged.patches[..];
     // Defer FK checks to commit so forward self-references (a child message whose
     // parent is inserted later) and other out-of-order links are legal mid-txn.
     tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
@@ -175,6 +212,7 @@ fn persist_rows(
         patch_blobs,
         RowBase::default(),
     )?;
+    link_payloads(tx, &session_id, staged)?;
     kept.restore(tx, &session_id)?;
     index_search_rows(tx, high_water)?;
     Ok(session_id)
@@ -659,9 +697,10 @@ fn append_rows(
     from: &ParseCheckpoint,
     append: &ParsedAppend,
     source_artifact_id: &str,
-    patch_blobs: &[Option<StagedBlob>],
+    staged: &Staged,
 ) -> Result<()> {
     tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
+    let patch_blobs = &staged.patches[..];
     let parsed = &append.session;
     let end = &append.checkpoint;
     tx.execute(
@@ -718,6 +757,7 @@ fn append_rows(
             file_events: from.file_event_count,
         },
     )?;
+    link_payloads(tx, session_id, staged)?;
     index_search_rows(tx, high_water)?;
 
     for result in &append.earlier_results {
@@ -1197,7 +1237,7 @@ pub fn ingest_file(
     let resume = checkpoint.filter(|_| ends_on_line(&snapshot));
 
     // Stage blob files before opening the transaction (DATA_MODEL.md §3).
-    let patch_blobs = stage_patch_blobs(blobs, &parsed)?;
+    let patch_blobs = stage_blobs(blobs, &mut parsed)?;
 
     // Serialize with other archive writers (UI folder writes, forget, settings)
     // so the two connections never contend on SQLite's write lock. Taken after
@@ -1322,7 +1362,8 @@ fn ingest_append(
         return Ok(None);
     }
 
-    let patch_blobs = stage_patch_blobs(blobs, &append.session)?;
+    let mut append = append;
+    let patch_blobs = stage_blobs(blobs, &mut append.session)?;
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
     append_rows(

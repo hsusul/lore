@@ -266,7 +266,8 @@ fn an_archive_indexed_by_the_insert_trigger_stays_in_sync_after_migration_0015()
             "CREATE TRIGGER search_document_ai AFTER INSERT ON search_document BEGIN
                  INSERT INTO search_fts(rowid, redacted_text) VALUES (new.id, new.redacted_text);
              END;
-             DELETE FROM schema_migrations WHERE version = 15;
+             DELETE FROM schema_migrations WHERE version >= 15;
+             DROP TABLE part_blob;
              INSERT INTO agent (id, display_name) VALUES ('old', 'Old');
              INSERT INTO agent_session (id, agent_id, dedupe_key) VALUES ('s-old', 'old', 'k');
              INSERT INTO search_document
