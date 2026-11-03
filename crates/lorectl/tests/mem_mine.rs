@@ -152,3 +152,92 @@ fn mine_without_an_archive_says_how_to_build_one() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn mine_propose_files_a_chosen_lesson_with_its_receipts_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            ("Running npm install axios.", "no, use pnpm not npm"),
+            ("I'll edit src/gen.rs.", "don't edit the generated files"),
+            ("npm install dayjs done.", "I told you, pnpm not npm"),
+            ("Edited src/gen.rs.", "stop editing the generated files"),
+        ],
+    );
+    ok(&lorectl(home, &["mem", "init"]));
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "mine", "--json"]))).unwrap();
+    let pnpm = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["text"] == "I told you, pnpm not npm")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (s1, s3) = (session(home, 1), session(home, 3));
+
+    let out = ok(&lorectl(home, &["mem", "mine", "--propose", &pnpm]));
+    let proposal = out.split_whitespace().nth(1).unwrap().to_owned();
+    assert_eq!(
+        out,
+        format!("proposed {proposal} _inbox/codex-{s3}.jsonl for lesson {pnpm}\n")
+    );
+    let inbox: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "inbox", "--json"]))).unwrap();
+    assert_eq!(inbox.as_array().unwrap().len(), 1);
+    let item = &inbox[0];
+    assert_eq!(item["agent"], "codex");
+    assert_eq!(item["session"], s3.as_str());
+    assert_eq!(item["source_verified"], true);
+    assert_eq!(item["type"], "convention");
+    assert_eq!(item["scope"], "global");
+    assert_eq!(item["title"], "I told you, pnpm not npm");
+    assert_eq!(
+        item["body"],
+        format!(
+            "I told you, pnpm not npm\n\n\
+             Mined by `lorectl mem mine` (lesson {pnpm}) from corrections in 2 sessions:\n\
+             - 2026-08-03 codex {s3}: \"I told you, pnpm not npm\", after \"npm install dayjs done.\"\n\
+             - 2026-08-01 codex {s1}: \"no, use pnpm not npm\", after \"Running npm install axios.\"\n"
+        )
+    );
+    assert_eq!(item["receipt"]["status"], "found");
+
+    // Proposing it again files nothing.
+    assert_eq!(
+        ok(&lorectl(home, &["mem", "mine", "--propose", &pnpm])),
+        format!("already proposed lesson {pnpm}\n")
+    );
+    let again: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "inbox", "--json"]))).unwrap();
+    assert_eq!(again.as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn mine_propose_refuses_an_unknown_lesson_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            ("Running npm install axios.", "no, use pnpm not npm"),
+            ("npm install dayjs done.", "I told you, pnpm not npm"),
+        ],
+    );
+    ok(&lorectl(home, &["mem", "init"]));
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "mine", "--json"]))).unwrap();
+    let real = json[0]["id"].as_str().unwrap().to_owned();
+    let out = lorectl(home, &["mem", "mine", "--propose", &real, "0000000000"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no lesson `0000000000`"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!home.join("vault/_inbox").exists());
+}

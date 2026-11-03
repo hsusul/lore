@@ -45,7 +45,8 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     retire <NOTE>     Mark a note retired --reason <TEXT>, one commit
     mine              Lessons from corrections you made in more than one
                       session, each with its receipts; writes nothing
-                      [--limit N, default 20] [--json]. Reads the archive
+                      [--limit N, default 20] [--json]. Reads the archive.
+                      --propose ID... files those lessons into the inbox
     eval              Score a policy for accepting proposals without you
                       against your own accepts and rejects; writes nothing
                       [--policy never|starting-bar, default never] [--json]

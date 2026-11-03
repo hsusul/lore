@@ -1,14 +1,27 @@
 //! `lorectl mem mine`: lessons mined from the archive's corrections, each
 //! with its receipts. A dry run by design: it opens the archive read only and
 //! writes nothing, to the archive or the vault.
+//!
+//! `--propose ID...` files the chosen lessons into the vault's inbox through
+//! the same path as every agent proposal, for a person to accept or reject.
+//! A lesson is proposed as the agent of its newest receipt, under that
+//! receipt's archive session id, marked verified: the miner read that session
+//! from the archive, and it is where the person said it. It accepts nothing.
 
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use lexopt::prelude::*;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::storage;
+use lore_memory::inbox::{self, Proposal};
 use lore_memory::mine::{self, Candidate, Lesson, Signal};
+use lore_memory::note::{AgentKind, NoteId, NoteType, Scope, SessionId};
+use lore_memory::repo::RepoContext;
+use lore_memory::review::ReviewError;
+use lore_memory::vault::{self, Vault};
 use serde_json::{json, Value};
+use time::OffsetDateTime;
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
@@ -17,12 +30,17 @@ use crate::receipt::date;
 const DEFAULT_LIMIT: usize = 20;
 /// Receipts printed per lesson; `--json` carries them all.
 const SHOWN_RECEIPTS: usize = 3;
+/// Receipts written into a proposed lesson's body.
+const PROPOSED_RECEIPTS: usize = 10;
+/// The longest title a proposal gets, as over MCP.
+const TITLE_CHARS: usize = 120;
 
 /// Run `lorectl mem mine`.
 pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let usage = |m: String| CliError::Usage(m);
     let mut parser = lexopt::Parser::from_args(&invocation.rest);
     let (mut limit, mut json) = (DEFAULT_LIMIT, invocation.json);
+    let (mut propose, mut ids, mut vault_dir) = (false, Vec::new(), None::<PathBuf>);
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
             Short('h') | Long("help") => {
@@ -37,6 +55,12 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
                 })?;
             }
             Long("json") => json = true,
+            Long("propose") => propose = true,
+            Long("vault") => {
+                let value = parser.value().map_err(|e| usage(e.to_string()))?;
+                vault_dir = Some(PathBuf::from(value));
+            }
+            Value(id) if propose => ids.push(id.to_string_lossy().into_owned()),
             other => return Err(usage(other.unexpected().to_string())),
         }
     }
@@ -44,6 +68,9 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let candidates = mine::corrections(&conn).map_err(storage::StorageError::from)?;
     let total = candidates.len();
     let mut lessons = mine::lessons(candidates);
+    if propose {
+        return propose_lessons(&lessons, &ids, vault_dir.as_deref());
+    }
     lessons.truncate(limit);
     let text = if json {
         format!(
@@ -116,4 +143,99 @@ fn lesson_json(lesson: &Lesson) -> Value {
         "id": lesson.id, "text": lesson.text, "sessions": lesson.sessions,
         "receipts": receipts,
     })
+}
+
+/// File each lesson `ids` names. Every id is checked before anything is
+/// written, and a lesson already in the inbox is not filed twice.
+fn propose_lessons(
+    lessons: &[Lesson],
+    ids: &[String],
+    vault: Option<&Path>,
+) -> Result<u8, CliError> {
+    if ids.is_empty() {
+        return Err(CliError::Usage(
+            "--propose needs at least one lesson id".into(),
+        ));
+    }
+    let chosen = ids
+        .iter()
+        .map(|id| {
+            lessons.iter().find(|l| l.id == *id).ok_or_else(|| {
+                CliError::Usage(format!("no lesson `{id}`; `lorectl mem mine` lists them"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let vault = Vault::open(&vault::resolve_dir(vault)?)?;
+    let (filed, _) = inbox::proposals(&vault).map_err(ReviewError::from)?;
+    let mut out = std::io::stdout().lock();
+    for lesson in chosen {
+        let marker = format!("(lesson {})", lesson.id);
+        if filed.iter().any(|p| p.body.contains(&marker)) {
+            let _ = writeln!(out, "already proposed lesson {}", lesson.id);
+            continue;
+        }
+        let written =
+            inbox::propose(&vault, proposal(lesson, &marker)?).map_err(ReviewError::from)?;
+        let _ = writeln!(
+            out,
+            "proposed {} {}/{} for lesson {}",
+            written.id.as_str(),
+            inbox::INBOX_DIR,
+            written.file_name(),
+            lesson.id
+        );
+    }
+    Ok(exit::OK)
+}
+
+fn proposal(lesson: &Lesson, marker: &str) -> Result<Proposal, CliError> {
+    let newest = &lesson.receipts[0];
+    let bad = |e: lore_memory::note::InvalidValue| CliError::Usage(e.to_string());
+    let mut body = format!(
+        "{}\n\nMined by `lorectl mem mine` {marker} from corrections in {} sessions:\n",
+        lesson.text, lesson.sessions
+    );
+    for receipt in lesson.receipts.iter().take(PROPOSED_RECEIPTS) {
+        body.push_str(&format!(
+            "- {} {} {}: \"{}\"",
+            day(receipt),
+            receipt.agent,
+            receipt.session,
+            receipt.text
+        ));
+        if let Some(after) = &receipt.preceding {
+            body.push_str(&format!(", after \"{after}\""));
+        }
+        body.push('\n');
+    }
+    let more = lesson.receipts.len().saturating_sub(PROPOSED_RECEIPTS);
+    if more > 0 {
+        body.push_str(&format!("- and {more} more sessions\n"));
+    }
+    Ok(Proposal {
+        id: NoteId::generate(),
+        agent: AgentKind::parse(&newest.agent).map_err(bad)?,
+        session: SessionId::parse(&newest.session).map_err(bad)?,
+        source_verified: true,
+        note_type: NoteType::Convention,
+        scope: scope(lesson),
+        title: lesson.text.chars().take(TITLE_CHARS).collect(),
+        body,
+        anchors: Vec::new(),
+        relation: None,
+        proposed_at: OffsetDateTime::now_utc(),
+    })
+}
+
+/// The repository every receipt came from, when they share one this machine
+/// can still find; otherwise global.
+fn scope(lesson: &Lesson) -> Scope {
+    let mut paths = lesson.receipts.iter().map(|r| r.repo_path.as_deref());
+    let first = paths.next().flatten();
+    match first.filter(|first| paths.all(|p| p == Some(first))) {
+        Some(path) => RepoContext::discover(Path::new(path))
+            .key()
+            .map_or(Scope::Global, |key| Scope::Repo(key.clone())),
+        None => Scope::Global,
+    }
 }
