@@ -1,5 +1,6 @@
 //! A proposal's receipt: the archived session it came from, and the passage
-//! of that session that shares the most words with what it proposes.
+//! of that session that shares the most words with what it proposes,
+//! preferring what the person said over what the agent said.
 //!
 //! Only the redacted search projection is read, the same text `search` and
 //! the MCP tools return, so a receipt never shows a span the secret scan
@@ -117,9 +118,12 @@ fn words(text: &str) -> BTreeSet<String> {
 }
 
 /// The session text, title aside, sharing the most of `wanted`; the earliest
-/// on a tie. `None` when no passage shares a word.
+/// on a tie. The person's own turns come first: an agent turn is quoted only
+/// when no user turn shares a word. `None` when no passage shares a word.
 fn best_passage(conn: &Connection, session: &str, wanted: &BTreeSet<String>) -> Option<String> {
-    let (mut best, mut best_score, mut after, mut read) = (None, 0, None, 0);
+    // Index 0 is the best user turn, 1 the best of any other role.
+    let mut best: [(usize, Option<String>); 2] = [(0, None), (0, None)];
+    let (mut after, mut read) = (None, 0);
     while read < MAX_DOCUMENTS {
         let page = search::session_documents_page(conn, session, after, PAGE).ok()?;
         let Some(last) = page.last() else { break };
@@ -127,12 +131,14 @@ fn best_passage(conn: &Connection, session: &str, wanted: &BTreeSet<String>) -> 
         read += page.len();
         for document in page.iter().filter(|d| d.label != "title") {
             let score = words(&document.text).intersection(wanted).count();
-            if score > best_score {
-                (best, best_score) = (Some(document.text.clone()), score);
+            let slot = &mut best[usize::from(document.label != "user")];
+            if score > slot.0 {
+                *slot = (score, Some(document.text.clone()));
             }
         }
     }
-    best.map(|text| excerpt(&text, wanted))
+    let [(_, user), (_, other)] = best;
+    user.or(other).map(|text| excerpt(&text, wanted))
 }
 
 /// `text` on one line, from a few words before its first wanted word, cut to

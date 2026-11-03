@@ -138,3 +138,36 @@ fn inbox_says_so_in_one_line_when_there_is_no_archive() {
     );
     assert!(!home.join("archive").exists(), "inbox created an archive");
 }
+
+#[test]
+fn a_receipt_quotes_the_person_before_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let archive_id = home_with_archive(home);
+    // The agent's turn shares more words with this proposal than the
+    // person's does, as a mined lesson's receipts do.
+    let out = ok(&lorectl(
+        home,
+        &[
+            "mem",
+            "propose",
+            "--agent",
+            "codex",
+            "--session",
+            NATIVE,
+            "--type",
+            "fact",
+            "--title",
+            "Migration done",
+        ],
+        "Migration done after: \"Migration done.\"\n",
+    ));
+    let id = out.split_whitespace().nth(1).unwrap().to_owned();
+    assert_eq!(
+        ok(&lorectl(home, &["mem", "inbox"], "")),
+        format!(
+            "{id}  codex:{NATIVE} (unverified)  fact  global  Migration done\n\
+             \x20   from codex session {archive_id}, 2026-08-11: \"run the migration\"\n"
+        )
+    );
+}
