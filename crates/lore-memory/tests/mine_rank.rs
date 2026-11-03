@@ -117,3 +117,31 @@ fn the_rule_score_is_fixed_and_explainable() {
         ]
     );
 }
+
+#[test]
+fn a_task_with_a_rule_tacked_on_scores_below_zero() {
+    let scores: Vec<(&str, i32)> = [
+        "delete the ios sim runtimes and make it so that it builds them on my ssd from now on",
+        "install the deps and run the tests",
+        "dont make a doc for it just give me the thing to copy from now on",
+        "make sure to commit and push every little step",
+    ]
+    .iter()
+    .map(|t| (*t, rule_score(t)))
+    .collect();
+    assert_eq!(
+        scores,
+        [
+            (
+                "delete the ios sim runtimes and make it so that it builds them on my ssd from now on",
+                -1
+            ),
+            ("install the deps and run the tests", -3),
+            (
+                "dont make a doc for it just give me the thing to copy from now on",
+                3
+            ),
+            ("make sure to commit and push every little step", 2),
+        ]
+    );
+}
