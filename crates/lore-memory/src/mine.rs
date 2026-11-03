@@ -270,7 +270,45 @@ fn read_turns(conn: &Connection) -> rusqlite::Result<Vec<Turn>> {
             }),
         }
     }
+    for turn in &mut turns {
+        turn.text = strip_harness(&turn.text);
+    }
+    turns.retain(|t| !t.text.trim().is_empty());
     Ok(turns)
+}
+
+/// `text` without the blocks an agent harness injects into a turn, such as
+/// `<command-name>`, `<command-args>`, `<system-reminder>`, and
+/// `<local-command-stdout>`: any `<name>...</name>` whose name is lowercase
+/// words joined by hyphens. Other markup, like `<div>`, stays.
+fn strip_harness(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('<') {
+        let after = &rest[open + 1..];
+        let name_len = after
+            .bytes()
+            .take_while(|b| b.is_ascii_lowercase() || *b == b'-')
+            .count();
+        let name = &after[..name_len];
+        let close = format!("</{name}>");
+        let end = (name.contains('-') && after[name_len..].starts_with('>'))
+            .then(|| after.find(&close))
+            .flatten();
+        match end {
+            Some(end) => {
+                out.push_str(&rest[..open]);
+                out.push(' ');
+                rest = &after[end + close.len()..];
+            }
+            None => {
+                out.push_str(&rest[..=open]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Whether `text` starts by invoking a skill, `[$name](path) ...`, or a slash
