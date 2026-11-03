@@ -1,0 +1,11 @@
+{
+  "name": "lore",
+  "owner": { "name": "Lore" },
+  "plugins": [
+    {
+      "name": "lore",
+      "source": "./plugins/claude-code",
+      "description": "Start each session with the repository's Lore memory notes and their freshness labels."
+    }
+  ]
+}

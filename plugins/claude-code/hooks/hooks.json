@@ -1,0 +1,12 @@
+{
+  "description": "Lore memory notes for the repository at session start.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "lorectl hook session-start", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
