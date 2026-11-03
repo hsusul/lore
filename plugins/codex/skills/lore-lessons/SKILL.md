@@ -13,9 +13,9 @@ Call `recall_memory` with `cwd` set to the absolute path of the current director
 
 ## 2. Read every candidate
 
-Call `mine_candidates` with no arguments. While its `next_cursor` is not null, call it again with `cursor` set to that value. Read every page before you decide anything. If there are no candidates, say so and stop.
+Call `mine_candidates` with `cwd` set to the absolute path of the current directory. While its `next_cursor` is not null, call it again with the same `cwd` and `cursor` set to that value. Read every page before you decide anything. If there are no candidates, say so and stop.
 
-Each candidate has the person's words, a suggested rule, receipts, and `may_conflict_with`. A receipt names the session, agent, and date, and quotes what the person said.
+Each candidate has the person's words, a suggested rule, receipts, and `may_conflict_with`. A receipt names the session, agent, date, and repository, and quotes what the person said. The reply's `cwd_repo` is the repository at the current directory.
 
 ## 3. Keep standing rules only
 
@@ -45,10 +45,8 @@ Call `propose_memory` once per rule with these fields.
 - `title` is the rule.
 - `body` is one sentence of context, then a Receipts list. Each item quotes the person's words and names the agent, session, and date from one receipt.
 - `type` is `convention`, or `pitfall` when the rule warns against a mistake.
-- `scope` is `repo`, with `cwd` set to the current directory, when every receipt comes from the repository at the current directory. Otherwise it is `global`.
+- `scope` is `repo`, with `cwd` set to the current directory, when `cwd_repo` is not null and every receipt's `repo.scope` equals `cwd_repo.scope`. Otherwise it is `global`.
 - `session_id` is the session of the newest receipt.
-
-To check a receipt's repository, call `search_sessions` with the query `repo:<name>` and a few words the person said. Here `<name>` is the folder name of the repository at the current directory. The receipt is from that repository when a hit has its session. If you cannot tell, use `global`.
 
 If `propose_memory` refuses the session because another agent recorded it, use the newest receipt your own agent recorded. If there is none, leave out `session_id`.
 

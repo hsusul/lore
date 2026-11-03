@@ -379,12 +379,7 @@ fn the_lore_lessons_skill_names_only_what_the_lore_server_lists() {
             .collect();
         assert_eq!(
             tools_named,
-            [
-                "mine_candidates",
-                "propose_memory",
-                "recall_memory",
-                "search_sessions"
-            ],
+            ["mine_candidates", "propose_memory", "recall_memory"],
             "{dir}"
         );
         let unknown: Vec<&String> = named.iter().filter(|w| !vocabulary.contains(*w)).collect();
@@ -399,8 +394,7 @@ fn the_lore_lessons_skill_names_only_what_the_lore_server_lists() {
     // Claude Code pre-approves the read-only tools under their plugin names,
     // mcp__plugin_<plugin>_<server>__<tool>. Codex has no such field.
     let allowed = "allowed-tools: mcp__plugin_lore_lore__recall_memory \
-                   mcp__plugin_lore_lore__mine_candidates \
-                   mcp__plugin_lore_lore__search_sessions\n";
+                   mcp__plugin_lore_lore__mine_candidates\n";
     let claude = skill("plugins/claude-code");
     assert_eq!(claude.matches(allowed).count(), 1, "{claude}");
     let plugin = read_json(&repo_root().join("plugins/claude-code/.claude-plugin/plugin.json"));
