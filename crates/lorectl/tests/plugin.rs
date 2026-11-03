@@ -156,3 +156,112 @@ fn the_plugin_hook_puts_the_notes_on_stdout_for_the_session() {
         }
     }
 }
+
+/// Each plugin's MCP server entry: command, args, and env.
+fn mcp_server(dir: &str) -> (String, Vec<String>, Vec<(String, String)>) {
+    let mcp = read_json(&repo_root().join(dir).join(".mcp.json"));
+    let lore = &mcp["mcpServers"]["lore"];
+    let args = lore["args"].as_array().unwrap();
+    let env = lore["env"].as_object().unwrap();
+    (
+        lore["command"].as_str().unwrap().to_owned(),
+        args.iter()
+            .map(|a| a.as_str().unwrap().to_owned())
+            .collect(),
+        env.iter()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_owned()))
+            .collect(),
+    )
+}
+
+#[test]
+fn each_plugin_registers_lorectl_mcp_as_the_lore_server() {
+    for (dir, agent) in [
+        ("plugins/claude-code", "claude-code"),
+        ("plugins/codex", "codex"),
+    ] {
+        let (command, args, env) = mcp_server(dir);
+        assert_eq!(command, "lorectl", "{dir}");
+        assert_eq!(args, ["mcp"], "{dir}");
+        assert_eq!(env, [("LORE_AGENT".to_owned(), agent.to_owned())], "{dir}");
+    }
+    let codex = read_json(&repo_root().join("plugins/codex/.codex-plugin/plugin.json"));
+    assert_eq!(codex["mcpServers"], "./.mcp.json");
+    let mcp = read_json(&repo_root().join("plugins/codex/.mcp.json"));
+    assert_eq!(
+        mcp["mcpServers"]["lore"]["env_vars"],
+        json!(["LORE_VAULT_DIR", "LORE_ARCHIVE_DIR"])
+    );
+}
+
+#[test]
+fn the_plugin_mcp_server_files_proposals_as_its_own_agent() {
+    let home = tempfile::tempdir().unwrap();
+    let vault = home.path().join("vault");
+    lorectl(
+        home.path(),
+        &["mem", "init", "--vault", vault.to_str().unwrap()],
+    );
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_lorectl")).parent().unwrap();
+    for (dir, agent) in [
+        ("plugins/claude-code", "claude-code"),
+        ("plugins/codex", "codex"),
+    ] {
+        let (command, args, env) = mcp_server(dir);
+        let mut child = Command::new(bin_dir.join(&command))
+            .args(&args)
+            .envs(env)
+            .env("HOME", home.path())
+            .env("LORE_VAULT_DIR", &vault)
+            .env("LORE_ARCHIVE_DIR", home.path().join("archive"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let messages = [
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "clientInfo": {"name": "some-client"}}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+            json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                "name": "propose_memory", "arguments": {
+                    "title": "T", "body": "B", "type": "fact", "scope": "global"}}}),
+        ];
+        let mut pipe = child.stdin.take().unwrap();
+        for m in &messages {
+            writeln!(pipe, "{m}").unwrap();
+        }
+        drop(pipe);
+        let out = child.wait_with_output().unwrap();
+        let replies: Vec<Value> = String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let tools: Vec<&str> = replies[1]["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            tools,
+            [
+                "search_sessions",
+                "read_session",
+                "recall_memory",
+                "read_note",
+                "mine_candidates",
+                "propose_memory"
+            ],
+            "{dir}"
+        );
+        let inbox = replies[2]["result"]["structuredContent"]["inbox"]
+            .as_str()
+            .unwrap();
+        assert!(
+            inbox.starts_with(&format!("_inbox/{agent}-mcp-")),
+            "{dir}: {inbox}"
+        );
+    }
+}

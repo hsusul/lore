@@ -183,7 +183,7 @@ The vault is `~/Lore` by default. For another vault, set `LORE_VAULT_DIR` to an 
 
 ### Plugins
 
-`plugins/` holds a plugin for each agent. Each one runs `lorectl hook session-start` when a session starts. The agent passes its hook JSON on stdin, and the hook's output becomes context the session starts with: the repository's memory notes with their freshness labels, and a warning about agent work at risk. `lorectl` must be on `PATH`. The plugins do not add the MCP server, so add it as shown above.
+`plugins/` holds a plugin for each agent. Each one runs `lorectl hook session-start` when a session starts. The agent passes its hook JSON on stdin, and the hook's output becomes context the session starts with: the repository's memory notes with their freshness labels, and a warning about agent work at risk. Each plugin also registers `lorectl mcp` as the `lore` MCP server, with `LORE_AGENT` set to that agent, so installing a plugin wires both the hook and the tools. `lorectl` must be on `PATH`. To use another vault or archive, set `LORE_VAULT_DIR` or `LORE_ARCHIVE_DIR` in the environment the agent starts in.
 
 In Claude Code, run `/plugin marketplace add hsusul/lore`, then `/plugin install lore@lore`. For Codex, `plugins/codex` holds `.codex-plugin/plugin.json` and `hooks/hooks.json`.
 
