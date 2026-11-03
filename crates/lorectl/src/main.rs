@@ -14,6 +14,7 @@
 //! `--help` marks which is which so the listing cannot flatter the binary.
 
 mod cli;
+mod eval;
 mod exit;
 mod help;
 mod hook;
