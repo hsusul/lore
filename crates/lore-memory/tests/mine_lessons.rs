@@ -85,3 +85,36 @@ fn a_correction_said_in_one_session_only_is_not_a_lesson() {
     assert_eq!(corrections(&conn).unwrap().len(), 2);
     assert!(lessons(corrections(&conn).unwrap()).is_empty());
 }
+
+#[test]
+fn repeats_alone_are_not_a_lesson_and_word_forms_still_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let repeat: &[(&str, &str)] = &[
+        ("user", "add a health check endpoint to the server"),
+        ("assistant", "Done."),
+        ("user", "add a health check endpoint to the server please"),
+    ];
+    let conn = archive::codex_archive(
+        dir.path(),
+        &[
+            repeat,
+            repeat,
+            &[
+                ("user", "fix the schema"),
+                ("assistant", "Editing src/generated/schema.rs."),
+                ("user", "never hand edit generated files"),
+            ],
+            &[
+                ("user", "fix the schema"),
+                ("assistant", "Edited src/generated/schema.rs."),
+                ("user", "stop editing the generated file"),
+            ],
+        ],
+    );
+    let found = lessons(corrections(&conn).unwrap());
+    let texts: Vec<(&str, usize)> = found
+        .iter()
+        .map(|l| (l.text.as_str(), l.sessions))
+        .collect();
+    assert_eq!(texts, [("stop editing the generated file", 2)]);
+}

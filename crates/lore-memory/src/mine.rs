@@ -202,8 +202,19 @@ pub fn content_words(text: &str) -> BTreeSet<String> {
     text.to_lowercase()
         .split(|c: char| !(c.is_alphanumeric() || c == '\''))
         .filter(|w| w.chars().count() >= 3 && !COMMON.contains(w))
-        .map(str::to_owned)
+        .map(stem)
         .collect()
+}
+
+/// `word` without a plain `ing`, `ed`, or `s` ending, so "edit", "editing",
+/// and "edited" count as one word. Short words are kept whole.
+fn stem(word: &str) -> String {
+    for (suffix, min) in [("ing", 6), ("ed", 5), ("s", 4)] {
+        if word.len() >= min && word.ends_with(suffix) && !word.ends_with("ss") {
+            return word[..word.len() - suffix.len()].to_owned();
+        }
+    }
+    word.to_owned()
 }
 
 /// Candidates from different sessions that say the same thing.
@@ -222,8 +233,8 @@ pub struct Lesson {
 
 /// Group `candidates` into lessons: a candidate joins the first lesson with a
 /// member whose content words overlap its own by at least half, else starts
-/// one. Only lessons said in at least two sessions are kept, most sessions
-/// first, then the most recent.
+/// one. Only lessons said in at least two sessions, at least one of them as
+/// a correction, are kept, most sessions first, then the most recent.
 #[must_use]
 pub fn lessons(mut candidates: Vec<Candidate>) -> Vec<Lesson> {
     candidates.sort_by(|a, b| (a.at_ms, &a.session, &a.text).cmp(&(b.at_ms, &b.session, &b.text)));
@@ -257,7 +268,10 @@ fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
             receipts.push(candidate);
         }
     }
-    if receipts.len() < MIN_SESSIONS {
+    // A turn re-sent across sessions with no correction among them is a task
+    // the person repeats, not a lesson.
+    let corrected = receipts.iter().any(|r| r.signal == Signal::Correction);
+    if receipts.len() < MIN_SESSIONS || !corrected {
         return None;
     }
     let hash = blake3::hash(format!("{}\n{}", oldest.session, oldest.text).as_bytes());
