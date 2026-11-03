@@ -12,6 +12,9 @@
 //! never writes a note file or the working tree. A file that no longer parses
 //! cannot be searched, so recall names it in `skipped` instead of dropping it
 //! unseen.
+//!
+//! [`anchored_to`] narrows recall to the notes anchored to one file, so an
+//! agent about to change that file can be shown them.
 
 use std::fs;
 use std::io;
@@ -19,7 +22,7 @@ use std::path::Path;
 
 use crate::anchor::{Freshness, Located, WorkTree};
 use crate::index::has_words;
-use crate::note::{Note, NoteError, Scope};
+use crate::note::{Note, NoteError, RelPath, Scope};
 use crate::repo::RepoContext;
 use crate::vault::{Vault, VaultError};
 
@@ -114,6 +117,59 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
         notes,
         skipped,
     })
+}
+
+/// The active notes that apply in `cwd` with an anchor on `path`, a path
+/// relative to the root of the repository that holds `cwd`, best first, at
+/// most `limit`. An anchor whose file is gone from the working tree is on the
+/// file it was renamed to, if any, not on its old path. Changed notes sink below the rest, as
+/// in [`recall`]. Outside a repository, nothing is anchored.
+pub fn anchored_to(
+    vault: &Vault,
+    cwd: &Path,
+    path: &RelPath,
+    limit: usize,
+) -> Result<Vec<Recalled>, VaultError> {
+    let context = RepoContext::discover(cwd);
+    let Some(root) = context.root() else {
+        return Ok(Vec::new());
+    };
+    let tree = WorkTree::new(root);
+    let repo_scope = context.key().map(|key| format!("repo:{}", key.as_str()));
+    let hits = vault
+        .index()?
+        .list_active(repo_scope.as_deref(), usize::MAX)?;
+    let mut notes = Vec::new();
+    for hit in hits {
+        let Some(Ok(note)) = parse_file(vault, &hit.path)? else {
+            continue;
+        };
+        // Where each anchor's file is now: its own path while that file
+        // exists, else the file it was renamed to.
+        let on_path = note.anchors.iter().any(|anchor| {
+            if root.join(anchor.path.as_str()).exists() {
+                anchor.path == *path
+            } else {
+                tree.locate(anchor).path == *path
+            }
+        });
+        if !on_path {
+            continue;
+        }
+        let (anchors, freshness) = check_note(&note, &context, Some(&tree));
+        notes.push(Recalled {
+            freshness,
+            anchors,
+            path: hit.path,
+            slug: hit.slug,
+            note,
+            excerpt: hit.excerpt,
+            score: hit.score,
+        });
+    }
+    notes.sort_by_key(|recalled| tier(recalled.freshness));
+    notes.truncate(limit);
+    Ok(notes)
 }
 
 /// Each of `note`'s anchors checked against `tree`, the working tree of
