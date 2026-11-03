@@ -20,7 +20,7 @@ use crate::exit::{self, CliError};
 use crate::receipt::Archive;
 
 /// What a receipt's excerpt should match: the proposal's title and body.
-fn receipt_text(p: &Proposal) -> String {
+pub(crate) fn receipt_text(p: &Proposal) -> String {
     format!("{}\n{}", p.title, p.body)
 }
 
