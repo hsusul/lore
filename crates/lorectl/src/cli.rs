@@ -153,6 +153,8 @@ pub struct Invocation {
     pub json: bool,
     /// `--patch`. Only meaningful for `inspect`.
     pub patch: bool,
+    /// `--since <DURATION>`, as given. Only `scan` takes it.
+    pub since: Option<String>,
     /// The command's operand, when it takes one (a search query, a session id).
     pub operand: Option<String>,
     /// Everything after `mem <SUBCOMMAND>`, parsed by the `mem` command itself.
@@ -186,6 +188,7 @@ where
     let mut archive = None;
     let mut json = false;
     let mut patch = false;
+    let mut since = None;
     let mut help = false;
     let mut version = false;
     let mut command: Option<Command> = None;
@@ -212,6 +215,15 @@ where
             Short('V') | Long("version") => version = true,
             Long("json") => json = true,
             Long("patch") => patch = true,
+            Long("since") => {
+                since = Some(
+                    parser
+                        .value()
+                        .map_err(usage)?
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
             Long("archive") => archive = Some(PathBuf::from(parser.value().map_err(usage)?)),
             Value(value) if command.is_none() => {
                 let name = value.to_string_lossy();
@@ -263,6 +275,11 @@ where
                     }
                     _ => {}
                 }
+                if since.is_some() && command != Command::Scan {
+                    return Err(CliError::Usage(
+                        "--since works only with `lorectl scan`".into(),
+                    ));
+                }
                 Action::Run(command)
             }
             None => Action::NoCommand,
@@ -273,6 +290,7 @@ where
         archive,
         json,
         patch,
+        since,
         operand,
         rest,
         action,

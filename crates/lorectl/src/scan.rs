@@ -45,6 +45,7 @@ use crate::exit::{self, CliError};
 
 /// Run a full scan of every configured source root into the archive.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
+    let since = invocation.since.as_deref().map(window).transpose()?;
     let archive_dir = invocation.archive_dir()?;
     std::fs::create_dir_all(&archive_dir).map_err(|_| CliError::Storage(StorageError::Io))?;
 
@@ -70,7 +71,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     // Safe here only because the lock is held: without it this would reclaim a
     // concurrently-running writer's jobs.
     let recovered = worker.recover()?;
-    let summary = worker.scan(&NullSink)?;
+    let summary = worker.scan_since(&NullSink, since.as_ref().map(|(_, at)| *at))?;
 
     // Close the worker's connection before stamping, so the write below is the
     // only one open. Not required for correctness — WAL permits both, and the
@@ -87,11 +88,33 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let report = if invocation.json {
         json_report(&archive_dir, recovered, &summary, completed_at)
     } else {
-        text_report(&archive_dir, recovered, &summary)
+        let mut text = text_report(&archive_dir, recovered, &summary);
+        if let Some((given, _)) = &since {
+            text.push_str(&format!("\nonly sources modified in the last {given}"));
+        }
+        text
     };
     let _ = writeln!(stdout, "{report}");
 
     Ok(exit::OK)
+}
+
+/// `--since` as given and the moment it reaches back to: a whole number of
+/// days, hours, or minutes, such as `30d`, `12h`, or `90m`.
+fn window(given: &str) -> Result<(String, std::time::SystemTime), CliError> {
+    let bad = || CliError::Usage(format!("--since `{given}` must be like 30d, 12h, or 90m"));
+    let unit = match given.chars().last() {
+        Some('d') => 86_400,
+        Some('h') => 3_600,
+        Some('m') => 60,
+        _ => return Err(bad()),
+    };
+    let count: u64 = given[..given.len() - 1].parse().map_err(|_| bad())?;
+    let back = std::time::Duration::from_secs(count.checked_mul(unit).ok_or_else(bad)?);
+    let at = std::time::SystemTime::now()
+        .checked_sub(back)
+        .ok_or_else(bad)?;
+    Ok((given.to_owned(), at))
 }
 
 /// Epoch millis, saturating rather than panicking on a clock before the epoch.

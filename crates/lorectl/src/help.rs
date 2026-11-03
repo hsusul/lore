@@ -130,6 +130,8 @@ Options:
                       directory, not the database file.
     --json            Machine-readable output where a command supports it.
     --patch           With `inspect`: also print each recorded patch.
+    --since <DUR>     With `scan`: only sources modified in the last DUR,
+                      such as 30d, 12h, or 90m, newest first.
     -h, --help        Print this help.
     -V, --version     Print the version.
 
