@@ -176,7 +176,7 @@ Exit codes:
     {ok}  ok
     {usage}  usage: unknown flag or command, a relative --archive, or a command
        this build does not implement
-    {no_archive}  no archive at that location (run `lorectl scan` to build one); for
+    {no_archive}  no archive at that location (run `lorectl init`, or `lorectl scan`); for
        `mem`, no vault there (run `lorectl mem init`)
     {not_a_repo}  not inside a Git repository
     {unreadable}  archive present but unreadable: not a Lore archive, a schema
