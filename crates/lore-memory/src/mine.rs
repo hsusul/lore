@@ -5,13 +5,23 @@
 //! words, never a model: a short user turn right after an assistant turn that
 //! opens with or contains a correction ("no", "don't", "instead", "use X not
 //! Y", "I told you"), or a user turn that repeats an instruction the person
-//! already gave earlier in the same session. It writes nothing.
+//! already gave earlier in the same session. [`lessons`] groups candidates
+//! that say the same thing across sessions. It writes nothing.
 
 use std::collections::BTreeSet;
 
 use rusqlite::Connection;
 
 use crate::policy::overlap_per_mille;
+
+/// Candidates join one lesson when their content words overlap at least this
+/// much, per mille.
+const LESSON_PER_MILLE: usize = 500;
+/// A candidate is compared with at most this many of a lesson's oldest
+/// members, so grouping stays linear in the number of candidates.
+const MATCH_MEMBERS: usize = 8;
+/// A lesson needs corrections from at least this many sessions.
+const MIN_SESSIONS: usize = 2;
 
 /// A correction longer than this is a new task that happens to say "no".
 const MAX_CHARS: usize = 300;
@@ -195,8 +205,88 @@ pub fn content_words(text: &str) -> BTreeSet<String> {
     text.to_lowercase()
         .split(|c: char| !(c.is_alphanumeric() || c == '\''))
         .filter(|w| w.chars().count() >= 3 && !COMMON.contains(w))
-        .map(str::to_owned)
+        .map(stem)
         .collect()
+}
+
+/// `word` without a plain `ing`, `ed`, or `s` ending, so "edit", "editing",
+/// and "edited" count as one word. Short words are kept whole.
+fn stem(word: &str) -> String {
+    for (suffix, min) in [("ing", 6), ("ed", 5), ("s", 4)] {
+        if word.len() >= min && word.ends_with(suffix) && !word.ends_with("ss") {
+            return word[..word.len() - suffix.len()].to_owned();
+        }
+    }
+    word.to_owned()
+}
+
+/// Candidates from different sessions that say the same thing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lesson {
+    /// Ten hex characters, the same for as long as its oldest receipt is.
+    pub id: String,
+    /// The newest receipt's text.
+    pub text: String,
+    /// Distinct sessions among the receipts.
+    pub sessions: usize,
+    pub latest_ms: Option<i64>,
+    /// The newest candidate from each session, newest first.
+    pub receipts: Vec<Candidate>,
+}
+
+/// Group `candidates` into lessons: a candidate joins the first lesson with one
+/// of its first [`MATCH_MEMBERS`] members whose content words overlap its own
+/// by at least half, else starts
+/// one. Only lessons said in at least two sessions, at least one of them as
+/// a correction, are kept, most sessions first, then the most recent.
+#[must_use]
+pub fn lessons(mut candidates: Vec<Candidate>) -> Vec<Lesson> {
+    candidates.sort_by(|a, b| (a.at_ms, &a.session, &a.text).cmp(&(b.at_ms, &b.session, &b.text)));
+    let mut groups: Vec<Vec<(BTreeSet<String>, Candidate)>> = Vec::new();
+    for candidate in candidates {
+        let words = content_words(&candidate.text);
+        if words.is_empty() {
+            continue;
+        }
+        let joins = groups.iter().position(|group| {
+            group
+                .iter()
+                .take(MATCH_MEMBERS)
+                .any(|(other, _)| overlap_per_mille(other, &words) >= LESSON_PER_MILLE)
+        });
+        match joins {
+            Some(at) => groups[at].push((words, candidate)),
+            None => groups.push(vec![(words, candidate)]),
+        }
+    }
+    let mut found: Vec<Lesson> = groups.into_iter().filter_map(lesson).collect();
+    found.sort_by(|a, b| (b.sessions, b.latest_ms, &a.id).cmp(&(a.sessions, a.latest_ms, &b.id)));
+    found
+}
+
+/// One group, oldest first, as a lesson, or `None` below [`MIN_SESSIONS`].
+fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
+    let oldest = group.first()?.1.clone();
+    let mut receipts: Vec<Candidate> = Vec::new();
+    for (_, candidate) in group.into_iter().rev() {
+        if !receipts.iter().any(|r| r.session == candidate.session) {
+            receipts.push(candidate);
+        }
+    }
+    // A turn re-sent across sessions with no correction among them is a task
+    // the person repeats, not a lesson.
+    let corrected = receipts.iter().any(|r| r.signal == Signal::Correction);
+    if receipts.len() < MIN_SESSIONS || !corrected {
+        return None;
+    }
+    let hash = blake3::hash(format!("{}\n{}", oldest.session, oldest.text).as_bytes());
+    Some(Lesson {
+        id: hash.to_hex()[..10].to_owned(),
+        text: receipts[0].text.clone(),
+        sessions: receipts.len(),
+        latest_ms: receipts[0].at_ms,
+        receipts,
+    })
 }
 
 fn one_line(text: &str) -> String {
