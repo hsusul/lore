@@ -39,6 +39,9 @@ pub struct Proposal {
     pub id: NoteId,
     pub agent: AgentKind,
     pub session: SessionId,
+    /// Whether the session was matched against the archive when the proposal
+    /// was filed. A line written before this field existed reads as false.
+    pub source_verified: bool,
     pub note_type: NoteType,
     pub scope: Scope,
     pub title: String,
@@ -207,6 +210,7 @@ impl Proposal {
             "id": self.id.as_str(),
             "agent": self.agent.as_str(),
             "session": self.session.as_str(),
+            "source_verified": self.source_verified,
             "type": self.note_type.as_str(),
             "scope": self.scope.to_string(),
             "title": self.title,
@@ -261,6 +265,11 @@ impl Proposal {
             id: NoteId::parse(text("id")?).map_err(|e| field("id", e))?,
             agent: AgentKind::parse(text("agent")?).map_err(|e| field("agent", e))?,
             session: SessionId::parse(text("session")?).map_err(|e| field("session", e))?,
+            source_verified: match map.get("source_verified") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(verified)) => *verified,
+                Some(_) => return Err(field("source_verified", "expected true or false")),
+            },
             note_type: NoteType::parse(text("type")?).map_err(|e| field("type", e))?,
             scope: Scope::parse(text("scope")?).map_err(|e| field("scope", e))?,
             title: text("title")?.to_string(),

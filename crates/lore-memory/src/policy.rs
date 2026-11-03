@@ -96,6 +96,7 @@ mod tests {
             id: NoteId::parse(&format!("01JD00000000000000000000{n:02}")).unwrap(),
             agent: AgentKind::ClaudeCode,
             session: SessionId::parse(session).unwrap(),
+            source_verified: false,
             note_type: NoteType::Pitfall,
             scope: Scope::Repo(RepoKey::parse("81444c90f1ff44ac").unwrap()),
             title: title.to_owned(),

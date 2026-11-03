@@ -976,6 +976,7 @@ fn propose_memory_files_into_the_connection_inbox_as_claude_code() {
             "id": id,
             "agent": "claude-code",
             "session": session_id,
+            "source_verified": false,
             "type": "pitfall",
             "scope": "repo:81444c90f1ff44ac",
             "title": "Retry the migration once",
@@ -1423,6 +1424,19 @@ fn propose_memory_verifies_a_session_of_the_calling_agent() {
         .map(|l| serde_json::from_str::<Value>(l).unwrap()["session"].clone())
         .collect();
     assert_eq!(sessions, vec![json!(archive_id), json!(archive_id)]);
+    let verified: Vec<Value> = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap()["source_verified"].clone())
+        .collect();
+    assert_eq!(verified, vec![json!(true), json!(true)]);
+    let listed = mem(home.path(), &["inbox"]);
+    assert_eq!(
+        listed
+            .matches(&format!("claude-code:{archive_id} (verified)"))
+            .count(),
+        2,
+        "{listed}"
+    );
     assert_eq!(
         snapshot(&home.path().join("archive")),
         before,
@@ -1492,6 +1506,34 @@ fn propose_memory_stores_an_unknown_session_as_given_and_unverified() {
         snapshot(&home.path().join("archive")),
         before,
         "archive unchanged"
+    );
+}
+
+#[test]
+fn an_archive_shaped_session_the_archive_lacks_is_stored_unverified() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    archive_in(home.path());
+    let fake = "s_0123456789abcdef";
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[propose(1, global_note(fake))],
+    );
+    let id = structured(&replies[0])["proposal_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let text =
+        std::fs::read_to_string(vault.join(format!("_inbox/claude-code-{fake}.jsonl"))).unwrap();
+    let line: Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(line["session"], fake);
+    assert_eq!(line["source_verified"], false);
+    assert_eq!(
+        mem(home.path(), &["inbox"]),
+        format!("{id}  claude-code:{fake} (unverified)  fact  global  T\n")
     );
 }
 

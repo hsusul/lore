@@ -56,6 +56,7 @@ fn proposal(id: &str, agent: AgentKind, session: &str, body: &str) -> Proposal {
         id: NoteId::parse(id).unwrap(),
         agent,
         session: SessionId::parse(session).unwrap(),
+        source_verified: false,
         note_type: NoteType::Pitfall,
         scope: Scope::Global,
         title: "Worktrees share refs".into(),
@@ -100,7 +101,7 @@ fn two_sessions_proposing_at_once_write_two_files_of_one_line() {
     assert_eq!(files, ["claude-code-s1.jsonl", "codex-s2.jsonl"]);
     assert_eq!(
         fs::read_to_string(root.join("_inbox/codex-s2.jsonl")).unwrap(),
-        "{\"agent\":\"codex\",\"anchors\":[],\"body\":\"A fetch in one worktree is seen by all of them.\\n\",\"id\":\"01JC9V6Q4M8K2T7X3N5R0B1H6E\",\"proposed_at\":\"2026-11-01T12:00:00Z\",\"scope\":\"global\",\"session\":\"s2\",\"title\":\"Worktrees share refs\",\"type\":\"pitfall\"}\n"
+        "{\"agent\":\"codex\",\"anchors\":[],\"body\":\"A fetch in one worktree is seen by all of them.\\n\",\"id\":\"01JC9V6Q4M8K2T7X3N5R0B1H6E\",\"proposed_at\":\"2026-11-01T12:00:00Z\",\"scope\":\"global\",\"session\":\"s2\",\"source_verified\":false,\"title\":\"Worktrees share refs\",\"type\":\"pitfall\"}\n"
     );
     assert_eq!(review::inbox(&vault).unwrap().proposals.len(), 2);
     assert!(git(&root, &["status", "--porcelain"]).is_empty());
@@ -126,7 +127,7 @@ fn a_secret_in_a_proposal_is_redacted_before_it_is_written() {
     let line = fs::read_to_string(dir.path().join("_inbox/claude-code-s1.jsonl")).unwrap();
     assert_eq!(
         line,
-        "{\"agent\":\"claude-code\",\"anchors\":[{\"lines\":\"3-4\",\"path\":\"deploy/staging.env\"}],\"body\":\"Use «redacted:aws-access-key-id» for staging.\\n\",\"id\":\"01JC9V6Q4M8K2T7X3N5R0B1H6D\",\"proposed_at\":\"2026-11-01T12:00:00Z\",\"scope\":\"global\",\"session\":\"s1\",\"title\":\"Worktrees share refs\",\"type\":\"pitfall\"}\n"
+        "{\"agent\":\"claude-code\",\"anchors\":[{\"lines\":\"3-4\",\"path\":\"deploy/staging.env\"}],\"body\":\"Use «redacted:aws-access-key-id» for staging.\\n\",\"id\":\"01JC9V6Q4M8K2T7X3N5R0B1H6D\",\"proposed_at\":\"2026-11-01T12:00:00Z\",\"scope\":\"global\",\"session\":\"s1\",\"source_verified\":false,\"title\":\"Worktrees share refs\",\"type\":\"pitfall\"}\n"
     );
     assert!(!line.contains(key));
 }
@@ -804,4 +805,31 @@ fn a_retire_written_before_midnight_commits_after_it() {
     assert_eq!(again, (rel.clone(), Added::Committed));
     assert_eq!(vault.read(&rel).unwrap(), written);
     assert_eq!(subjects(dir.path()).len(), 3);
+}
+
+#[test]
+fn a_proposal_line_keeps_whether_its_session_was_verified() {
+    let (dir, vault) = new_vault();
+    let mut verified = proposal(P1, AgentKind::Codex, "s_0123456789abcdef", BODY);
+    verified.source_verified = true;
+    inbox::propose(&vault, verified).unwrap();
+    // A line written before the field existed.
+    let old = proposal(P2, AgentKind::Codex, "s2", BODY).to_line();
+    let old = old.replace(",\"source_verified\":false", "");
+    assert!(!old.contains("source_verified"), "{old}");
+    fs::write(dir.path().join("_inbox/codex-s2.jsonl"), format!("{old}\n")).unwrap();
+
+    let (found, skipped) = inbox::proposals(&vault).unwrap();
+    assert!(skipped.is_empty(), "{skipped:?}");
+    let flags: Vec<(&str, bool)> = found
+        .iter()
+        .map(|p| (p.session.as_str(), p.source_verified))
+        .collect();
+    assert_eq!(flags, [("s2", false), ("s_0123456789abcdef", true)]);
+
+    let bad = old.replace("\"id\":", "\"source_verified\":\"yes\",\"id\":");
+    assert_eq!(
+        Proposal::from_line(&bad).unwrap_err().to_string(),
+        "`source_verified`: expected true or false"
+    );
 }

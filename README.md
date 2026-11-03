@@ -129,6 +129,8 @@ lorectl mem reject <ID> --reason "<TEXT>"  # decline; the vault is untouched
 lorectl mem retire <NOTE> --reason "<TEXT>"
 ```
 
+`mem inbox` marks each proposal's source `(verified)` when the archive held that agent's session at the time the proposal was filed, and `(unverified)` otherwise. Proposals filed with `mem propose`, or before Lore recorded this, are unverified.
+
 `lorectl mem eval` scores a policy for accepting proposals without you against the proposals you already accepted and rejected. It reports how many it would have taken off your hands, lists every one it would have accepted that you rejected, and says whether it clears a fixed bar. It accepts nothing and writes nothing. `--policy` is `never` (the default) or `starting-bar`.
 
 A script or an agent without MCP can file a proposal with `lorectl mem propose`. The body is read from stdin.

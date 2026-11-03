@@ -14,6 +14,7 @@ fn proposal(id: &str, title: &str, at: i64) -> Proposal {
         id: NoteId::parse(id).unwrap(),
         agent: AgentKind::Codex,
         session: SessionId::parse("s-1").unwrap(),
+        source_verified: false,
         note_type: NoteType::Fact,
         scope: Scope::Global,
         title: title.into(),

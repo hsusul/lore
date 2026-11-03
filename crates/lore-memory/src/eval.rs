@@ -218,6 +218,7 @@ mod tests {
             id: NoteId::parse(&format!("01JD00000000000000000000{n:02}")).unwrap(),
             agent: AgentKind::Codex,
             session: SessionId::parse("s-1").unwrap(),
+            source_verified: false,
             note_type: NoteType::Fact,
             scope: Scope::Global,
             title: title.to_owned(),
