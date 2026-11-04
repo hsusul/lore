@@ -3,10 +3,11 @@
 //! Forgetting a session transactionally removes its canonical rows, search
 //! projections (so the FTS index is cleared), findings, and any blob that is no
 //! longer referenced by anything — then merges the search index so the
-//! deleted rows' terms leave its segments, and runs `secure_delete` + `VACUUM`
-//! maintenance to zero freed pages. Original agent logs and user-chosen exports
-//! are **outside Lore's ownership** and are never deleted; the report names the
-//! source copies that remain so the UI can disclose them.
+//! deleted rows' terms leave its segments, with `secure_delete` zeroing the
+//! pages that frees. Forgetting everything also runs `VACUUM`, which is cheap
+//! once almost nothing is left and shrinks the file. Original agent logs and
+//! user-chosen exports are **outside Lore's ownership** and are never deleted;
+//! the report names the source copies that remain so the UI can disclose them.
 
 use std::path::Path;
 
@@ -70,9 +71,11 @@ pub fn forget_session(
         blobs.remove(relpath)?;
     }
 
-    // Best-effort maintenance: checkpoint the WAL and vacuum to reclaim + zero
-    // freed space. Failure here does not undo the deletion.
-    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;");
+    // Best-effort: fold the WAL back so the zeroed pages replace the old ones
+    // in the file. No VACUUM: secure_delete already zeroed the freed pages, and
+    // rewriting the whole archive took 17 s on a 2.4 GB one, with the UI
+    // waiting on this connection. Failure here does not undo the deletion.
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
 
     Ok(ForgetReport {
         blobs_removed: orphans.len(),
