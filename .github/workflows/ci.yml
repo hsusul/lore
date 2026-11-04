@@ -54,6 +54,11 @@ jobs:
         run: |
           cargo test -p lore-ipc
           git diff --exit-code crates/lore-ipc/bindings
+      - name: Disk use (measurement, temporary)
+        if: always()
+        run: |
+          df -h /
+          du -sh target target/debug/deps
 
   ui:
     name: UI — lint · typecheck · test
