@@ -1573,3 +1573,26 @@ fn propose_memory_without_an_archive_stores_the_session_unverified() {
         "the server created an archive"
     );
 }
+
+#[test]
+fn search_lists_a_session_once_with_its_match_count() {
+    // Every assistant reply in this session says "step", so it used to fill
+    // the page with copies of itself.
+    let (archive, _homes) = scanned_archive(5);
+    let replies = converse(
+        archive.path(),
+        &[call(1, "search_sessions", json!({ "query": "step" }))],
+    );
+    let hits = structured(&replies[0])["hits"].as_array().unwrap();
+    let found: Vec<(&str, u64)> = hits
+        .iter()
+        .map(|h| {
+            (
+                h["session_id"].as_str().unwrap(),
+                h["matches"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    let session_id = only_session_id(archive.path());
+    assert_eq!(found, [(session_id.as_str(), 5)]);
+}
