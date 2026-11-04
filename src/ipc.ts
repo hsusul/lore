@@ -11,8 +11,6 @@ import type { FileEventDto } from "../crates/lore-ipc/bindings/FileEventDto";
 import type { FolderSummary } from "../crates/lore-ipc/bindings/FolderSummary";
 import type { ForgetReport } from "../crates/lore-ipc/bindings/ForgetReport";
 import type { GitObservationDto } from "../crates/lore-ipc/bindings/GitObservationDto";
-import type { IndexUpdatedEvent } from "../crates/lore-ipc/bindings/IndexUpdatedEvent";
-import type { JobFailedEvent } from "../crates/lore-ipc/bindings/JobFailedEvent";
 import type { MessageDto } from "../crates/lore-ipc/bindings/MessageDto";
 import type { MessagePage } from "../crates/lore-ipc/bindings/MessagePage";
 import type { MessagePartDto } from "../crates/lore-ipc/bindings/MessagePartDto";
@@ -23,10 +21,8 @@ import type { BackupScheduleDto } from "../crates/lore-ipc/bindings/BackupSchedu
 import type { CheckUpdateResultDto } from "../crates/lore-ipc/bindings/CheckUpdateResultDto";
 import type { SearchHit } from "../crates/lore-ipc/bindings/SearchHit";
 import type { SearchPage } from "../crates/lore-ipc/bindings/SearchPage";
-import type { SecretFlaggedEvent } from "../crates/lore-ipc/bindings/SecretFlaggedEvent";
 import type { SegmentDto } from "../crates/lore-ipc/bindings/SegmentDto";
 import type { SessionDetail } from "../crates/lore-ipc/bindings/SessionDetail";
-import type { SessionIngestedEvent } from "../crates/lore-ipc/bindings/SessionIngestedEvent";
 import type { SessionPage } from "../crates/lore-ipc/bindings/SessionPage";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 import type { TokenTotalsDto } from "../crates/lore-ipc/bindings/TokenTotalsDto";
@@ -84,8 +80,6 @@ export type {
   FolderSummary,
   ForgetReport,
   GitObservationDto,
-  IndexUpdatedEvent,
-  JobFailedEvent,
   MessageDto,
   MessagePage,
   MessagePartDto,
@@ -94,10 +88,8 @@ export type {
   ScanProgress,
   SearchHit,
   SearchPage,
-  SecretFlaggedEvent,
   SegmentDto,
   SessionDetail,
-  SessionIngestedEvent,
   SessionPage,
   SessionSummary,
   TokenTotalsDto,
@@ -337,34 +329,6 @@ export function onScanProgress(
   handler: (progress: ScanProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<ScanProgress>("scan_progress", (event) => handler(event.payload));
-}
-
-/** Subscribe to session ingested events. Resolves with an unlisten handle. */
-export function onSessionIngested(
-  handler: (event: SessionIngestedEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<SessionIngestedEvent>("session_ingested", (event) => handler(event.payload));
-}
-
-/** Subscribe to index updated events. Resolves with an unlisten handle. */
-export function onIndexUpdated(
-  handler: (event: IndexUpdatedEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<IndexUpdatedEvent>("index_updated", (event) => handler(event.payload));
-}
-
-/** Subscribe to job failed events. Resolves with an unlisten handle. */
-export function onJobFailed(
-  handler: (event: JobFailedEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<JobFailedEvent>("job_failed", (event) => handler(event.payload));
-}
-
-/** Subscribe to secret flagged events. Resolves with an unlisten handle. */
-export function onSecretFlagged(
-  handler: (event: SecretFlaggedEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<SecretFlaggedEvent>("secret_flagged", (event) => handler(event.payload));
 }
 
 /** Calculate cumulative token usage and estimated cost across all sessions. */
