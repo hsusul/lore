@@ -94,14 +94,45 @@ pub fn inbox(vault: &Vault) -> Result<Pending, ReviewError> {
     Ok(Pending { proposals, skipped })
 }
 
+/// A person's changes to a proposal, applied as it is accepted. The inbox line
+/// stays as the agent wrote it; the note gets the edited text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Edits {
+    pub title: Option<String>,
+    pub body: Option<String>,
+}
+
 /// Accept proposal `id`: write it as a new note at `<scope>/<slug>.md`, with
 /// `as_slug` overriding the slug its title gives, or, for `relation: updates`,
 /// rewrite the target note. One commit. Running it again changes nothing.
 pub fn accept(vault: &Vault, id: &str, as_slug: Option<&str>) -> Result<Accepted, ReviewError> {
+    accept_edited(vault, id, as_slug, &Edits::default())
+}
+
+/// [`accept`] with `edits` applied to the proposal first. Edited text is
+/// redacted and validated the way a proposal is, so an edit cannot put a
+/// secret or a malformed title into the vault. Once a proposal is accepted,
+/// running this again returns that note and ignores `edits`.
+pub fn accept_edited(
+    vault: &Vault,
+    id: &str,
+    as_slug: Option<&str>,
+    edits: &Edits,
+) -> Result<Accepted, ReviewError> {
     if let Some(slug) = as_slug {
         check_slug(slug)?;
     }
-    let proposal = find_proposal(vault, id)?;
+    let mut proposal = find_proposal(vault, id)?;
+    if edits != &Edits::default() {
+        if let Some(title) = &edits.title {
+            proposal.title.clone_from(title);
+        }
+        if let Some(body) = &edits.body {
+            proposal.body.clone_from(body);
+        }
+        proposal = proposal.redacted()?;
+        proposal.validate()?;
+    }
     let updates = matches!(proposal.relation, Some(Relation::Updates(_)));
     // Check the log before looking for the target: an accepted update stays
     // accepted even when its target was deleted by hand since.
