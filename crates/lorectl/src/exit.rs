@@ -109,34 +109,43 @@ impl CliError {
     #[must_use]
     pub fn advice(&self) -> Option<&'static str> {
         match self {
-            CliError::Storage(StorageError::ArchiveMissing) => {
-                Some("run `lorectl init` to set Lore up, or `lorectl scan` to build the archive alone")
-            }
+            CliError::Storage(StorageError::ArchiveMissing)
+            | CliError::SourceRoots(SourceRootError::Storage(StorageError::ArchiveMissing)) => Some(
+                "run `lorectl init` to set Lore up, or `lorectl scan` to build the archive alone",
+            ),
             CliError::Usage(_) | CliError::NotImplemented(_) => Some("run `lorectl --help`"),
-            CliError::Lock(LockError::Held) | CliError::Memory(VaultError::Busy(_)) => {
+            CliError::Lock(LockError::Held) => {
                 Some("wait for the other process to finish, then run it again")
             }
             CliError::NotARepository => Some("run it from inside a Git repository"),
-            CliError::Memory(VaultError::Missing(_)) => {
-                Some("run `lorectl mem init` to create one")
-            }
-            CliError::Memory(VaultError::Conflict(_)) => {
-                Some("edit that file by hand, or give the new note another title")
-            }
-            CliError::Memory(VaultError::DuplicateId { .. }) => {
-                Some("leave out `id:` to get a new one, or edit the note that has it")
-            }
-            CliError::Memory(VaultError::Git(..)) => Some(
-                "git failed in the vault; run `git status` there to see why (Lore skips hooks and signing)",
-            ),
+            CliError::Memory(error) => vault_advice(error),
             CliError::Review(ReviewError::Dirty(_)) => {
                 Some("commit or discard your edit to that note, then run it again")
             }
             CliError::Review(ReviewError::Vault(VaultError::Conflict(_))) => {
                 Some("accept it under another name with `--as <slug>`")
             }
+            CliError::Review(ReviewError::Vault(error))
+            | CliError::Review(ReviewError::Inbox(InboxError::Vault(error))) => vault_advice(error),
             _ => None,
         }
+    }
+}
+
+fn vault_advice(error: &VaultError) -> Option<&'static str> {
+    match error {
+        VaultError::Missing(_) => Some("run `lorectl mem init` to create one"),
+        VaultError::Busy(_) => Some("wait for the other process to finish, then run it again"),
+        VaultError::Conflict(_) => {
+            Some("edit that file by hand, or give the new note another title")
+        }
+        VaultError::DuplicateId { .. } => {
+            Some("leave out `id:` to get a new one, or edit the note that has it")
+        }
+        VaultError::Git(..) => Some(
+            "git failed in the vault; run `git status` there to see why (Lore skips hooks and signing)",
+        ),
+        _ => None,
     }
 }
 
@@ -450,5 +459,48 @@ mod tests {
             let text = CliError::Scan(error).to_string();
             assert!(!text.contains('/'), "scan error leaked a path: {text}");
         }
+    }
+
+    #[test]
+    fn a_wrapped_vault_error_shares_the_vault_advice() {
+        let missing = CliError::Review(ReviewError::Vault(VaultError::Missing("/tmp/v".into())));
+        assert_eq!(
+            missing.advice(),
+            Some("run `lorectl mem init` to create one")
+        );
+
+        let busy = CliError::Review(ReviewError::Vault(VaultError::Busy("/tmp/v".into())));
+        assert_eq!(
+            busy.advice(),
+            Some("wait for the other process to finish, then run it again")
+        );
+
+        let git = CliError::Review(ReviewError::Vault(VaultError::Git(
+            "commit".into(),
+            "boom".into(),
+        )));
+        assert_eq!(
+            git.advice(),
+            Some(
+                "git failed in the vault; run `git status` there to see why (Lore skips hooks and signing)"
+            )
+        );
+
+        let inbox_missing = CliError::Review(ReviewError::Inbox(InboxError::Vault(
+            VaultError::Missing("/tmp/v".into()),
+        )));
+        assert_eq!(
+            inbox_missing.advice(),
+            Some("run `lorectl mem init` to create one")
+        );
+    }
+
+    #[test]
+    fn a_source_roots_missing_archive_shares_the_missing_archive_advice() {
+        let missing = CliError::SourceRoots(SourceRootError::Storage(StorageError::ArchiveMissing));
+        assert_eq!(
+            missing.advice(),
+            Some("run `lorectl init` to set Lore up, or `lorectl scan` to build the archive alone")
+        );
     }
 }
