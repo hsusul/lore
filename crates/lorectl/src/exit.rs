@@ -110,7 +110,7 @@ impl CliError {
     pub fn advice(&self) -> Option<&'static str> {
         match self {
             CliError::Storage(StorageError::ArchiveMissing) => {
-                Some("run `lorectl scan` to build one")
+                Some("run `lorectl init` to set Lore up, or `lorectl scan` to build the archive alone")
             }
             CliError::Usage(_) | CliError::NotImplemented(_) => Some("run `lorectl --help`"),
             CliError::Lock(LockError::Held) | CliError::Memory(VaultError::Busy(_)) => {

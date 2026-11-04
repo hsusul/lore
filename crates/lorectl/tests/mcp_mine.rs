@@ -252,12 +252,11 @@ fn mine_candidates_without_an_archive_is_a_tool_error() {
     let dir = tempfile::tempdir().unwrap();
     let (_, result) = mine(&dir.path().join("none"), json!({}));
     assert_eq!(result["isError"], true);
-    assert!(
-        result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("lorectl scan"),
-        "{result}"
+    // A first run has no archive and no vault yet: init makes both.
+    assert_eq!(
+        result["content"][0]["text"],
+        "no archive at that path; run `lorectl init` to set Lore up, or `lorectl scan` \
+         to build the archive alone"
     );
 }
 
