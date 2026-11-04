@@ -8,6 +8,7 @@
 //!
 //! Recall ([`recall`]) returns the notes for a directory's repository, each with
 //! a [`anchor::Freshness`] from checking its anchors against the working tree.
+//! [`session_start`] renders them as the block an agent sees when it starts.
 //!
 //! Eval ([`eval`]) scores a policy for accepting proposals without a person
 //! against the decisions a person already made, offline. [`policy`] holds the
@@ -29,4 +30,5 @@ pub mod policy;
 pub mod recall;
 pub mod repo;
 pub mod review;
+pub mod session_start;
 pub mod vault;
