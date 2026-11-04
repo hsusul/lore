@@ -851,9 +851,10 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         Some(_) => return Err(invalid_argument("cwd", "must be an absolute path")),
     };
     let conn = open(&ctx.archive_dir)?;
-    let found = mine::corrections(&conn).map_err(|e| e.to_string())?;
+    let turns = mine::read_turns(&conn).map_err(|e| e.to_string())?;
+    let found = mine::corrections_in(&turns, &mine::Limits::default());
     let mut lessons = mine::lessons(found);
-    mine::find_conflicts(&conn, &mut lessons).map_err(|e| e.to_string())?;
+    mine::find_conflicts(&turns, &mut lessons);
     let before = lessons.len();
     if !arguments
         .get("all")
