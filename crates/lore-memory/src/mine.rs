@@ -398,8 +398,25 @@ pub fn states_rule(text: &str) -> bool {
 }
 
 /// Phrases that make a turn read as a standing rule. "make sure" counts for
-/// less when the same turn holds a task verb (see [`rule_score`]).
+/// less, and for less still when the same turn holds a task verb (see
+/// [`rule_score`]).
 const STANDING: &[&str] = &["from now on", "going forward", "always", "never"];
+/// Phrases that ask the agent for something now, which a standing rule does
+/// not: "can you make sure the prompt is right" is a request.
+const ASKS: &[&str] = &[
+    "can you",
+    "could you",
+    "can u",
+    "would you",
+    "do you",
+    "do i",
+    "how do",
+    "whats up",
+    "what's up",
+    "why is",
+];
+/// More words than this and a turn is usually a task with a rule inside it.
+const RULE_WORDS_MAX: usize = 20;
 /// First words of a one-off task order.
 const TASK_VERBS: &[&str] = &[
     "push",
@@ -435,13 +452,16 @@ const TASK_OPENERS: &[&str] = &[
 ];
 
 /// How much `text` reads like a standing rule rather than a one-off task
-/// order. Fixed and explainable: +2 for a standing phrase ("from now on",
-/// "always", "never", "going forward"), or for "make sure" alone, which earns
-/// only +1 when the turn also holds a task verb; +1 when it names no specific
+/// order. Fixed and explainable: +3 for a standing phrase ("from now on",
+/// "always", "never", "going forward"; "never mind" is not one), or +2 for
+/// "make sure" alone, which earns only +1 when the turn also holds a task
+/// verb; -2 when it asks the agent something now (a question mark, "can you",
+/// "do you", "how do", ...); -1 when it runs past [`RULE_WORDS_MAX`] words;
+/// +1 when it names no specific
 /// artifact; -3 for each PR or issue number (`#478`, `issue 12`), each
 /// branch-shaped token (a slash and no file extension), each URL, and each
 /// span the secret scan masked; and -2 when it opens with a task verb
-/// ("push", "merge", "fix", ...) and names an artifact; and -4 when it names
+/// ("push", "merge", "fix", ...) and names an artifact; and -5 when it names
 /// none but opens with a task verb and adds a second instruction with "and",
 /// a task with a rule tacked on ("delete the runtimes and make it build on
 /// my ssd from now on").
@@ -490,10 +510,18 @@ pub fn rule_score(text: &str) -> i32 {
     let artifacts = numbers + branches + paths;
     let mut score = 0;
     let task_verb = tokens.iter().any(|t| TASK_VERBS.contains(t));
-    if STANDING.iter().any(|p| lower.contains(p)) {
-        score += 2;
+    let standing = lower.replace("never mind", "");
+    if STANDING.iter().any(|p| standing.contains(p)) {
+        score += 3;
     } else if lower.contains("make sure") {
         score += if task_verb { 1 } else { 2 };
+    }
+    let padded = format!(" {} ", tokens.join(" "));
+    if lower.contains('?') || ASKS.iter().any(|p| padded.contains(&format!(" {p} "))) {
+        score -= 2;
+    }
+    if tokens.len() > RULE_WORDS_MAX {
+        score -= 1;
     }
     if artifacts == 0 {
         score += 1;
@@ -505,7 +533,7 @@ pub fn rule_score(text: &str) -> i32 {
     }
     let opens_chore = tokens.first().is_some_and(|t| TASK_OPENERS.contains(t));
     if artifacts == 0 && (opens_task || opens_chore) && tokens.contains(&"and") {
-        score -= 4;
+        score -= 5;
     }
     score
 }
