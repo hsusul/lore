@@ -531,6 +531,25 @@ mod tests {
     }
 
     #[test]
+    fn a_source_that_failed_on_a_busy_database_is_retried_unchanged() {
+        // Another writer held the database. Nothing about the source is wrong,
+        // so waiting for it to change could leave its session out for good.
+        let conn = db();
+        schedule_source(&conn, &new_job("src", 0), 10).unwrap();
+        claim_next(&conn).unwrap();
+        fail_with_kind(&conn, "src", "sqlite_busy", "database is locked").unwrap();
+
+        assert_eq!(
+            schedule_source(&conn, &new_job("src", 0), 10).unwrap(),
+            SourceSchedule::Enqueued
+        );
+        assert_eq!(
+            load(&conn, "src").unwrap().unwrap().state,
+            JobState::Pending
+        );
+    }
+
+    #[test]
     fn schedule_source_coalesces_a_pending_storm() {
         let conn = db();
         assert_eq!(
