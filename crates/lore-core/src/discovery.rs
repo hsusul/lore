@@ -522,4 +522,29 @@ mod tests {
         assert!(report.agents.iter().all(|a| !a.detection.installed));
         assert!(report.sessions.is_empty());
     }
+
+    #[test]
+    fn protected_roots_collects_and_deduplicates_effective_and_protected_paths() {
+        let registry = AdapterRegistry::v0();
+        let mut config = DiscoveryConfig::new();
+        let dir = tempfile::tempdir().unwrap();
+        let claude_root = dir.path().join("claude");
+        let codex_root = dir.path().join("codex");
+
+        // Pass duplicate roots to verify sorting and deduplication
+        config.set_roots(
+            "claude-code",
+            DiscoveryRoots::new(vec![claude_root.clone(), claude_root.clone()]),
+        );
+        config.set_roots("codex", DiscoveryRoots::new(vec![codex_root.clone()]));
+
+        let roots = protected_roots(&registry, &config);
+        assert!(roots.contains(&claude_root));
+        assert!(roots.contains(&codex_root));
+
+        let mut sorted_deduped = roots.clone();
+        sorted_deduped.sort();
+        sorted_deduped.dedup();
+        assert_eq!(roots, sorted_deduped);
+    }
 }
