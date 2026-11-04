@@ -17,6 +17,7 @@ import {
   HIGHLIGHT_START,
   type DetectedAgent,
   type FolderSummary,
+  type LessonDto,
   type MessagePage,
   type RepositorySummary,
   type ScanProgress,
@@ -234,6 +235,58 @@ function downloadText(filename: string, text: string): boolean {
 // ── The handler table ────────────────────────────────────────────────────
 
 /** Build a fresh in-memory archive and the handler for every IPC command. */
+const day = 86_400_000;
+const lessonAt = Date.UTC(2026, 9, 16, 15, 12);
+
+/** Sample lessons, in the shape `list_lessons` returns, best first. */
+const sampleLessons: LessonDto[] = [
+  {
+    id: "a1b2c3d4e5",
+    text: "no, don't start analytics on launch. ask the user first, Apple will reject this",
+    suggested_rule: "Don't start analytics on launch. Ask the user first, Apple will reject this.",
+    conversations: 3,
+    latest_ms: lessonAt + 5 * day,
+    receipts: [
+      {
+        session_id: "sample-codex-analytics",
+        agent_id: "codex",
+        repo: "beeclean",
+        at_ms: lessonAt + 5 * day,
+        text: "again, nothing is sent until they say yes",
+        preceding: "Set collectionEnabled = true as the default.",
+        signal: "repeat",
+      },
+      {
+        session_id: "sample-claude-analytics",
+        agent_id: "claude-code",
+        repo: "beeclean",
+        at_ms: lessonAt,
+        text: "no, don't start analytics on launch. ask the user first, Apple will reject this",
+        preceding: "Added Analytics.start() to AppDelegate.swift.",
+        signal: "correction",
+      },
+    ],
+  },
+  {
+    id: "f6e5d4c3b2",
+    text: "use pnpm, not npm, in this repo",
+    suggested_rule: "Use pnpm, not npm, in this repo.",
+    conversations: 2,
+    latest_ms: lessonAt + 2 * day,
+    receipts: [
+      {
+        session_id: "sample-claude-pnpm",
+        agent_id: "claude-code",
+        repo: "sightline",
+        at_ms: lessonAt + 2 * day,
+        text: "use pnpm, not npm, in this repo",
+        preceding: "Ran npm install.",
+        signal: "correction",
+      },
+    ],
+  },
+];
+
 export function createMockHandlers(
   emit: MockEmit,
   { now = Date.now(), scanStepMs = 220 }: MockOptions = {},
@@ -360,6 +413,12 @@ export function createMockHandlers(
         (customRoots.get(agent) ?? []).filter((p) => p !== asString(a.path)),
       );
       return null;
+    },
+
+    // Memory
+    list_lessons: (a) => {
+      const limit = typeof a.limit === "number" ? a.limit : sampleLessons.length;
+      return sampleLessons.slice(0, limit);
     },
 
     // Folders

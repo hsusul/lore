@@ -16,6 +16,8 @@ import type { MessagePage } from "../crates/lore-ipc/bindings/MessagePage";
 import type { MessagePartDto } from "../crates/lore-ipc/bindings/MessagePartDto";
 import type { RepositorySummary } from "../crates/lore-ipc/bindings/RepositorySummary";
 import type { RescanResult } from "../crates/lore-ipc/bindings/RescanResult";
+import type { LessonDto } from "../crates/lore-ipc/bindings/LessonDto";
+import type { LessonReceiptDto } from "../crates/lore-ipc/bindings/LessonReceiptDto";
 import type { ScanProgress } from "../crates/lore-ipc/bindings/ScanProgress";
 import type { BackupScheduleDto } from "../crates/lore-ipc/bindings/BackupScheduleDto";
 import type { CheckUpdateResultDto } from "../crates/lore-ipc/bindings/CheckUpdateResultDto";
@@ -82,6 +84,8 @@ export type {
   GitObservationDto,
   MessageDto,
   MessagePage,
+  LessonDto,
+  LessonReceiptDto,
   MessagePartDto,
   RepositorySummary,
   RescanResult,
@@ -175,6 +179,14 @@ export function listSessionMessagesPage(
 /** The user-defined folders, with thread counts. */
 export function listFolders(): Promise<FolderSummary[]> {
   return invoke<FolderSummary[]>("list_folders");
+}
+
+/**
+ * Lessons mined from the archive's corrections, best first. Read only: mining
+ * writes nothing to the archive or the vault.
+ */
+export function listLessons(limit?: number): Promise<LessonDto[]> {
+  return invoke<LessonDto[]>("list_lessons", { limit: limit ?? null });
 }
 
 /** Create a folder and return it (the name is trimmed and length-capped). */

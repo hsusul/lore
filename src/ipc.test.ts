@@ -14,6 +14,7 @@ import {
   HIGHLIGHT_START,
   listDetectedAgents,
   listFolderSessionsPage,
+  listLessons,
   listRepositorySessionsPage,
   listSessions,
   listSessionsPage,
@@ -62,6 +63,15 @@ describe("ipc contract", () => {
       multiple: false,
       title: "Choose Codex session folder",
     });
+  });
+
+  it("list_lessons passes its limit, or null for all", async () => {
+    invoke.mockResolvedValue([]);
+    await listLessons();
+    expect(invoke).toHaveBeenCalledWith("list_lessons", { limit: null });
+
+    await listLessons(5);
+    expect(invoke).toHaveBeenCalledWith("list_lessons", { limit: 5 });
   });
 
   it("list_sessions defaults limit to 50", async () => {

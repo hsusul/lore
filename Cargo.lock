@@ -2838,6 +2838,7 @@ version = "0.2.0"
 dependencies = [
  "lore-core",
  "lore-ipc",
+ "lore-memory",
  "rusqlite",
  "serde",
  "serde_json",

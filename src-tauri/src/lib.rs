@@ -48,6 +48,7 @@ pub fn run() {
             delete_folder,
             set_session_folder,
             list_folder_sessions_page,
+            list_lessons,
             get_setting,
             set_setting,
             get_backup_schedule,

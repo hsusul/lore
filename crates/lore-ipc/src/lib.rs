@@ -358,6 +358,46 @@ pub struct CheckUpdateResultDto {
     pub published_at: Option<String>,
 }
 
+/// One user turn a lesson was mined from: where and when the person said it,
+/// redacted, and what the agent had just done. Payload element of `list_lessons`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LessonReceiptDto {
+    pub session_id: String,
+    /// `claude-code` or `codex`.
+    pub agent_id: String,
+    /// The repository's display name, when the archive linked one.
+    pub repo: Option<String>,
+    #[ts(type = "number | null")]
+    pub at_ms: Option<i64>,
+    /// The person's turn, redacted, on one line.
+    pub text: String,
+    /// The assistant turn it answers, redacted and cut short.
+    pub preceding: Option<String>,
+    /// `correction` | `repeat` | `rule`.
+    pub signal: String,
+}
+
+/// A candidate lesson mined from the archive's corrections, for a person to
+/// keep or skip. Payload element of `list_lessons`, best first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LessonDto {
+    /// Ten hex characters, stable while its oldest receipt is.
+    pub id: String,
+    /// The newest receipt's text that states a rule.
+    pub text: String,
+    /// The rule reworded as an instruction, a starting point for the title.
+    pub suggested_rule: String,
+    /// How many conversations it was said in.
+    #[ts(type = "number")]
+    pub conversations: i64,
+    #[ts(type = "number | null")]
+    pub latest_ms: Option<i64>,
+    /// The newest receipt from each conversation, newest first.
+    pub receipts: Vec<LessonReceiptDto>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
