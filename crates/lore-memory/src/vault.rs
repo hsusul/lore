@@ -36,8 +36,10 @@ const IGNORED: [&str; 3] = [".lore/", "_inbox/", ".*.md.tmp"];
 /// How long a writer waits for another to release the vault lock before it
 /// gives up with [`VaultError::Busy`].
 pub const LOCK_WAIT: Duration = Duration::from_secs(5);
-/// Settings every git call carries: no hooks, no signing, no prompts.
-const GIT_SAFE: [&str; 8] = [
+/// Settings every git call carries: no hooks, no signing, no prompts, and
+/// paths printed as they are, since a slug can hold letters of any script and
+/// a quoted path read back from git names no file.
+const GIT_SAFE: [&str; 10] = [
     "-c",
     "core.hooksPath=/dev/null",
     "-c",
@@ -46,6 +48,8 @@ const GIT_SAFE: [&str; 8] = [
     "tag.gpgsign=false",
     "-c",
     "core.fsmonitor=false",
+    "-c",
+    "core.quotePath=false",
 ];
 
 #[derive(Debug, Error)]
