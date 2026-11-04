@@ -40,8 +40,8 @@ pub enum ProgressEvent {
     /// queued (the rest coalesced onto existing jobs).
     ScanEnqueued { discovered: usize, enqueued: usize },
     /// Every source modified within [`crate::worker::RECENT_WINDOW`] that the
-    /// running background scan scheduled has been drained. Older history may
-    /// still be in the queue.
+    /// running scan scheduled has been drained. Older history may still be in
+    /// the queue.
     RecentFinished,
     /// A full discovery scan has drained all work it scheduled.
     ScanFinished,

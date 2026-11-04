@@ -35,9 +35,10 @@
 
 use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use lore_core::enrich::{resolve_repository, RepoResolution};
-use lore_core::landing::{self, Landing, LandingIndex};
+use lore_core::landing;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::storage;
 use lore_memory::index::Index;
@@ -60,6 +61,9 @@ const NOTE_CAP: usize = 10;
 const CHAR_CAP: usize = 2_000;
 /// Hook JSON past this many bytes is not read.
 const STDIN_CAP: u64 = 1 << 20;
+/// The history walk behind the at-risk line gives up past this. Half the 10 s
+/// the Claude Code plugin allows the hook, so the notes still get their turn.
+const AT_RISK_BUDGET: Duration = Duration::from_secs(5);
 
 /// Run a hook event. Always returns `Ok(exit::OK)`.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
@@ -177,7 +181,8 @@ fn session_start(invocation: &Invocation) -> Result<(), CliError> {
 
 /// How many recorded changes are present in the repository but unreferenced.
 ///
-/// Walks the repository's history once; see `lore_core::landing`.
+/// Walks history only when staged content is missing from `HEAD`, and then
+/// within [`AT_RISK_BUDGET`]; see `lore_core::landing::count_staged`.
 fn count_at_risk(conn: &rusqlite::Connection, repository_id: &str) -> Result<usize, CliError> {
     let mut stmt = conn
         .prepare(
@@ -195,18 +200,13 @@ fn count_at_risk(conn: &rusqlite::Connection, repository_id: &str) -> Result<usi
         return Ok(0);
     }
 
-    let Some((worktree, index)) = landing::live_worktrees(conn, repository_id)?
-        .into_iter()
-        .find_map(|w| LandingIndex::build(&w).map(|i| (w, i)))
-    else {
-        return Ok(0);
-    };
-    Ok(oids
+    // Staged only. `Unreferenced` content is not discarded by a reset, so
+    // announcing it under the same warning would be false.
+    let deadline = Instant::now() + AT_RISK_BUDGET;
+    Ok(landing::live_worktrees(conn, repository_id)?
         .iter()
-        // Staged only. `Unreferenced` content is not discarded by a reset, so
-        // announcing it under the same warning would be false.
-        .filter(|oid| matches!(landing::classify(&worktree, &index, oid), Landing::Staged))
-        .count())
+        .find_map(|w| landing::count_staged(w, &oids, deadline))
+        .unwrap_or(0))
 }
 
 #[cfg(test)]

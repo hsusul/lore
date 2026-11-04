@@ -414,10 +414,14 @@ fn spawned_worker_scans_then_shuts_down_clean() {
     let (tx, rx) = mpsc::channel();
     let handle = spawn(worker, Some(watcher), ChannelSink(tx));
 
-    // Shutdown no longer waits out a scan, so wait for this one to finish.
+    // Shutdown cuts a scan short, so let the initial one finish first.
     let mut events = Vec::new();
-    while !matches!(events.last(), Some(ProgressEvent::ScanFinished)) {
-        events.push(rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap());
+    while let Ok(event) = rx.recv() {
+        let finished = matches!(event, ProgressEvent::ScanFinished);
+        events.push(event);
+        if finished {
+            break;
+        }
     }
     handle.shutdown();
 
@@ -564,6 +568,137 @@ fn progress_events_are_content_free() {
     }
 }
 
+/// Forwards every event and, after each `Ingested`, waits for the test to let
+/// the worker go on, so the test sees the scan mid-flight.
+struct GatedSink {
+    events: mpsc::Sender<ProgressEvent>,
+    gate: std::sync::Mutex<mpsc::Receiver<()>>,
+}
+
+impl ProgressSink for GatedSink {
+    fn emit(&self, event: ProgressEvent) {
+        let ingested = matches!(event, ProgressEvent::Ingested { .. });
+        let _ = self.events.send(event);
+        if ingested {
+            let _ = self.gate.lock().unwrap().recv();
+        }
+    }
+}
+
+/// Spawn a worker over `home`, add 200 sources (before the startup scan, or
+/// after it and then ask for a rescan), and quit as the first of them lands.
+/// Returns how many of them were ingested, how many were added, and the
+/// archive with the directory that holds it.
+fn quit_mid_scan(
+    home: &Home,
+    during_rescan: bool,
+) -> (usize, usize, Connection, tempfile::TempDir) {
+    const SOURCES: usize = 200;
+    let add_sources = || {
+        for i in 0..SOURCES {
+            fs::write(
+                home.claude_root
+                    .join(format!("encoded-repo/extra-{i}.jsonl")),
+                fixture("claude_code/basic_text.jsonl"),
+            )
+            .unwrap();
+        }
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lore.db");
+    let worker = lore_core::worker::open_worker(
+        &db_path,
+        AdapterRegistry::v0(),
+        home.blobs.clone(),
+        home.config.clone(),
+        WorkerConfig {
+            idle_poll: std::time::Duration::from_secs(3600),
+            ..WorkerConfig::default()
+        },
+    )
+    .unwrap();
+    if !during_rescan {
+        add_sources();
+    }
+    let (tx, rx) = mpsc::channel();
+    let (gate_tx, gate_rx) = mpsc::channel();
+    let handle = spawn(
+        worker,
+        None,
+        GatedSink {
+            events: tx,
+            gate: std::sync::Mutex::new(gate_rx),
+        },
+    );
+    let added = if during_rescan {
+        while let Ok(event) = rx.recv() {
+            match event {
+                ProgressEvent::Ingested { .. } => gate_tx.send(()).unwrap(),
+                ProgressEvent::ScanFinished => break,
+                _ => {}
+            }
+        }
+        add_sources();
+        handle.trigger_rescan();
+        SOURCES
+    } else {
+        SOURCES + 2
+    };
+
+    // Quit as the first source lands, then keep releasing the worker until its
+    // thread exits and drops the sink, which closes `rx`.
+    let mut ingested = 0;
+    let mut quitting = None;
+    let mut handle = Some(handle);
+    while let Ok(event) = rx.recv() {
+        if matches!(event, ProgressEvent::Ingested { .. }) {
+            ingested += 1;
+            if let Some(handle) = handle.take() {
+                quitting = Some(std::thread::spawn(move || handle.shutdown()));
+            }
+            let _ = gate_tx.send(());
+        }
+    }
+    quitting.unwrap().join().unwrap();
+    let check = lore_core::storage::open(&db_path).unwrap();
+    (ingested, added, check, dir)
+}
+
+#[test]
+fn shutdown_during_the_startup_scan_stops_it_and_keeps_the_rest_queued() {
+    let home = home();
+    let (ingested, added, check, _dir) = quit_mid_scan(&home, false);
+    assert!(
+        ingested < added,
+        "shutdown waited for the whole scan: {ingested} of {added} sources"
+    );
+    assert_eq!(
+        jobs::queue_depth(&check).unwrap().pending,
+        added - ingested,
+        "the sources not reached stay queued for the next launch"
+    );
+    assert_eq!(
+        lore_core::settings::last_scan_completed_at(&check).unwrap(),
+        None,
+        "a scan cut short must not be stamped as finished"
+    );
+}
+
+#[test]
+fn shutdown_during_a_rescan_does_not_drain_the_rest_first() {
+    let home = home();
+    let (ingested, added, check, _dir) = quit_mid_scan(&home, true);
+    assert!(
+        ingested < added,
+        "shutdown waited for the rescan: {ingested} of {added} sources"
+    );
+    assert_eq!(
+        jobs::queue_depth(&check).unwrap().pending,
+        added - ingested,
+        "the sources not reached stay queued for the next launch"
+    );
+}
+
 #[test]
 fn spawned_worker_reports_the_recent_month_before_older_history() {
     // A first run over a large history should be able to show the last month
@@ -580,7 +715,6 @@ fn spawned_worker_reports_the_recent_month_before_older_history() {
     let worker = worker_in_memory(
         &home,
         WorkerConfig {
-            drain_batch: 1,
             idle_poll: std::time::Duration::from_secs(3600),
             ..WorkerConfig::default()
         },
