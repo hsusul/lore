@@ -333,6 +333,45 @@ pub struct RescanResult {
     pub enriched: i64,
 }
 
+/// One time the user said it: a turn the miner found, with where it was said.
+/// Payload element of [`LessonDto::receipts`]. Every text is redacted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReceiptDto {
+    pub session_id: String,
+    pub agent_id: String,
+    /// The repository's display name, when the archive linked one.
+    pub repo: Option<String>,
+    /// Epoch milliseconds.
+    #[ts(type = "number | null")]
+    pub at_ms: Option<i64>,
+    /// The user's turn, on one line.
+    pub text: String,
+    /// The assistant turn it answers, cut short.
+    pub preceding: Option<String>,
+}
+
+/// A lesson mined from the user's corrections, waiting for review.
+/// Payload element of `list_lessons`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LessonDto {
+    /// Stable for as long as its oldest receipt is.
+    pub id: String,
+    /// The newest receipt's text that states a rule.
+    pub text: String,
+    /// The same rule, phrased for an agent to read.
+    pub suggested_rule: String,
+    /// Distinct conversations among the receipts.
+    #[ts(type = "number")]
+    pub conversations: i64,
+    /// Epoch milliseconds of the newest receipt.
+    #[ts(type = "number | null")]
+    pub latest_ms: Option<i64>,
+    /// The newest receipt from each session, newest first.
+    pub receipts: Vec<ReceiptDto>,
+}
+
 /// Cumulative token usage and estimated cost across the entire archive.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]

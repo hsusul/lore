@@ -26,6 +26,8 @@ import type { SessionDetail } from "../crates/lore-ipc/bindings/SessionDetail";
 import type { SessionPage } from "../crates/lore-ipc/bindings/SessionPage";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 import type { TokenTotalsDto } from "../crates/lore-ipc/bindings/TokenTotalsDto";
+import type { LessonDto } from "../crates/lore-ipc/bindings/LessonDto";
+import type { ReceiptDto } from "../crates/lore-ipc/bindings/ReceiptDto";
 
 export type BackupInterval = "off" | "daily" | "weekly";
 export type SearchSort = "relevance" | "newest" | "oldest";
@@ -93,6 +95,8 @@ export type {
   SessionPage,
   SessionSummary,
   TokenTotalsDto,
+  LessonDto,
+  ReceiptDto,
 };
 
 /** Snippet highlight markers (must match lore_core::search). */
@@ -329,6 +333,11 @@ export function onScanProgress(
   handler: (progress: ScanProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<ScanProgress>("scan_progress", (event) => handler(event.payload));
+}
+
+/** Lessons mined from the user's corrections, waiting for review, most conversations first. */
+export function listLessons(): Promise<LessonDto[]> {
+  return invoke<LessonDto[]>("list_lessons");
 }
 
 /** Calculate cumulative token usage and estimated cost across all sessions. */
