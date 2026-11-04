@@ -39,6 +39,7 @@ tauri-build = { version = "2", features = [] }
 lore-core = { path = "../crates/lore-core" }
 lore-ipc = { path = "../crates/lore-ipc" }
 lore-memory = { path = "../crates/lore-memory" }
+lore-skills = { path = "../crates/lore-skills" }
 # Same version as lore-core so the Connection type unifies (features are additive
 # across the graph; lore-core already enables the bundled SQLite).
 rusqlite = "0.32"

@@ -5,7 +5,6 @@
 //! hook or script that wants to gate on findings reads `--json`.
 
 use std::io::Write;
-use std::path::PathBuf;
 
 use lore_skills::{report, Finding, Inventory, Roots, SkillRecord, Source};
 
@@ -39,15 +38,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
 /// them. From the environment, so a test or a live lane can point them at a
 /// fixture without a flag that would exist only for them.
 fn roots() -> Result<Roots, CliError> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .ok_or_else(|| CliError::Usage("HOME must be set to an absolute path".into()))?;
-    Ok(Roots::resolve(
-        &home,
-        std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from),
-        std::env::var_os("CODEX_HOME").map(PathBuf::from),
-    ))
+    Roots::from_env().ok_or_else(|| CliError::Usage("HOME must be set to an absolute path".into()))
 }
 
 fn ls_text(inventory: &Inventory) -> String {

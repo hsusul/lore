@@ -422,6 +422,43 @@ pub struct AgentsReadDto {
     pub text: String,
 }
 
+/// One problem the skills doctor found, described, with the fix it suggests.
+/// Element of [`SkillsReportDto::findings`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillFindingDto {
+    /// The kebab-case kind, as in `lorectl skills doctor --json`.
+    pub kind: String,
+    /// The skill it is about; `None` for a finding about a whole agent.
+    pub skill: Option<String>,
+    pub description: String,
+    /// Suggested, never run.
+    pub fix: String,
+    pub fix_kind: String,
+}
+
+/// How many skills one folder holds. Element of [`SkillsReportDto::folders`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillFolderDto {
+    /// The folder, with the home directory written `~`.
+    pub path: String,
+    #[ts(type = "number")]
+    pub skills: i64,
+}
+
+/// What the skills doctor found on this machine. Payload of `skills_report`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillsReportDto {
+    /// Distinct skill names.
+    #[ts(type = "number")]
+    pub skills: i64,
+    pub folders: Vec<SkillFolderDto>,
+    /// Worst first.
+    pub findings: Vec<SkillFindingDto>,
+}
+
 /// Cumulative token usage and estimated cost across the entire archive.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]

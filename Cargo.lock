@@ -2839,6 +2839,7 @@ dependencies = [
  "lore-core",
  "lore-ipc",
  "lore-memory",
+ "lore-skills",
  "rusqlite",
  "serde",
  "serde_json",

@@ -252,6 +252,14 @@ describe("ipc contract", () => {
     expect(invoke).toHaveBeenCalledWith("agents_read", { cwd: "/Users/me/code/lore" });
   });
 
+  it("skillsReport invokes skills_report and passes the report through", async () => {
+    const { skillsReport } = await import("./ipc");
+    const report = { skills: 2, folders: [{ path: "~/.claude/skills", skills: 2 }], findings: [] };
+    invoke.mockResolvedValueOnce(report);
+    expect(await skillsReport()).toEqual(report);
+    expect(invoke).toHaveBeenCalledWith("skills_report");
+  });
+
   it("getTokenTotals, relinkSegmentRepository, and checkForUpdates invoke expected commands", async () => {
     const { checkForUpdates, getTokenTotals, relinkSegmentRepository } = await import("./ipc");
 

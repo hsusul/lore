@@ -164,6 +164,21 @@ impl Roots {
         Self::resolve(home, None, None)
     }
 
+    /// The roots this process's environment names: `$HOME`, with
+    /// `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME` winning when set. `None` when
+    /// `$HOME` is unset or not absolute.
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())?;
+        Some(Self::resolve(
+            &home,
+            std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from),
+            std::env::var_os("CODEX_HOME").map(PathBuf::from),
+        ))
+    }
+
     /// `claude_config_dir` (`$CLAUDE_CONFIG_DIR`) and `codex_home`
     /// (`$CODEX_HOME`) win over the defaults under `home` when set.
     #[must_use]
