@@ -833,3 +833,52 @@ fn a_proposal_line_keeps_whether_its_session_was_verified() {
         "`source_verified`: expected true or false"
     );
 }
+
+#[test]
+fn an_edited_accept_writes_the_edited_text_and_keeps_the_inbox_line() {
+    let (dir, vault) = new_vault();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    let edits = review::Edits {
+        title: Some("Worktrees share one ref store".into()),
+        body: Some("A fetch in one worktree updates every worktree's refs.\n".into()),
+    };
+    let accepted = review::accept_edited(&vault, P1, None, &edits).unwrap();
+    assert_eq!(accepted.rel, "global/worktrees-share-one-ref-store.md");
+    let date = today();
+    assert_eq!(
+        vault.read(&accepted.rel).unwrap(),
+        format!(
+            "---\nid: {}\ntype: pitfall\ntitle: Worktrees share one ref store\nscope: global\nstatus: active\nsources:\n  - claude-code:s1\ncreated: {date}\n---\nA fetch in one worktree updates every worktree's refs.\n\n## Timeline\n- {date} accepted from claude-code:s1\n",
+            accepted.id.as_str()
+        )
+    );
+    let (filed, _) = inbox::proposals(&vault).unwrap();
+    assert_eq!(
+        filed[0].title, "Worktrees share refs",
+        "the agent's line is kept"
+    );
+
+    let again = review::accept_edited(&vault, P1, None, &review::Edits::default()).unwrap();
+    assert_eq!(again.rel, accepted.rel);
+    assert_eq!(again.outcome, Added::Unchanged);
+    assert_eq!(subjects(dir.path()).len(), 2, "one accept commit");
+}
+
+#[test]
+fn an_edit_is_redacted_and_validated_like_a_proposal() {
+    let (_dir, vault) = new_vault();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    let blank = review::Edits {
+        title: Some("  ".into()),
+        body: None,
+    };
+    assert!(review::accept_edited(&vault, P1, None, &blank).is_err());
+
+    let secret = review::Edits {
+        title: None,
+        body: Some("Use token ghp_0123456789abcdefghijklmnopqrstuvwxyzAB to fetch.\n".into()),
+    };
+    let accepted = review::accept_edited(&vault, P1, None, &secret).unwrap();
+    let note = vault.read(&accepted.rel).unwrap();
+    assert!(!note.contains("ghp_0123456789"), "{note}");
+}
