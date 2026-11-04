@@ -18,7 +18,7 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::anchor::{Freshness, Located, WorkTree};
 use crate::index::has_words;
@@ -117,6 +117,47 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
         notes,
         skipped,
     })
+}
+
+/// Every active note in the vault, by path, for a person browsing them all.
+/// A note scoped to a repository is checked against that repository's working
+/// tree when one of `repo_dirs` is inside it; any other note is checked with
+/// no tree, so it is `Unanchored`, or `Unchecked` when it has anchors. Notes
+/// that do not parse are skipped, as in [`recall`].
+pub fn all_active(vault: &Vault, repo_dirs: &[PathBuf]) -> Result<Vec<Recalled>, VaultError> {
+    let repos: Vec<(RepoContext, WorkTree)> = repo_dirs
+        .iter()
+        .map(|dir| RepoContext::discover(dir))
+        .filter_map(|context| {
+            let tree = WorkTree::new(context.root()?);
+            context.key()?;
+            Some((context, tree))
+        })
+        .collect();
+    let mut notes = Vec::new();
+    for hit in vault.index()?.list_all_active(usize::MAX)? {
+        let Some(Ok(note)) = parse_file(vault, &hit.path)? else {
+            continue;
+        };
+        let repo = match &note.scope {
+            Scope::Repo(key) => repos.iter().find(|(c, _)| c.key() == Some(key)),
+            Scope::Global => None,
+        };
+        let (anchors, freshness) = match repo {
+            Some((context, tree)) => check_note(&note, context, Some(tree)),
+            None => check_note(&note, &RepoContext::NoRepo, None),
+        };
+        notes.push(Recalled {
+            freshness,
+            anchors,
+            path: hit.path,
+            slug: hit.slug,
+            note,
+            excerpt: hit.excerpt,
+            score: hit.score,
+        });
+    }
+    Ok(notes)
 }
 
 /// The active notes that apply in `cwd` with an anchor on `path`, a path

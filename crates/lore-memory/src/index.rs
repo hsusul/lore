@@ -251,6 +251,21 @@ impl Index {
         Ok(hits)
     }
 
+    /// Every active note, whatever its scope, by path, at most `limit`. The
+    /// score is 0 and the excerpt is the start of the body above `## Timeline`.
+    pub fn list_all_active(&self, limit: usize) -> Result<Vec<Hit>, IndexError> {
+        let statement = self.conn.prepare_cached(
+            "SELECT path, id, slug, scope, note_type, status, title, body, 0.0 FROM notes
+               WHERE status = 'active' ORDER BY path LIMIT ?1",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut hits = collect_hits(statement, params![limit])?;
+        for hit in &mut hits {
+            hit.excerpt = opening(&hit.excerpt);
+        }
+        Ok(hits)
+    }
+
     /// Paths of the notes whose id, slug (file name), or path is exactly `key`.
     pub fn lookup(&self, key: &str) -> Result<Vec<String>, IndexError> {
         let mut statement = self.conn.prepare_cached(
