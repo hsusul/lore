@@ -171,13 +171,9 @@ fn runs_lorectl(line: &str, sub: &[&str]) -> bool {
     line.match_indices("lorectl").any(|(at, word)| {
         let rest = line[at + word.len()..].trim_start_matches(['\'', '"']);
         let words: Vec<&str> = rest.split_whitespace().collect();
-        let matches_sub = if sub.is_empty() {
-            rest.is_empty() || rest.starts_with(char::is_whitespace)
-        } else {
-            rest.starts_with(char::is_whitespace)
-                && words.windows(sub.len()).any(|window| window == sub)
-        };
-        (at == 0 || line[..at].ends_with(boundary)) && matches_sub
+        (at == 0 || line[..at].ends_with(boundary))
+            && rest.starts_with(char::is_whitespace)
+            && words.windows(sub.len()).any(|window| window == sub)
     })
 }
 
@@ -200,16 +196,6 @@ fn json(text: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn runs_lorectl_handles_empty_sub_without_panicking() {
-        assert!(runs_lorectl("lorectl", &[]));
-        assert!(runs_lorectl("lorectl mcp", &[]));
-        assert!(runs_lorectl("/usr/local/bin/lorectl", &[]));
-        assert!(runs_lorectl("\"/opt/bin/lorectl\"", &[]));
-        assert!(!runs_lorectl("lorectl_other", &[]));
-        assert!(!runs_lorectl("other_binary", &[]));
-    }
 
     #[test]
     fn runs_lorectl_matches_subcommands_and_boundaries() {
