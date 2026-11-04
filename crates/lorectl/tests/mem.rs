@@ -547,3 +547,28 @@ fn mem_add_from_inside_a_git_hook_commits_to_the_vault() {
     assert_eq!(log(&other), ["other"], "the hook's repo gained a commit");
     assert_eq!(status(&vault), "");
 }
+
+#[test]
+fn the_global_json_flag_reaches_recall_and_eval() {
+    // `lorectl --json mem inbox` and `lorectl --json mem mine` print JSON, so
+    // recall and eval must too, not only with the flag after the subcommand.
+    let (dir, vault) = init();
+    for sub in ["recall", "eval"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+            .args(["--json", "mem", sub, "--vault"])
+            .arg(&vault)
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", dir.path())
+            .env_remove("LORE_VAULT_DIR")
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 0, "{sub}: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&text).is_ok(),
+            "`lorectl --json mem {sub}` printed: {text}"
+        );
+    }
+}

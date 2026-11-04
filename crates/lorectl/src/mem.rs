@@ -270,7 +270,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             if found.notes.is_empty() {
                 eprintln!("lorectl: no notes match `{query}`");
             }
-            if args.json {
+            if args.json || invocation.json {
                 let _ = writeln!(out, "{}", recall_json(&found));
             } else {
                 print_recall(&mut out, &found);
