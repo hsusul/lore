@@ -394,12 +394,15 @@ fn trim_slashes(path: &str) -> &str {
 /// Trim surrounding slashes and a trailing `.git`.
 fn clean_path(path: &str) -> String {
     let path = trim_slashes(path);
-    if path.len() >= 4 && path[path.len() - 4..].eq_ignore_ascii_case(".git") {
-        &path[..path.len() - 4]
-    } else {
-        path
-    }
-    .to_string()
+    path.len()
+        .checked_sub(4)
+        .filter(|&at| {
+            path.get(at..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(".git"))
+        })
+        .and_then(|at| path.get(..at))
+        .unwrap_or(path)
+        .to_string()
 }
 
 // ── Hardened system-git fallback (GIT_INTEGRATION.md §5) ─────────────────────
@@ -708,6 +711,10 @@ mod tests {
         assert_eq!(
             normalize_remote_url("git@github.com:org/repo.Git/").as_deref(),
             Some("github.com/org/repo")
+        );
+        assert_eq!(
+            normalize_remote_url("https://example.com/org/日本").as_deref(),
+            Some("example.com/org/日本")
         );
     }
 
