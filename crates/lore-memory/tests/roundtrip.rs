@@ -369,11 +369,15 @@ fn roundtrip_repo_notes_live_in_a_folder_named_for_people() {
         ("git@github.com:hsusul/lore.git", "lore"),
         ("https://github.com/hsusul/Lore/", "Lore"),
         ("/srv/git/my repo.git", "my repo"),
+        ("git@github.com:hsusul/lore.GIT", "lore"),
+        ("https://github.com/hsusul/lore.Git/", "lore"),
     ] {
         assert_eq!(RepoName::from_origin(origin).unwrap().as_str(), name);
     }
     assert_eq!(RepoName::parse("My Repo").unwrap().slug(), "my-repo");
     assert!(RepoName::from_origin("").is_none());
+    assert!(RepoName::from_origin("https://github.com/hsusul/.git").is_none());
+    assert!(RepoName::from_origin("https://github.com/hsusul/.GIT").is_none());
 }
 
 #[test]

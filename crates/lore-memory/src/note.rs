@@ -325,7 +325,12 @@ impl RepoName {
     pub fn from_origin(origin: &str) -> Option<Self> {
         let trimmed = origin.trim().trim_end_matches(['/', '\\']);
         let last = trimmed.rsplit(['/', ':', '\\']).next()?;
-        Self::parse(last.strip_suffix(".git").unwrap_or(last)).ok()
+        let name = if last.len() >= 4 && last[last.len() - 4..].eq_ignore_ascii_case(".git") {
+            &last[..last.len() - 4]
+        } else {
+            last
+        };
+        Self::parse(name).ok()
     }
 
     #[must_use]
