@@ -534,17 +534,20 @@ fn find_proposal(vault: &Vault, id: &str) -> Result<Proposal, ReviewError> {
 }
 
 /// Every decision, last one per proposal winning. A line that does not parse,
-/// such as one torn by a crash, is ignored: the commit it would describe is
-/// found again from the vault.
+/// or is not UTF-8, such as one torn by a crash, is ignored: the commit it
+/// would describe is found again from the vault.
 pub fn decisions(vault: &Vault) -> Result<HashMap<NoteId, Decision>, VaultError> {
     let path = vault.lore_dir().join(DECISIONS_FILE);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
         Err(e) => return Err(VaultError::Io(format!("read {DECISIONS_FILE}"), e)),
     };
     let mut out = HashMap::new();
-    for line in text.lines() {
+    let lines = bytes
+        .split(|b| *b == b'\n')
+        .filter_map(|raw| std::str::from_utf8(raw).ok());
+    for line in lines {
         if let Some((id, decision)) = parse_decision(line) {
             out.insert(id, decision);
         }

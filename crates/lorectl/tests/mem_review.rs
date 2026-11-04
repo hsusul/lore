@@ -380,3 +380,28 @@ fn a_lost_decision_is_recovered_for_a_note_with_a_non_ascii_name() {
         "the accepted note was not recovered: {stderr}"
     );
 }
+
+#[test]
+fn a_torn_line_with_a_stray_byte_does_not_break_review() {
+    // A crash mid-append can leave half a UTF-8 sequence at the end of the
+    // inbox or the decision log. The other lines must still be read.
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    ok(&lorectl(&vault, &["init"], ""));
+    let first = propose(&vault, "s1", "Prune worktrees");
+    let second = propose(&vault, "s1", "Fetch before rebasing");
+    ok(&lorectl(&vault, &["reject", &first, "--reason", "dup"], ""));
+    for file in [".lore/decisions.jsonl", "_inbox/codex-s1.jsonl"] {
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(vault.join(file))
+            .unwrap();
+        f.write_all(b"{\"id\":\"torn \xff").unwrap();
+    }
+
+    let listed = ok(&lorectl(&vault, &["inbox"], ""));
+    assert!(listed.contains(&second), "{listed}");
+    assert!(!listed.contains(&first), "the rejection was lost: {listed}");
+    let accepted = ok(&lorectl(&vault, &["accept", &second], ""));
+    assert!(accepted.starts_with("accepted "), "{accepted}");
+}
