@@ -17,6 +17,11 @@ jobs:
   rust-core:
     name: Rust core — fmt · clippy · test · network guard
     runs-on: ubuntu-latest
+    env:
+      # Full debuginfo is embedded in each of the ~160 test binaries on Linux and
+      # filled 22 GB of target/, past the free disk on some runner images. Line
+      # tables keep file:line in panics and backtraces.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1 # pinned; keep in sync with rust-toolchain.toml
