@@ -241,6 +241,17 @@ describe("ipc contract", () => {
     expect(invoke).toHaveBeenCalledWith("list_lessons");
   });
 
+  it("listNotes and agentsRead invoke their commands with the directory", async () => {
+    const { agentsRead, listNotes } = await import("./ipc");
+    invoke.mockResolvedValueOnce([]);
+    expect(await listNotes()).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("list_notes");
+    const read = { repo_key: null, repo_name: null, notes: [], total: 0, note_cap: 10, char_cap: 2000, text: "" };
+    invoke.mockResolvedValueOnce(read);
+    expect(await agentsRead("/Users/me/code/lore")).toEqual(read);
+    expect(invoke).toHaveBeenCalledWith("agents_read", { cwd: "/Users/me/code/lore" });
+  });
+
   it("getTokenTotals, relinkSegmentRepository, and checkForUpdates invoke expected commands", async () => {
     const { checkForUpdates, getTokenTotals, relinkSegmentRepository } = await import("./ipc");
 

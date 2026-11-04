@@ -28,6 +28,9 @@ import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary"
 import type { TokenTotalsDto } from "../crates/lore-ipc/bindings/TokenTotalsDto";
 import type { LessonDto } from "../crates/lore-ipc/bindings/LessonDto";
 import type { ReceiptDto } from "../crates/lore-ipc/bindings/ReceiptDto";
+import type { NoteDto } from "../crates/lore-ipc/bindings/NoteDto";
+import type { ReadNoteDto } from "../crates/lore-ipc/bindings/ReadNoteDto";
+import type { AgentsReadDto } from "../crates/lore-ipc/bindings/AgentsReadDto";
 
 export type BackupInterval = "off" | "daily" | "weekly";
 export type SearchSort = "relevance" | "newest" | "oldest";
@@ -97,6 +100,9 @@ export type {
   TokenTotalsDto,
   LessonDto,
   ReceiptDto,
+  NoteDto,
+  ReadNoteDto,
+  AgentsReadDto,
 };
 
 /** Snippet highlight markers (must match lore_core::search). */
@@ -338,6 +344,16 @@ export function onScanProgress(
 /** Lessons mined from the user's corrections, waiting for review, most conversations first. */
 export function listLessons(): Promise<LessonDto[]> {
   return invoke<LessonDto[]>("list_lessons");
+}
+
+/** Every active note in the vault, by path. Empty when there is no vault yet. */
+export function listNotes(): Promise<NoteDto[]> {
+  return invoke<NoteDto[]>("list_notes");
+}
+
+/** What an agent starting a session in `cwd` is given: the session-start notes section. */
+export function agentsRead(cwd: string): Promise<AgentsReadDto> {
+  return invoke<AgentsReadDto>("agents_read", { cwd });
 }
 
 /** Calculate cumulative token usage and estimated cost across all sessions. */

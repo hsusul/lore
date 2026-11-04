@@ -60,7 +60,9 @@ pub fn run() {
             get_token_totals,
             relink_segment_repository,
             check_for_updates,
-            list_lessons
+            list_lessons,
+            list_notes,
+            agents_read
         ])
         .build(tauri::generate_context!());
     let app = match app {

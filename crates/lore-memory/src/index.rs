@@ -251,6 +251,19 @@ impl Index {
         Ok(hits)
     }
 
+    /// Every active note, in any scope, by path.
+    pub fn list_every_active(&self) -> Result<Vec<Hit>, IndexError> {
+        let statement = self.conn.prepare_cached(
+            "SELECT path, id, slug, scope, note_type, status, title, body, 0.0 FROM notes
+               WHERE status = 'active' ORDER BY path",
+        )?;
+        let mut hits = collect_hits(statement, params![])?;
+        for hit in &mut hits {
+            hit.excerpt = opening(&hit.excerpt);
+        }
+        Ok(hits)
+    }
+
     /// Paths of the notes whose id, slug (file name), or path is exactly `key`.
     pub fn lookup(&self, key: &str) -> Result<Vec<String>, IndexError> {
         let mut statement = self.conn.prepare_cached(
