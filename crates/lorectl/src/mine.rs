@@ -69,11 +69,11 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
         }
     }
     let conn = storage::open_read_only(&invocation.archive_dir()?.join(ARCHIVE_DB_FILENAME))?;
-    let candidates =
-        mine::corrections_within(&conn, &limits).map_err(storage::StorageError::from)?;
+    let turns = mine::read_turns(&conn).map_err(storage::StorageError::from)?;
+    let candidates = mine::corrections_in(&turns, &limits);
     let total = candidates.len();
     let mut lessons = mine::lessons_within(candidates, &limits);
-    mine::find_conflicts(&conn, &mut lessons).map_err(storage::StorageError::from)?;
+    mine::find_conflicts(&turns, &mut lessons);
     if propose {
         return propose_lessons(&lessons, &ids, vault_dir.as_deref());
     }

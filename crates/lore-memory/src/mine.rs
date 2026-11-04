@@ -165,6 +165,10 @@ struct Turn {
     repo_path: Option<String>,
 }
 
+/// Every user and assistant turn in the archive, read once so the miner's
+/// passes can share it: reading them is most of what a mining call costs.
+pub struct Turns(Vec<Turn>);
+
 /// Every candidate in the archive, by session then turn. Read only.
 pub fn corrections(conn: &Connection) -> rusqlite::Result<Vec<Candidate>> {
     corrections_within(conn, &Limits::default())
@@ -190,7 +194,13 @@ impl Default for Limits {
 
 /// [`corrections`] with `limits.max_chars` in place of the default.
 pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Result<Vec<Candidate>> {
-    let turns = read_turns(conn)?;
+    Ok(corrections_in(&read_turns(conn)?, limits))
+}
+
+/// [`corrections_within`] over turns already read.
+#[must_use]
+pub fn corrections_in(turns: &Turns, limits: &Limits) -> Vec<Candidate> {
+    let turns = &turns.0;
     let mut found = Vec::new();
     let mut earlier: Vec<BTreeSet<String>> = Vec::new();
     for (i, turn) in turns.iter().enumerate() {
@@ -241,12 +251,12 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
         }
         earlier.push(words);
     }
-    Ok(found)
+    found
 }
 
 /// Every user and assistant message in the archive, its parts' text joined,
 /// in session then turn order.
-fn read_turns(conn: &Connection) -> rusqlite::Result<Vec<Turn>> {
+pub fn read_turns(conn: &Connection) -> rusqlite::Result<Turns> {
     let mut statement = conn.prepare(TURNS)?;
     let mut rows = statement.query([])?;
     let mut turns: Vec<Turn> = Vec::new();
@@ -274,7 +284,7 @@ fn read_turns(conn: &Connection) -> rusqlite::Result<Vec<Turn>> {
         turn.text = strip_harness(&turn.text);
     }
     turns.retain(|t| !t.text.trim().is_empty());
-    Ok(turns)
+    Ok(Turns(turns))
 }
 
 /// `text` without the blocks an agent harness injects into a turn, such as
@@ -684,8 +694,8 @@ const MAX_CONFLICTS: usize = 3;
 /// (PR, push, commit, branch, merge, rebase, tests, mocks, docs, permission).
 /// At most [`MAX_CONFLICTS`], newest first. Lore does not decide whether a
 /// turn overrides the lesson; that takes reading it. Read only.
-pub fn find_conflicts(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Result<()> {
-    let turns = read_turns(conn)?;
+pub fn find_conflicts(turns: &Turns, lessons: &mut [Lesson]) {
+    let turns = &turns.0;
     for lesson in lessons.iter_mut() {
         let (Some(words), Some(after)) = (family_of(&lesson.text), lesson.latest_ms) else {
             continue;
@@ -717,7 +727,6 @@ pub fn find_conflicts(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Re
             })
             .collect();
     }
-    Ok(())
 }
 
 /// Acknowledgements and connectors that open a turn, cut by [`suggest_rule`].
