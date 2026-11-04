@@ -137,20 +137,22 @@ pub enum FinishOutcome {
 /// - a `pending` row → coalesce (the queued run will pick up the latest bytes);
 /// - a `running` row → set `redo` so it re-runs on completion (the mid-run
 ///   change is never dropped);
-/// - a finished (`done`/`failed`) row → re-arm it to `pending`.
+/// - a finished (`done`/`failed`) row with the same payload → leave it, unless
+///   it failed on a busy database;
+/// - any other finished row → re-arm it to `pending`.
 pub fn schedule_source(
     conn: &Connection,
     job: &NewJob<'_>,
     capacity: usize,
 ) -> Result<SourceSchedule> {
-    let existing: Option<(String, Option<String>)> = conn
+    let existing: Option<(String, Option<String>, Option<String>)> = conn
         .query_row(
-            "SELECT state, payload_json FROM job WHERE id = ?1",
+            "SELECT state, payload_json, error_kind FROM job WHERE id = ?1",
             [job.id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    match existing.as_ref().map(|(state, _)| state.as_str()) {
+    match existing.as_ref().map(|(state, ..)| state.as_str()) {
         None => {
             enqueue(conn, job, capacity)?;
             Ok(SourceSchedule::Enqueued)
@@ -178,14 +180,16 @@ pub fn schedule_source(
         Some("done")
             if existing
                 .as_ref()
-                .is_some_and(|(_, payload)| payload.as_deref() == job.payload_json) =>
+                .is_some_and(|(_, payload, _)| payload.as_deref() == job.payload_json) =>
         {
             Ok(SourceSchedule::CoalescedDone)
         }
+        // A busy database says nothing about the source, so that failure is
+        // re-armed even when the source has not changed since.
         Some("failed")
-            if existing
-                .as_ref()
-                .is_some_and(|(_, payload)| payload.as_deref() == job.payload_json) =>
+            if existing.as_ref().is_some_and(|(_, payload, kind)| {
+                payload.as_deref() == job.payload_json && kind.as_deref() != Some("sqlite_busy")
+            }) =>
         {
             Ok(SourceSchedule::CoalescedFailed)
         }
