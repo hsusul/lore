@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useState, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 /**
  * Fixed-height list windowing. Kept dependency-free and split into a pure core
@@ -115,11 +115,15 @@ export function useWindowing(
   );
 
   // Stable across renders so a caller's `[active, scrollToIndex]` effect fires
-  // only when the active row changes — not on every scroll, which would fight
-  // the user's own scrolling by yanking the view back to the active row.
+  // only when the active row changes — not on every scroll, a page load, or a
+  // resize, each of which would fight the user's own scrolling by yanking the
+  // view back to the active row. So it reads the sizes through a ref.
+  const sizes = useRef({ count, viewportHeight, rowHeight });
+  sizes.current = { count, viewportHeight, rowHeight };
   const scrollToIndex = useCallback(
     (index: number) => {
       const el = containerRef.current;
+      const { count, viewportHeight, rowHeight } = sizes.current;
       if (!el || viewportHeight <= 0 || rowHeight <= 0 || count <= 0 || index < 0) return;
       const targetIndex = Math.min(index, count - 1);
       const top = targetIndex * rowHeight;
@@ -127,7 +131,7 @@ export function useWindowing(
       if (top < el.scrollTop) el.scrollTop = top;
       else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
     },
-    [containerRef, count, viewportHeight, rowHeight],
+    [containerRef],
   );
 
   return useMemo(
