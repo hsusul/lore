@@ -372,6 +372,56 @@ pub struct LessonDto {
     pub receipts: Vec<ReceiptDto>,
 }
 
+/// An accepted note in the vault. Payload element of `list_notes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct NoteDto {
+    pub id: String,
+    /// The note file, relative to the vault.
+    pub path: String,
+    pub title: String,
+    /// `global`, or `repo:<key>`.
+    pub scope: String,
+    pub note_type: String,
+    /// The start of the note's body.
+    pub excerpt: String,
+}
+
+/// One note in the session-start section. Element of [`AgentsReadDto::notes`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReadNoteDto {
+    pub id: String,
+    pub title: String,
+    pub path: String,
+    /// The freshness word agents see: fresh, moved, changed, gone, unanchored.
+    pub freshness: String,
+    /// Whether its line fits the section; a note past the byte cap is chosen
+    /// but left out.
+    pub shown: bool,
+}
+
+/// What an agent is given at session start in one directory: the same section
+/// `lorectl hook session-start` prints. Payload of `agents_read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentsReadDto {
+    /// The repository's key and name, when the directory is in one.
+    pub repo_key: Option<String>,
+    pub repo_name: Option<String>,
+    /// The notes chosen, best first, at most `note_cap`.
+    pub notes: Vec<ReadNoteDto>,
+    /// Every active note that applies in this directory, chosen or not.
+    #[ts(type = "number")]
+    pub total: i64,
+    #[ts(type = "number")]
+    pub note_cap: i64,
+    #[ts(type = "number")]
+    pub char_cap: i64,
+    /// The section exactly as an agent reads it; empty when no note applies.
+    pub text: String,
+}
+
 /// Cumulative token usage and estimated cost across the entire archive.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]

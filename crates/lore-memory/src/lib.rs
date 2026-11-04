@@ -29,4 +29,5 @@ pub mod policy;
 pub mod recall;
 pub mod repo;
 pub mod review;
+pub mod session_start;
 pub mod vault;

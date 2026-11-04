@@ -43,9 +43,8 @@ use lore_core::enrich::{resolve_repository, RepoResolution};
 use lore_core::landing;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::storage;
-use lore_memory::index::Index;
+use lore_memory::session_start;
 use lore_memory::vault::{self, Vault};
-use lore_memory::{inbox, recall};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
@@ -56,11 +55,6 @@ use crate::exit::{self, CliError};
 /// Lore that refused an unfamiliar one would break sessions on upgrade.
 const SESSION_START: &str = "session-start";
 
-/// At most this many notes at session start. Experiment Q3 saw agents follow
-/// them at 5, 10, and 25; the cap is set by what the context costs.
-const NOTE_CAP: usize = 10;
-/// The notes section stops adding note lines past this many bytes.
-const CHAR_CAP: usize = 2_000;
 /// Hook JSON past this many bytes is not read.
 const STDIN_CAP: u64 = 1 << 20;
 /// The history walk behind the at-risk line gives up past this. Half the 10 s
@@ -101,57 +95,9 @@ fn hook_cwd() -> Option<PathBuf> {
 
 /// The notes section for `cwd`, or `None` when there is nothing to add.
 fn memory_notes(cwd: Option<&Path>) -> Option<String> {
-    let cwd = cwd?;
     let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
-    let found = recall::recall(&vault, "", cwd, NOTE_CAP).ok()?;
-    if found.notes.is_empty() {
-        return None;
-    }
-    // Recall left the index fresh, so counting what it capped is one query.
-    let scope = found.context.key().map(|k| format!("repo:{}", k.as_str()));
-    let total = Index::open(&vault.lore_dir())
-        .ok()
-        .flatten()
-        .and_then(|index| index.list_active(scope.as_deref(), usize::MAX).ok())
-        .map_or(0, |all| all.len());
-    let lines = found.notes.iter().map(|recalled| {
-        format!(
-            "- [{}] {} ({})",
-            recalled.freshness.label(),
-            title(&recalled.note.title),
-            recalled.note.id.as_str()
-        )
-    });
-    Some(render(lines, total.max(found.notes.len())))
-}
-
-/// A note title fit for an agent's context: secrets masked, on one line.
-fn title(text: &str) -> String {
-    inbox::redact(text)
-        .unwrap_or_else(|_| "(title withheld)".to_owned())
-        .replace(char::is_control, " ")
-}
-
-/// A heading, one line per note while the section stays under [`CHAR_CAP`],
-/// then a line saying how many of `total` were left out and where they are.
-fn render(lines: impl IntoIterator<Item = String>, total: usize) -> String {
-    let mut out = String::from("Lore memory for this repo:\n");
-    let mut shown = 0;
-    for line in lines {
-        if out.len() + line.len() + 1 > CHAR_CAP {
-            break;
-        }
-        out.push_str(&line);
-        out.push('\n');
-        shown += 1;
-    }
-    let left = total.saturating_sub(shown);
-    if left > 0 {
-        out.push_str(&format!(
-            "- {left} more not shown. The recall_memory tool lists them.\n"
-        ));
-    }
-    out
+    let found = session_start::session_start(&vault, cwd?).ok()??;
+    Some(found.text)
 }
 
 /// Report at-risk agent work for the current repository, if any.
@@ -242,31 +188,5 @@ mod tests {
         let invocation =
             crate::cli::parse(["--archive", "relative/path", "hook", SESSION_START]).unwrap();
         assert!(session_start(&invocation, Some(Path::new("/"))).is_err());
-    }
-
-    #[test]
-    fn the_notes_section_stops_near_two_thousand_bytes() {
-        let line = format!("- [fresh] {} (01JD0000000000000000000001)", "t".repeat(400));
-        let out = render(std::iter::repeat_n(line.clone(), 10), 10);
-        let expected = format!(
-            "Lore memory for this repo:\n{line}\n{line}\n{line}\n{line}\n\
-             - 6 more not shown. The recall_memory tool lists them.\n"
-        );
-        assert_eq!(out, expected);
-        assert_eq!(
-            render(["- [gone] a (b)".to_owned()], 1),
-            "Lore memory for this repo:\n- [gone] a (b)\n"
-        );
-    }
-
-    #[test]
-    fn a_title_is_redacted_and_kept_on_one_line() {
-        assert_eq!(title("two\nlines"), "two lines");
-        let key = concat!("AKIA", "Z7Q4R2T6Y8U1W3E5");
-        let shown = title(&format!("rotate {key}"));
-        assert!(
-            shown.starts_with("rotate ") && !shown.contains(key),
-            "{shown}"
-        );
     }
 }
