@@ -60,6 +60,19 @@ impl Default for WorkerConfig {
     }
 }
 
+/// How far back a background scan counts as recent. The worker reports when
+/// every source modified in this window has been read, so a first run can show
+/// the last month while older history is still being read.
+pub const RECENT_WINDOW: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// A full scan the background loop is draining one bounded batch per pass.
+struct ScanInFlight {
+    /// Ingest priority is source mtime in epoch millis, so this is the lowest
+    /// priority still inside [`RECENT_WINDOW`].
+    recent_since_ms: i64,
+    recent_done: bool,
+}
+
 /// Outcome of one [`Worker::run_pending`] pass over discovery/watcher input:
 /// how many sources were newly enqueued and the drain tally that followed.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -155,6 +168,39 @@ impl Worker {
             crate::storage::checkpoint(&self.conn);
             return Ok((summary, left));
         }
+        self.finish_scan(sink, since);
+        Ok((summary, 0))
+    }
+
+    /// Queue a full scan for the background loop to drain batch by batch, and
+    /// return its in-flight state for [`Self::settle_scan`].
+    fn begin_scan(&self, sink: &dyn ProgressSink) -> jobs::Result<ScanInFlight> {
+        self.pipeline().enqueue_scan_since(sink, None)?;
+        let window = i64::try_from(RECENT_WINDOW.as_millis()).unwrap_or(i64::MAX);
+        Ok(ScanInFlight {
+            recent_since_ms: now_ms().saturating_sub(window),
+            recent_done: false,
+        })
+    }
+
+    /// Called after each drained batch: reports [`ProgressEvent::RecentFinished`]
+    /// once the recent window is read, and finishes the scan when the queue is
+    /// empty. Returns whether the scan is finished.
+    ///
+    /// [`ProgressEvent::RecentFinished`]: crate::pipeline::ProgressEvent::RecentFinished
+    fn settle_scan(&self, scan: &mut ScanInFlight, sink: &dyn ProgressSink) -> jobs::Result<bool> {
+        if !scan.recent_done && !self.pipeline().ingest_pending_since(scan.recent_since_ms)? {
+            scan.recent_done = true;
+            sink.emit(crate::pipeline::ProgressEvent::RecentFinished);
+        }
+        if jobs::queue_depth(&self.conn)?.active() > 0 {
+            return Ok(false);
+        }
+        self.finish_scan(sink, None);
+        Ok(true)
+    }
+
+    fn finish_scan(&self, sink: &dyn ProgressSink, since: Option<std::time::SystemTime>) {
         // The scan finished, so record when Lore last looked. Done here rather
         // than in a caller so every scanning surface stamps it: the desktop
         // worker and `lorectl scan` reach this same line, and an archive filled
@@ -178,7 +224,6 @@ impl Worker {
         // this the WAL keeps that high-water mark for the life of the process.
         crate::storage::checkpoint(&self.conn);
         sink.emit(crate::pipeline::ProgressEvent::ScanFinished);
-        Ok((summary, 0))
     }
 
     /// Schedule ingest jobs for a batch of observed paths (e.g. debounced
@@ -343,10 +388,11 @@ impl Drop for WorkerHandle {
 
 /// Run `worker` on a dedicated thread and return a handle to control it.
 ///
-/// The thread: recovers interrupted jobs, runs an initial scan, then loops —
-/// blocking for a control signal (up to `idle_poll`), polling the watcher, and
-/// draining a bounded batch — until shutdown. A `None` watcher means "no live
-/// updates" (still useful for the initial scan and manual rescans).
+/// The thread: recovers interrupted jobs, queues an initial scan, then loops —
+/// checking for a control signal (waiting up to `idle_poll` only when no scan
+/// is in flight), polling the watcher, and draining a bounded batch — until
+/// shutdown. A `None` watcher means "no live updates" (still useful for the
+/// initial scan and manual rescans).
 ///
 /// Errors from any single step are swallowed so one failure never tears down
 /// the whole worker; per-source failures are already recorded durably by the
@@ -358,16 +404,24 @@ where
     let (tx, rx) = mpsc::channel();
     let idle_poll = worker.cfg.idle_poll;
     let join = thread::spawn(move || {
-        // Startup: recover interrupted work, then an initial incremental scan.
+        // Startup: recover interrupted work, then queue an initial incremental
+        // scan. It drains one bounded batch per pass of the loop below, so the
+        // worker keeps answering signals during a first scan of a large history.
         let _ = worker.recover();
-        let _ = worker.scan(&sink);
+        let mut scan = worker.begin_scan(&sink).ok();
 
         loop {
-            let signal = rx.recv_timeout(idle_poll);
+            // A scan in flight drains back to back; only an idle worker waits.
+            let wait = if scan.is_some() {
+                Duration::ZERO
+            } else {
+                idle_poll
+            };
+            let signal = rx.recv_timeout(wait);
             match signal {
                 Ok(Signal::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(Signal::Rescan) => {
-                    let _ = worker.scan(&sink);
+                    scan = worker.begin_scan(&sink).ok();
                 }
                 Ok(Signal::Reverify) => {
                     let _ = worker.enqueue_reverify();
@@ -379,12 +433,19 @@ where
                     } = *next;
                     worker.config = config;
                     watcher = next_watcher;
-                    let _ = worker.scan(&sink);
+                    scan = worker.begin_scan(&sink).ok();
                 }
                 Ok(Signal::Wake) | Err(RecvTimeoutError::Timeout) => {}
             }
             let ready = poll_ready(watcher.as_mut());
             let _ = worker.run_pending(&ready, &sink);
+            if let Some(in_flight) = scan.as_mut() {
+                // An error drops the scan rather than spinning on it; the queue
+                // is durable, so the next scan or pass picks the work back up.
+                if !matches!(worker.settle_scan(in_flight, &sink), Ok(false)) {
+                    scan = None;
+                }
+            }
         }
     });
     WorkerHandle {

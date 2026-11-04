@@ -414,7 +414,11 @@ fn spawned_worker_scans_then_shuts_down_clean() {
     let (tx, rx) = mpsc::channel();
     let handle = spawn(worker, Some(watcher), ChannelSink(tx));
 
-    // Deterministic stop: joins the thread after the initial scan completed.
+    // Shutdown no longer waits out a scan, so wait for this one to finish.
+    let mut events = Vec::new();
+    while !matches!(events.last(), Some(ProgressEvent::ScanFinished)) {
+        events.push(rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap());
+    }
     handle.shutdown();
 
     // The initial scan ingested both sources before shutdown.
@@ -426,7 +430,6 @@ fn spawned_worker_scans_then_shuts_down_clean() {
         "no job left running after a clean shutdown"
     );
     // At least the initial scan emitted content-free progress.
-    let events: Vec<ProgressEvent> = rx.try_iter().collect();
     assert!(events
         .iter()
         .any(|e| matches!(e, ProgressEvent::Ingested { .. })));
@@ -559,4 +562,51 @@ fn progress_events_are_content_free() {
             );
         }
     }
+}
+
+#[test]
+fn spawned_worker_reports_the_recent_month_before_older_history() {
+    // A first run over a large history should be able to show the last month
+    // without waiting for years of older sessions.
+    let home = home();
+    let old = home.codex_root.join("2026/08/11/rollout-a.jsonl");
+    let sixty_days = std::time::Duration::from_secs(60 * 86_400);
+    fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - sixty_days)
+        .unwrap();
+    let worker = worker_in_memory(
+        &home,
+        WorkerConfig {
+            drain_batch: 1,
+            idle_poll: std::time::Duration::from_secs(3600),
+            ..WorkerConfig::default()
+        },
+    );
+    let (tx, rx) = mpsc::channel();
+    let handle = spawn(worker, None, ChannelSink(tx));
+
+    let mut seen = Vec::new();
+    loop {
+        let event = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let finished = matches!(event, ProgressEvent::ScanFinished);
+        seen.push(match event {
+            ProgressEvent::ScanEnqueued { .. } => "enqueued",
+            ProgressEvent::Ingested { agent_id, .. } if agent_id == "claude-code" => "recent",
+            ProgressEvent::Ingested { .. } => "old",
+            ProgressEvent::RecentFinished => "recent finished",
+            ProgressEvent::ScanFinished => "finished",
+            other => panic!("unexpected event {other:?}"),
+        });
+        if finished {
+            break;
+        }
+    }
+    handle.shutdown();
+    assert_eq!(
+        seen,
+        ["enqueued", "recent", "recent finished", "old", "finished"]
+    );
 }

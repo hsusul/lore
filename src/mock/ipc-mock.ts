@@ -433,7 +433,7 @@ export function createMockHandlers(
       const all = buildSampleSessions(now);
       const present = new Set(sessions.map((s) => s.summary.id));
       const chunk = Math.ceil(all.length / 4);
-      const tally: ScanProgress = { discovered: all.length, ingested: 0, skipped: 0, failed: 0, enriched: 0, done: false };
+      const tally: ScanProgress = { discovered: all.length, ingested: 0, skipped: 0, failed: 0, enriched: 0, recent_done: false, done: false };
       for (let i = 0; i < all.length; i += chunk) {
         for (const session of all.slice(i, i + chunk)) {
           if (present.has(session.summary.id)) {
@@ -450,7 +450,7 @@ export function createMockHandlers(
         emit("scan_progress", { ...tally });
         await sleep(scanStepMs);
       }
-      emit("scan_progress", { ...tally, done: true });
+      emit("scan_progress", { ...tally, recent_done: true, done: true });
       const { discovered, ingested, skipped, failed, enriched } = tally;
       return { discovered, ingested, skipped, failed, enriched };
     },

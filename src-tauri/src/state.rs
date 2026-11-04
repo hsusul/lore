@@ -76,7 +76,11 @@ impl ProgressSink for WorkerSink {
                         ..ScanProgress::default()
                     };
                 }
-                ProgressEvent::ScanFinished => progress.done = true,
+                ProgressEvent::RecentFinished => progress.recent_done = true,
+                ProgressEvent::ScanFinished => {
+                    progress.recent_done = true;
+                    progress.done = true;
+                }
                 ProgressEvent::Ingested {
                     agent_id,
                     session_id,

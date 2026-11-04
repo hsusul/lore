@@ -39,6 +39,10 @@ pub enum ProgressEvent {
     /// A scan pass scheduled work: `discovered` sources seen, `enqueued` newly
     /// queued (the rest coalesced onto existing jobs).
     ScanEnqueued { discovered: usize, enqueued: usize },
+    /// Every source modified within [`crate::worker::RECENT_WINDOW`] that the
+    /// running background scan scheduled has been drained. Older history may
+    /// still be in the queue.
+    RecentFinished,
     /// A full discovery scan has drained all work it scheduled.
     ScanFinished,
     /// A source was ingested with the given change classification.
@@ -164,6 +168,13 @@ impl<'a> Pipeline<'a> {
             enqueued,
         });
         Ok(enqueued)
+    }
+
+    /// Whether a source modified at or after `since_ms` is still waiting to be
+    /// ingested. Ingest priority is the source's mtime, so this reads it off
+    /// the queue without touching the files.
+    pub fn ingest_pending_since(&self, since_ms: i64) -> jobs::Result<bool> {
+        jobs::any_active_at_or_above(self.conn, JOB_KIND, since_ms)
     }
 
     /// Schedule an ingest job for a single observed path (e.g. from the

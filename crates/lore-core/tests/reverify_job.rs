@@ -138,10 +138,13 @@ fn reverify_job_enqueues_drains_and_is_idempotent() {
 }
 
 /// A `Send` sink so the threaded worker can run without a channel consumer.
-struct DropSink;
+/// `Send` sink for the threaded worker: forwards events over a channel.
+struct ChannelSink(std::sync::mpsc::Sender<lore_core::pipeline::ProgressEvent>);
 
-impl lore_core::pipeline::ProgressSink for DropSink {
-    fn emit(&self, _event: lore_core::pipeline::ProgressEvent) {}
+impl lore_core::pipeline::ProgressSink for ChannelSink {
+    fn emit(&self, event: lore_core::pipeline::ProgressEvent) {
+        let _ = self.0.send(event);
+    }
 }
 
 #[test]
@@ -175,8 +178,8 @@ fn worker_shuts_down_cleanly_with_a_reverify_job_queued() {
         assert_eq!(pipeline.enqueue_reverify().unwrap(), 1);
     }
 
-    // Spawn the worker and shut it down deterministically. The initial scan's
-    // bounded drain claims and completes the pending reverify job.
+    // Spawn the worker, wait for its initial scan, then shut it down. The
+    // scan's bounded drain claims and completes the pending reverify job.
     let cfg = WorkerConfig {
         idle_poll: Duration::from_secs(3600),
         ..WorkerConfig::default()
@@ -184,7 +187,12 @@ fn worker_shuts_down_cleanly_with_a_reverify_job_queued() {
     let worker =
         lore_core::worker::open_worker(&db_path, AdapterRegistry::v0(), blobs, config, cfg)
             .unwrap();
-    let handle = spawn(worker, None, DropSink);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = spawn(worker, None, ChannelSink(tx));
+    while !matches!(
+        rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        lore_core::pipeline::ProgressEvent::ScanFinished
+    ) {}
     handle.shutdown();
 
     let check = lore_core::storage::open(&db_path).unwrap();

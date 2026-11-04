@@ -318,6 +318,17 @@ pub fn queue_depth(conn: &Connection) -> Result<QueueDepth> {
     })
 }
 
+/// Whether any pending or running job of `kind` has a priority of at least
+/// `min_priority`. Content-free: a yes or no.
+pub fn any_active_at_or_above(conn: &Connection, kind: &str, min_priority: i64) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM job
+             WHERE kind = ?1 AND state IN ('pending', 'running') AND priority >= ?2)",
+        params![kind, min_priority],
+        |row| row.get(0),
+    )?)
+}
+
 /// Maximum consecutive execution attempts before a repeatedly crashed job is
 /// marked failed to prevent infinite restart crash loops.
 pub const MAX_JOB_ATTEMPTS: i64 = 5;
