@@ -495,4 +495,90 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn agent_name_and_display() {
+        for (agent, name) in [
+            (Agent::ClaudeCode, "claude-code"),
+            (Agent::Codex, "codex"),
+            (Agent::Cursor, "cursor"),
+        ] {
+            assert_eq!(agent.name(), name);
+            assert_eq!(agent.to_string(), name);
+        }
+    }
+
+    #[test]
+    fn content_hash_short_prefix() {
+        let full = ContentHash("0123456789abcdef".into());
+        assert_eq!(full.short(), "0123456789ab");
+        let short = ContentHash("short".into());
+        assert_eq!(short.short(), "short");
+    }
+
+    #[test]
+    fn source_specificity_ordering() {
+        let git = Source::Git {
+            url: "https://example.com/repo.git".into(),
+            rev: "main".into(),
+            subpath: "skills/test".into(),
+        };
+        let plugin = Source::Plugin {
+            marketplace: "m".into(),
+            plugin: "p".into(),
+            version: "1.0".into(),
+        };
+        let builtin = Source::Builtin {
+            agent: Agent::Codex,
+        };
+        let local = Source::Local {
+            path: PathBuf::from("/path/to/skill"),
+        };
+        let unknown = Source::Unknown;
+
+        assert_eq!(git.specificity(), 4);
+        assert_eq!(plugin.specificity(), 3);
+        assert_eq!(builtin.specificity(), 2);
+        assert_eq!(local.specificity(), 1);
+        assert_eq!(unknown.specificity(), 0);
+    }
+
+    #[test]
+    fn finding_skill_and_kind_tags() {
+        let bad_fm = Finding::BadFrontmatter {
+            skill: "my-skill".into(),
+            path: PathBuf::from("/path"),
+            reason: "err".into(),
+        };
+        let budget = Finding::CodexBudget {
+            chars: 1000,
+            limit: 800,
+            skills: 2,
+            largest: PathBuf::from("/path"),
+        };
+        let unknown_src = Finding::UnknownSource {
+            skill: "custom".into(),
+            path: PathBuf::from("/path/custom"),
+        };
+
+        assert_eq!(bad_fm.skill(), Some("my-skill"));
+        assert_eq!(bad_fm.kind(), "bad-frontmatter");
+
+        assert_eq!(budget.skill(), None);
+        assert_eq!(budget.kind(), "codex-budget");
+
+        assert_eq!(unknown_src.skill(), Some("custom"));
+        assert_eq!(unknown_src.kind(), "unknown-source");
+    }
+
+    #[test]
+    fn fix_kind_and_text_accessors() {
+        let cmd = Fix::Command("echo test".into());
+        assert_eq!(cmd.kind(), "command");
+        assert_eq!(cmd.text(), "echo test");
+
+        let hint = Fix::Hint("check this".into());
+        assert_eq!(hint.kind(), "hint");
+        assert_eq!(hint.text(), "check this");
+    }
 }
