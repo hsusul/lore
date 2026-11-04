@@ -470,6 +470,47 @@ export function createMockHandlers(
     },
     backup_now: () => null,
 
+    // Memory
+    list_lessons: () => [
+      {
+        id: "a1b2c3d4e5",
+        text: "I told you, pnpm not npm",
+        suggested_rule: "Pnpm not npm",
+        conversations: 2,
+        latest_ms: sessions[0]?.summary.started_at ?? null,
+        receipts: sessions.slice(0, 2).map((s) => ({
+          session_id: s.summary.id,
+          agent_id: s.summary.agent_id,
+          repo: null,
+          at_ms: s.summary.started_at,
+          text: "no, use pnpm not npm",
+          preceding: "Running npm install.",
+        })),
+      },
+    ],
+
+    list_notes: () => [
+      {
+        id: "01JD0000000000000000000001",
+        path: "global/never-push-to-main.md",
+        title: "Never push to main",
+        scope: "global",
+        note_type: "convention",
+        excerpt: "Open a PR.",
+      },
+    ],
+    agents_read: () => ({
+      repo_key: null,
+      repo_name: null,
+      notes: [
+        { id: "01JD0000000000000000000001", title: "Never push to main", path: "global/never-push-to-main.md", freshness: "unanchored", shown: true },
+      ],
+      total: 1,
+      note_cap: 10,
+      char_cap: 2000,
+      text: "Lore memory for this repo:\n- [unanchored] Never push to main (01JD0000000000000000000001)\n",
+    }),
+
     // Usage and updates
     get_token_totals: () => ({
       total_input_tokens: sessions.reduce((n, s) => n + (s.summary.total_input_tokens ?? 0), 0),

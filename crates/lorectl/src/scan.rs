@@ -133,6 +133,9 @@ pub(crate) fn window(given: &str) -> Result<(String, std::time::SystemTime), Cli
         _ => return Err(bad()),
     };
     let count: u64 = given[..given.len() - 1].parse().map_err(|_| bad())?;
+    if count == 0 {
+        return Err(bad());
+    }
     let back = std::time::Duration::from_secs(count.checked_mul(unit).ok_or_else(bad)?);
     let at = std::time::SystemTime::now()
         .checked_sub(back)
@@ -279,5 +282,13 @@ mod tests {
         // Guards the saturating conversion: a negative or zero stamp would make
         // "when did Lore last look?" unanswerable.
         assert!(now_ms() > 1_700_000_000_000, "clock before 2023");
+    }
+
+    #[test]
+    fn window_requires_positive_count() {
+        assert!(window("0d").is_err());
+        assert!(window("0h").is_err());
+        assert!(window("0m").is_err());
+        assert!(window("30d").is_ok());
     }
 }

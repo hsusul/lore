@@ -24,7 +24,7 @@ use crate::storage::blob::BlobStore;
 use crate::storage::StorageError;
 
 /// Durable job kind for a single source-file ingest.
-const JOB_KIND: &str = "ingest_source";
+pub(crate) const JOB_KIND: &str = "ingest_source";
 /// Durable job kind for a coalesced commit re-verification pass (I2).
 const JOB_KIND_REVERIFY: &str = "reverify";
 /// Re-verification runs at the lowest priority so it never jumps ahead of

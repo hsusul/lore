@@ -356,3 +356,52 @@ fn mem_accept_refuses_lines_appended_to_the_inbox_by_hand() {
     assert!(!stderr.contains('\u{1b}'), "{stderr}");
     assert!(!stderr.contains(secret), "{stderr}");
 }
+
+#[test]
+fn a_lost_decision_is_recovered_for_a_note_with_a_non_ascii_name() {
+    // Slugs keep letters of any script. When the decision line is lost, the
+    // accepting commit is found by its message and the note read by the path
+    // git reports, which git quotes unless told not to.
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    ok(&lorectl(&vault, &["init"], ""));
+    let id = propose(&vault, "s1", "Café réglages");
+    let accepted = ok(&lorectl(&vault, &["accept", &id], ""));
+    assert!(
+        accepted.starts_with("accepted repos/3f9a1c0b01234567/café-réglages.md "),
+        "{accepted}"
+    );
+    std::fs::write(vault.join(".lore/decisions.jsonl"), "").unwrap();
+
+    let out = lorectl(&vault, &["reject", &id, "--reason", "dup"], "");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("already accepted"),
+        "the accepted note was not recovered: {stderr}"
+    );
+}
+
+#[test]
+fn a_torn_line_with_a_stray_byte_does_not_break_review() {
+    // A crash mid-append can leave half a UTF-8 sequence at the end of the
+    // inbox or the decision log. The other lines must still be read.
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    ok(&lorectl(&vault, &["init"], ""));
+    let first = propose(&vault, "s1", "Prune worktrees");
+    let second = propose(&vault, "s1", "Fetch before rebasing");
+    ok(&lorectl(&vault, &["reject", &first, "--reason", "dup"], ""));
+    for file in [".lore/decisions.jsonl", "_inbox/codex-s1.jsonl"] {
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(vault.join(file))
+            .unwrap();
+        f.write_all(b"{\"id\":\"torn \xff").unwrap();
+    }
+
+    let listed = ok(&lorectl(&vault, &["inbox"], ""));
+    assert!(listed.contains(&second), "{listed}");
+    assert!(!listed.contains(&first), "the rejection was lost: {listed}");
+    let accepted = ok(&lorectl(&vault, &["accept", &second], ""));
+    assert!(accepted.starts_with("accepted "), "{accepted}");
+}

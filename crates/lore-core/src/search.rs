@@ -397,9 +397,9 @@ fn append_filters(
     if let Some(path) = &query.path {
         sql.push_str(&format!(
             " AND EXISTS (SELECT 1 FROM file_event fe
-                          WHERE fe.session_id = {session} AND fe.path LIKE ?)"
+                          WHERE fe.session_id = {session} AND fe.path LIKE ? ESCAPE '\\')"
         ));
-        params.push(Value::Text(format!("{path}%")));
+        params.push(Value::Text(format!("{}%", like_escape(path))));
     }
     if let Some(tool) = &query.tool {
         sql.push_str(&format!(

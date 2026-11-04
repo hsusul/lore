@@ -494,3 +494,81 @@ fn mem_reindex_reports_skipped_files() {
         stderr(&out)
     );
 }
+
+#[test]
+fn mem_add_from_inside_a_git_hook_commits_to_the_vault() {
+    // A git hook runs with GIT_DIR and GIT_INDEX_FILE set to the repo being
+    // committed to. A note added from one must still land in the vault.
+    let (dir, vault) = init();
+    let other = dir.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&other)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.name=T",
+        "-c",
+        "user.email=t@example.invalid",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "other",
+    ]);
+
+    let file = note_file(dir.path(), "n.md", NOTE);
+    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["mem", "add", &file, "--vault"])
+        .arg(&vault)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", dir.path())
+        .env("GIT_DIR", other.join(".git"))
+        .env("GIT_INDEX_FILE", other.join(".git/index"))
+        .env_remove("LORE_VAULT_DIR")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    assert_eq!(
+        log(&vault),
+        ["mem: add worktrees-share-refs", "mem: init vault"]
+    );
+    assert_eq!(log(&other), ["other"], "the hook's repo gained a commit");
+    assert_eq!(status(&vault), "");
+}
+
+#[test]
+fn the_global_json_flag_reaches_recall_and_eval() {
+    // `lorectl --json mem inbox` and `lorectl --json mem mine` print JSON, so
+    // recall and eval must too, not only with the flag after the subcommand.
+    let (dir, vault) = init();
+    for sub in ["recall", "eval"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+            .args(["--json", "mem", sub, "--vault"])
+            .arg(&vault)
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", dir.path())
+            .env_remove("LORE_VAULT_DIR")
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 0, "{sub}: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&text).is_ok(),
+            "`lorectl --json mem {sub}` printed: {text}"
+        );
+    }
+}

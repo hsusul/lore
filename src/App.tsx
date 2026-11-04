@@ -384,6 +384,10 @@ export default function App() {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      // Overlays share one slot, so a shortcut that opens one would replace an
+      // open dialog, and an unanswered confirmation would vanish with it. Only
+      // the palette, which ⌘K also closes, lets shortcuts through.
+      if (ws.overlay.kind !== "none" && ws.overlay.kind !== "palette") return;
       const mod = event.metaKey || event.ctrlKey;
       if (mod && event.key.toLowerCase() === "k") {
         event.preventDefault();

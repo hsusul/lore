@@ -744,6 +744,29 @@ mod tests {
     }
 
     #[test]
+    fn a_subagent_transcript_is_titled_by_its_task_prompt() {
+        let content = concat!(
+            "{\"type\":\"user\",\"sessionId\":\"s\",\"isSidechain\":true,\"message\":{\"role\":\"user\",\"content\":\"Find every caller of open_reader\"}}\n",
+            "{\"type\":\"assistant\",\"sessionId\":\"s\",\"isSidechain\":true,\"message\":{\"role\":\"assistant\",\"content\":\"Searching\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(content, "fallback");
+        assert_eq!(
+            session.title.as_deref(),
+            Some("Find every caller of open_reader")
+        );
+    }
+
+    #[test]
+    fn a_main_session_is_not_titled_by_its_subagent_prompt() {
+        let content = concat!(
+            "{\"type\":\"user\",\"sessionId\":\"s\",\"isSidechain\":true,\"message\":{\"role\":\"user\",\"content\":\"Find every caller of open_reader\"}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s\",\"message\":{\"role\":\"user\",\"content\":\"Investigate the cache miss\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(content, "fallback");
+        assert_eq!(session.title.as_deref(), Some("Investigate the cache miss"));
+    }
+
+    #[test]
     fn single_segment_for_constant_context() {
         let a = ClaudeCodeAdapter::new();
         let s = a.parse_str(&fixture("basic_text.jsonl"), "fallback");

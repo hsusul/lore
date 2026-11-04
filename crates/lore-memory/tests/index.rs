@@ -237,3 +237,28 @@ fn index_search_active_keeps_global_and_one_repo_and_drops_retired() {
         assert_eq!(paths, expected, "{scope:?}");
     }
 }
+
+#[test]
+fn split_timeline_only_splits_on_exact_heading() {
+    use lore_memory::index::split_timeline;
+
+    let body = "## Timeline of events\nDetails here.\n";
+    let (statement, timeline) = split_timeline(body);
+    assert_eq!(statement, body);
+    assert_eq!(timeline, "");
+
+    let body2 = "Some text.\n## Timeline is important.\nMore text.\n";
+    let (statement2, timeline2) = split_timeline(body2);
+    assert_eq!(statement2, body2);
+    assert_eq!(timeline2, "");
+
+    let body3 = "Some text.\n\n## Timeline\n- 2026-11-01 noted\n";
+    let (statement3, timeline3) = split_timeline(body3);
+    assert_eq!(statement3, "Some text.\n\n");
+    assert_eq!(timeline3, "## Timeline\n- 2026-11-01 noted\n");
+
+    let body4 = "## Timeline\n- 2026-11-01 noted\n";
+    let (statement4, timeline4) = split_timeline(body4);
+    assert_eq!(statement4, "");
+    assert_eq!(timeline4, "## Timeline\n- 2026-11-01 noted\n");
+}

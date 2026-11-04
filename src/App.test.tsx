@@ -649,6 +649,27 @@ describe("session actions", () => {
   });
 });
 
+describe("dialogs", () => {
+  it("keeps a confirmation open when a global shortcut is pressed", async () => {
+    await renderLoaded();
+    fireEvent.click(screen.getByRole("option", { name: /Fix flaky retry backoff/ }));
+    await screen.findByRole("article", { name: "Fix flaky retry backoff" });
+    fireEvent.click(screen.getByRole("button", { name: "Forget…" }));
+    const name = "Forget “Fix flaky retry backoff”?";
+    expect(screen.getByRole("alertdialog", { name })).toBeTruthy();
+    const scans = m.rescan.mock.calls.length;
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    fireEvent.keyDown(window, { key: "r", metaKey: true });
+
+    expect(screen.getByRole("alertdialog", { name })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: /Jump to a session/ })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /Settings/ })).toBeNull();
+    expect(m.rescan.mock.calls.length).toBe(scans);
+  });
+});
+
 describe("window shell", () => {
   function sidebar() {
     return screen.getByRole("navigation", { name: "Sidebar" });
