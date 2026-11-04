@@ -363,18 +363,18 @@ fn row<'a>(rel: &'a str, note: &'a Note) -> impl rusqlite::Params + 'a {
 #[must_use]
 pub fn split_timeline(body: &str) -> (&str, &str) {
     const HEADING: &str = "## Timeline";
-    let at = if body.starts_with(HEADING) {
-        Some(0)
-    } else {
-        body.find("\n## Timeline").map(|at| at + 1)
-    };
-    match at {
-        Some(at) => (
-            body.get(..at).unwrap_or(body),
-            body.get(at..).unwrap_or_default(),
-        ),
-        None => (body, ""),
+    let mut offset = 0;
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\n', '\r']).trim_end();
+        if trimmed == HEADING {
+            return (
+                body.get(..offset).unwrap_or(body),
+                body.get(offset..).unwrap_or_default(),
+            );
+        }
+        offset += line.len();
     }
+    (body, "")
 }
 
 /// The first words of a body, cut the way `snippet` cuts an excerpt.
