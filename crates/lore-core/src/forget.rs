@@ -2,7 +2,8 @@
 //!
 //! Forgetting a session transactionally removes its canonical rows, search
 //! projections (so the FTS index is cleared), findings, and any blob that is no
-//! longer referenced by anything — then runs `secure_delete` + `VACUUM`
+//! longer referenced by anything — then merges the search index so the
+//! deleted rows' terms leave its segments, and runs `secure_delete` + `VACUUM`
 //! maintenance to zero freed pages. Original agent logs and user-chosen exports
 //! are **outside Lore's ownership** and are never deleted; the report names the
 //! source copies that remain so the UI can disclose them.
@@ -61,6 +62,7 @@ pub fn forget_session(
             tx.execute("DELETE FROM blob WHERE id = ?1", [id])?;
         }
         tx.commit()?;
+        merge_search_index(conn)?;
         orphans
     };
 
@@ -76,6 +78,14 @@ pub fn forget_session(
         blobs_removed: orphans.len(),
         source_paths,
     })
+}
+
+/// Merge the search index, which drops the terms of the rows just deleted.
+/// FTS5 otherwise keeps them in its segments, in the archive file, until a
+/// merge happens to reach them, and VACUUM copies them as live pages.
+fn merge_search_index(conn: &Connection) -> Result<()> {
+    conn.execute_batch("INSERT INTO search_fts(search_fts) VALUES ('optimize');")?;
+    Ok(())
 }
 
 /// Forget **all** archive content, keeping the database file/connection open
@@ -99,6 +109,7 @@ pub fn forget_all(conn: &Connection, blobs: &BlobStore) -> Result<ForgetReport> 
         let orphans = orphan_blobs(&tx)?;
         tx.execute("DELETE FROM blob", [])?;
         tx.commit()?;
+        merge_search_index(conn)?;
         orphans
     };
 
@@ -355,6 +366,34 @@ mod tests {
         assert!(
             !file_holds_marker(dir.path()),
             "the archive file still holds a forgotten session's text"
+        );
+    }
+
+    #[test]
+    fn the_merge_migration_clears_what_earlier_forgets_left() {
+        let dir = tempfile::tempdir().unwrap();
+        // A forget before migration 0018 deleted the rows and merged nothing.
+        let conn = forget_marked_session(dir.path(), |conn, _, sid| {
+            conn.execute("DELETE FROM search_document WHERE session_id = ?1", [sid])
+                .unwrap();
+        });
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .unwrap();
+        assert!(
+            file_holds_marker(dir.path()),
+            "a delete alone leaves the forgotten text in the index"
+        );
+
+        drop(conn);
+
+        // A fresh connection, as at launch after an upgrade.
+        let conn = Connection::open(dir.path().join("lore.db")).unwrap();
+        conn.execute_batch(include_str!("../migrations/0018_fts_optimize.sql"))
+            .unwrap();
+        drop(conn);
+        assert!(
+            !file_holds_marker(dir.path()),
+            "the migration left the forgotten session's text in the archive file"
         );
     }
 
