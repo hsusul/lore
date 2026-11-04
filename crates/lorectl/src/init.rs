@@ -336,7 +336,7 @@ fn review_lessons(
             break;
         };
         if let Some(title) = title {
-            match crate::mine::keep(vault, lesson, &title) {
+            match lore_memory::filing::keep(vault, lesson, &title) {
                 Ok(rel) => {
                     kept += 1;
                     let _ = writeln!(out, "      kept {rel}");
@@ -364,7 +364,7 @@ fn filed_state(
     };
     let best = filed
         .iter()
-        .filter(|p| crate::mine::came_from(p, lesson))
+        .filter(|p| lore_memory::filing::came_from(p, lesson))
         .map(rank)
         .min()?;
     Some(["already kept", "in the inbox", "rejected"][best])
