@@ -31,6 +31,9 @@ import type { ReceiptDto } from "../crates/lore-ipc/bindings/ReceiptDto";
 import type { NoteDto } from "../crates/lore-ipc/bindings/NoteDto";
 import type { ReadNoteDto } from "../crates/lore-ipc/bindings/ReadNoteDto";
 import type { AgentsReadDto } from "../crates/lore-ipc/bindings/AgentsReadDto";
+import type { SkillsReportDto } from "../crates/lore-ipc/bindings/SkillsReportDto";
+import type { SkillFindingDto } from "../crates/lore-ipc/bindings/SkillFindingDto";
+import type { SkillFolderDto } from "../crates/lore-ipc/bindings/SkillFolderDto";
 
 export type BackupInterval = "off" | "daily" | "weekly";
 export type SearchSort = "relevance" | "newest" | "oldest";
@@ -103,6 +106,9 @@ export type {
   NoteDto,
   ReadNoteDto,
   AgentsReadDto,
+  SkillsReportDto,
+  SkillFindingDto,
+  SkillFolderDto,
 };
 
 /** Snippet highlight markers (must match lore_core::search). */
@@ -354,6 +360,11 @@ export function listNotes(): Promise<NoteDto[]> {
 /** What an agent starting a session in `cwd` is given: the session-start notes section. */
 export function agentsRead(cwd: string): Promise<AgentsReadDto> {
   return invoke<AgentsReadDto>("agents_read", { cwd });
+}
+
+/** What the skills doctor finds on this machine: findings worst first, with fixes, and skills per folder. */
+export function skillsReport(): Promise<SkillsReportDto> {
+  return invoke<SkillsReportDto>("skills_report");
 }
 
 /** Calculate cumulative token usage and estimated cost across all sessions. */

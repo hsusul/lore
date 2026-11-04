@@ -511,6 +511,23 @@ export function createMockHandlers(
       text: "Lore memory for this repo:\n- [unanchored] Never push to main (01JD0000000000000000000001)\n",
     }),
 
+    skills_report: () => ({
+      skills: 64,
+      folders: [
+        { path: "~/.claude/skills", skills: 38 },
+        { path: "~/.codex/skills", skills: 12 },
+      ],
+      findings: [
+        {
+          kind: "name-mismatch",
+          skill: "taste-skill",
+          description: "SKILL.md names it taste, so agents look it up as taste and the folder never matches.",
+          fix: "Change the name line in SKILL.md to taste-skill.",
+          fix_kind: "edit",
+        },
+      ],
+    }),
+
     // Usage and updates
     get_token_totals: () => ({
       total_input_tokens: sessions.reduce((n, s) => n + (s.summary.total_input_tokens ?? 0), 0),
