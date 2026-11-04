@@ -75,8 +75,12 @@ pub fn validate_export_path(
 /// If `path` is provided, it is validated against strict security boundaries
 /// (must be absolute, cannot be inside archive dir or agent session dirs).
 /// If `path` is omitted, the native save dialog is displayed in Rust.
+///
+/// `async` so it runs off the main thread. The blocking dialog needs the main
+/// thread's event loop, so calling it from a sync command hangs the window. The
+/// config lock is taken after the dialog closes for the same reason.
 #[tauri::command]
-pub fn save_session_export(
+pub async fn save_session_export(
     app: AppHandle,
     state: State<'_, AppState>,
     id: String,
@@ -86,12 +90,9 @@ pub fn save_session_export(
     if is_invalid_text_token(&id, 256) {
         return Err("invalid session id".to_string());
     }
-    let config = state.config.lock().map_err(|_| "state lock poisoned")?;
 
-    let target_path = match path {
-        Some(p) => {
-            validate_export_path(Path::new(&p), &state.archive_dir, &state.registry, &config)?
-        }
+    let chosen = match path {
+        Some(p) => PathBuf::from(p),
         None => {
             use tauri_plugin_dialog::DialogExt;
             let file_path = app
@@ -103,9 +104,14 @@ pub fn save_session_export(
             let Some(fp) = file_path else {
                 return Ok(false);
             };
-            let p = fp.as_path().ok_or("invalid file path from save dialog")?;
-            validate_export_path(p, &state.archive_dir, &state.registry, &config)?
+            fp.as_path()
+                .ok_or("invalid file path from save dialog")?
+                .to_path_buf()
         }
+    };
+    let target_path = {
+        let config = state.config.lock().map_err(|_| "state lock poisoned")?;
+        validate_export_path(&chosen, &state.archive_dir, &state.registry, &config)?
     };
 
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
