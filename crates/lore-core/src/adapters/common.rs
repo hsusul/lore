@@ -179,13 +179,18 @@ fn add_tokens(sum: Tokens, more: Tokens) -> Tokens {
 /// deliberately skipped so permissions and injected repository instructions
 /// do not become session titles.
 pub(crate) fn fallback_title(messages: &[ParsedMessage]) -> Option<String> {
-    messages
-        .iter()
-        .filter(|message| message.role == Role::User && !message.is_sidechain)
-        .flat_map(|message| &message.parts)
-        .filter(|part| part.kind == PartKind::Text)
-        .filter_map(|part| part.text.as_deref())
-        .find_map(title_from_text)
+    let first = |sidechain: bool| {
+        messages
+            .iter()
+            .filter(|message| message.role == Role::User && message.is_sidechain == sidechain)
+            .flat_map(|message| &message.parts)
+            .filter(|part| part.kind == PartKind::Text)
+            .filter_map(|part| part.text.as_deref())
+            .find_map(title_from_text)
+    };
+    // A subagent's transcript is sidechain from its first line, so its task
+    // prompt is the only request there is to name it by.
+    first(false).or_else(|| first(true))
 }
 
 fn title_from_text(text: &str) -> Option<String> {

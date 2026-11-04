@@ -50,7 +50,11 @@ use crate::storage::{Result, StorageError};
 ///
 /// v9: the high-entropy rule skips paths and code identifiers, so archives
 /// drop those false findings only after a re-parse.
-pub const PARSER_VERSION: &str = "9";
+///
+/// v10: a Claude subagent transcript, sidechain from its first line, is titled
+/// by its task prompt, so the subagent sessions ingested untitled at v9 get a
+/// title only after a re-parse.
+pub const PARSER_VERSION: &str = "10";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.

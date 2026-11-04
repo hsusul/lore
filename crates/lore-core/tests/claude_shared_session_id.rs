@@ -414,7 +414,11 @@ fn upgrading_a_v3_archive_matches_a_fresh_scan_and_keeps_the_folder() {
                 2,
                 Some("Placeholder parent title".to_string())
             ),
-            (format!("{PARENT_ID}/agent-a0000000000000001"), 2, None),
+            (
+                format!("{PARENT_ID}/agent-a0000000000000001"),
+                2,
+                Some("survey the garden".to_string())
+            ),
         ]
     );
     assert_eq!(session_for(&archive, PARENT_ID).0, parent_session);
