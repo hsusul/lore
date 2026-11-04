@@ -497,6 +497,11 @@ impl Vault {
 
     pub(crate) fn git(&self, args: &[&str]) -> Result<String, VaultError> {
         let mut command = Command::new("git");
+        // `lorectl` can run inside a git hook, where GIT_DIR and GIT_INDEX_FILE
+        // name the repo being committed to and would win over `-C`.
+        for name in crate::repo::REDIRECTING_ENV {
+            command.env_remove(name);
+        }
         command.arg("-C").arg(&self.root).args(GIT_SAFE);
         let (has_name, has_email) = self.identity();
         if !has_name {
@@ -529,7 +534,11 @@ impl Vault {
     /// identity is used when set; a fallback is passed only for what is missing.
     fn identity(&self) -> (bool, bool) {
         *self.identity.get_or_init(|| {
-            let output = Command::new("git")
+            let mut command = Command::new("git");
+            for name in crate::repo::REDIRECTING_ENV {
+                command.env_remove(name);
+            }
+            let output = command
                 .arg("-C")
                 .arg(&self.root)
                 .args(["config", "--get-regexp", r"^user\.(name|email)$"])

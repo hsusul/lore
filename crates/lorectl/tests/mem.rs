@@ -494,3 +494,56 @@ fn mem_reindex_reports_skipped_files() {
         stderr(&out)
     );
 }
+
+#[test]
+fn mem_add_from_inside_a_git_hook_commits_to_the_vault() {
+    // A git hook runs with GIT_DIR and GIT_INDEX_FILE set to the repo being
+    // committed to. A note added from one must still land in the vault.
+    let (dir, vault) = init();
+    let other = dir.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&other)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.name=T",
+        "-c",
+        "user.email=t@example.invalid",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "other",
+    ]);
+
+    let file = note_file(dir.path(), "n.md", NOTE);
+    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["mem", "add", &file, "--vault"])
+        .arg(&vault)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", dir.path())
+        .env("GIT_DIR", other.join(".git"))
+        .env("GIT_INDEX_FILE", other.join(".git/index"))
+        .env_remove("LORE_VAULT_DIR")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    assert_eq!(
+        log(&vault),
+        ["mem: add worktrees-share-refs", "mem: init vault"]
+    );
+    assert_eq!(log(&other), ["other"], "the hook's repo gained a commit");
+    assert_eq!(status(&vault), "");
+}
