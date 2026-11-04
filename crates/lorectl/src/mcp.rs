@@ -497,9 +497,11 @@ fn search_sessions(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
 
 fn read_session(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let session_id = string_arg(arguments, "session_id").ok_or("`session_id` is required")?;
-    let after_id = match string_arg(arguments, "cursor") {
-        Some(cursor) => Some(cursor.parse::<i64>().map_err(|_| "`cursor` is not valid")?),
-        None => None,
+    // `<id>` resumes after document `id`; `<id>:<chars>` resumes inside it,
+    // after the characters the last page already returned.
+    let (after_id, mut skip) = match string_arg(arguments, "cursor") {
+        Some(cursor) => parse_read_cursor(cursor).ok_or("`cursor` is not valid")?,
+        None => (None, 0),
     };
     let conn = open(&ctx.archive_dir)?;
     let summary = query::get_session(&conn, session_id)
@@ -514,26 +516,31 @@ fn read_session(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let mut budget = READ_PAGE_CHARS;
     let mut entries = Vec::new();
     let mut last_id = None;
+    let mut cut = None;
     for document in &documents {
         if budget == 0 {
             break;
         }
-        let length = document.text.chars().count();
-        let (text, truncated) = if length > budget {
-            (document.text.chars().take(budget).collect(), true)
-        } else {
-            (document.text.clone(), false)
-        };
-        budget = budget.saturating_sub(length);
+        let rest: Vec<char> = document.text.chars().skip(skip).collect();
+        let taken = rest.len().min(budget);
+        let text: String = rest[..taken].iter().collect();
+        budget -= taken;
         last_id = Some(document.id);
         let mut entry = json!({ "label": document.label, "text": text });
-        if truncated {
+        if taken < rest.len() {
             entry["truncated"] = json!(true);
+            cut = Some((document.id, skip + taken));
         }
+        skip = 0;
         entries.push(entry);
     }
-    let more = entries.len() < documents.len() || full_page;
-    let next_cursor = last_id.filter(|_| more).map(|id| id.to_string());
+    let next_cursor = match cut {
+        Some((id, chars)) => Some(format!("{id}:{chars}")),
+        None => {
+            let more = entries.len() < documents.len() || full_page;
+            last_id.filter(|_| more).map(|id| id.to_string())
+        }
+    };
 
     Ok(json!({
         "session_id": summary.id,
@@ -542,6 +549,18 @@ fn read_session(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         "entries": entries,
         "next_cursor": next_cursor,
     }))
+}
+
+/// Split a `read_session` cursor into the document id to read after and how
+/// many characters of the next document were already returned.
+fn parse_read_cursor(cursor: &str) -> Option<(Option<i64>, usize)> {
+    match cursor.split_once(':') {
+        None => Some((Some(cursor.parse().ok()?), 0)),
+        Some((id, chars)) => {
+            let id: i64 = id.parse().ok()?;
+            Some((Some(id.checked_sub(1)?), chars.parse().ok()?))
+        }
+    }
 }
 
 /// Recall never creates a vault: none yet is a normal state, not an error.
