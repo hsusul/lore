@@ -14,13 +14,15 @@
 //! policies it scores.
 //!
 //! The miner ([`mine`]) reads the archive for user turns that correct the
-//! agent, the raw material of a lesson.
+//! agent, the raw material of a lesson; [`filing`] files a lesson into the
+//! inbox.
 //!
 //! This crate has no network capability (`tests/no_network_in_memory.rs`,
 //! `scripts/egress-check.sh`). It spawns the `git` binary and nothing else.
 
 pub mod anchor;
 pub mod eval;
+pub mod filing;
 pub mod inbox;
 pub mod index;
 pub mod mine;
