@@ -276,5 +276,5 @@ fn a_codex_command_that_exited_nonzero_is_found_by_has_error() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(failed, 4);
+    assert_eq!(failed, 5);
 }
