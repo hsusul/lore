@@ -253,6 +253,9 @@ pub struct ScanProgress {
     /// Number of segments enriched with Git evidence.
     #[ts(type = "number")]
     pub enriched: i64,
+    /// Every session file modified in the last 30 days has been read. Older
+    /// history may still be scanning; `done` says when everything is.
+    pub recent_done: bool,
     /// The scan pass has finished.
     pub done: bool,
 }

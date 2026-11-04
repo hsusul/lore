@@ -26,6 +26,11 @@ failed: number,
  */
 enriched: number, 
 /**
+ * Every session file modified in the last 30 days has been read. Older
+ * history may still be scanning; `done` says when everything is.
+ */
+recent_done: boolean, 
+/**
  * The scan pass has finished.
  */
 done: boolean, };

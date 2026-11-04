@@ -514,12 +514,12 @@ describe("scan", () => {
     // aria-disabled grays the button; the busy spinner must not inherit that disabled color.
     expect(scanning.querySelector("svg")?.getAttribute("class")).toContain("text-label-2");
 
-    act(() => events.scan?.({ discovered: 10, ingested: 2, skipped: 1, failed: 0, enriched: 0, done: false }));
+    act(() => events.scan?.({ discovered: 10, ingested: 2, skipped: 1, failed: 0, enriched: 0, recent_done: false, done: false }));
     expect(screen.getByRole("progressbar", { name: "Archive scan" }).getAttribute("aria-valuetext")).toBe("3 of 10 sessions");
     act(() => scanning.focus());
     expect((await screen.findByRole("tooltip")).textContent).toBe("Scanning 3 of 10");
 
-    act(() => events.scan?.({ discovered: 10, ingested: 8, skipped: 1, failed: 1, enriched: 3, done: true }));
+    act(() => events.scan?.({ discovered: 10, ingested: 8, skipped: 1, failed: 1, enriched: 3, recent_done: true, done: true }));
     expect(screen.getByRole("status").textContent).toBe("Scan finished: 8 new or changed, 1 unchanged, 1 unreadable");
     expect(screen.getByText("2 sessions")).toBeTruthy();
     expect((await screen.findByRole("tooltip")).textContent).toBe("Rescan (⌘R), last scanned just now. 8 new or changed, 1 unchanged, 1 unreadable");
@@ -546,7 +546,7 @@ describe("scan", () => {
   it("refreshes the list as the worker ingests sessions", async () => {
     await renderLoaded();
     m.listSessionsPage.mockResolvedValue({ sessions: [session("c", "A brand new session"), alpha, beta], next_cursor: null });
-    act(() => events.scan?.({ discovered: 3, ingested: 1, skipped: 0, failed: 0, enriched: 0, done: false }));
+    act(() => events.scan?.({ discovered: 3, ingested: 1, skipped: 0, failed: 0, enriched: 0, recent_done: false, done: false }));
     expect(await screen.findByRole("option", { name: /A brand new session/ }, { timeout: 2000 })).toBeTruthy();
   });
 

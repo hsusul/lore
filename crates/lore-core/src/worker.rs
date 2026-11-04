@@ -62,6 +62,11 @@ impl Default for WorkerConfig {
     }
 }
 
+/// How far back a scan counts as recent. A scan reports when every source
+/// modified in this window has been read, so a first run can show the last
+/// month while older history is still being read.
+pub const RECENT_WINDOW: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
 /// Outcome of one [`Worker::run_pending`] pass over discovery/watcher input:
 /// how many sources were newly enqueued and the drain tally that followed.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -252,12 +257,21 @@ impl Worker {
         deadline: Option<std::time::Instant>,
     ) -> jobs::Result<DrainSummary> {
         let mut total = DrainSummary::default();
+        // Ingest priority is source mtime in epoch millis, so this is the
+        // lowest priority still inside the recent window.
+        let window = i64::try_from(RECENT_WINDOW.as_millis()).unwrap_or(i64::MAX);
+        let recent_since_ms = now_ms().saturating_sub(window);
+        let mut recent_done = false;
         loop {
             // One source at a time, so none starts after a deadline or a stop.
             if self.stopping() || deadline.is_some_and(|at| std::time::Instant::now() >= at) {
                 break;
             }
             let batch = pipeline.drain(sink, 1)?;
+            if !recent_done && !pipeline.ingest_pending_since(recent_since_ms)? {
+                recent_done = true;
+                sink.emit(crate::pipeline::ProgressEvent::RecentFinished);
+            }
             let made_progress = batch.processed() > 0 || batch.requeued > 0;
             total.ingested += batch.ingested;
             total.skipped += batch.skipped;

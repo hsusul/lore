@@ -133,6 +133,7 @@ describe("ipc contract", () => {
         skipped: 0,
         failed: 0,
         enriched: 0,
+        recent_done: true,
         done: true,
       },
     });
