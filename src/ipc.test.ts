@@ -261,6 +261,19 @@ describe("ipc contract", () => {
     expect(invoke).toHaveBeenCalledWith("skills_report");
   });
 
+  it("acceptLesson and retireNote invoke their commands and resolve with the note path", async () => {
+    const { acceptLesson, retireNote } = await import("./ipc");
+    invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
+    expect(await acceptLesson("abc123")).toBe("global/use-pnpm-not-npm.md");
+    expect(invoke).toHaveBeenCalledWith("accept_lesson", { id: "abc123", title: null });
+    invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
+    expect(await acceptLesson("abc123", "Use pnpm")).toBe("global/use-pnpm-not-npm.md");
+    expect(invoke).toHaveBeenCalledWith("accept_lesson", { id: "abc123", title: "Use pnpm" });
+    invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
+    expect(await retireNote("use-pnpm-not-npm", "pnpm is gone")).toBe("global/use-pnpm-not-npm.md");
+    expect(invoke).toHaveBeenCalledWith("retire_note", { key: "use-pnpm-not-npm", reason: "pnpm is gone" });
+  });
+
   it("getTokenTotals, relinkSegmentRepository, and checkForUpdates invoke expected commands", async () => {
     const { checkForUpdates, getTokenTotals, relinkSegmentRepository } = await import("./ipc");
 

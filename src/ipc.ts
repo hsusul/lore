@@ -367,6 +367,16 @@ export function skillsReport(): Promise<SkillsReportDto> {
   return invoke<SkillsReportDto>("skills_report");
 }
 
+/** Keep lesson `id` as a note, titled `title` or the suggested rule. Resolves with the note's vault path. */
+export function acceptLesson(id: string, title?: string): Promise<string> {
+  return invoke<string>("accept_lesson", { id, title: title ?? null });
+}
+
+/** Retire the note named by `key` (id, slug, or path) with `reason`. Resolves with the note's vault path. */
+export function retireNote(key: string, reason: string): Promise<string> {
+  return invoke<string>("retire_note", { key, reason });
+}
+
 /** Calculate cumulative token usage and estimated cost across all sessions. */
 export function getTokenTotals(): Promise<TokenTotalsDto> {
   return invoke<TokenTotalsDto>("get_token_totals");

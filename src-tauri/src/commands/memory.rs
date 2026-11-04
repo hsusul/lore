@@ -8,6 +8,7 @@ use lore_ipc::{AgentsReadDto, LessonDto, NoteDto, ReadNoteDto, ReceiptDto};
 use lore_memory::mine::{self, Candidate, Lesson, Limits};
 use lore_memory::session_start::{self, CHAR_CAP, NOTE_CAP};
 use lore_memory::vault::{self, Vault, VaultError};
+use lore_memory::{filing, inbox, review};
 use rusqlite::Connection;
 use tauri::State;
 
@@ -48,6 +49,56 @@ pub async fn agents_read(cwd: String) -> Result<AgentsReadDto, String> {
         Some(vault) => agents_read_in(&vault, cwd).map_err(|e| e.to_string()),
         None => Ok(nothing_read(None)),
     }
+}
+
+/// Keep the mined lesson `id` as a note: filed as a proposal and accepted, one
+/// commit in the vault, as `lorectl init` keeps one. `title` is the rule as
+/// the person edited it; without one, the suggested rule. Returns the note's
+/// path in the vault.
+#[tauri::command]
+pub async fn accept_lesson(
+    state: State<'_, AppState>,
+    id: String,
+    title: Option<String>,
+) -> Result<String, String> {
+    let vault = open_vault().ok_or("no vault yet; `lorectl mem init` creates one")?;
+    let conn = lore_core::storage::open_read_only(&state.archive_dir.join(ARCHIVE_DB_FILENAME))
+        .map_err(|e| e.to_string())?;
+    accept_in(&conn, &vault, &id, title.as_deref())
+}
+
+/// Retire the note named by `key` (its id, slug, or path) with `reason`: one
+/// commit, and agents stop being given it. Returns the note's path.
+#[tauri::command]
+pub async fn retire_note(key: String, reason: String) -> Result<String, String> {
+    let vault = open_vault().ok_or("no vault yet; `lorectl mem init` creates one")?;
+    review::retire(&vault, &key, &reason)
+        .map(|(rel, _)| rel)
+        .map_err(|e| e.to_string())
+}
+
+fn accept_in(
+    conn: &Connection,
+    vault: &Vault,
+    id: &str,
+    title: Option<&str>,
+) -> Result<String, String> {
+    let limits = Limits::default();
+    let turns = mine::read_turns(conn).map_err(|e| e.to_string())?;
+    let found = mine::lessons_within(mine::corrections_in(&turns, &limits), &limits);
+    let lesson = found
+        .iter()
+        .find(|l| l.id == id)
+        .ok_or_else(|| format!("no lesson `{id}` in the archive"))?;
+    let (filed, _) = inbox::proposals(vault).map_err(|e| e.to_string())?;
+    if filing::is_filed(&filed, lesson) {
+        return Err(format!("lesson `{id}` was already filed"));
+    }
+    let title = title
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map_or_else(|| mine::suggest_rule(&lesson.text), str::to_owned);
+    filing::keep(vault, lesson, &title).map_err(|e| e.to_string())
 }
 
 fn open_vault() -> Option<Vault> {
@@ -262,6 +313,52 @@ mod tests {
             (1, "unanchored", true, 1, None)
         );
         assert_eq!((read.note_cap, read.char_cap), (10, 2_000));
+    }
+
+    #[test]
+    fn accepting_a_lesson_keeps_one_note_and_only_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = archive(
+            dir.path(),
+            &[
+                &[
+                    ("user", "add axios"),
+                    ("assistant", "Running npm install axios."),
+                    ("user", "no, use pnpm not npm"),
+                ],
+                &[
+                    ("user", "add dayjs"),
+                    ("assistant", "npm install dayjs done."),
+                    ("user", "I told you, pnpm not npm"),
+                ],
+            ],
+        );
+        let (vault, _) = Vault::init(&dir.path().join("vault")).unwrap();
+        let id = lessons(&conn).unwrap()[0].id.clone();
+
+        let rel = accept_in(&conn, &vault, &id, Some("  Use pnpm, not npm  ")).unwrap();
+        assert_eq!(rel, "global/use-pnpm-not-npm.md");
+        let kept: Vec<(String, String)> = notes(&vault)
+            .unwrap()
+            .into_iter()
+            .map(|n| (n.path, n.title))
+            .collect();
+        assert_eq!(kept, [(rel.clone(), "Use pnpm, not npm".to_owned())]);
+        assert_eq!(
+            accept_in(&conn, &vault, &id, None),
+            Err(format!("lesson `{id}` was already filed"))
+        );
+        assert_eq!(
+            accept_in(&conn, &vault, "nope", None),
+            Err("no lesson `nope` in the archive".to_owned())
+        );
+
+        let (retired, _) = review::retire(&vault, &rel, "pnpm is gone now").unwrap();
+        assert_eq!(retired, rel);
+        assert!(
+            notes(&vault).unwrap().is_empty(),
+            "a retired note is no longer active"
+        );
     }
 
     #[test]
