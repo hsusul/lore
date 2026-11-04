@@ -148,7 +148,7 @@ const TOOLS: &[Tool] = &[
         description: "Full-text search across archived coding-agent sessions. Plain words are \
 ANDed. Filters: agent:claude-code|codex, path:<file>, tool:<name>, model:<id>, repo:<id>, \
 branch:<name>, commit:<sha>, before:<date>, after:<date>, has:error, has:patch. Returns \
-session ids with redacted snippets.",
+each matching session once with a redacted snippet and its match count.",
         input_schema: search_schema,
         call: search_sessions,
     },
@@ -479,16 +479,29 @@ fn search_sessions(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         sort,
     )
     .map_err(|e| e.to_string())?;
-    let hits: Vec<Value> = page
-        .hits
+    // Each session once per page, at its best hit, with how many of the
+    // page's hits it had. The page itself is unchanged, so the cursor still
+    // resumes exactly after it.
+    let mut sessions: Vec<(&lore_ipc::SearchHit, usize)> = Vec::new();
+    for hit in &page.hits {
+        match sessions
+            .iter_mut()
+            .find(|(s, _)| s.session_id == hit.session_id)
+        {
+            Some((_, matches)) => *matches += 1,
+            None => sessions.push((hit, 1)),
+        }
+    }
+    let hits: Vec<Value> = sessions
         .iter()
-        .map(|hit| {
+        .map(|(hit, matches)| {
             json!({
                 "session_id": hit.session_id,
                 "agent_id": hit.agent_id,
                 "started_at_ms": hit.started_at,
                 "source_kind": hit.source_kind,
                 "snippet": hit.snippet.replace(HIGHLIGHT_START, "").replace(HIGHLIGHT_END, ""),
+                "matches": matches,
             })
         })
         .collect();
