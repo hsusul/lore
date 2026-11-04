@@ -500,4 +500,68 @@ mod tests {
             Freshness::Gone
         );
     }
+
+    #[test]
+    fn freshness_labels_match_specification() {
+        assert_eq!(Freshness::Fresh.label(), "fresh");
+        assert_eq!(
+            Freshness::Moved {
+                lines: LineRange::new(1, 2).unwrap()
+            }
+            .label(),
+            "moved"
+        );
+        assert_eq!(Freshness::Changed.label(), "changed");
+        assert_eq!(Freshness::Gone.label(), "gone");
+        assert_eq!(Freshness::Unanchored.label(), "unanchored");
+        assert_eq!(Freshness::Unchecked.label(), "unchecked");
+    }
+
+    #[test]
+    fn freshness_severity_hierarchy() {
+        let moved = Freshness::Moved {
+            lines: LineRange::new(5, 10).unwrap(),
+        };
+        assert_eq!(Freshness::Fresh.severity(), 0);
+        assert_eq!(Freshness::Unanchored.severity(), 0);
+        assert_eq!(Freshness::Unchecked.severity(), 0);
+        assert_eq!(moved.severity(), 1);
+        assert_eq!(Freshness::Changed.severity(), 2);
+        assert_eq!(Freshness::Gone.severity(), 3);
+    }
+
+    #[test]
+    fn line_range_from_start_and_len() {
+        assert_eq!(line_range(0, 1), Some(LineRange::new(1, 1).unwrap()));
+        assert_eq!(line_range(4, 3), Some(LineRange::new(5, 7).unwrap()));
+        assert_eq!(line_range(0, 0), None);
+    }
+
+    #[test]
+    fn hash_matches_prefix_verification() {
+        let hash = LineHash::parse("b3:0123456789abcdef").unwrap();
+        assert!(hash_matches(&hash, "0123456789abcdef0000"));
+        assert!(hash_matches(&hash, "0123456789abcdef"));
+        assert!(!hash_matches(&hash, "0123456789abcdee"));
+        assert!(!hash_matches(&hash, "0123"));
+    }
+
+    #[test]
+    fn pin_error_display_formatting() {
+        let missing = PinError::Missing("foo.rs".into());
+        assert_eq!(
+            missing.to_string(),
+            "anchor `foo.rs` is not a file in the repository"
+        );
+
+        let out_of_range = PinError::OutOfRange {
+            path: "bar.rs".into(),
+            lines: LineRange::new(10, 20).unwrap(),
+            len: 5,
+        };
+        assert_eq!(
+            out_of_range.to_string(),
+            "anchor `bar.rs` has 5 lines, so lines 10-20 do not exist"
+        );
+    }
 }
