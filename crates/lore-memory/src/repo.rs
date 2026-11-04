@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 use crate::note::{RepoKey, RepoName};
 
 /// Variables that would point `git` somewhere other than the directory asked.
-const REDIRECTING_ENV: [&str; 5] = [
+pub(crate) const REDIRECTING_ENV: [&str; 5] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
