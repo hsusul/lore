@@ -371,6 +371,8 @@ fn roundtrip_repo_notes_live_in_a_folder_named_for_people() {
         ("/srv/git/my repo.git", "my repo"),
         ("git@github.com:hsusul/lore.GIT", "lore"),
         ("https://github.com/hsusul/lore.Git/", "lore"),
+        ("/srv/git/日本", "日本"),
+        ("/srv/git/日本.git", "日本"),
     ] {
         assert_eq!(RepoName::from_origin(origin).unwrap().as_str(), name);
     }
