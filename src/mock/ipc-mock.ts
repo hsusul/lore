@@ -470,6 +470,25 @@ export function createMockHandlers(
     },
     backup_now: () => null,
 
+    // Memory
+    list_lessons: () => [
+      {
+        id: "a1b2c3d4e5",
+        text: "I told you, pnpm not npm",
+        suggested_rule: "Pnpm not npm",
+        conversations: 2,
+        latest_ms: sessions[0]?.summary.started_at ?? null,
+        receipts: sessions.slice(0, 2).map((s) => ({
+          session_id: s.summary.id,
+          agent_id: s.summary.agent_id,
+          repo: null,
+          at_ms: s.summary.started_at,
+          text: "no, use pnpm not npm",
+          preceding: "Running npm install.",
+        })),
+      },
+    ],
+
     // Usage and updates
     get_token_totals: () => ({
       total_input_tokens: sessions.reduce((n, s) => n + (s.summary.total_input_tokens ?? 0), 0),
