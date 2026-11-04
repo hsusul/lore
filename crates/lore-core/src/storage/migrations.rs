@@ -103,6 +103,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "fk_indexes",
         sql: include_str!("../../migrations/0017_fk_indexes.sql"),
     },
+    Migration {
+        version: 18,
+        name: "fts_optimize",
+        sql: include_str!("../../migrations/0018_fts_optimize.sql"),
+    },
 ];
 
 /// How many migrations exist. Tests assert against this rather than a literal

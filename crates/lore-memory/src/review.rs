@@ -94,14 +94,45 @@ pub fn inbox(vault: &Vault) -> Result<Pending, ReviewError> {
     Ok(Pending { proposals, skipped })
 }
 
+/// A person's changes to a proposal, applied as it is accepted. The inbox line
+/// stays as the agent wrote it; the note gets the edited text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Edits {
+    pub title: Option<String>,
+    pub body: Option<String>,
+}
+
 /// Accept proposal `id`: write it as a new note at `<scope>/<slug>.md`, with
 /// `as_slug` overriding the slug its title gives, or, for `relation: updates`,
 /// rewrite the target note. One commit. Running it again changes nothing.
 pub fn accept(vault: &Vault, id: &str, as_slug: Option<&str>) -> Result<Accepted, ReviewError> {
+    accept_edited(vault, id, as_slug, &Edits::default())
+}
+
+/// [`accept`] with `edits` applied to the proposal first. Edited text is
+/// redacted and validated the way a proposal is, so an edit cannot put a
+/// secret or a malformed title into the vault. Once a proposal is accepted,
+/// running this again returns that note and ignores `edits`.
+pub fn accept_edited(
+    vault: &Vault,
+    id: &str,
+    as_slug: Option<&str>,
+    edits: &Edits,
+) -> Result<Accepted, ReviewError> {
     if let Some(slug) = as_slug {
         check_slug(slug)?;
     }
-    let proposal = find_proposal(vault, id)?;
+    let mut proposal = find_proposal(vault, id)?;
+    if edits != &Edits::default() {
+        if let Some(title) = &edits.title {
+            proposal.title.clone_from(title);
+        }
+        if let Some(body) = &edits.body {
+            proposal.body.clone_from(body);
+        }
+        proposal = proposal.redacted()?;
+        proposal.validate()?;
+    }
     let updates = matches!(proposal.relation, Some(Relation::Updates(_)));
     // Check the log before looking for the target: an accepted update stays
     // accepted even when its target was deleted by hand since.
@@ -534,17 +565,20 @@ fn find_proposal(vault: &Vault, id: &str) -> Result<Proposal, ReviewError> {
 }
 
 /// Every decision, last one per proposal winning. A line that does not parse,
-/// such as one torn by a crash, is ignored: the commit it would describe is
-/// found again from the vault.
+/// or is not UTF-8, such as one torn by a crash, is ignored: the commit it
+/// would describe is found again from the vault.
 pub fn decisions(vault: &Vault) -> Result<HashMap<NoteId, Decision>, VaultError> {
     let path = vault.lore_dir().join(DECISIONS_FILE);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
         Err(e) => return Err(VaultError::Io(format!("read {DECISIONS_FILE}"), e)),
     };
     let mut out = HashMap::new();
-    for line in text.lines() {
+    let lines = bytes
+        .split(|b| *b == b'\n')
+        .filter_map(|raw| std::str::from_utf8(raw).ok());
+    for line in lines {
         if let Some((id, decision)) = parse_decision(line) {
             out.insert(id, decision);
         }

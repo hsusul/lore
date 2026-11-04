@@ -151,3 +151,22 @@ fn a_missing_home_is_an_empty_report_not_an_error() {
     assert!(inventory.records.is_empty());
     assert!(lore_skills::doctor(&inventory).is_empty());
 }
+
+#[test]
+fn unclosed_frontmatter_fence_is_reported_without_double_frontmatter() {
+    let tmp = std::env::temp_dir().join(format!("lore-skills-unclosed-{}", std::process::id()));
+    let skill_dir = tmp.join(".agents/skills/unclosed-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(skill_dir.join("SKILL.md"), "---\nname: unclosed-skill\n").unwrap();
+    let inventory = lore_skills::inventory(&Roots::from_home(&tmp));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let bad = inventory
+        .records
+        .iter()
+        .find(|r| r.name == "unclosed-skill")
+        .expect("record for unclosed skill");
+    assert_eq!(
+        bad.frontmatter_error.as_deref(),
+        Some("frontmatter has no closing `---`")
+    );
+}

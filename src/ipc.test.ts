@@ -226,6 +226,32 @@ describe("ipc contract", () => {
     expect(hitField).toBe("title");
   });
 
+  it("listLessons invokes list_lessons and passes the lessons through", async () => {
+    const { listLessons } = await import("./ipc");
+    const lesson = {
+      id: "a1b2c3d4e5",
+      text: "I told you, pnpm not npm",
+      suggested_rule: "Pnpm not npm",
+      conversations: 3,
+      latest_ms: 1_785_751_203_000,
+      receipts: [],
+    };
+    invoke.mockResolvedValueOnce([lesson]);
+    expect(await listLessons()).toEqual([lesson]);
+    expect(invoke).toHaveBeenCalledWith("list_lessons");
+  });
+
+  it("listNotes and agentsRead invoke their commands with the directory", async () => {
+    const { agentsRead, listNotes } = await import("./ipc");
+    invoke.mockResolvedValueOnce([]);
+    expect(await listNotes()).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("list_notes");
+    const read = { repo_key: null, repo_name: null, notes: [], total: 0, note_cap: 10, char_cap: 2000, text: "" };
+    invoke.mockResolvedValueOnce(read);
+    expect(await agentsRead("/Users/me/code/lore")).toEqual(read);
+    expect(invoke).toHaveBeenCalledWith("agents_read", { cwd: "/Users/me/code/lore" });
+  });
+
   it("getTokenTotals, relinkSegmentRepository, and checkForUpdates invoke expected commands", async () => {
     const { checkForUpdates, getTokenTotals, relinkSegmentRepository } = await import("./ipc");
 

@@ -398,13 +398,23 @@ pub fn proposals(vault: &Vault) -> Result<(Vec<Proposal>, Vec<Skipped>), InboxEr
     let mut found = Vec::new();
     let mut skipped = Vec::new();
     for name in names {
-        let text = fs::read_to_string(dir.join(&name))
-            .map_err(io_error(format!("read {INBOX_DIR}/{name}")))?;
-        for (number, line) in text.lines().enumerate() {
+        // Bytes, line by line: one line torn mid-character by a crash must not
+        // hide the file's other proposals.
+        let bytes =
+            fs::read(dir.join(&name)).map_err(io_error(format!("read {INBOX_DIR}/{name}")))?;
+        for (number, raw) in bytes.split(|b| *b == b'\n').enumerate() {
+            let at = format!("{INBOX_DIR}/{name}:{}", number + 1);
+            let Ok(line) = std::str::from_utf8(raw) else {
+                skipped.push(Skipped {
+                    at,
+                    id: None,
+                    reason: "the line is not UTF-8".into(),
+                });
+                continue;
+            };
             if line.trim().is_empty() {
                 continue;
             }
-            let at = format!("{INBOX_DIR}/{name}:{}", number + 1);
             match Proposal::from_line(line) {
                 Ok(p) if p.file_name() == name.to_ascii_lowercase() => match refusal(&p) {
                     None => found.push(p),

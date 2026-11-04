@@ -100,7 +100,7 @@ fn scan_since_never_marks_an_older_source_missing() {
 #[test]
 fn scan_since_needs_a_number_and_a_unit() {
     let dir = tempfile::tempdir().unwrap();
-    for bad in ["30", "d", "-3d", "30w", "1.5d"] {
+    for bad in ["30", "d", "-3d", "30w", "1.5d", "0d", "0h", "0m"] {
         let out = lorectl(dir.path(), &["scan", "--since", bad]);
         assert_eq!(out.status.code(), Some(1), "{bad}");
         assert!(

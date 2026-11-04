@@ -1596,3 +1596,50 @@ fn search_lists_a_session_once_with_its_match_count() {
     let session_id = only_session_id(archive.path());
     assert_eq!(found, [(session_id.as_str(), 5)]);
 }
+
+#[test]
+fn read_session_returns_all_of_a_document_longer_than_a_page() {
+    let archive = tempfile::tempdir().unwrap();
+    let homes = common::empty_homes();
+    let project = homes.path().join("claude/projects/p");
+    std::fs::create_dir_all(&project).unwrap();
+    let long: String = (0..5_000).map(|i| format!("word{i:05} ")).collect();
+    std::fs::write(
+        project.join(format!("{SESSION_UUID}.jsonl")),
+        format!(
+            "{{\"type\":\"user\",\"uuid\":\"u0\",\"sessionId\":\"{SESSION_UUID}\",\"cwd\":\"/p\",\
+\"message\":{{\"role\":\"user\",\"content\":\"summarise\"}}}}\n\
+{{\"type\":\"assistant\",\"uuid\":\"a0\",\"parentUuid\":\"u0\",\"sessionId\":\"{SESSION_UUID}\",\
+\"cwd\":\"/p\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{long}\"}}]}}}}\n"
+        ),
+    )
+    .unwrap();
+    let out = lorectl(archive.path(), homes.path(), &["scan"]);
+    assert_eq!(out.status.code(), Some(0), "seeding scan failed");
+    let session_id = only_session_id(archive.path());
+
+    let mut assistant = String::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..10 {
+        let mut args = json!({ "session_id": session_id });
+        if let Some(cursor) = &cursor {
+            args["cursor"] = json!(cursor);
+        }
+        let replies = converse(archive.path(), &[call(1, "read_session", args)]);
+        let page = structured(&replies[0]);
+        for entry in page["entries"].as_array().unwrap() {
+            if entry["label"] == "assistant" {
+                assistant.push_str(entry["text"].as_str().unwrap());
+            }
+        }
+        cursor = page["next_cursor"].as_str().map(str::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        (assistant.chars().count(), assistant.trim_end()),
+        (long.chars().count(), long.trim_end()),
+        "read_session lost part of a long reply"
+    );
+}

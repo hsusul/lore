@@ -5,9 +5,9 @@
 //! hook or script that wants to gate on findings reads `--json`.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use lore_skills::{Finding, Inventory, Roots, SkillRecord, Source};
+use lore_skills::{report, Finding, Inventory, Roots, SkillRecord, Source};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
@@ -50,12 +50,6 @@ fn roots() -> Result<Roots, CliError> {
     ))
 }
 
-fn distinct_names(inventory: &Inventory) -> usize {
-    let mut names: Vec<&str> = inventory.records.iter().map(|r| r.name.as_str()).collect();
-    names.dedup();
-    names.len()
-}
-
 fn ls_text(inventory: &Inventory) -> String {
     let width = inventory
         .records
@@ -74,7 +68,10 @@ fn ls_text(inventory: &Inventory) -> String {
             locations.join(",")
         ));
     }
-    out.push_str(&format!("{} skills found", distinct_names(inventory)));
+    out.push_str(&format!(
+        "{} skills found",
+        report::distinct_names(inventory)
+    ));
     out
 }
 
@@ -95,15 +92,13 @@ fn source_label(record: &SkillRecord) -> String {
 /// The findings as one JSON array, each with its `fix` and whether that fix
 /// is a `command` or a `hint`.
 fn doctor_json(inventory: &Inventory, findings: &[Finding]) -> String {
-    let fixes = lore_skills::fixes(findings, &inventory.roots);
-    let records: Vec<serde_json::Value> = findings
+    let records: Vec<serde_json::Value> = report::report(inventory, findings)
         .iter()
-        .zip(&fixes)
-        .map(|(f, fix)| {
-            let mut value = serde_json::to_value(f).unwrap_or_default();
+        .map(|entry| {
+            let mut value = serde_json::to_value(&entry.finding).unwrap_or_default();
             if let Some(object) = value.as_object_mut() {
-                object.insert("fix".into(), fix.text().into());
-                object.insert("fix_kind".into(), fix.kind().into());
+                object.insert("fix".into(), entry.fix.text().into());
+                object.insert("fix_kind".into(), entry.fix.kind().into());
             }
             value
         })
@@ -112,14 +107,10 @@ fn doctor_json(inventory: &Inventory, findings: &[Finding]) -> String {
 }
 
 fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
-    let show = |path: &Path| match path.strip_prefix(&inventory.roots.home) {
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => path.display().to_string(),
-    };
     let mut out = String::new();
     let mut group: Option<Option<&str>> = None;
-    let fixes = lore_skills::fixes(findings, &inventory.roots);
-    for (finding, fix) in findings.iter().zip(&fixes) {
+    for entry in &report::report(inventory, findings) {
+        let (finding, fix) = (&entry.finding, &entry.fix);
         if group != Some(finding.skill()) {
             group = Some(finding.skill());
             if !out.is_empty() {
@@ -135,7 +126,7 @@ fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
         out.push_str(&format!(
             "  {:<15} {}\n  {:<15} {}\n",
             finding.kind(),
-            describe(finding, &show),
+            entry.description,
             label,
             fix.text()
         ));
@@ -143,65 +134,9 @@ fn doctor_text(inventory: &Inventory, findings: &[Finding]) -> String {
     if !out.is_empty() {
         out.push('\n');
     }
-    out.push_str(&summary(findings, distinct_names(inventory)));
+    out.push_str(&report::summary(
+        findings,
+        report::distinct_names(inventory),
+    ));
     out
-}
-
-fn describe(finding: &Finding, show: &dyn Fn(&Path) -> String) -> String {
-    match finding {
-        Finding::BadFrontmatter { path, reason, .. } => {
-            format!("{}/SKILL.md {reason}", show(path))
-        }
-        Finding::NameMismatch { declared, path, .. } => {
-            format!("{} declares `name: {declared}`", show(path))
-        }
-        Finding::BrokenRef {
-            missing,
-            agent,
-            path,
-            found_at,
-            ..
-        } => format!(
-            "{} names `{missing}`, which {agent} cannot load (it is at {})",
-            show(path),
-            show(found_at)
-        ),
-        Finding::Drift { copies, .. } => {
-            let copies: Vec<String> = copies
-                .iter()
-                .map(|c| format!("{} ({} lines, {})", show(&c.path), c.lines, c.hash.short()))
-                .collect();
-            format!("{} copies differ: {}", copies.len(), copies.join(", "))
-        }
-        Finding::CodexBudget {
-            chars,
-            limit,
-            skills,
-            ..
-        } => format!("{skills} skills Codex loads use {chars} characters of names and descriptions, over its {limit}"),
-        Finding::Duplicate { paths, .. } => {
-            let paths: Vec<String> = paths.iter().map(|p| show(p)).collect();
-            format!("{} separate copies: {}", paths.len(), paths.join(", "))
-        }
-        Finding::UnknownSource { path, .. } => {
-            format!("{} is in no lockfile or plugin manifest", show(path))
-        }
-    }
-}
-
-/// One line, duplicates first.
-fn summary(findings: &[Finding], skills: usize) -> String {
-    let count = |kind: &str| findings.iter().filter(|f| f.kind() == kind).count();
-    format!(
-        "{} duplicates, {} drift, {} unknown sources, {} broken refs, {} name mismatches, \
-         {} bad frontmatter, {} codex budget; {} findings; {skills} skills found",
-        count("duplicate"),
-        count("drift"),
-        count("unknown-source"),
-        count("broken-ref"),
-        count("name-mismatch"),
-        count("bad-frontmatter"),
-        count("codex-budget"),
-        findings.len(),
-    )
 }

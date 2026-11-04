@@ -22,7 +22,9 @@
 //! work happens on the worker thread, never inside an OS callback.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -78,6 +80,9 @@ pub struct Worker {
     blobs: BlobStore,
     config: DiscoveryConfig,
     cfg: WorkerConfig,
+    /// Set by [`WorkerHandle`] on shutdown. A scan checks it between sources,
+    /// so quitting never waits for the rest of the archive.
+    stop: Arc<AtomicBool>,
 }
 
 impl Worker {
@@ -95,7 +100,12 @@ impl Worker {
             blobs,
             config,
             cfg,
+            stop: Arc::default(),
         }
+    }
+
+    fn stopping(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
     }
 
     fn pipeline(&self) -> Pipeline<'_> {
@@ -147,9 +157,10 @@ impl Worker {
         let pipeline = self.pipeline();
         pipeline.enqueue_scan_since(sink, since)?;
         let summary = self.drain_to_empty(&pipeline, sink, deadline)?;
-        let left = match deadline {
-            Some(_) => jobs::queue_depth(&self.conn)?.pending,
-            None => 0,
+        let left = if deadline.is_some() || self.stopping() {
+            jobs::queue_depth(&self.conn)?.pending
+        } else {
+            0
         };
         if left > 0 {
             crate::storage::checkpoint(&self.conn);
@@ -242,13 +253,11 @@ impl Worker {
     ) -> jobs::Result<DrainSummary> {
         let mut total = DrainSummary::default();
         loop {
-            // With a deadline, one source at a time, so none starts after it.
-            let max = match deadline {
-                Some(at) if std::time::Instant::now() >= at => break,
-                Some(_) => 1,
-                None => self.cfg.drain_batch,
-            };
-            let batch = pipeline.drain(sink, max)?;
+            // One source at a time, so none starts after a deadline or a stop.
+            if self.stopping() || deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                break;
+            }
+            let batch = pipeline.drain(sink, 1)?;
             let made_progress = batch.processed() > 0 || batch.requeued > 0;
             total.ingested += batch.ingested;
             total.skipped += batch.skipped;
@@ -289,6 +298,7 @@ enum Signal {
 /// joins its thread, so the worker never outlives the handle.
 pub struct WorkerHandle {
     tx: Sender<Signal>,
+    stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -321,13 +331,15 @@ impl WorkerHandle {
     }
 
     /// Stop the worker and join its thread. Deterministic: the worker finishes
-    /// its current bounded step, then exits; interrupted work stays durable and
-    /// is recovered on the next start. Safe to call once.
+    /// the source it is on, then exits, even mid-scan; the sources not reached
+    /// stay queued and interrupted work is recovered on the next start. Safe to
+    /// call once.
     pub fn shutdown(mut self) {
         self.stop();
     }
 
     fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
         let _ = self.tx.send(Signal::Shutdown);
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -357,6 +369,7 @@ where
 {
     let (tx, rx) = mpsc::channel();
     let idle_poll = worker.cfg.idle_poll;
+    let stop = Arc::clone(&worker.stop);
     let join = thread::spawn(move || {
         // Startup: recover interrupted work, then an initial incremental scan.
         let _ = worker.recover();
@@ -383,12 +396,16 @@ where
                 }
                 Ok(Signal::Wake) | Err(RecvTimeoutError::Timeout) => {}
             }
+            if worker.stopping() {
+                break;
+            }
             let ready = poll_ready(watcher.as_mut());
             let _ = worker.run_pending(&ready, &sink);
         }
     });
     WorkerHandle {
         tx,
+        stop,
         join: Some(join),
     }
 }

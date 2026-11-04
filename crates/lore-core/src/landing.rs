@@ -45,7 +45,9 @@
 //! worktree still exists; looking only at the recorded path would report
 //! `NoObservedLanding` for every one of them.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use rusqlite::{Connection, OptionalExtension};
 
@@ -147,7 +149,12 @@ impl LandingIndex {
     /// answer", not "the content is absent".
     #[must_use]
     pub fn build(worktree: &Path) -> Option<Self> {
-        let repo = gix::discover(worktree).ok()?;
+        Self::build_until(&gix::discover(worktree).ok()?, None)
+    }
+
+    /// The walk behind [`LandingIndex::build`], abandoned with `None` once
+    /// `deadline` passes: a partial index would call committed work uncommitted.
+    fn build_until(repo: &gix::Repository, deadline: Option<Instant>) -> Option<Self> {
         let mut blobs = std::collections::HashSet::new();
         let mut seen_trees = std::collections::HashSet::new();
 
@@ -173,6 +180,9 @@ impl LandingIndex {
         // Ancestry from every ref, so history is covered rather than only tips.
         if let Ok(walk) = repo.rev_walk(tips).all() {
             for info in walk.flatten() {
+                if deadline.is_some_and(|d| Instant::now() >= d) {
+                    return None;
+                }
                 let Ok(object) = repo.find_object(info.id) else {
                     continue;
                 };
@@ -180,7 +190,7 @@ impl LandingIndex {
                     continue;
                 };
                 let Ok(tree) = commit.tree_id() else { continue };
-                collect_tree(&repo, tree.detach(), &mut blobs, &mut seen_trees);
+                collect_tree(repo, tree.detach(), &mut blobs, &mut seen_trees);
             }
         }
         Some(Self { blobs })
@@ -269,6 +279,43 @@ pub fn classify(worktree: &Path, index: &LandingIndex, oid: &str) -> Landing {
     } else {
         Landing::Unreferenced
     }
+}
+
+/// How many of `oids` are [`Landing::Staged`] in the repository containing
+/// `worktree`, or `None` when it cannot be opened or the answer needs a history
+/// walk that does not finish by `deadline`.
+///
+/// Same answer as [`classify`] per oid, without walking history first. Only an
+/// oid in the index can be staged, and one in `HEAD`'s tree is committed, so
+/// the walk runs only for what is left, which is usually nothing.
+#[must_use]
+pub fn count_staged(worktree: &Path, oids: &[String], deadline: Instant) -> Option<usize> {
+    let repo = gix::discover(worktree).ok()?;
+    // Unreadable is "not staged", as in `index_contains`.
+    let Ok(index) = repo.index() else {
+        return Some(0);
+    };
+    let in_index: HashSet<gix::ObjectId> = index.entries().iter().map(|e| e.id).collect();
+    let mut candidates: Vec<gix::ObjectId> = oids
+        .iter()
+        .filter_map(|oid| gix::ObjectId::from_hex(oid.as_bytes()).ok())
+        .filter(|id| in_index.contains(id) && repo.has_object(id))
+        .collect();
+    if let Ok(head) = repo.head_tree_id() {
+        let mut at_head = HashSet::new();
+        collect_tree(&repo, head.detach(), &mut at_head, &mut HashSet::new());
+        candidates.retain(|id| !at_head.contains(id));
+    }
+    if candidates.is_empty() {
+        return Some(0);
+    }
+    let history = LandingIndex::build_until(&repo, Some(deadline))?;
+    Some(
+        candidates
+            .iter()
+            .filter(|id| !history.blobs.contains(*id))
+            .count(),
+    )
 }
 
 /// Whether the repository's index holds `blob`.

@@ -7,7 +7,7 @@
 #[path = "common/archive.rs"]
 mod archive;
 
-use lore_memory::mine::{corrections, find_conflicts, lessons};
+use lore_memory::mine::{corrections, find_conflicts, lessons, read_turns};
 
 fn sid(n: u32) -> String {
     format!("cccccccc-0000-4000-8000-{n:012x}")
@@ -93,7 +93,7 @@ fn harness_blocks_are_not_the_persons_words() {
     );
 
     let mut found = lessons(found);
-    find_conflicts(&conn, &mut found).unwrap();
+    find_conflicts(&read_turns(&conn).unwrap(), &mut found);
     let pr = found
         .iter()
         .find(|l| l.text == "dont make a pr just push to main")

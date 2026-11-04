@@ -162,3 +162,104 @@ pub(crate) fn date(ms: i64) -> Option<String> {
     let at = OffsetDateTime::from_unix_timestamp(ms.div_euclid(1000)).ok()?;
     Some(at.date().to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn words_filters_short_tokens_and_lowercases() {
+        let got = words("Run the migration with NPM on v2!");
+        let expected: BTreeSet<String> = ["migration", "npm", "run", "the", "with"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(got, expected);
+        assert!(!got.contains("on"));
+        assert!(!got.contains("v2"));
+    }
+
+    #[test]
+    fn date_formats_utc_day_from_millis() {
+        assert_eq!(date(1_786_406_400_000), Some("2026-08-11".into()));
+        assert_eq!(date(0), Some("1970-01-01".into()));
+        assert_eq!(date(86_400_000), Some("1970-01-02".into()));
+        assert_eq!(date(-86_400_000), Some("1969-12-31".into()));
+    }
+
+    #[test]
+    fn excerpt_extracts_around_matching_words_and_replaces_quotes() {
+        let wanted: BTreeSet<String> = ["migration"].into_iter().map(str::to_string).collect();
+        let text = "First step is here and now we must run the migration before starting.";
+        let got = excerpt(text, &wanted);
+        assert_eq!(got, "...we must run the migration before starting.");
+    }
+
+    #[test]
+    fn excerpt_replaces_double_quotes_and_caps_length() {
+        let wanted: BTreeSet<String> = ["migration"].into_iter().map(str::to_string).collect();
+        let text = "run the \"migration\" now";
+        assert_eq!(excerpt(text, &wanted), "run the 'migration' now");
+
+        let long_body = format!("run the migration {}", "word ".repeat(50));
+        let got = excerpt(&long_body, &wanted);
+        assert!(got.ends_with("..."));
+        assert!(got.len() <= EXCERPT_CHARS + "...".len());
+    }
+
+    #[test]
+    fn receipt_line_and_json_formatting() {
+        let no_arch = Receipt::NoArchive;
+        assert_eq!(
+            no_arch.line(),
+            "    receipt: no archive yet; `lorectl scan` builds one"
+        );
+        assert_eq!(no_arch.json(), json!({ "status": "no_archive" }));
+
+        let not_found = Receipt::NotArchived("s-missing".into());
+        assert_eq!(
+            not_found.line(),
+            "    receipt: session s-missing is not in the archive"
+        );
+        assert_eq!(not_found.json(), json!({ "status": "not_archived" }));
+
+        let found = Receipt::Found {
+            session: "s-123".into(),
+            agent: "codex".into(),
+            started: Some("2026-08-11".into()),
+            excerpt: Some("run migration".into()),
+        };
+        assert_eq!(
+            found.line(),
+            "    from codex session s-123, 2026-08-11: \"run migration\""
+        );
+        assert_eq!(
+            found.json(),
+            json!({
+                "status": "found",
+                "session": "s-123",
+                "agent": "codex",
+                "started": "2026-08-11",
+                "excerpt": "run migration",
+            })
+        );
+
+        let minimal_found = Receipt::Found {
+            session: "s-456".into(),
+            agent: "claude-code".into(),
+            started: None,
+            excerpt: None,
+        };
+        assert_eq!(minimal_found.line(), "    from claude-code session s-456");
+        assert_eq!(
+            minimal_found.json(),
+            json!({
+                "status": "found",
+                "session": "s-456",
+                "agent": "claude-code",
+                "started": Value::Null,
+                "excerpt": Value::Null,
+            })
+        );
+    }
+}

@@ -36,8 +36,10 @@ const IGNORED: [&str; 3] = [".lore/", "_inbox/", ".*.md.tmp"];
 /// How long a writer waits for another to release the vault lock before it
 /// gives up with [`VaultError::Busy`].
 pub const LOCK_WAIT: Duration = Duration::from_secs(5);
-/// Settings every git call carries: no hooks, no signing, no prompts.
-const GIT_SAFE: [&str; 8] = [
+/// Settings every git call carries: no hooks, no signing, no prompts, and
+/// paths printed as they are, since a slug can hold letters of any script and
+/// a quoted path read back from git names no file.
+const GIT_SAFE: [&str; 10] = [
     "-c",
     "core.hooksPath=/dev/null",
     "-c",
@@ -46,6 +48,8 @@ const GIT_SAFE: [&str; 8] = [
     "tag.gpgsign=false",
     "-c",
     "core.fsmonitor=false",
+    "-c",
+    "core.quotePath=false",
 ];
 
 #[derive(Debug, Error)]
@@ -497,6 +501,11 @@ impl Vault {
 
     pub(crate) fn git(&self, args: &[&str]) -> Result<String, VaultError> {
         let mut command = Command::new("git");
+        // `lorectl` can run inside a git hook, where GIT_DIR and GIT_INDEX_FILE
+        // name the repo being committed to and would win over `-C`.
+        for name in crate::repo::REDIRECTING_ENV {
+            command.env_remove(name);
+        }
         command.arg("-C").arg(&self.root).args(GIT_SAFE);
         let (has_name, has_email) = self.identity();
         if !has_name {
@@ -529,7 +538,11 @@ impl Vault {
     /// identity is used when set; a fallback is passed only for what is missing.
     fn identity(&self) -> (bool, bool) {
         *self.identity.get_or_init(|| {
-            let output = Command::new("git")
+            let mut command = Command::new("git");
+            for name in crate::repo::REDIRECTING_ENV {
+                command.env_remove(name);
+            }
+            let output = command
                 .arg("-C")
                 .arg(&self.root)
                 .args(["config", "--get-regexp", r"^user\.(name|email)$"])

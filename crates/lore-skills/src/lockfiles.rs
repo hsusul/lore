@@ -121,7 +121,7 @@ fn claude_plugins(claude: &Path) -> Vec<(PathBuf, Source)> {
     };
     let mut out = Vec::new();
     for (key, installs) in plugins {
-        let (plugin, marketplace) = key.split_once('@').unwrap_or((key, ""));
+        let (plugin, marketplace) = key.rsplit_once('@').unwrap_or((key, ""));
         for install in installs.as_array().into_iter().flatten() {
             let path = text(install, "installPath");
             let Some(path) = cache_relative(Path::new(&path), &cache) else {

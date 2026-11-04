@@ -10,6 +10,7 @@ pub mod frontmatter;
 pub mod locations;
 pub mod lockfiles;
 pub mod model;
+pub mod report;
 pub mod scan;
 
 pub use doctor::{doctor, CODEX_BUDGET_CHARS};

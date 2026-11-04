@@ -13,7 +13,7 @@ use lore_core::adapters::{AdapterRegistry, DiscoveryRoots};
 use lore_core::discovery::DiscoveryConfig;
 use lore_core::enrich::enrich_session;
 use lore_core::ingest::persist_session;
-use lore_core::pipeline::{NullSink, Pipeline};
+use lore_core::pipeline::{NullSink, Pipeline, ProgressEvent};
 use lore_core::storage::blob::BlobStore;
 use lore_core::worker::{spawn, WorkerConfig};
 use rusqlite::Connection;
@@ -137,11 +137,13 @@ fn reverify_job_enqueues_drains_and_is_idempotent() {
     );
 }
 
-/// A `Send` sink so the threaded worker can run without a channel consumer.
-struct DropSink;
+/// A `Send` sink that forwards events, so the test can tell when a scan ends.
+struct ChannelSink(std::sync::mpsc::Sender<ProgressEvent>);
 
-impl lore_core::pipeline::ProgressSink for DropSink {
-    fn emit(&self, _event: lore_core::pipeline::ProgressEvent) {}
+impl lore_core::pipeline::ProgressSink for ChannelSink {
+    fn emit(&self, event: ProgressEvent) {
+        let _ = self.0.send(event);
+    }
 }
 
 #[test]
@@ -175,8 +177,8 @@ fn worker_shuts_down_cleanly_with_a_reverify_job_queued() {
         assert_eq!(pipeline.enqueue_reverify().unwrap(), 1);
     }
 
-    // Spawn the worker and shut it down deterministically. The initial scan's
-    // bounded drain claims and completes the pending reverify job.
+    // Spawn the worker and shut it down once the initial scan ends, since a
+    // shutdown cuts a scan short. That scan's drain completes the reverify job.
     let cfg = WorkerConfig {
         idle_poll: Duration::from_secs(3600),
         ..WorkerConfig::default()
@@ -184,7 +186,13 @@ fn worker_shuts_down_cleanly_with_a_reverify_job_queued() {
     let worker =
         lore_core::worker::open_worker(&db_path, AdapterRegistry::v0(), blobs, config, cfg)
             .unwrap();
-    let handle = spawn(worker, None, DropSink);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = spawn(worker, None, ChannelSink(tx));
+    while let Ok(event) = rx.recv() {
+        if matches!(event, ProgressEvent::ScanFinished) {
+            break;
+        }
+    }
     handle.shutdown();
 
     let check = lore_core::storage::open(&db_path).unwrap();
