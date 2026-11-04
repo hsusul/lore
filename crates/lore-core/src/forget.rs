@@ -310,6 +310,54 @@ mod tests {
         assert!(blobs.read(&relpath).is_err(), "blob file deleted");
     }
 
+    const MARKER: &str = "quokkazebrafirefly";
+
+    /// Whether the archive file at `dir` or its WAL holds [`MARKER`].
+    fn file_holds_marker(dir: &Path) -> bool {
+        ["lore.db", "lore.db-wal"].iter().any(|name| {
+            std::fs::read(dir.join(name))
+                .is_ok_and(|bytes| bytes.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()))
+        })
+    }
+
+    /// Archive a session holding [`MARKER`] beside one that stays, then pass
+    /// its id to `forget`.
+    fn forget_marked_session(
+        dir: &Path,
+        forget: impl FnOnce(&Connection, &BlobStore, &str),
+    ) -> Connection {
+        let (_bd, blobs) = store();
+        let conn = crate::storage::open(&dir.join("lore.db")).unwrap();
+        persist(&conn, &blobs, "keep", "const KEEP = 1");
+        let sid = persist(&conn, &blobs, "gone", &format!("const {MARKER} = 2"));
+        forget(&conn, &blobs, &sid);
+        conn
+    }
+
+    #[test]
+    fn a_forgotten_session_leaves_no_trace_in_the_archive_file() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(forget_marked_session(dir.path(), |conn, blobs, sid| {
+            forget_session(conn, blobs, sid).unwrap();
+        }));
+        assert!(
+            !file_holds_marker(dir.path()),
+            "the archive file still holds the forgotten session's text"
+        );
+    }
+
+    #[test]
+    fn forgetting_everything_leaves_no_trace_in_the_archive_file() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(forget_marked_session(dir.path(), |conn, blobs, _| {
+            forget_all(conn, blobs).unwrap();
+        }));
+        assert!(
+            !file_holds_marker(dir.path()),
+            "the archive file still holds a forgotten session's text"
+        );
+    }
+
     #[test]
     fn forget_session_keeps_a_blob_shared_with_another_session() {
         let conn = crate::storage::open_in_memory().unwrap();
