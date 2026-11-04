@@ -207,12 +207,16 @@ fn configure_common(conn: &Connection) -> Result<()> {
 /// - `synchronous = NORMAL` controls fsync at commit and is meaningless without
 ///   commits. It is durable under WAL across app crashes (only an OS/power loss
 ///   can drop the last transaction), which a re-scan recovers.
+/// - `wal_autocheckpoint = 16384` checkpoints every 64 MiB of WAL instead of
+///   every 4 MiB. Each automatic checkpoint fsyncs, and a bulk scan writes
+///   gigabytes; the worker still checkpoints and truncates after each scan.
 fn configure(conn: &Connection) -> Result<()> {
     configure_common(conn)?;
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;\n\
          PRAGMA journal_mode = WAL;\n\
-         PRAGMA synchronous = NORMAL;",
+         PRAGMA synchronous = NORMAL;\n\
+         PRAGMA wal_autocheckpoint = 16384;",
     )?;
     conn.busy_timeout(WRITER_BUSY_TIMEOUT)?;
     Ok(())
@@ -529,6 +533,18 @@ mod tests {
         // Byte-for-byte: the reader may create `-shm`/`-wal` sidecars, but the
         // archive itself must be untouched.
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn the_writer_checkpoints_the_wal_every_64_mib_not_every_4() {
+        // A bulk scan commits far more than SQLite's default 1000 pages
+        // between checkpoints, and each automatic checkpoint fsyncs.
+        let (_dir, path) = migrated_archive();
+        let writer = open(&path).unwrap();
+        let pages: i64 = writer
+            .query_row("PRAGMA wal_autocheckpoint", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pages, 16_384);
     }
 
     #[test]
