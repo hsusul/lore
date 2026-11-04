@@ -9,8 +9,12 @@ on:
     tags: ["v*"]
   workflow_dispatch: {}
 
+# Read-only by default. Only the release job, which runs no project code and
+# installs nothing, can write: `npm ci` runs package install scripts, and the
+# build runs our code, so neither may hold a token that can push or edit
+# releases.
 permissions:
-  contents: write # create/attach to the GitHub Release on a tag
+  contents: read
 
 jobs:
   macos:
@@ -18,6 +22,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.97.1 # pinned; keep in sync with rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
@@ -36,11 +42,23 @@ jobs:
           name: lore-macos-dmg
           path: target/release/bundle/dmg/*.dmg
           if-no-files-found: error
+
+  release:
+    name: Attach the .dmg to the GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create/attach to the GitHub Release on a tag
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lore-macos-dmg
+          path: dmg
       - name: Attach the .dmg to the GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/bundle/dmg/*.dmg
+          files: dmg/*.dmg
           generate_release_notes: true
           body: |
             **Unsigned macOS build (Apple Silicon).** Lore is not yet signed with
