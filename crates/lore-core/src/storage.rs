@@ -216,7 +216,8 @@ fn configure(conn: &Connection) -> Result<()> {
         "PRAGMA foreign_keys = ON;\n\
          PRAGMA journal_mode = WAL;\n\
          PRAGMA synchronous = NORMAL;\n\
-         PRAGMA wal_autocheckpoint = 16384;",
+         PRAGMA wal_autocheckpoint = 16384;\n\
+         PRAGMA cache_size = -262144;",
     )?;
     conn.busy_timeout(WRITER_BUSY_TIMEOUT)?;
     Ok(())
