@@ -34,7 +34,7 @@ pub fn parse(text: &str) -> (Result<Frontmatter, String>, &str) {
         header.push(line);
     }
     if !closed {
-        return (Err("frontmatter has no closing `---`".into()), "");
+        return (Err("has no closing `---`".into()), "");
     }
     (fields(&header), text.get(offset..).unwrap_or_default())
 }
@@ -286,6 +286,11 @@ mod tests {
             let error = front(text).unwrap_err();
             assert!(error.contains(needle), "{text:?} gave {error:?}");
         }
+    }
+
+    #[test]
+    fn unclosed_fence_error_has_no_redundant_frontmatter_prefix() {
+        assert_eq!(front("---\nname: x\n").unwrap_err(), "has no closing `---`");
     }
 
     #[test]
