@@ -435,3 +435,52 @@ fn a_claude_write_is_addressed_like_a_codex_create() {
         "a Claude write did not record the content it wrote"
     );
 }
+
+#[test]
+fn count_staged_gives_the_same_answer_as_classify() {
+    let dir = repo();
+    let landed = b"pub fn landed() {}\n";
+    let older = b"pub fn older() {}\n";
+    std::fs::write(dir.path().join("landed.rs"), landed).unwrap();
+    std::fs::write(dir.path().join("older.rs"), older).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "two files"]);
+    std::fs::write(dir.path().join("older.rs"), b"pub fn newer() {}\n").unwrap();
+    git(dir.path(), &["commit", "-am", "supersede older"]);
+
+    // Committed at HEAD, committed only in history, and genuinely staged.
+    let staged = b"pub fn staged_now() {}\n";
+    std::fs::write(dir.path().join("staged.rs"), staged).unwrap();
+    std::fs::write(dir.path().join("older_copy.rs"), older).unwrap();
+    git(dir.path(), &["add", "staged.rs", "older_copy.rs"]);
+
+    let oids = [landed.as_slice(), older, staged].map(landing::blob_oid);
+    let far = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    assert_eq!(landing::count_staged(dir.path(), &oids, far), Some(1));
+}
+
+#[test]
+fn count_staged_skips_the_history_walk_when_nothing_could_be_staged() {
+    // A deadline already past fails any walk, so an answer proves none ran.
+    let dir = repo();
+    let landed = b"pub fn landed() {}\n";
+    std::fs::write(dir.path().join("landed.rs"), landed).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "land"]);
+
+    let oids = [landed.as_slice(), b"never written\n"].map(landing::blob_oid);
+    let past = std::time::Instant::now();
+    assert_eq!(landing::count_staged(dir.path(), &oids, past), Some(0));
+}
+
+#[test]
+fn count_staged_gives_up_at_the_deadline_rather_than_guess() {
+    let dir = repo();
+    let staged = b"pub fn staged_now() {}\n";
+    std::fs::write(dir.path().join("staged.rs"), staged).unwrap();
+    git(dir.path(), &["add", "staged.rs"]);
+
+    let oids = [landing::blob_oid(staged)];
+    let past = std::time::Instant::now();
+    assert_eq!(landing::count_staged(dir.path(), &oids, past), None);
+}
