@@ -440,3 +440,51 @@ fn session_start_adds_nothing_without_a_vault_or_a_matching_note() {
     assert_eq!(code(&out), 0);
     assert_eq!(stdout(&out), "");
 }
+
+#[test]
+fn at_risk_work_is_found_in_the_repo_named_on_stdin() {
+    // An agent may start the hook from anywhere. The notes already follow the
+    // `cwd` in the hook JSON, and the at-risk check must look at the same repo.
+    let repo = repo();
+    let homes = common::empty_homes();
+    let archive = tempfile::tempdir().unwrap();
+    seed_codex_session_in(repo.path(), homes.path());
+    assert_eq!(
+        code(&lorectl_in(
+            repo.path(),
+            archive.path(),
+            homes.path(),
+            &["scan"]
+        )),
+        0
+    );
+    std::fs::create_dir_all(repo.path().join("src")).unwrap();
+    std::fs::write(repo.path().join("src/new.ts"), "export const x = 1\n").unwrap();
+    git(repo.path(), &["add", "src/new.ts"]);
+
+    let elsewhere = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["hook", "session-start", "--archive"])
+        .arg(archive.path())
+        .current_dir(elsewhere.path())
+        .env("HOME", homes.path())
+        .env("LORE_VAULT_DIR", homes.path().join("no-vault"))
+        .env("CLAUDE_CONFIG_DIR", homes.path().join("claude"))
+        .env("CODEX_HOME", homes.path().join("codex"))
+        .env_remove("LORE_ARCHIVE_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn lorectl");
+    let mut pipe = child.stdin.take().unwrap();
+    pipe.write_all(cwd_json(repo.path()).as_bytes()).unwrap();
+    drop(pipe);
+    let out = child.wait_with_output().unwrap();
+
+    assert_eq!(code(&out), 0);
+    assert_eq!(
+        stdout(&out),
+        "lore: 1 file(s) written by agents are staged and not committed \
+         (a reset would discard them) \u{2014} see `lorectl status`\n"
+    );
+}
