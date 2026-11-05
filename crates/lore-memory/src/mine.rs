@@ -144,9 +144,9 @@ pub struct Candidate {
 const TURNS: &str = "SELECT m.session_id, s.agent_id, m.seq, m.role, m.ts, sd.redacted_text,
         r.display_name, r.primary_path
     FROM message m
-    JOIN agent_session s ON s.id = m.session_id
-    JOIN message_part p ON p.message_id = m.id AND p.kind = 'text'
-    JOIN search_document sd ON sd.session_id = m.session_id
+    CROSS JOIN agent_session s ON s.id = m.session_id
+    CROSS JOIN message_part p ON p.message_id = m.id AND p.kind = 'text'
+    CROSS JOIN search_document sd ON sd.session_id = m.session_id
         AND sd.source_kind = 'message_part' AND sd.source_id = p.id
     LEFT JOIN session_segment seg ON seg.id = m.segment_id
     LEFT JOIN repository r ON r.id = seg.repository_id
@@ -292,7 +292,7 @@ pub fn read_turns(conn: &Connection) -> rusqlite::Result<Turns> {
             }
             _ => turns.push(Turn {
                 agent: row.get(1)?,
-                user: row.get::<_, String>(3)? == "user",
+                user: row.get_ref(3)?.as_str()? == "user",
                 at_ms: row.get(4)?,
                 repo: row.get(6)?,
                 repo_path: row.get(7)?,
@@ -332,15 +332,17 @@ fn strip_harness(text: &str) -> String {
             .take_while(|b| b.is_ascii_lowercase() || *b == b'-')
             .count();
         let name = &after[..name_len];
-        let close = format!("</{name}>");
-        let end = (name.contains('-') && after[name_len..].starts_with('>'))
-            .then(|| after.find(&close))
-            .flatten();
+        let end = if name.contains('-') && after[name_len..].starts_with('>') {
+            find_close_tag(&after[name_len + 1..], name)
+                .map(|pos| (name_len + 1 + pos, name.len() + 3))
+        } else {
+            None
+        };
         match end {
-            Some(end) => {
+            Some((end_pos, close_len)) => {
                 out.push_str(&rest[..open]);
                 out.push(' ');
-                rest = &after[end + close.len()..];
+                rest = &after[end_pos + close_len..];
             }
             None => {
                 out.push_str(&rest[..=open]);
@@ -350,6 +352,22 @@ fn strip_harness(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+fn find_close_tag(haystack: &str, name: &str) -> Option<usize> {
+    let mut search = haystack;
+    let mut offset = 0;
+    while let Some(pos) = search.find("</") {
+        let tag_start = pos + 2;
+        let candidate = &search[tag_start..];
+        if candidate.starts_with(name) && candidate[name.len()..].starts_with('>') {
+            return Some(offset + pos);
+        }
+        let advance = tag_start;
+        offset += advance;
+        search = &search[advance..];
+    }
+    None
 }
 
 /// How Claude Code opens the user turn it writes when a skill already loaded
@@ -414,7 +432,11 @@ fn corrects(text: &str) -> bool {
     let opener = tokens.first().is_some_and(|t| OPENERS.contains(t))
         && !matches!(tokens.get(1), Some(&("worries" | "problem")));
     let use_not = use_x_not_y(&tokens);
-    opener || use_not || PHRASES.iter().any(|p| format!(" {lower} ").contains(p))
+    if opener || use_not {
+        return true;
+    }
+    let padded = format!(" {lower} ");
+    PHRASES.iter().any(|p| padded.contains(p))
 }
 
 /// Lowercase words, keeping apostrophes, so "don't" stays one word.
@@ -468,16 +490,16 @@ const STANDING: &[&str] = &["from now on", "going forward", "always", "never"];
 /// Phrases that ask the agent for something now, which a standing rule does
 /// not: "can you make sure the prompt is right" is a request.
 const ASKS: &[&str] = &[
-    "can you",
-    "could you",
-    "can u",
-    "would you",
-    "do you",
-    "do i",
-    "how do",
-    "whats up",
-    "what's up",
-    "why is",
+    " can you ",
+    " could you ",
+    " can u ",
+    " would you ",
+    " do you ",
+    " do i ",
+    " how do ",
+    " whats up ",
+    " what's up ",
+    " why is ",
 ];
 /// More words than this and a turn is usually a task with a rule inside it.
 const RULE_WORDS_MAX: usize = 20;
@@ -581,7 +603,7 @@ pub fn rule_score(text: &str) -> i32 {
         score += if task_verb { 1 } else { 2 };
     }
     let padded = format!(" {} ", tokens.join(" "));
-    if lower.contains('?') || ASKS.iter().any(|p| padded.contains(&format!(" {p} "))) {
+    if lower.contains('?') || ASKS.iter().any(|p| padded.contains(p)) {
         score -= 2;
     }
     if tokens.len() > RULE_WORDS_MAX {
@@ -759,11 +781,26 @@ fn clauses(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn clause_contains_word(clause: &str, word: &str) -> bool {
+    let mut search = clause;
+    while let Some(pos) = search.find(word) {
+        let before_ok = pos > 0 && search.as_bytes()[pos - 1] == b' ';
+        let after_pos = pos + word.len();
+        let after_ok = after_pos < search.len() && search.as_bytes()[after_pos] == b' ';
+        if before_ok && after_ok {
+            return true;
+        }
+        let advance = pos + word.len().max(1);
+        search = &search[advance..];
+    }
+    false
+}
+
 /// Whether `text` names `family` by one of its words.
 fn names_family(text: &str, words: &[&str]) -> bool {
     clauses(text)
         .iter()
-        .any(|clause| words.iter().any(|w| clause.contains(&format!(" {w} "))))
+        .any(|clause| words.iter().any(|w| clause_contains_word(clause, w)))
 }
 
 /// The words of the first command family `text` names.
@@ -772,7 +809,7 @@ fn family_of(text: &str) -> Option<&'static [&'static str]> {
     clauses.iter().find_map(|clause| {
         let (_, words) = FAMILIES
             .iter()
-            .find(|(_, words)| words.iter().any(|w| clause.contains(&format!(" {w} "))))?;
+            .find(|(_, words)| words.iter().any(|w| clause_contains_word(clause, w)))?;
         Some(*words)
     })
 }
