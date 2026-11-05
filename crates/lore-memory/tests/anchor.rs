@@ -233,3 +233,72 @@ fn lines_that_moved_in_a_file_over_1_mib_are_changed() {
     assert_eq!(small.check(root), Freshness::Moved { lines: lines("2") });
     assert_eq!(big.check(root), Freshness::Changed);
 }
+
+#[test]
+#[ignore = "benchmark: measure anchor checking latency"]
+fn bench_anchor_check_latency() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    repo(root, None);
+
+    let mut anchors = Vec::new();
+    let tree = WorkTree::new(root);
+
+    // Create 50 files with 200 lines each, and 1000 anchors across them.
+    for file_idx in 0..50 {
+        let filename = format!("src/file_{file_idx}.rs");
+        let mut content = String::new();
+        for line_idx in 1..=200 {
+            content.push_str(&format!(
+                "// line {line_idx} in file {file_idx}\nfn func_{line_idx}() {{}}\n"
+            ));
+        }
+        commit(root, &filename, &content, &format!("commit {file_idx}"));
+
+        for anchor_idx in 0..20 {
+            let start = anchor_idx * 5 + 1;
+            let end = start + 4;
+            let anchor = tree
+                .pin(&Anchor {
+                    path: RelPath::parse(&filename).unwrap(),
+                    lines: Some(LineRange::new(start as u32, end as u32).unwrap()),
+                    hash: None,
+                    commit: None,
+                })
+                .unwrap();
+            anchors.push(anchor);
+        }
+    }
+
+    assert_eq!(anchors.len(), 1000);
+
+    let measure = |label: &str| {
+        let tree = WorkTree::new(root);
+        // 2 warmups
+        for _ in 0..2 {
+            for a in &anchors {
+                let loc = tree.locate(a);
+                std::hint::black_box(loc);
+            }
+        }
+        // 7 runs
+        let mut times = Vec::new();
+        for _ in 0..7 {
+            let start = std::time::Instant::now();
+            for a in &anchors {
+                let loc = tree.locate(a);
+                std::hint::black_box(loc);
+            }
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            times.push(elapsed);
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = times[3];
+        println!(
+            "{label}: median = {:.2} ms, range = [{:.2} ms .. {:.2} ms]",
+            median, times[0], times[6]
+        );
+    };
+
+    measure("check 1000 anchors");
+}
