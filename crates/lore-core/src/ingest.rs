@@ -54,7 +54,11 @@ use crate::storage::{Result, StorageError};
 /// v10: a Claude subagent transcript, sidechain from its first line, is titled
 /// by its task prompt, so the subagent sessions ingested untitled at v9 get a
 /// title only after a re-parse.
-pub const PARSER_VERSION: &str = "10";
+///
+/// v11: the high-entropy rule also skips generated ids (MCP tool names, tool
+/// use and call ids, mangled symbols, build hashes), again only after a
+/// re-parse.
+pub const PARSER_VERSION: &str = "11";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.

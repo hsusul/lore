@@ -99,3 +99,40 @@ fn almost_every_random_token_is_still_flagged() {
     // the entropy floor). Six random tokens now read as identifiers.
     assert_eq!(flagged, 9_812);
 }
+
+/// Generated ids seen as high-entropy findings on a real history, none a
+/// secret.
+const STRUCTURED_IDS: &[&str] = &[
+    "mcp__fc6983da-0816-4afe-a9db-48419f02fe10__list_teams",
+    "toolu_016Txo4Jsas9kZh82FM24mWY",
+    "call_x8ZQb7Yk2mN4pR9sT1vW3aBc",
+    "local_fc6983da-0816-4afe-a9db-48419f02fe10",
+    "scan_ingest-d6de84c9490de3fb",
+    "target/debug/deps/scan_ingest-d6de84c9490de3fb",
+    "_RNvNtCsjIpJoQiBNqZ_9lore_core6ingest11insert_rows",
+    "_ZN9lore_core6ingest11insert_rows17h3f2a9c4d5e6b7a81E",
+];
+
+#[test]
+fn tool_ids_mangled_symbols_and_build_hashes_are_not_secrets() {
+    for text in STRUCTURED_IDS {
+        assert_eq!(rules(text), Vec::<&str>::new(), "{text}");
+        let line = format!("tool_use_id: {text} returned");
+        assert_eq!(rules(&line), Vec::<&str>::new(), "{line}");
+    }
+}
+
+#[test]
+fn look_alikes_of_structured_ids_stay_flagged() {
+    for text in [
+        // A uuid inside a path, as most of the uuids left on a real history.
+        "sessions/fc6983da-0816-4afe-a9db-48419f02fe10",
+        // Not a uuid after local_, nor a name before the hash.
+        "local_Zq7Lm2Xc9Vb4Nk8Rt1Yw6Pd3",
+        "Zq7Lm2Xc9Vb4Nk8Rt1-d6de84c9490de3fb",
+        // A random token that only starts like a tool id.
+        "toolu_016Txo4Jsas9kZh82FM24mWY/Zq7Lm2Xc9Vb4Nk8",
+    ] {
+        assert_eq!(rules(text), ["high-entropy"], "{text}");
+    }
+}
