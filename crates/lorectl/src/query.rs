@@ -110,7 +110,12 @@ pub fn inspect(invocation: &Invocation) -> Result<u8, CliError> {
         .ok_or_else(|| CliError::Usage("`lorectl inspect` needs a SESSION_ID".into()))?;
     let (conn, archive_dir) = open_reader(invocation)?;
 
-    let Some(detail) = query::get_session(&conn, session_id)? else {
+    let target_id = match query::find_session(&conn, session_id)? {
+        Some(owner) => owner.archive_id,
+        None => session_id.to_string(),
+    };
+
+    let Some(detail) = query::get_session(&conn, &target_id)? else {
         // Not an error about the archive: the archive is fine and simply holds
         // no such session. Exit 1, because the argument was wrong.
         return Err(CliError::Usage(format!(
