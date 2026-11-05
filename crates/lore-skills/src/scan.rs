@@ -1,7 +1,7 @@
 //! Walk every location under a home root into [`SkillRecord`]s. Read-only:
 //! nothing here opens a file for writing.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -32,6 +32,7 @@ struct Found {
     name: SkillName,
     install: Install,
     source: Source,
+    skill_md: Option<Vec<u8>>,
 }
 
 /// Scan every location in [`LOCATIONS`] under `roots`. Missing locations and
@@ -40,7 +41,7 @@ struct Found {
 pub fn inventory(roots: &Roots) -> Inventory {
     let locks = lockfiles::read(roots);
     let agents_dir = fs::canonicalize(roots.home.join(".agents/skills")).ok();
-    let mut hashes: HashMap<PathBuf, ContentHash> = HashMap::new();
+    let mut hashes: HashMap<PathBuf, (ContentHash, Option<Vec<u8>>)> = HashMap::new();
     let mut found = Vec::new();
     let mut elsewhere = BTreeMap::new();
 
@@ -57,7 +58,7 @@ pub fn inventory(roots: &Roots) -> Inventory {
                     continue;
                 }
                 let real_path = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-                let hash = hashes
+                let (hash, skill_md) = hashes
                     .entry(real_path.clone())
                     .or_insert_with(|| hash_dir(&real_path))
                     .clone();
@@ -86,24 +87,23 @@ pub fn inventory(roots: &Roots) -> Inventory {
                     name,
                     install,
                     source,
+                    skill_md,
                 });
             }
         }
     }
 
-    let records = group(found);
-    let mut known: BTreeSet<&str> = records.iter().map(|r| r.name.as_str()).collect();
-    known.extend(elsewhere.keys().map(String::as_str));
-    let known: BTreeSet<String> = known.into_iter().map(str::to_string).collect();
-    let records = records
-        .into_iter()
-        .map(|mut record| {
-            record
-                .refs
-                .retain(|r| known.contains(r) && *r != record.name);
-            record
-        })
+    let mut records = group(found);
+    let known: HashSet<String> = records
+        .iter()
+        .map(|r| r.name.clone())
+        .chain(elsewhere.keys().cloned())
         .collect();
+    for record in &mut records {
+        record
+            .refs
+            .retain(|r| known.contains(r) && *r != record.name);
+    }
 
     Inventory {
         roots: roots.clone(),
@@ -156,6 +156,7 @@ fn group(found: Vec<Found>) -> Vec<SkillRecord> {
         name,
         install,
         source,
+        skill_md,
     } in found
     {
         let key = (name.clone(), install.hash.clone());
@@ -167,7 +168,7 @@ fn group(found: Vec<Found>) -> Vec<SkillRecord> {
                 record.installs.push(install);
             }
             None => {
-                let record = new_record(name, install, source);
+                let record = new_record(name, install, source, skill_md);
                 by_key.insert(key, record);
             }
         }
@@ -189,9 +190,18 @@ fn group(found: Vec<Found>) -> Vec<SkillRecord> {
     records
 }
 
-fn new_record(name: SkillName, install: Install, source: Source) -> SkillRecord {
-    let bytes = read_capped(&install.real_path.join("SKILL.md"))
-        .map(|(_, bytes)| bytes)
+fn new_record(
+    name: SkillName,
+    install: Install,
+    source: Source,
+    skill_md: Option<Vec<u8>>,
+) -> SkillRecord {
+    let bytes = skill_md
+        .or_else(|| {
+            read_capped(&install.real_path.join("SKILL.md"))
+                .map(|(_, bytes)| bytes)
+                .ok()
+        })
         .unwrap_or_default();
     let text = String::from_utf8_lossy(&bytes);
     let (parsed, body) = frontmatter::parse(&text);
@@ -231,9 +241,11 @@ fn find_skills_dirs(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     if depth > MAX_SEARCH_DEPTH {
         return;
     }
-    for (name, path) in children(dir).unwrap_or_default() {
+    for (name, path, file_type) in children(dir).unwrap_or_default() {
         // Not followed: a link here could loop or leave the cache entirely.
-        let is_dir = fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir());
+        let is_dir = file_type
+            .map(|ft| ft.is_dir())
+            .unwrap_or_else(|| fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()));
         if !is_dir {
             continue;
         }
@@ -250,20 +262,21 @@ fn skill_folders(dir: &Path) -> Vec<(SkillName, PathBuf)> {
     children(dir)
         .unwrap_or_default()
         .into_iter()
-        .filter(|(_, path)| path.join("SKILL.md").is_file())
+        .filter(|(_, path, _)| path.join("SKILL.md").is_file())
+        .map(|(name, path, _)| (name, path))
         .collect()
 }
 
-/// Sorted, non-hidden, UTF-8-named entries of a directory.
-fn children(dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
-    let mut out: Vec<(String, PathBuf)> = fs::read_dir(dir)?
+/// Sorted, non-hidden, UTF-8-named entries of a directory with file types.
+fn children(dir: &Path) -> io::Result<Vec<(String, PathBuf, Option<fs::FileType>)>> {
+    let mut out: Vec<(String, PathBuf, Option<fs::FileType>)> = fs::read_dir(dir)?
         .filter_map(Result::ok)
         .filter_map(|e| {
             let name = e.file_name().into_string().ok()?;
-            (!name.starts_with('.')).then(|| (name, e.path()))
+            (!name.starts_with('.')).then(|| (name, e.path(), e.file_type().ok()))
         })
         .collect();
-    out.sort();
+    out.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
     Ok(out)
 }
 
@@ -271,7 +284,8 @@ fn children(dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
 fn read_capped(path: &Path) -> io::Result<(u64, Vec<u8>)> {
     let file = File::open(path)?;
     let len = file.metadata()?.len();
-    let mut bytes = Vec::new();
+    let cap = len.min(MAX_READ_BYTES) as usize;
+    let mut bytes = Vec::with_capacity(cap);
     file.take(MAX_READ_BYTES).read_to_end(&mut bytes)?;
     Ok((len, bytes))
 }
@@ -294,12 +308,14 @@ enum Entry {
 /// length, and the first [`MAX_READ_BYTES`] bytes, in sorted order. Hidden
 /// files (`.DS_Store`, editor state) are not content an agent reads. Links are
 /// followed only while they stay inside `root`, which is already resolved, and
-/// each real directory is walked once.
-fn hash_dir(root: &Path) -> ContentHash {
+/// each real directory is walked once. Returns the content hash and any
+/// `SKILL.md` bytes read at the root.
+fn hash_dir(root: &Path) -> (ContentHash, Option<Vec<u8>>) {
     let mut files = Vec::new();
     let mut walked = HashSet::from([root.to_path_buf()]);
     collect_files(root, root, "", &mut walked, &mut files);
     let mut hasher = blake3::Hasher::new();
+    let mut skill_md = None;
     for (relative, entry) in files {
         hasher.update(relative.as_bytes());
         hasher.update(&[0]);
@@ -319,6 +335,9 @@ fn hash_dir(root: &Path) -> ContentHash {
                 Ok((len, bytes)) => {
                     hasher.update(&len.to_le_bytes());
                     hasher.update(&bytes);
+                    if relative == "SKILL.md" {
+                        skill_md = Some(bytes);
+                    }
                 }
                 Err(_) => {
                     hasher.update(b"\xffunreadable");
@@ -326,7 +345,10 @@ fn hash_dir(root: &Path) -> ContentHash {
             },
         }
     }
-    ContentHash(hasher.finalize().to_hex().to_string())
+    (
+        ContentHash(hasher.finalize().to_hex().to_string()),
+        skill_md,
+    )
 }
 
 fn collect_files(
@@ -340,7 +362,7 @@ fn collect_files(
         out.push((prefix.to_string(), Entry::Unlistable));
         return;
     };
-    for (name, path) in children {
+    for (name, path, file_type) in children {
         let relative = if prefix.is_empty() {
             name
         } else {
@@ -348,15 +370,20 @@ fn collect_files(
         };
         // A linked top-level SKILL.md is still the file the agent reads.
         let entry_point = relative == "SKILL.md";
-        if let Some(target) = fs::read_link(&path).ok().filter(|_| !entry_point) {
-            let inside = fs::canonicalize(&path).is_ok_and(|real| real.starts_with(root));
-            if !inside {
-                out.push((relative, Entry::Outside(target)));
-                continue;
+        let is_symlink = file_type.as_ref().is_some_and(|ft| ft.is_symlink());
+        if is_symlink && !entry_point {
+            if let Ok(target) = fs::read_link(&path) {
+                let inside = fs::canonicalize(&path).is_ok_and(|real| real.starts_with(root));
+                if !inside {
+                    out.push((relative, Entry::Outside(target)));
+                    continue;
+                }
             }
         }
-        match fs::metadata(&path) {
-            Ok(meta) if meta.is_dir() => match fs::canonicalize(&path) {
+        if file_type.as_ref().is_some_and(|ft| ft.is_file()) {
+            out.push((relative, Entry::File));
+        } else if file_type.as_ref().is_some_and(|ft| ft.is_dir()) {
+            match fs::canonicalize(&path) {
                 Ok(real) if walked.insert(real.clone()) => {
                     collect_files(root, &path, &relative, walked, out);
                 }
@@ -365,9 +392,23 @@ fn collect_files(
                     out.push((relative, Entry::Walked(inner)));
                 }
                 Err(_) => out.push((relative, Entry::Unlistable)),
-            },
-            Ok(meta) if meta.is_file() => out.push((relative, Entry::File)),
-            _ => {}
+            }
+        } else {
+            // Symlink or unqueried file type: fall back to fs::metadata
+            match fs::metadata(&path) {
+                Ok(meta) if meta.is_dir() => match fs::canonicalize(&path) {
+                    Ok(real) if walked.insert(real.clone()) => {
+                        collect_files(root, &path, &relative, walked, out);
+                    }
+                    Ok(real) => {
+                        let inner = real.strip_prefix(root).unwrap_or(&real).to_path_buf();
+                        out.push((relative, Entry::Walked(inner)));
+                    }
+                    Err(_) => out.push((relative, Entry::Unlistable)),
+                },
+                Ok(meta) if meta.is_file() => out.push((relative, Entry::File)),
+                _ => {}
+            }
         }
     }
 }
