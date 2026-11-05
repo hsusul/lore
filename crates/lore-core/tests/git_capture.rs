@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use lore_core::git::{capture, capture_via_git};
+use lore_core::git::{capture, capture_identity, capture_via_git};
 
 /// Run a git command in `dir` with a hermetic environment (no user/global/system
 /// config, no prompts) and a fixed identity so commits succeed deterministically.
@@ -252,4 +252,29 @@ fn capture_handles_multiple_remotes_and_commits() {
     );
     assert_eq!(facts.root_commits.len(), 1);
     assert!(!facts.history_truncated);
+}
+
+#[test]
+fn capture_identity_matches_capture_identity_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    git(
+        dir.path(),
+        &["remote", "add", "origin", "git@github.com:user/repo.git"],
+    );
+
+    let full = capture(dir.path()).expect("capture succeeds");
+    let identity = capture_identity(dir.path()).expect("capture_identity succeeds");
+
+    assert_eq!(identity.common_dir, full.common_dir);
+    assert_eq!(identity.workdir, full.workdir);
+    assert_eq!(identity.remotes, full.remotes);
+    assert_eq!(identity.root_commits, full.root_commits);
+    assert_eq!(identity.history_truncated, full.history_truncated);
+
+    // Declines non-absolute and non-git paths
+    assert!(capture_identity(Path::new("relative/path")).is_none());
+    let non_git = tempfile::tempdir().unwrap();
+    assert!(capture_identity(non_git.path()).is_none());
 }

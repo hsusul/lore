@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::git::{self, CapturedRepo};
+use crate::git::{self, CapturedIdentityRef, CapturedRepo};
 use crate::ingest::det_id;
 use crate::storage::Result;
 
@@ -464,7 +464,12 @@ struct Identity {
 /// - no remote → key on the local common dir (`high` locally). Root-set alone is
 ///   recorded as evidence but never used as the identity key, so unrelated repos
 ///   that merely share a root commit are never merged.
-fn resolve_identity(facts: &CapturedRepo, common_key: &str, workdir: &Path) -> Identity {
+fn resolve_identity<'a>(
+    facts: impl Into<CapturedIdentityRef<'a>>,
+    common_key: &str,
+    workdir: &Path,
+) -> Identity {
+    let facts = facts.into();
     let roots_known = !facts.root_commits.is_empty() && !facts.history_truncated;
     let remote_name = facts
         .remotes
@@ -476,7 +481,7 @@ fn resolve_identity(facts: &CapturedRepo, common_key: &str, workdir: &Path) -> I
         .map(|n| n.to_string_lossy().into_owned());
 
     if !facts.remotes.is_empty() && roots_known {
-        let mut material = facts.remotes.clone();
+        let mut material = facts.remotes.to_vec();
         material.extend(facts.root_commits.iter().cloned());
         Identity {
             key: format!("rr:{}", fnv1a_hex(material.join("\n").as_bytes())),
@@ -516,12 +521,13 @@ struct DerivedIdentity {
     workdir: PathBuf,
 }
 
-fn derive_identity(facts: &CapturedRepo) -> DerivedIdentity {
+fn derive_identity<'a>(facts: impl Into<CapturedIdentityRef<'a>>) -> DerivedIdentity {
+    let facts = facts.into();
     let common_key = fnv1a_hex(facts.common_dir.to_string_lossy().as_bytes());
     let workdir = facts
         .workdir
-        .clone()
-        .unwrap_or_else(|| facts.common_dir.clone());
+        .map(PathBuf::from)
+        .unwrap_or_else(|| facts.common_dir.to_path_buf());
     let identity = resolve_identity(facts, &common_key, &workdir);
     let repo_id = det_id("repo", &[&identity.key]);
     DerivedIdentity {
@@ -581,7 +587,7 @@ pub enum RepoResolution {
 /// id the writer *would* use and asks whether that row exists. It never inserts,
 /// which is why it is safe on a read-only connection.
 pub fn resolve_repository(conn: &Connection, cwd: &Path) -> Result<RepoResolution> {
-    let Some(facts) = git::capture(cwd) else {
+    let Some(facts) = git::capture_identity(cwd) else {
         return Ok(RepoResolution::NotARepository);
     };
     let derived = derive_identity(&facts);
