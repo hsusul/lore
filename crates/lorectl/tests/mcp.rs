@@ -995,7 +995,8 @@ fn propose_memory_files_into_the_connection_inbox_as_claude_code() {
 fn propose_memory_takes_the_agent_from_lore_agent_then_client_info() {
     let home = memory_home();
     let vault = home.path().join("vault");
-    let note = json!({ "title": "T", "body": "B", "type": "fact", "scope": "global" });
+    let note =
+        json!({ "title": "Keep the log short", "body": "B", "type": "fact", "scope": "global" });
     let cases = [
         (Some("codex"), Some("claude-code"), "codex"),
         (Some("claude-code"), Some("codex-tui"), "claude-code"),
@@ -1024,7 +1025,8 @@ fn propose_memory_takes_the_agent_from_lore_agent_then_client_info() {
 fn propose_memory_from_an_unknown_agent_writes_nothing() {
     let home = memory_home();
     let vault = home.path().join("vault");
-    let note = json!({ "title": "T", "body": "B", "type": "fact", "scope": "global" });
+    let note =
+        json!({ "title": "Keep the log short", "body": "B", "type": "fact", "scope": "global" });
     for client in [None, Some("cursor")] {
         let replies = session(
             home.path(),
@@ -1053,7 +1055,7 @@ fn propose_memory_stores_a_secret_masked() {
     // `AKIAIOSFODNN7EXAMPLE` is on the scanner's allowlist, so use another.
     let key = format!("{}{}", "AKIA", "ABCDEFGHIJKLMNOP");
     let note = json!({
-        "title": "Deploy key",
+        "title": "Rotate the deploy key",
         "body": format!("Deploy with {key} only."),
         "type": "fact",
         "scope": "global",
@@ -1089,7 +1091,7 @@ fn propose_memory_rejects_bad_arguments_with_a_code_and_a_fix() {
     let home = memory_home();
     let vault = home.path().join("vault");
     let cwd = lore_repo(home.path());
-    let ok = json!({ "title": "T", "body": "B", "type": "fact", "scope": "repo", "cwd": cwd });
+    let ok = json!({ "title": "Retry the migration once", "body": "B", "type": "fact", "scope": "repo", "cwd": cwd });
     let with = |key: &str, value: Value| {
         let mut arguments = ok.clone();
         arguments[key] = value;
@@ -1103,9 +1105,19 @@ fn propose_memory_rejects_bad_arguments_with_a_code_and_a_fix() {
             "the `## Timeline` section is Lore's to write",
         ),
         (
-            with("title", json!("two\nlines")),
+            with("title", json!("Retry the\nmigration once")),
             "title",
             "must be one line without control characters",
+        ),
+        (
+            with("title", json!("Use pnpm")),
+            "title",
+            "must be a whole rule of at least three words",
+        ),
+        (
+            with("title", json!("Cause you never get to access it")),
+            "title",
+            "must make sense without the conversation: say what it is about instead of starting with `Cause`",
         ),
         (
             with("title", json!("t".repeat(121))),
@@ -1182,7 +1194,7 @@ fn propose_memory_pins_anchors_only_inside_the_scope_repo() {
                       Check path and lines, or omit lines.";
     let scope_fix = "Anchors need scope repo and a cwd inside that repo.";
     let note = |scope: &str, cwd: &str, anchor: Value| {
-        json!({ "title": "T", "body": "B", "type": "fact", "scope": scope, "cwd": cwd,
+        json!({ "title": "Keep the log short", "body": "B", "type": "fact", "scope": scope, "cwd": cwd,
                 "anchors": [anchor] })
     };
     let cases = [
@@ -1241,7 +1253,7 @@ fn propose_memory_updates_only_a_note_that_exists() {
     let vault = home.path().join("vault");
     add_note(home.path(), TIMELINE_NOTE, &[]);
     let note = |target: &str| {
-        json!({ "title": "T", "body": "B", "type": "pitfall", "scope": "global",
+        json!({ "title": "Keep the log short", "body": "B", "type": "pitfall", "scope": "global",
                 "updates": target })
     };
     let unknown = "01JC9V6Q4M8K2T7X3N5R0B1H7Z";
@@ -1276,7 +1288,8 @@ fn propose_memory_updates_only_a_note_that_exists() {
 fn propose_memory_without_a_vault_is_vault_missing_and_creates_nothing() {
     let home = tempfile::tempdir().unwrap();
     let vault = home.path().join("none");
-    let note = json!({ "title": "T", "body": "B", "type": "fact", "scope": "global" });
+    let note =
+        json!({ "title": "Keep the log short", "body": "B", "type": "fact", "scope": "global" });
     let replies = session(
         home.path(),
         &vault,
@@ -1310,7 +1323,7 @@ fn two_servers_proposing_at_once_write_two_whole_files() {
                 let body = format!("Server {server} proposal {i}. {}", "x".repeat(3_000));
                 propose(
                     i,
-                    json!({ "title": "T", "body": body, "type": "fact", "scope": "global" }),
+                    json!({ "title": "Keep the log short", "body": body, "type": "fact", "scope": "global" }),
                 )
             })
             .collect()
@@ -1386,7 +1399,7 @@ fn snapshot(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
 
 fn global_note(session_id: &str) -> Value {
     json!({
-        "title": "T", "body": "B", "type": "fact", "scope": "global",
+        "title": "Keep the log short", "body": "B", "type": "fact", "scope": "global",
         "session_id": session_id,
     })
 }
@@ -1537,7 +1550,7 @@ fn an_archive_shaped_session_the_archive_lacks_is_stored_unverified() {
     assert_eq!(
         mem(home.path(), &["inbox"]),
         format!(
-            "{id}  claude-code:{fake} (unverified)  fact  global  T\n\
+            "{id}  claude-code:{fake} (unverified)  fact  global  Keep the log short\n\
              \x20   receipt: no archive yet; `lorectl scan` builds one\n"
         )
     );

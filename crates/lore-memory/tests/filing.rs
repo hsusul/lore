@@ -16,6 +16,7 @@ fn lesson() -> Lesson {
         at_ms: Some(at_ms),
         text: text.to_owned(),
         preceding: Some("Ran npm install.".to_owned()),
+        following: None,
         signal: Signal::Correction,
     };
     Lesson {

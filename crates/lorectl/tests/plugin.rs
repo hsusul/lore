@@ -226,7 +226,7 @@ fn the_plugin_mcp_server_files_proposals_as_its_own_agent() {
             json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
             json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
                 "name": "propose_memory", "arguments": {
-                    "title": "T", "body": "B", "type": "fact", "scope": "global"}}}),
+                    "title": "Keep the log short", "body": "B", "type": "fact", "scope": "global"}}}),
         ];
         let mut pipe = child.stdin.take().unwrap();
         for m in &messages {

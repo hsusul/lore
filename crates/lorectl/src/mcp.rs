@@ -180,8 +180,9 @@ an update to it.",
         description: "Call when asked to find lessons in past sessions. Returns candidate \
 corrections and standing rules the person gave agents, those that read most like a standing \
 rule first, each with receipts: the \
-session, agent, date, what the person said, and what the agent had just done. Several \
-candidates often say one thing in different words. Group them by meaning, write each group as \
+session, agent, date, the correction the person gave, what the agent had just done as before, \
+and the agent's reply to it as after. Read before and after to learn what went wrong: a \
+correction alone is often unclear. Several candidates often say one thing in different words. Group them by meaning, write each group as \
 one short rule in plain words, and file each rule once with propose_memory, citing its \
 sessions in the body and passing one of them as session_id. Leave out anything that only \
 redirected the task at hand. may_conflict_with lists later turns in the same repository about \
@@ -725,6 +726,9 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
             return Err(invalid_argument(field, &problem));
         }
     }
+    if let Some(problem) = string_arg(arguments, "title").and_then(vague_title) {
+        return Err(invalid_argument("title", &problem));
+    }
     let note_type = string_arg(arguments, "type")
         .and_then(|t| NoteType::parse(t).ok())
         .ok_or_else(|| {
@@ -833,6 +837,30 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }))
 }
 
+/// Words a title cannot start with: each leans on a conversation the reader
+/// of the note never saw ("Cause you never get to access it").
+const LEANING_WORDS: &[&str] = &[
+    "it", "this", "that", "these", "those", "they", "them", "cause", "because", "so", "and", "but",
+    "also", "yes", "yeah", "yea", "ok", "okay", "no",
+];
+
+/// Why a title would not make sense on its own, if it would not.
+fn vague_title(title: &str) -> Option<String> {
+    let words: Vec<&str> = title.split_whitespace().collect();
+    if words.len() < 3 {
+        return Some("must be a whole rule of at least three words".to_owned());
+    }
+    let first = words[0]
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
+    LEANING_WORDS.contains(&first.as_str()).then(|| {
+        format!(
+            "must make sense without the conversation: say what it is about instead of starting with `{}`",
+            words[0]
+        )
+    })
+}
+
 /// The miner's candidate lessons, in [`mine::lessons`] order, each with up to
 /// [`MINE_RECEIPTS`] receipts, a page at a time. A page ends at `limit` or
 /// before it would pass [`MINE_REPLY_CHARS`], and `next_cursor` says where
@@ -890,6 +918,7 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
                 "repo": session_repo(&conn, &r.session, r.repo.clone()),
                 "correction": redact(&r.text)?,
                 "before": r.preceding.as_deref().map(redact).transpose()?,
+                "after": r.following.as_deref().map(redact).transpose()?,
             }));
         }
         let mut conflicts = Vec::new();

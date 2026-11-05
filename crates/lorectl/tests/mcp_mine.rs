@@ -30,6 +30,7 @@ fn scanned(home: &Path, sessions: &[(&str, &str)]) {
             item(1, "user", "input_text", "go ahead"),
             item(2, "assistant", "output_text", assistant),
             item(3, "user", "input_text", user),
+            item(4, "assistant", "output_text", "Understood."),
         ];
         let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
         std::fs::write(day.join(format!("rollout-{:012x}.jsonl", i + 1)), body).unwrap();
@@ -216,6 +217,7 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
                 "session": session(home, 2), "agent": "codex", "date": "2026-08-02",
                 "repo": null,
                 "correction": "Stop asking me for permission", "before": "Shall I run it?",
+                "after": "Understood.",
             }],
         })
     );
