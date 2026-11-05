@@ -75,12 +75,9 @@ fn redacted_tokens_urls_and_task_verbs_lower_the_score() {
                 "make sure you merge the PR at «redacted:high-entropy» before lunch",
                 -2
             ),
-            (
-                "always check https://github.com/acme/app/pull/478 first",
-                -1
-            ),
+            ("always check https://github.com/acme/app/pull/478 first", 0),
             ("make sure to commit and push every little step", 2),
-            ("make sure that docs are never tracked", 3),
+            ("make sure that docs are never tracked", 4),
             ("make sure the readme stays short", 3),
         ]
     );
@@ -105,15 +102,89 @@ fn the_rule_score_is_fixed_and_explainable() {
     assert_eq!(
         scores,
         [
-            ("from now on run the formatter first", 3),
-            ("make sure that docs are never tracked", 3),
-            ("always use pnpm", 3),
+            ("from now on run the formatter first", 4),
+            ("make sure that docs are never tracked", 4),
+            ("always use pnpm", 4),
             ("Stop asking me for permission", 1),
             ("dont make a pr just push to main", 1),
-            ("never edit src/generated/schema.rs", 2),
+            ("never edit src/generated/schema.rs", 3),
             ("fix issue 12 and close it", -5),
             ("rebase feature/login-form onto main", -5),
             (TASK, -8),
+        ]
+    );
+}
+
+#[test]
+fn a_task_with_a_rule_tacked_on_scores_below_zero() {
+    let scores: Vec<(&str, i32)> = [
+        "delete the ios sim runtimes and make it so that it builds them on my ssd from now on",
+        "install the deps and run the tests",
+        "dont make a doc for it just give me the thing to copy from now on",
+        "make sure to commit and push every little step",
+    ]
+    .iter()
+    .map(|t| (*t, rule_score(t)))
+    .collect();
+    assert_eq!(
+        scores,
+        [
+            (
+                "delete the ios sim runtimes and make it so that it builds them on my ssd from now on",
+                -1
+            ),
+            ("install the deps and run the tests", -4),
+            (
+                "dont make a doc for it just give me the thing to copy from now on",
+                4
+            ),
+            ("make sure to commit and push every little step", 2),
+        ]
+    );
+}
+
+#[test]
+fn a_request_or_a_question_scores_below_a_standing_rule() {
+    // On a real archive every one of these tied at the ceiling, so the order
+    // fell to recency and requests to the agent led the list.
+    let scores: Vec<(&str, i32)> = [
+        "never use urself as a contributor",
+        "make sure each change gets its own pr",
+        "can you make sure that the prompt stops it from drifting and give me the prompt",
+        "the backend is railway? make sure the analytics work",
+        "do you remember the permissions change we merged, make sure it is still there",
+        "for this skill do i just run it once and then from now on it applies",
+        "never mind then go ahead and make a pr for those warnings",
+        "ok so the screen should show the lesson first and then the notes and then the skills \
+         and make sure the sidebar has the counts on the right",
+    ]
+    .iter()
+    .map(|t| (*t, rule_score(t)))
+    .collect();
+    assert_eq!(
+        scores,
+        [
+            ("never use urself as a contributor", 4),
+            ("make sure each change gets its own pr", 3),
+            (
+                "can you make sure that the prompt stops it from drifting and give me the prompt",
+                1
+            ),
+            ("the backend is railway? make sure the analytics work", 1),
+            (
+                "do you remember the permissions change we merged, make sure it is still there",
+                1
+            ),
+            (
+                "for this skill do i just run it once and then from now on it applies",
+                2
+            ),
+            ("never mind then go ahead and make a pr for those warnings", 1),
+            (
+                "ok so the screen should show the lesson first and then the notes and then the skills \
+                 and make sure the sidebar has the counts on the right",
+                2
+            ),
         ]
     );
 }

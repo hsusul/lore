@@ -4,8 +4,9 @@
 //! The scope comes from the directory: global notes always, plus the notes of
 //! the repository that contains it. Ranking is the index's BM25, then notes
 //! whose anchors changed sink below the rest and notes whose files are gone
-//! sink to the bottom. A query with no words recalls every note in scope, in
-//! path order before that sort. The limit applies after that sort, to a
+//! sink to the bottom. A query with no words recalls every note in scope:
+//! the repository's own notes before global ones, then notes with more
+//! sources, then newer, then by path, before that sort. The limit applies after that sort, to a
 //! bounded set of candidates, so a stale note never takes a fresher note's
 //! slot among those candidates. Recall goes through [`Vault::index`], so
 //! notes a person edited, renamed, or deleted by hand are picked up first; it
@@ -75,10 +76,14 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
         .saturating_mul(CANDIDATES_PER_NOTE)
         .min(MAX_CANDIDATES)
         .max(limit);
-    let hits = if has_words(query) {
+    let ranked = has_words(query);
+    // With no words there is nothing to rank by in the index, so every note in
+    // scope is read and ordered here; a path order would hand the slots to
+    // whichever notes sort first by name.
+    let hits = if ranked {
         index.search_active(query, repo_scope.as_deref(), candidates)?
     } else {
-        index.list_active(repo_scope.as_deref(), candidates)?
+        index.list_active(repo_scope.as_deref(), usize::MAX)?
     };
     let mut skipped = Vec::new();
     for rel in index.unparsed()? {
@@ -86,18 +91,28 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
             skipped.push((rel, error));
         }
     }
-    let tree = context.root().map(WorkTree::new);
-    let mut notes = Vec::new();
+    let mut parsed = Vec::new();
     for hit in hits {
         // The file changed after the index read it: gone, or no longer a note.
-        let note = match parse_file(vault, &hit.path)? {
-            Some(Ok(note)) => note,
-            Some(Err(error)) => {
-                skipped.push((hit.path, error));
-                continue;
-            }
-            None => continue,
-        };
+        match parse_file(vault, &hit.path)? {
+            Some(Ok(note)) => parsed.push((hit, note)),
+            Some(Err(error)) => skipped.push((hit.path, error)),
+            None => {}
+        }
+    }
+    if !ranked {
+        parsed.sort_by(|(a, x), (b, y)| {
+            matches!(y.scope, Scope::Repo(_))
+                .cmp(&matches!(x.scope, Scope::Repo(_)))
+                .then(y.sources.len().cmp(&x.sources.len()))
+                .then(y.created.cmp(&x.created))
+                .then(a.path.cmp(&b.path))
+        });
+        parsed.truncate(candidates);
+    }
+    let tree = context.root().map(WorkTree::new);
+    let mut notes = Vec::new();
+    for (hit, note) in parsed {
         let (anchors, freshness) = check_note(&note, &context, tree.as_ref());
         notes.push(Recalled {
             freshness,

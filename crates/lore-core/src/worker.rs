@@ -22,7 +22,9 @@
 //! work happens on the worker thread, never inside an OS callback.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -60,6 +62,11 @@ impl Default for WorkerConfig {
     }
 }
 
+/// How far back a scan counts as recent. A scan reports when every source
+/// modified in this window has been read, so a first run can show the last
+/// month while older history is still being read.
+pub const RECENT_WINDOW: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
 /// Outcome of one [`Worker::run_pending`] pass over discovery/watcher input:
 /// how many sources were newly enqueued and the drain tally that followed.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -78,6 +85,9 @@ pub struct Worker {
     blobs: BlobStore,
     config: DiscoveryConfig,
     cfg: WorkerConfig,
+    /// Set by [`WorkerHandle`] on shutdown. A scan checks it between sources,
+    /// so quitting never waits for the rest of the archive.
+    stop: Arc<AtomicBool>,
 }
 
 impl Worker {
@@ -95,7 +105,12 @@ impl Worker {
             blobs,
             config,
             cfg,
+            stop: Arc::default(),
         }
+    }
+
+    fn stopping(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
     }
 
     fn pipeline(&self) -> Pipeline<'_> {
@@ -131,15 +146,46 @@ impl Worker {
         sink: &dyn ProgressSink,
         since: Option<std::time::SystemTime>,
     ) -> jobs::Result<DrainSummary> {
+        Ok(self.scan_until(sink, since, None)?.0)
+    }
+
+    /// [`Self::scan_since`] that starts no new source after `deadline`. The
+    /// sources not reached stay queued for the next scan, newest first, and
+    /// their count comes back with the summary. A scan cut short did not look
+    /// at everything, so it stamps nothing.
+    pub fn scan_until(
+        &self,
+        sink: &dyn ProgressSink,
+        since: Option<std::time::SystemTime>,
+        deadline: Option<std::time::Instant>,
+    ) -> jobs::Result<(DrainSummary, usize)> {
         let pipeline = self.pipeline();
         pipeline.enqueue_scan_since(sink, since)?;
-        let summary = self.drain_to_empty(&pipeline, sink)?;
+        let summary = self.drain_to_empty(&pipeline, sink, deadline)?;
+        let left = if deadline.is_some() || self.stopping() {
+            jobs::queue_depth(&self.conn)?.pending
+        } else {
+            0
+        };
+        if left > 0 {
+            crate::storage::checkpoint(&self.conn);
+            return Ok((summary, left));
+        }
         // The scan finished, so record when Lore last looked. Done here rather
         // than in a caller so every scanning surface stamps it: the desktop
         // worker and `lorectl scan` reach this same line, and an archive filled
         // by one must not look unscanned to the other.
-        if since.is_none() {
-            let _ = crate::settings::record_scan_completed(&self.conn, now_ms());
+        match since {
+            None => {
+                let _ = crate::settings::record_scan_completed(&self.conn, now_ms());
+            }
+            Some(since) => {
+                let since_ms = since
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+                let _ =
+                    crate::settings::record_window_scan_completed(&self.conn, now_ms(), since_ms);
+            }
         }
 
         // The queue is empty and no transaction is open — the one moment a
@@ -148,7 +194,7 @@ impl Worker {
         // this the WAL keeps that high-water mark for the life of the process.
         crate::storage::checkpoint(&self.conn);
         sink.emit(crate::pipeline::ProgressEvent::ScanFinished);
-        Ok(summary)
+        Ok((summary, 0))
     }
 
     /// Schedule ingest jobs for a batch of observed paths (e.g. debounced
@@ -208,10 +254,24 @@ impl Worker {
         &self,
         pipeline: &Pipeline<'_>,
         sink: &dyn ProgressSink,
+        deadline: Option<std::time::Instant>,
     ) -> jobs::Result<DrainSummary> {
         let mut total = DrainSummary::default();
+        // Ingest priority is source mtime in epoch millis, so this is the
+        // lowest priority still inside the recent window.
+        let window = i64::try_from(RECENT_WINDOW.as_millis()).unwrap_or(i64::MAX);
+        let recent_since_ms = now_ms().saturating_sub(window);
+        let mut recent_done = false;
         loop {
-            let batch = pipeline.drain(sink, self.cfg.drain_batch)?;
+            // One source at a time, so none starts after a deadline or a stop.
+            if self.stopping() || deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                break;
+            }
+            let batch = pipeline.drain(sink, 1)?;
+            if !recent_done && !pipeline.ingest_pending_since(recent_since_ms)? {
+                recent_done = true;
+                sink.emit(crate::pipeline::ProgressEvent::RecentFinished);
+            }
             let made_progress = batch.processed() > 0 || batch.requeued > 0;
             total.ingested += batch.ingested;
             total.skipped += batch.skipped;
@@ -252,6 +312,7 @@ enum Signal {
 /// joins its thread, so the worker never outlives the handle.
 pub struct WorkerHandle {
     tx: Sender<Signal>,
+    stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -284,13 +345,15 @@ impl WorkerHandle {
     }
 
     /// Stop the worker and join its thread. Deterministic: the worker finishes
-    /// its current bounded step, then exits; interrupted work stays durable and
-    /// is recovered on the next start. Safe to call once.
+    /// the source it is on, then exits, even mid-scan; the sources not reached
+    /// stay queued and interrupted work is recovered on the next start. Safe to
+    /// call once.
     pub fn shutdown(mut self) {
         self.stop();
     }
 
     fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
         let _ = self.tx.send(Signal::Shutdown);
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -320,6 +383,7 @@ where
 {
     let (tx, rx) = mpsc::channel();
     let idle_poll = worker.cfg.idle_poll;
+    let stop = Arc::clone(&worker.stop);
     let join = thread::spawn(move || {
         // Startup: recover interrupted work, then an initial incremental scan.
         let _ = worker.recover();
@@ -346,12 +410,16 @@ where
                 }
                 Ok(Signal::Wake) | Err(RecvTimeoutError::Timeout) => {}
             }
+            if worker.stopping() {
+                break;
+            }
             let ready = poll_ready(watcher.as_mut());
             let _ = worker.run_pending(&ready, &sink);
         }
     });
     WorkerHandle {
         tx,
+        stop,
         join: Some(join),
     }
 }

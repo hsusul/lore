@@ -28,6 +28,8 @@ use crate::receipt::{date, Archive};
 
 const DEFAULT_SINCE: &str = "30d";
 const DEFAULT_LIMIT: usize = 5;
+/// Seconds init scans before it stops and shows lessons, newest files first.
+const DEFAULT_SCAN_SECONDS: u64 = 60;
 
 const NEXT: &str = "\
 Next
@@ -39,6 +41,7 @@ Next
 struct Args {
     since: String,
     limit: usize,
+    scan_seconds: u64,
     vault: Option<PathBuf>,
     archive: Option<PathBuf>,
     /// `--review` or `--no-review`, the last one given.
@@ -52,6 +55,7 @@ fn parse(invocation: &Invocation) -> Result<Option<Args>, CliError> {
     let mut args = Args {
         since: (invocation.since.clone()).unwrap_or_else(|| DEFAULT_SINCE.into()),
         limit: DEFAULT_LIMIT,
+        scan_seconds: DEFAULT_SCAN_SECONDS,
         vault: None,
         archive: invocation.archive.clone(),
         review: None,
@@ -68,6 +72,18 @@ fn parse(invocation: &Invocation) -> Result<Option<Args>, CliError> {
                     .into_owned();
                 args.limit = value.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
                     CliError::Usage(format!("--limit needs a positive number, got `{value}`"))
+                })?;
+            }
+            Long("scan-seconds") => {
+                let value = parser
+                    .value()
+                    .map_err(usage)?
+                    .to_string_lossy()
+                    .into_owned();
+                args.scan_seconds = value.parse().map_err(|_| {
+                    CliError::Usage(format!(
+                        "--scan-seconds needs a whole number, got `{value}`"
+                    ))
                 })?;
             }
             Long("vault") => args.vault = Some(parser.value().map_err(usage)?.into()),
@@ -106,10 +122,11 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     };
 
     let started = Instant::now();
-    let scanned = crate::scan::scan_into(&archive_dir, Some(since));
+    let deadline = started + std::time::Duration::from_secs(args.scan_seconds);
+    let scanned = crate::scan::scan_until(&archive_dir, Some(since), Some(deadline));
     let secs = started.elapsed().as_secs();
     let line = match scanned {
-        Ok((_, _, summary)) => {
+        Ok((_, _, summary, left)) => {
             let mut line = match summary.ingested {
                 0 => "no new sessions".to_owned(),
                 n => format!("scanned {n} new session{}", plural(n)),
@@ -117,6 +134,12 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             line.push_str(&format!(" from the last {window} in {secs} s"));
             if summary.failed > 0 {
                 line.push_str(&format!(", {} failed", summary.failed));
+            }
+            if left > 0 {
+                line.push_str(&format!(
+                    "; {left} more file{} waiting, `lorectl scan --since {window}` reads them",
+                    plural(left)
+                ));
             }
             line
         }
@@ -156,22 +179,32 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let mut input = std::io::stdin().lock();
     // Piped answers are not echoed, so print them as a terminal would.
     let echo = !terminal;
-    let (mut n, go_on) = review_proposals(&mut out, &mut input, echo, &vault, &archive, &proposals);
+    let (accepted, go_on) =
+        review_proposals(&mut out, &mut input, echo, &vault, &archive, &proposals);
+    let mut kept = 0;
     if go_on {
         match lessons {
             Ok(lessons) => {
                 let _ = write!(out, "{}", header(&lessons, args.limit));
                 let shown = &lessons[..lessons.len().min(args.limit)];
-                n += review_lessons(&mut out, &mut input, echo, &vault, shown);
+                kept = review_lessons(&mut out, &mut input, echo, &vault, shown);
             }
             Err(error) => drop(writeln!(out, "Lessons    failed: {error}\n")),
         }
     }
+    let what = match (accepted, kept) {
+        (0, k) => format!("Kept {k} lesson{}", plural(k)),
+        (a, 0) => format!("Accepted {a} proposal{}", plural(a)),
+        (a, k) => format!(
+            "Accepted {a} proposal{} and kept {k} lesson{}",
+            plural(a),
+            plural(k)
+        ),
+    };
     let _ = writeln!(
         out,
-        "Kept {n} lesson{}. Your next Claude Code or Codex session will see them \
-         once Lore is connected (lorectl connect).",
-        plural(n)
+        "{what}. Your next Claude Code or Codex session will see them \
+         once Lore is connected (lorectl connect)."
     );
     Ok(exit::OK)
 }
@@ -278,7 +311,8 @@ fn vault_step(dir: &Path) -> Result<(Vault, String), CliError> {
 const PROMPT: &str = "      [a]ccept  [e]dit  [s]kip  [q]uit ";
 
 /// Offer each lesson in turn and keep the ones accepted. A lesson filed
-/// before is shown as kept and not offered. Returns how many were kept.
+/// before is not offered; its line says whether it was kept, is waiting in
+/// the inbox, or was rejected. Returns how many were kept.
 fn review_lessons(
     out: &mut impl Write,
     input: &mut impl BufRead,
@@ -288,11 +322,12 @@ fn review_lessons(
 ) -> usize {
     // An unreadable inbox reads as empty; filing then reports the error.
     let filed = lore_memory::inbox::proposals(vault).map_or_else(|_| Vec::new(), |(p, _)| p);
+    let decisions = review::decisions(vault).unwrap_or_default();
     let mut kept = 0;
     for lesson in lessons {
         let _ = write!(out, "{}", lesson_text(lesson));
-        if crate::mine::is_filed(&filed, lesson) {
-            let _ = writeln!(out, "      (already kept)\n");
+        if let Some(state) = filed_state(&filed, &decisions, lesson) {
+            let _ = writeln!(out, "      ({state})\n");
             continue;
         }
         let suggested = mine::suggest_rule(&lesson.text);
@@ -301,7 +336,7 @@ fn review_lessons(
             break;
         };
         if let Some(title) = title {
-            match crate::mine::keep(vault, lesson, &title) {
+            match lore_memory::filing::keep(vault, lesson, &title) {
                 Ok(rel) => {
                     kept += 1;
                     let _ = writeln!(out, "      kept {rel}");
@@ -312,6 +347,27 @@ fn review_lessons(
         let _ = writeln!(out);
     }
     kept
+}
+
+/// What became of `lesson` if it was filed before: "already kept" when a
+/// proposal from it was accepted, else "in the inbox" while one is pending,
+/// else "rejected". `None` when it was never filed.
+fn filed_state(
+    filed: &[Proposal],
+    decisions: &std::collections::HashMap<lore_memory::note::NoteId, review::Decision>,
+    lesson: &Lesson,
+) -> Option<&'static str> {
+    let rank = |p: &Proposal| match decisions.get(&p.id) {
+        Some(review::Decision::Accepted { .. }) => 0,
+        None => 1,
+        Some(review::Decision::Rejected { .. }) => 2,
+    };
+    let best = filed
+        .iter()
+        .filter(|p| lore_memory::filing::came_from(p, lesson))
+        .map(rank)
+        .min()?;
+    Some(["already kept", "in the inbox", "rejected"][best])
 }
 
 /// The title to keep a lesson under, `Some(None)` to skip it, or `None` to

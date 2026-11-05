@@ -11,6 +11,8 @@ export default tseslint.config(
       "src-tauri",
       "crates",
       "docs",
+      // Gitignored: agent worktrees under it are whole copies of this repo.
+      ".claude",
     ],
   },
   js.configs.recommended,

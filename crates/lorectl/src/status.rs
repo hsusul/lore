@@ -55,6 +55,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     }
 
     let last_scan: Option<i64> = settings::last_scan_completed_at(&conn)?;
+    let window_scan = settings::last_window_scan(&conn)?;
 
     let (repository_id, display_name) = match &resolution {
         RepoResolution::InArchive {
@@ -84,6 +85,9 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             "in_archive": repository_id.is_some(),
             "sessions": total,
             "last_scan_completed_at_ms": last_scan,
+            "last_window_scan": window_scan.map(|(at, since)| serde_json::json!({
+                "completed_at_ms": at, "since_ms": since,
+            })),
             // The finding, first: content that exists in this repository but is
             // on no branch, and would be discarded by an ordinary reset.
             "at_risk": report.at_risk.iter().map(|c| serde_json::json!({
@@ -151,7 +155,15 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             );
         }
     }
-    let _ = writeln!(stdout, "last scan   {}", describe_last_scan(last_scan));
+    let last = match (last_scan, window_scan) {
+        (None, Some((at, since))) => format!(
+            "{}, of files modified since {} only; `lorectl scan` reads the rest",
+            describe_last_scan(Some(at)),
+            crate::receipt::date(since).unwrap_or_else(|| since.to_string())
+        ),
+        _ => describe_last_scan(last_scan),
+    };
+    let _ = writeln!(stdout, "last scan   {last}");
 
     if report.unreferenced > 0 {
         // Deliberately carries no reset advice: this content is already

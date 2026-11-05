@@ -742,7 +742,9 @@ const EXEC_HEADER_LINES: usize = 8;
 /// model reads. Shell and `apply_patch` results start with an `Exit code: N`
 /// line; `exec_command` results carry `Process exited with code N` in a header
 /// that ends with an `Output:` line, and no exit code while the process runs.
-/// Older releases wrote a JSON object with `metadata.exit_code` instead. Only
+/// `exec` scripts start with `Script failed` when the script itself failed;
+/// `Script completed` says nothing about the commands the script ran, so it
+/// stays `None`. Older releases wrote a JSON object with `metadata.exit_code` instead. Only
 /// the header is read, so a command that prints `Exit code: 1` is not taken
 /// for its own result.
 fn exit_code_failed(output: &Value) -> Option<bool> {
@@ -768,6 +770,9 @@ fn exit_code_failed(output: &Value) -> Option<bool> {
         return None; // no `Output:` line, so this is not an exec header
     }
     header.iter().find_map(|line| {
+        if *line == "Script failed" {
+            return Some(true);
+        }
         let code = line
             .strip_prefix("Exit code: ")
             .or_else(|| line.strip_prefix("Process exited with code "))?;
@@ -1042,6 +1047,8 @@ mod tests {
                 ("call_7", Some(true)),  // older JSON form, `metadata.exit_code: 2`
                 ("call_8", Some(false)), // older JSON form, `metadata.exit_code: 0`
                 ("call_9", None),        // no exit code at all
+                ("call_10", Some(true)), // exec script, `Script failed`
+                ("call_11", None),       // exec script, `Script completed`
             ]
         );
     }

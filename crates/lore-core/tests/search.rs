@@ -174,6 +174,37 @@ fn path_filter_matches_touched_files() {
 }
 
 #[test]
+fn path_filter_escapes_like_wildcards() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+
+    // Session 1 touches auth/login_audit.ts
+    let s1 = format!(
+        "{}{}",
+        user_message("p1", "/p", "inspect login"),
+        "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"p1\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Edit\",\"input\":{\"file_path\":\"auth/login_audit.ts\"}}]}}\n"
+    );
+    let sid1 = persist_claude(&conn, &blobs, &s1, "p1");
+
+    // Session 2 touches auth/login-audit.ts
+    let s2 = format!(
+        "{}{}",
+        user_message("p2", "/p", "inspect login"),
+        "{\"type\":\"assistant\",\"uuid\":\"a2\",\"sessionId\":\"p2\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t2\",\"name\":\"Edit\",\"input\":{\"file_path\":\"auth/login-audit.ts\"}}]}}\n"
+    );
+    let _sid2 = persist_claude(&conn, &blobs, &s2, "p2");
+
+    // An unescaped `_` wildcard would match `login-audit.ts` too.
+    let hits = search(&conn, "inspect path:auth/login_audit.ts", 20).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "path filter must not treat `_` as a wildcard"
+    );
+    assert_eq!(hits[0].session_id, sid1);
+}
+
+#[test]
 fn tool_filter_matches_invoked_tool_name() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let (_bd, blobs) = store();

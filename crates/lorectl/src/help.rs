@@ -148,6 +148,9 @@ Options:
                       such as 30d, 12h, or 90m, newest first. With `init`:
                       the window to scan, default 30d.
     --limit <N>       With `init`: lessons to show, default 5.
+    --scan-seconds <N> With `init`: stop scanning after N seconds, newest
+                      files first, and show lessons; default 60. The rest
+                      waits for the next scan.
     --review          With `init`: offer each lesson to keep, skip, or edit.
                       On by default when stdin is a terminal; `--no-review`
                       turns it off.
@@ -176,7 +179,7 @@ Exit codes:
     {ok}  ok
     {usage}  usage: unknown flag or command, a relative --archive, or a command
        this build does not implement
-    {no_archive}  no archive at that location (run `lorectl scan` to build one); for
+    {no_archive}  no archive at that location (run `lorectl init`, or `lorectl scan`); for
        `mem`, no vault there (run `lorectl mem init`)
     {not_a_repo}  not inside a Git repository
     {unreadable}  archive present but unreadable: not a Lore archive, a schema

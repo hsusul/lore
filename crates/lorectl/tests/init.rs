@@ -44,10 +44,12 @@ fn masked(o: &Output) -> String {
         String::from_utf8_lossy(&o.stderr)
     );
     let text = String::from_utf8(o.stdout.clone()).unwrap();
+    // The scan's seconds, wherever they sit on the Archive line.
     text.lines()
-        .map(|line| match line.rsplit_once(" in ") {
-            Some((head, tail)) if line.starts_with("Archive") && tail.ends_with(" s") => {
-                format!("{head} in N s\n")
+        .map(|line| match line.split_once(" in ") {
+            Some((head, tail)) if line.starts_with("Archive") => {
+                let rest = tail.split_once(" s").map_or("", |(_, rest)| rest);
+                format!("{head} in N s{rest}\n")
             }
             _ => format!("{line}\n"),
         })
@@ -151,7 +153,7 @@ fn init_creates_the_vault_scans_and_shows_the_lesson_then_reuses_both() {
          \n\
          \x20 {id}  2 conversations, latest 2026-10-28\n\
          \x20     \"I told you, docs are never tracked in git\"\n\
-         \x20     suggested: I told you, docs are never tracked in git\n\
+         \x20     suggested: Docs are never tracked in git\n\
          \x20     - claude-code {s2} 2026-10-28: \"I told you, docs are never tracked in git\"\n\
          \n",
         s2 = archived_id(home, 2),
@@ -253,8 +255,19 @@ fn ids(out: &str) -> Vec<String> {
 }
 
 fn kept(n: usize) -> String {
-    let s = if n == 1 { "" } else { "s" };
-    format!("Kept {n} lesson{s}. Your next Claude Code or Codex session will see them once Lore is connected (lorectl connect).\n")
+    done(0, n)
+}
+
+/// init's last line after accepting `accepted` proposals and keeping `kept`
+/// lessons.
+fn done(accepted: usize, kept: usize) -> String {
+    let s = |n: usize| if n == 1 { "" } else { "s" };
+    let what = match (accepted, kept) {
+        (0, k) => format!("Kept {k} lesson{}", s(k)),
+        (a, 0) => format!("Accepted {a} proposal{}", s(a)),
+        (a, k) => format!("Accepted {a} proposal{} and kept {k} lesson{}", s(a), s(k)),
+    };
+    format!("{what}. Your next Claude Code or Codex session will see them once Lore is connected (lorectl connect).\n")
 }
 
 fn git(vault: &Path, args: &[&str]) -> String {
@@ -563,7 +576,7 @@ fn review_accepts_one_proposal_and_rejects_the_other_with_a_reason() {
             inbox_header(home),
             tidy_block(home, &tidy),
             friday_block(&friday),
-            kept(1)
+            done(1, 0)
         )
     );
     let note =
@@ -679,4 +692,111 @@ fn init_without_review_lists_pending_proposals_before_the_lessons() {
     );
     let still = pending(home);
     assert!(still.contains(&tidy) && still.contains(&friday), "{still}");
+}
+
+#[test]
+fn review_says_a_lesson_was_rejected_or_is_waiting_instead_of_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_lessons(home);
+    let listed = masked(&lorectl(home, &["init", "--no-review"]));
+    let [docs, fmt] = <[String; 2]>::try_from(ids(&listed)).unwrap();
+    for id in [&docs, &fmt] {
+        let out = lorectl(home, &["mem", "mine", "--propose", id]);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let inbox: serde_json::Value =
+        serde_json::from_slice(&lorectl(home, &["mem", "inbox", "--json"]).stdout).unwrap();
+    let docs_proposal = inbox
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["body"].as_str().unwrap().contains(&docs))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out = lorectl(
+        home,
+        &["mem", "reject", &docs_proposal, "--reason", "not mine"],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The fmt proposal is still pending: skip it in the inbox step.
+    let out = masked(&lorectl_in(home, &["init", "--review"], "s\n"));
+    let docs_block = block(
+        home,
+        &docs,
+        2,
+        "2026-10-28",
+        DOCS,
+        "Docs are never tracked in git",
+    );
+    let fmt_block = block(
+        home,
+        &fmt,
+        4,
+        "2026-10-26",
+        FMT,
+        "Always run cargo fmt before you commit",
+    );
+    assert!(
+        out.contains(&format!("{docs_block}      (rejected)\n\n")),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("{fmt_block}      (in the inbox)\n\n")),
+        "{out}"
+    );
+}
+
+#[test]
+fn the_last_line_counts_accepted_proposals_apart_from_kept_lessons() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_proposals(home);
+    two_lessons(home);
+    // Accept the first proposal, skip the second, keep the first lesson,
+    // skip the second.
+    let out = masked(&lorectl_in(home, &["init", "--review"], "a\ns\na\ns\n"));
+    assert!(out.ends_with(&done(1, 1)), "{out}");
+}
+
+#[test]
+fn init_stops_scanning_at_its_time_budget_and_says_what_is_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    two_lessons(home);
+    let vault = home.join("vault");
+    let first = masked(&lorectl(
+        home,
+        &["init", "--no-review", "--scan-seconds", "0"],
+    ));
+    assert_eq!(
+        first,
+        format!(
+            "Lore\n\
+             Vault      created {}\n\
+             Archive    no new sessions from the last 30d in N s; 4 more files waiting, \
+             `lorectl scan --since 30d` reads them\n\
+             Lessons    none found in your sessions yet.\n\n{NEXT}",
+            vault.display()
+        )
+    );
+    // The next run picks the waiting files up.
+    let second = masked(&lorectl(home, &["init", "--no-review"]));
+    assert!(
+        second.contains("Archive    scanned 4 new sessions from the last 30d in N s\n"),
+        "{second}"
+    );
 }

@@ -154,16 +154,30 @@ const TURNS: &str = "SELECT m.session_id, s.agent_id, m.seq, m.role, m.ts, sd.re
     ORDER BY m.session_id, m.seq, p.ordinal";
 
 /// One message: its parts' text joined.
-struct Turn {
-    session: String,
+pub(crate) struct Turn {
+    pub(crate) session: String,
     agent: String,
-    seq: i64,
-    user: bool,
-    at_ms: Option<i64>,
+    pub(crate) seq: i64,
+    pub(crate) user: bool,
+    pub(crate) at_ms: Option<i64>,
     text: String,
     repo: Option<String>,
     repo_path: Option<String>,
 }
+
+/// A user turn that invoked a skill or slash command by name: `/name` or
+/// `[$name](path)`, read before harness blocks are stripped, since a slash
+/// command's turn can be nothing but them.
+pub(crate) struct Invoked {
+    pub(crate) session: String,
+    pub(crate) seq: i64,
+    pub(crate) at_ms: Option<i64>,
+    pub(crate) name: String,
+}
+
+/// Every user and assistant turn in the archive, read once so the miner's
+/// passes can share it: reading them is most of what a mining call costs.
+pub struct Turns(pub(crate) Vec<Turn>, pub(crate) Vec<Invoked>);
 
 /// Every candidate in the archive, by session then turn. Read only.
 pub fn corrections(conn: &Connection) -> rusqlite::Result<Vec<Candidate>> {
@@ -190,7 +204,21 @@ impl Default for Limits {
 
 /// [`corrections`] with `limits.max_chars` in place of the default.
 pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Result<Vec<Candidate>> {
-    let turns = read_turns(conn)?;
+    Ok(corrections_in(&read_turns(conn)?, limits))
+}
+
+/// [`corrections_within`] over turns already read.
+#[must_use]
+pub fn corrections_in(turns: &Turns, limits: &Limits) -> Vec<Candidate> {
+    corrections_at(turns, limits)
+        .into_iter()
+        .map(|(_, c)| c)
+        .collect()
+}
+
+/// [`corrections_in`], each with the index of its turn in `turns.0`.
+pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Candidate)> {
+    let turns = &turns.0;
     let mut found = Vec::new();
     let mut earlier: Vec<BTreeSet<String>> = Vec::new();
     for (i, turn) in turns.iter().enumerate() {
@@ -207,6 +235,7 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
         let text = one_line(&turn.text);
         let words = content_words(&text);
         let signal = if text.starts_with('<')
+            || text.starts_with(REINVOKED)
             || text.chars().count() > limits.max_chars
             || is_question(&text)
             || is_invocation(&text)
@@ -226,27 +255,30 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
             None
         };
         if let Some(signal) = signal {
-            found.push(Candidate {
-                session: turn.session.clone(),
-                agent: turn.agent.clone(),
-                repo: turn.repo.clone(),
-                repo_path: turn.repo_path.clone(),
-                at_ms: turn.at_ms,
-                preceding: before
-                    .filter(|b| !b.user)
-                    .map(|b| one_line(&b.text).chars().take(PRECEDING_CHARS).collect()),
-                text,
-                signal,
-            });
+            found.push((
+                i,
+                Candidate {
+                    session: turn.session.clone(),
+                    agent: turn.agent.clone(),
+                    repo: turn.repo.clone(),
+                    repo_path: turn.repo_path.clone(),
+                    at_ms: turn.at_ms,
+                    preceding: before
+                        .filter(|b| !b.user)
+                        .map(|b| one_line(&b.text).chars().take(PRECEDING_CHARS).collect()),
+                    text,
+                    signal,
+                },
+            ));
         }
         earlier.push(words);
     }
-    Ok(found)
+    found
 }
 
 /// Every user and assistant message in the archive, its parts' text joined,
 /// in session then turn order.
-fn read_turns(conn: &Connection) -> rusqlite::Result<Vec<Turn>> {
+pub fn read_turns(conn: &Connection) -> rusqlite::Result<Turns> {
     let mut statement = conn.prepare(TURNS)?;
     let mut rows = statement.query([])?;
     let mut turns: Vec<Turn> = Vec::new();
@@ -270,11 +302,20 @@ fn read_turns(conn: &Connection) -> rusqlite::Result<Vec<Turn>> {
             }),
         }
     }
+    let mut invoked = Vec::new();
     for turn in &mut turns {
+        if let Some(name) = turn.user.then(|| invoked_name(&turn.text)).flatten() {
+            invoked.push(Invoked {
+                session: turn.session.clone(),
+                seq: turn.seq,
+                at_ms: turn.at_ms,
+                name,
+            });
+        }
         turn.text = strip_harness(&turn.text);
     }
     turns.retain(|t| !t.text.trim().is_empty());
-    Ok(turns)
+    Ok(Turns(turns, invoked))
 }
 
 /// `text` without the blocks an agent harness injects into a turn, such as
@@ -309,6 +350,39 @@ fn strip_harness(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// How Claude Code opens the user turn it writes when a skill already loaded
+/// in the session is invoked again. The harness wrote it, not the person.
+const REINVOKED: &str = "(Re-invocation of /";
+
+/// The skill or command a raw user turn invokes: the `<command-name>` Claude
+/// Code writes for a slash command, or a leading `/name` or `[$name](path)`.
+fn invoked_name(raw: &str) -> Option<String> {
+    let text = raw.trim_start();
+    if let Some(rest) = text.strip_prefix(REINVOKED) {
+        return rest
+            .split([' ', '\u{2014}'])
+            .next()
+            .map(str::to_owned)
+            .filter(|n| !n.is_empty());
+    }
+    if let Some(rest) = text
+        .find("<command-name>")
+        .map(|i| &text[i + "<command-name>".len()..])
+    {
+        let name = rest.split("</command-name>").next()?.trim();
+        return Some(name.trim_start_matches('/').to_owned()).filter(|n| !n.is_empty());
+    }
+    if let Some(rest) = text.strip_prefix("[$") {
+        return rest
+            .split(']')
+            .next()
+            .map(str::to_owned)
+            .filter(|n| !n.is_empty());
+    }
+    let first = text.split_whitespace().next()?;
+    (is_invocation(first)).then(|| first[1..].to_owned())
 }
 
 /// Whether `text` starts by invoking a skill, `[$name](path) ...`, or a slash
@@ -388,8 +462,25 @@ pub fn states_rule(text: &str) -> bool {
 }
 
 /// Phrases that make a turn read as a standing rule. "make sure" counts for
-/// less when the same turn holds a task verb (see [`rule_score`]).
+/// less, and for less still when the same turn holds a task verb (see
+/// [`rule_score`]).
 const STANDING: &[&str] = &["from now on", "going forward", "always", "never"];
+/// Phrases that ask the agent for something now, which a standing rule does
+/// not: "can you make sure the prompt is right" is a request.
+const ASKS: &[&str] = &[
+    "can you",
+    "could you",
+    "can u",
+    "would you",
+    "do you",
+    "do i",
+    "how do",
+    "whats up",
+    "what's up",
+    "why is",
+];
+/// More words than this and a turn is usually a task with a rule inside it.
+const RULE_WORDS_MAX: usize = 20;
 /// First words of a one-off task order.
 const TASK_VERBS: &[&str] = &[
     "push",
@@ -410,14 +501,34 @@ const TASK_VERBS: &[&str] = &[
     "tag",
 ];
 
+/// Verbs that open a one-off task: [`TASK_VERBS`] and the chores a person
+/// hands an agent ("delete the runtimes", "install the deps").
+const TASK_OPENERS: &[&str] = &[
+    "delete",
+    "remove",
+    "install",
+    "uninstall",
+    "move",
+    "rename",
+    "update",
+    "add",
+    "clean",
+];
+
 /// How much `text` reads like a standing rule rather than a one-off task
-/// order. Fixed and explainable: +2 for a standing phrase ("from now on",
-/// "always", "never", "going forward"), or for "make sure" alone, which earns
-/// only +1 when the turn also holds a task verb; +1 when it names no specific
+/// order. Fixed and explainable: +3 for a standing phrase ("from now on",
+/// "always", "never", "going forward"; "never mind" is not one), or +2 for
+/// "make sure" alone, which earns only +1 when the turn also holds a task
+/// verb; -2 when it asks the agent something now (a question mark, "can you",
+/// "do you", "how do", ...); -1 when it runs past [`RULE_WORDS_MAX`] words;
+/// +1 when it names no specific
 /// artifact; -3 for each PR or issue number (`#478`, `issue 12`), each
 /// branch-shaped token (a slash and no file extension), each URL, and each
 /// span the secret scan masked; and -2 when it opens with a task verb
-/// ("push", "merge", "fix", ...) and names an artifact.
+/// ("push", "merge", "fix", ...) and names an artifact; and -5 when it names
+/// none but opens with a task verb and adds a second instruction with "and",
+/// a task with a rule tacked on ("delete the runtimes and make it build on
+/// my ssd from now on").
 #[must_use]
 pub fn rule_score(text: &str) -> i32 {
     let lower = text.to_lowercase();
@@ -463,17 +574,30 @@ pub fn rule_score(text: &str) -> i32 {
     let artifacts = numbers + branches + paths;
     let mut score = 0;
     let task_verb = tokens.iter().any(|t| TASK_VERBS.contains(t));
-    if STANDING.iter().any(|p| lower.contains(p)) {
-        score += 2;
+    let standing = lower.replace("never mind", "");
+    if STANDING.iter().any(|p| standing.contains(p)) {
+        score += 3;
     } else if lower.contains("make sure") {
         score += if task_verb { 1 } else { 2 };
+    }
+    let padded = format!(" {} ", tokens.join(" "));
+    if lower.contains('?') || ASKS.iter().any(|p| padded.contains(&format!(" {p} "))) {
+        score -= 2;
+    }
+    if tokens.len() > RULE_WORDS_MAX {
+        score -= 1;
     }
     if artifacts == 0 {
         score += 1;
     }
     score -= 3 * i32::try_from(numbers + branches).unwrap_or(i32::MAX / 3);
-    if artifacts > 0 && tokens.first().is_some_and(|t| TASK_VERBS.contains(t)) {
+    let opens_task = tokens.first().is_some_and(|t| TASK_VERBS.contains(t));
+    if artifacts > 0 && opens_task {
         score -= 2;
+    }
+    let opens_chore = tokens.first().is_some_and(|t| TASK_OPENERS.contains(t));
+    if artifacts == 0 && (opens_task || opens_chore) && tokens.contains(&"and") {
+        score -= 5;
     }
     score
 }
@@ -662,8 +786,8 @@ const MAX_CONFLICTS: usize = 3;
 /// (PR, push, commit, branch, merge, rebase, tests, mocks, docs, permission).
 /// At most [`MAX_CONFLICTS`], newest first. Lore does not decide whether a
 /// turn overrides the lesson; that takes reading it. Read only.
-pub fn find_conflicts(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Result<()> {
-    let turns = read_turns(conn)?;
+pub fn find_conflicts(turns: &Turns, lessons: &mut [Lesson]) {
+    let turns = &turns.0;
     for lesson in lessons.iter_mut() {
         let (Some(words), Some(after)) = (family_of(&lesson.text), lesson.latest_ms) else {
             continue;
@@ -695,12 +819,22 @@ pub fn find_conflicts(conn: &Connection, lessons: &mut [Lesson]) -> rusqlite::Re
             })
             .collect();
     }
-    Ok(())
 }
 
 /// Acknowledgements and connectors that open a turn, cut by [`suggest_rule`].
 const ACKS: &[&str] = &[
     "yes", "yea", "yeah", "ok", "okay", "sure", "do that", "and", "also", "so", "then",
+];
+/// Words that open a correction and are cut only before a comma, since "no"
+/// alone is often the rule itself ("no mocks, hit the real database").
+const CORRECTION_OPENERS: &[&str] = &[
+    "i told you",
+    "i said",
+    "actually",
+    "nope",
+    "nah",
+    "wait",
+    "no",
 ];
 /// Request frames that open a rule, longest first.
 const FRAMES: &[&str] = &[
@@ -718,10 +852,12 @@ const TRAILING: &[&str] = &["please", "from now on", "going forward"];
 const TASK_FRAMES: &[&str] = &["go ahead"];
 
 /// A lesson's rule in the person's own words, cleaned up by fixed rules:
-/// leading acknowledgements and connectors ("yea sure, and also") and a
+/// leading acknowledgements and connectors ("yea sure, and also"), a
+/// correction opener before a comma ("no,", "I told you,"), and a
 /// request frame ("make sure that you", "can you", "please") are cut, then
 /// trailing filler ("please", "from now on", "going forward") and
-/// punctuation, then "like" and "just like" between two words. "dont" and
+/// punctuation, then "like" and "just like" used as filler between two words
+/// (not "look like the old one" or "I like tabs"). "dont" and
 /// "cant" get their apostrophes and the first letter is capitalized. Nothing
 /// else is reworded. A turn that opens with a task order ("go ahead"), or
 /// that leaves fewer than three words, comes back as it was, trimmed.
@@ -729,8 +865,14 @@ const TASK_FRAMES: &[&str] = &["go ahead"];
 pub fn suggest_rule(text: &str) -> String {
     let original = text.trim();
     let mut rest = original;
-    while let Some(after) = strip_opening(rest, ACKS) {
-        rest = after;
+    loop {
+        if let Some(after) = strip_opening(rest, ACKS) {
+            rest = after;
+        } else if let Some(after) = strip_before_comma(rest, CORRECTION_OPENERS) {
+            rest = after;
+        } else {
+            break;
+        }
     }
     while let Some(after) = strip_opening(rest, FRAMES) {
         rest = after;
@@ -756,9 +898,10 @@ pub fn suggest_rule(text: &str) -> String {
     let mut kept = Vec::new();
     let mut i = 0;
     while i < words.len() {
-        if i > 0 && is(i, "just") && is(i + 1, "like") && i + 2 < words.len() {
+        let filler = |at: usize| !like_compares(words[i - 1], words[at + 1]);
+        if i > 0 && is(i, "just") && is(i + 1, "like") && i + 2 < words.len() && filler(i + 1) {
             i += 2;
-        } else if i > 0 && is(i, "like") && i + 1 < words.len() {
+        } else if i > 0 && is(i, "like") && i + 1 < words.len() && filler(i) {
             i += 1;
         } else {
             kept.push(contract(words[i]));
@@ -776,6 +919,26 @@ pub fn suggest_rule(text: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Whether "like" between `before` and `after` compares or is a verb, as in
+/// "look like the old one" or "I like tabs", rather than filler, as in
+/// "can you like run the tests".
+fn like_compares(before: &str, after: &str) -> bool {
+    const BEFORE: &[&str] = &[
+        "look", "looks", "looked", "looking", "feel", "feels", "sound", "sounds", "seem", "seems",
+        "is", "are", "was", "were", "be", "been", "i", "you", "we", "they", "would", "dont",
+        "don't",
+    ];
+    const AFTER: &[&str] = &[
+        "the", "a", "an", "this", "that", "these", "those", "my", "your", "our", "their", "its",
+        "his", "her",
+    ];
+    let lower = |w: &str| {
+        w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+            .to_lowercase()
+    };
+    BEFORE.contains(&lower(before).as_str()) || AFTER.contains(&lower(after).as_str())
+}
+
 /// `text` after the first of `openings` it starts with as whole words, and
 /// any commas after it, or `None`.
 fn strip_opening<'a>(text: &'a str, openings: &[&str]) -> Option<&'a str> {
@@ -788,6 +951,17 @@ fn strip_opening<'a>(text: &'a str, openings: &[&str]) -> Option<&'a str> {
                 .next()
                 .is_none_or(|c| c.is_whitespace() || c == ','))
         .then(|| after.trim_start_matches(|c: char| c.is_whitespace() || c == ','))
+    })
+}
+
+/// `text` after the first of `openings` it starts with when a comma follows
+/// it, or `None`.
+fn strip_before_comma<'a>(text: &'a str, openings: &[&str]) -> Option<&'a str> {
+    openings.iter().find_map(|opening| {
+        let head = text.get(..opening.len())?;
+        let after = text.get(opening.len()..)?.strip_prefix(',')?;
+        head.eq_ignore_ascii_case(opening)
+            .then(|| after.trim_start())
     })
 }
 

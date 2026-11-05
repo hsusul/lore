@@ -148,7 +148,7 @@ const TOOLS: &[Tool] = &[
         description: "Full-text search across archived coding-agent sessions. Plain words are \
 ANDed. Filters: agent:claude-code|codex, path:<file>, tool:<name>, model:<id>, repo:<id>, \
 branch:<name>, commit:<sha>, before:<date>, after:<date>, has:error, has:patch. Returns \
-session ids with redacted snippets.",
+each matching session once with a redacted snippet and its match count.",
         input_schema: search_schema,
         call: search_sessions,
     },
@@ -187,7 +187,9 @@ sessions in the body and passing one of them as session_id. Leave out anything t
 redirected the task at hand. may_conflict_with lists later turns in the same repository about \
 the same command. Judge each one: if a later turn overrides the candidate, leave it out or say \
 it was overridden; a turn about something else is no conflict. Candidates that read as one-off \
-orders are left out and counted in left_out; pass all: true to see them. Replies are paged: while next_cursor is not null, call again \
+orders are left out and counted in left_out; pass all: true to see them. Each receipt names \
+its repository as repo, a name and the scope a note for it takes, or null; pass cwd to get the \
+current directory's as cwd_repo. Replies are paged: while next_cursor is not null, call again \
 with it, and read every page before you group anything.",
         input_schema: mine_schema,
         call: mine_candidates,
@@ -254,6 +256,10 @@ fn mine_schema() -> Value {
                 "default": MINE_DEFAULT_LIMIT
             },
             "cursor": { "type": "string", "description": "next_cursor from a previous call." },
+            "cwd": {
+                "type": "string",
+                "description": "Absolute path of the current directory, to name its repository as cwd_repo."
+            },
             "all": {
                 "type": "boolean",
                 "default": false,
@@ -473,16 +479,29 @@ fn search_sessions(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         sort,
     )
     .map_err(|e| e.to_string())?;
-    let hits: Vec<Value> = page
-        .hits
+    // Each session once per page, at its best hit, with how many of the
+    // page's hits it had. The page itself is unchanged, so the cursor still
+    // resumes exactly after it.
+    let mut sessions: Vec<(&lore_ipc::SearchHit, usize)> = Vec::new();
+    for hit in &page.hits {
+        match sessions
+            .iter_mut()
+            .find(|(s, _)| s.session_id == hit.session_id)
+        {
+            Some((_, matches)) => *matches += 1,
+            None => sessions.push((hit, 1)),
+        }
+    }
+    let hits: Vec<Value> = sessions
         .iter()
-        .map(|hit| {
+        .map(|(hit, matches)| {
             json!({
                 "session_id": hit.session_id,
                 "agent_id": hit.agent_id,
                 "started_at_ms": hit.started_at,
                 "source_kind": hit.source_kind,
                 "snippet": hit.snippet.replace(HIGHLIGHT_START, "").replace(HIGHLIGHT_END, ""),
+                "matches": matches,
             })
         })
         .collect();
@@ -491,9 +510,11 @@ fn search_sessions(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
 
 fn read_session(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let session_id = string_arg(arguments, "session_id").ok_or("`session_id` is required")?;
-    let after_id = match string_arg(arguments, "cursor") {
-        Some(cursor) => Some(cursor.parse::<i64>().map_err(|_| "`cursor` is not valid")?),
-        None => None,
+    // `<id>` resumes after document `id`; `<id>:<chars>` resumes inside it,
+    // after the characters the last page already returned.
+    let (after_id, mut skip) = match string_arg(arguments, "cursor") {
+        Some(cursor) => parse_read_cursor(cursor).ok_or("`cursor` is not valid")?,
+        None => (None, 0),
     };
     let conn = open(&ctx.archive_dir)?;
     let summary = query::get_session(&conn, session_id)
@@ -508,26 +529,31 @@ fn read_session(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let mut budget = READ_PAGE_CHARS;
     let mut entries = Vec::new();
     let mut last_id = None;
+    let mut cut = None;
     for document in &documents {
         if budget == 0 {
             break;
         }
-        let length = document.text.chars().count();
-        let (text, truncated) = if length > budget {
-            (document.text.chars().take(budget).collect(), true)
-        } else {
-            (document.text.clone(), false)
-        };
-        budget = budget.saturating_sub(length);
+        let rest: Vec<char> = document.text.chars().skip(skip).collect();
+        let taken = rest.len().min(budget);
+        let text: String = rest[..taken].iter().collect();
+        budget -= taken;
         last_id = Some(document.id);
         let mut entry = json!({ "label": document.label, "text": text });
-        if truncated {
+        if taken < rest.len() {
             entry["truncated"] = json!(true);
+            cut = Some((document.id, skip + taken));
         }
+        skip = 0;
         entries.push(entry);
     }
-    let more = entries.len() < documents.len() || full_page;
-    let next_cursor = last_id.filter(|_| more).map(|id| id.to_string());
+    let next_cursor = match cut {
+        Some((id, chars)) => Some(format!("{id}:{chars}")),
+        None => {
+            let more = entries.len() < documents.len() || full_page;
+            last_id.filter(|_| more).map(|id| id.to_string())
+        }
+    };
 
     Ok(json!({
         "session_id": summary.id,
@@ -536,6 +562,18 @@ fn read_session(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         "entries": entries,
         "next_cursor": next_cursor,
     }))
+}
+
+/// Split a `read_session` cursor into the document id to read after and how
+/// many characters of the next document were already returned.
+fn parse_read_cursor(cursor: &str) -> Option<(Option<i64>, usize)> {
+    match cursor.split_once(':') {
+        None => Some((Some(cursor.parse().ok()?), 0)),
+        Some((id, chars)) => {
+            let id: i64 = id.parse().ok()?;
+            Some((Some(id.checked_sub(1)?), chars.parse().ok()?))
+        }
+    }
 }
 
 /// Recall never creates a vault: none yet is a normal state, not an error.
@@ -814,10 +852,22 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
             .parse::<usize>()
             .map_err(|_| invalid_argument("cursor", "must be next_cursor from a previous call"))?,
     };
+    let cwd_repo = match string_arg(arguments, "cwd") {
+        None => Value::Null,
+        Some(cwd) if Path::new(cwd).is_absolute() => {
+            let context = RepoContext::discover(Path::new(cwd));
+            let name = context.name().map(|name| name.as_str().to_owned());
+            context
+                .key()
+                .map_or(Value::Null, |key| repo_json(name, key))
+        }
+        Some(_) => return Err(invalid_argument("cwd", "must be an absolute path")),
+    };
     let conn = open(&ctx.archive_dir)?;
-    let found = mine::corrections(&conn).map_err(|e| e.to_string())?;
+    let turns = mine::read_turns(&conn).map_err(|e| e.to_string())?;
+    let found = mine::corrections_in(&turns, &mine::Limits::default());
     let mut lessons = mine::lessons(found);
-    mine::find_conflicts(&conn, &mut lessons).map_err(|e| e.to_string())?;
+    mine::find_conflicts(&turns, &mut lessons);
     let before = lessons.len();
     if !arguments
         .get("all")
@@ -837,6 +887,7 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
             receipts.push(json!({
                 "session": r.session, "agent": r.agent,
                 "date": r.at_ms.and_then(crate::receipt::date),
+                "repo": session_repo(&conn, &r.session, r.repo.clone()),
                 "correction": redact(&r.text)?,
                 "before": r.preceding.as_deref().map(redact).transpose()?,
             }));
@@ -867,7 +918,32 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }
     let mut reply = page(&candidates, (next < total).then_some(next), total);
     reply["left_out"] = json!(left_out);
+    reply["cwd_repo"] = cwd_repo;
     Ok(reply)
+}
+
+/// `{"name", "scope"}` for a repository, where `scope` is the `repo:<key>`
+/// a note for it carries.
+fn repo_json(name: Option<String>, key: &lore_memory::note::RepoKey) -> Value {
+    json!({ "name": name, "scope": format!("repo:{}", key.as_str()) })
+}
+
+/// The repository a session worked in, from the origin URL the archive
+/// recorded for it, or null when it recorded none.
+fn session_repo(conn: &Connection, session: &str, name: Option<String>) -> Value {
+    let url: Option<String> = conn
+        .query_row(
+            "SELECT e.display_value FROM session_segment seg
+             JOIN repository_identity_evidence e ON e.repository_id = seg.repository_id
+             WHERE seg.session_id = ?1 AND e.kind = 'remote' AND e.display_value IS NOT NULL
+             ORDER BY e.last_seen_at DESC LIMIT 1",
+            [session],
+            |r| r.get(0),
+        )
+        .ok();
+    url.as_deref()
+        .and_then(lore_memory::repo::repo_key)
+        .map_or(Value::Null, |key| repo_json(name, &key))
 }
 
 /// One page of `mine_candidates`: the candidates, where the next page starts,

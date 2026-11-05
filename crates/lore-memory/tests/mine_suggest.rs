@@ -85,3 +85,42 @@ fn too_little_left_returns_the_original() {
     assert_eq!(suggest_rule(" ok, please "), "ok, please");
     assert_eq!(suggest_rule("yes do that please"), "yes do that please");
 }
+
+#[test]
+fn like_that_compares_stays() {
+    assert_eq!(
+        suggest_rule("make it look like the old dialog from now on"),
+        "Make it look like the old dialog"
+    );
+    assert_eq!(
+        suggest_rule("keep the button just like the old one"),
+        "Keep the button just like the old one"
+    );
+    assert_eq!(
+        suggest_rule("i like tabs not spaces in this repo"),
+        "I like tabs not spaces in this repo"
+    );
+    assert_eq!(
+        suggest_rule("run the tests like before you push"),
+        "Run the tests before you push"
+    );
+}
+
+#[test]
+fn a_correction_opener_before_a_comma_is_cut() {
+    assert_eq!(
+        suggest_rule("no, make it look like the old dialog from now on"),
+        "Make it look like the old dialog"
+    );
+    assert_eq!(suggest_rule("no, use pnpm not npm"), "Use pnpm not npm");
+    assert_eq!(suggest_rule("I told you, pnpm not npm"), "Pnpm not npm");
+    assert_eq!(
+        suggest_rule("actually, never push to main"),
+        "Never push to main"
+    );
+    // "no" that is the rule itself stays.
+    assert_eq!(
+        suggest_rule("no mocks, hit the real test database"),
+        "No mocks, hit the real test database"
+    );
+}

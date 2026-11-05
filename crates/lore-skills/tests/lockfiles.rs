@@ -1,4 +1,5 @@
 //! The provenance files, read from a redacted copy of real ones.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::Path;
 
@@ -69,4 +70,69 @@ fn lockfiles_that_are_missing_or_malformed_record_nothing() {
         "/nonexistent/lore-skills-home",
     )));
     assert_eq!(locks, lockfiles::Lockfiles::default());
+}
+
+struct TempHome(std::path::PathBuf);
+
+impl TempHome {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "lore-skills-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn lockfiles_claude_plugins_splits_scoped_plugin_at_last_at_sign() {
+    let temp = TempHome::new("scoped-plugin");
+    let claude = temp.path().join("claude");
+    let cache = claude.join("plugins/cache");
+    let install = cache.join("market/@scope/pkg/1.0.0");
+    std::fs::create_dir_all(&install).unwrap();
+    std::fs::write(
+        claude.join("plugins/installed_plugins.json"),
+        serde_json::json!({
+            "version": 2,
+            "plugins": {
+                "@scope/pkg@market": [{
+                    "installPath": install,
+                    "version": "1.0.0"
+                }]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let roots = Roots::resolve(temp.path(), Some(claude), None);
+    let locks = lockfiles::read(&roots);
+    assert_eq!(
+        locks.claude_plugins,
+        vec![(
+            "market/@scope/pkg/1.0.0".into(),
+            Source::Plugin {
+                marketplace: "market".into(),
+                plugin: "@scope/pkg".into(),
+                version: "1.0.0".into(),
+            }
+        )]
+    );
 }

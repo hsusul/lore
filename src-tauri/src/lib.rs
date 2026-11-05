@@ -59,7 +59,15 @@ pub fn run() {
             reverify,
             get_token_totals,
             relink_segment_repository,
-            check_for_updates
+            check_for_updates,
+            list_lessons,
+            list_notes,
+            agents_read,
+            skills_report,
+            accept_lesson,
+            retire_note,
+            edit_note,
+            skill_usage
         ])
         .build(tauri::generate_context!());
     let app = match app {

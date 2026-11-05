@@ -276,5 +276,54 @@ fn a_codex_command_that_exited_nonzero_is_found_by_has_error() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(failed, 4);
+    assert_eq!(failed, 5);
+}
+
+/// A Codex rollout for session `n` whose user turns are `texts`.
+fn rollout(homes: &Path, n: usize, texts: &[&str]) {
+    let day = homes.join("codex/sessions/2026/11/02");
+    std::fs::create_dir_all(&day).unwrap();
+    let mut lines = vec![serde_json::json!({"type": "session_meta",
+        "timestamp": "2026-11-02T10:00:00.000Z",
+        "payload": {"id": format!("019e0000-0000-7000-8000-{n:012x}"), "cwd": "/proj",
+            "cli_version": "0.133.0", "model_provider": "openai"}})];
+    for (i, text) in texts.iter().enumerate() {
+        lines.push(serde_json::json!({"type": "response_item",
+            "timestamp": format!("2026-11-02T10:00:{:02}.000Z", i + 1),
+            "payload": {"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": text}]}}));
+    }
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(day.join(format!("rollout-{n:012x}.jsonl")), body).unwrap();
+}
+
+#[test]
+fn a_search_lists_each_session_once_with_its_match_count() {
+    // One chatty session used to fill half the page with its own hits.
+    let archive = tempfile::tempdir().unwrap();
+    let homes = tempfile::tempdir().unwrap();
+    rollout(
+        homes.path(),
+        1,
+        &["use pnpm here", "pnpm, not npm", "did pnpm install run"],
+    );
+    rollout(homes.path(), 2, &["switch this repo to pnpm"]);
+    assert_eq!(code(&lorectl(archive.path(), homes.path(), &["scan"])), 0);
+
+    let out = lorectl(archive.path(), homes.path(), &["--json", "search", "pnpm"]);
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+    let mut found: Vec<(String, u64)> = stdout(&out)
+        .lines()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            let id = v["session_id"].as_str().unwrap().to_owned();
+            (id, v["matches"].as_u64().unwrap())
+        })
+        .collect();
+    found.sort_by_key(|(_, matches)| *matches);
+    assert_eq!(
+        found.iter().map(|(_, m)| *m).collect::<Vec<_>>(),
+        [1, 3],
+        "each session once, with its own hit count"
+    );
 }

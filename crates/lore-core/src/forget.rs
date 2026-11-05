@@ -2,10 +2,12 @@
 //!
 //! Forgetting a session transactionally removes its canonical rows, search
 //! projections (so the FTS index is cleared), findings, and any blob that is no
-//! longer referenced by anything — then runs `secure_delete` + `VACUUM`
-//! maintenance to zero freed pages. Original agent logs and user-chosen exports
-//! are **outside Lore's ownership** and are never deleted; the report names the
-//! source copies that remain so the UI can disclose them.
+//! longer referenced by anything — then merges the search index so the
+//! deleted rows' terms leave its segments, with `secure_delete` zeroing the
+//! pages that frees. Forgetting everything also runs `VACUUM`, which is cheap
+//! once almost nothing is left and shrinks the file. Original agent logs and
+//! user-chosen exports are **outside Lore's ownership** and are never deleted;
+//! the report names the source copies that remain so the UI can disclose them.
 
 use std::path::Path;
 
@@ -61,6 +63,7 @@ pub fn forget_session(
             tx.execute("DELETE FROM blob WHERE id = ?1", [id])?;
         }
         tx.commit()?;
+        merge_search_index(conn)?;
         orphans
     };
 
@@ -68,14 +71,24 @@ pub fn forget_session(
         blobs.remove(relpath)?;
     }
 
-    // Best-effort maintenance: checkpoint the WAL and vacuum to reclaim + zero
-    // freed space. Failure here does not undo the deletion.
-    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;");
+    // Best-effort: fold the WAL back so the zeroed pages replace the old ones
+    // in the file. No VACUUM: secure_delete already zeroed the freed pages, and
+    // rewriting the whole archive took 17 s on a 2.4 GB one, with the UI
+    // waiting on this connection. Failure here does not undo the deletion.
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
 
     Ok(ForgetReport {
         blobs_removed: orphans.len(),
         source_paths,
     })
+}
+
+/// Merge the search index, which drops the terms of the rows just deleted.
+/// FTS5 otherwise keeps them in its segments, in the archive file, until a
+/// merge happens to reach them, and VACUUM copies them as live pages.
+fn merge_search_index(conn: &Connection) -> Result<()> {
+    conn.execute_batch("INSERT INTO search_fts(search_fts) VALUES ('optimize');")?;
+    Ok(())
 }
 
 /// Forget **all** archive content, keeping the database file/connection open
@@ -99,6 +112,7 @@ pub fn forget_all(conn: &Connection, blobs: &BlobStore) -> Result<ForgetReport> 
         let orphans = orphan_blobs(&tx)?;
         tx.execute("DELETE FROM blob", [])?;
         tx.commit()?;
+        merge_search_index(conn)?;
         orphans
     };
 
@@ -308,6 +322,82 @@ mod tests {
             .unwrap();
         assert_eq!(counts, (0, 0, 0, 0), "all owned rows gone");
         assert!(blobs.read(&relpath).is_err(), "blob file deleted");
+    }
+
+    const MARKER: &str = "quokkazebrafirefly";
+
+    /// Whether the archive file at `dir` or its WAL holds [`MARKER`].
+    fn file_holds_marker(dir: &Path) -> bool {
+        ["lore.db", "lore.db-wal"].iter().any(|name| {
+            std::fs::read(dir.join(name))
+                .is_ok_and(|bytes| bytes.windows(MARKER.len()).any(|w| w == MARKER.as_bytes()))
+        })
+    }
+
+    /// Archive a session holding [`MARKER`] beside one that stays, then pass
+    /// its id to `forget`.
+    fn forget_marked_session(
+        dir: &Path,
+        forget: impl FnOnce(&Connection, &BlobStore, &str),
+    ) -> Connection {
+        let (_bd, blobs) = store();
+        let conn = crate::storage::open(&dir.join("lore.db")).unwrap();
+        persist(&conn, &blobs, "keep", "const KEEP = 1");
+        let sid = persist(&conn, &blobs, "gone", &format!("const {MARKER} = 2"));
+        forget(&conn, &blobs, &sid);
+        conn
+    }
+
+    #[test]
+    fn a_forgotten_session_leaves_no_trace_in_the_archive_file() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(forget_marked_session(dir.path(), |conn, blobs, sid| {
+            forget_session(conn, blobs, sid).unwrap();
+        }));
+        assert!(
+            !file_holds_marker(dir.path()),
+            "the archive file still holds the forgotten session's text"
+        );
+    }
+
+    #[test]
+    fn forgetting_everything_leaves_no_trace_in_the_archive_file() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(forget_marked_session(dir.path(), |conn, blobs, _| {
+            forget_all(conn, blobs).unwrap();
+        }));
+        assert!(
+            !file_holds_marker(dir.path()),
+            "the archive file still holds a forgotten session's text"
+        );
+    }
+
+    #[test]
+    fn the_merge_migration_clears_what_earlier_forgets_left() {
+        let dir = tempfile::tempdir().unwrap();
+        // A forget before migration 0018 deleted the rows and merged nothing.
+        let conn = forget_marked_session(dir.path(), |conn, _, sid| {
+            conn.execute("DELETE FROM search_document WHERE session_id = ?1", [sid])
+                .unwrap();
+        });
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .unwrap();
+        assert!(
+            file_holds_marker(dir.path()),
+            "a delete alone leaves the forgotten text in the index"
+        );
+
+        drop(conn);
+
+        // A fresh connection, as at launch after an upgrade.
+        let conn = Connection::open(dir.path().join("lore.db")).unwrap();
+        conn.execute_batch(include_str!("../migrations/0018_fts_optimize.sql"))
+            .unwrap();
+        drop(conn);
+        assert!(
+            !file_holds_marker(dir.path()),
+            "the migration left the forgotten session's text in the archive file"
+        );
     }
 
     #[test]

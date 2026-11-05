@@ -17,16 +17,33 @@ Three rules hold the design together.
 - Agents only propose. A person accepts. Agents never get delete.
 - Every recalled note says whether the code it points at still matches. A stale note is labelled, not silently served.
 
-## Install
+## Get started
 
-Lore is early. There is no signed build. The newest GitHub release, v0.1.1, predates the current code, so build from source. You need Rust. `rust-toolchain.toml` pins the toolchain, and rustup selects it.
+Lore is early. There is no signed build, so build from source. You need Rust and git. `rust-toolchain.toml` pins the toolchain, and rustup selects it.
 
 ```bash
 cargo build --release -p lorectl
-target/release/lorectl --help
+export PATH="$PWD/target/release:$PATH"
+lorectl init
 ```
 
-Put `target/release/lorectl` on your `PATH`. The examples below assume it is there. `lorectl help mem` prints the memory commands alone.
+`lorectl init` makes the vault at `~/Lore`, scans the sessions of the last 30 days for up to a minute, newest first, and shows the lessons it found in your corrections. Whatever it did not reach waits for the next `lorectl init` or `lorectl scan --since 30d`. It reads your Claude Code and Codex logs and never changes them. Put `target/release` on your `PATH` for good so agents can run `lorectl` too.
+
+Then, in Claude Code, install the plugin and let the agent write your lessons:
+
+```text
+/plugin marketplace add hsusul/lore
+/plugin install lore@lore
+/lore:lore-lessons
+```
+
+The agent reads every candidate Lore mined, groups the ones that mean the same thing, and files each rule with its receipts, the sessions it came from. Nothing becomes a note until you accept it:
+
+```bash
+lorectl init --review
+```
+
+Accept, edit, or skip each one. From the next session on, the plugin shows the accepted notes for the repository at session start, each with a freshness label. `lorectl connect` says whether Claude Code and Codex are connected, and prints what to add for one that is not. `lorectl help mem` prints the memory commands alone.
 
 The desktop app is a second front end over the same archive. It needs Node.js 20, the Xcode command-line tools, and the Tauri 2 prerequisites for macOS. Run it with `npm run tauri dev`.
 
@@ -135,7 +152,7 @@ Under each proposal, `mem inbox` prints its receipt: the archived session it cam
 
 `mem inbox` marks each proposal's source `(verified)` when the archive held that agent's session at the time the proposal was filed, and `(unverified)` otherwise. Proposals filed with `mem propose`, or before Lore recorded this, are unverified.
 
-`lorectl mem mine` reads the archive for corrections you made to an agent, such as "no, use pnpm not npm", standing rules such as "make sure the docs are never pushed", and instructions you had to repeat. It groups the ones that say the same thing into lessons and keeps those that state a rule. Lessons rank first by how much they read like a standing rule: "from now on", "always", "never", and "make sure" raise one ("make sure" less when the same turn also says to push, merge, or the like), and a PR or issue number, a branch name, a URL, a masked secret, or a one-off order like "push this branch" lowers it. Then lessons you gave in more conversations rank higher, then newer ones. A resumed or forked copy of a conversation counts once. Each lesson prints with its receipts: the sessions it came from, the date, what you said, and what the agent had just done. Under a lesson, `may conflict with` lists up to three later turns in the same repository about the same command (PR, push, commit, branch, merge, rebase, tests, mocks, docs, permission). Lore does not judge them: read them, or let the agent judge them through `mine_candidates`, before you accept the lesson. A lesson that scores below zero reads as a one-off order and is left out; the first line counts them, and `--all` lists them too. It is a dry run: it writes nothing. `--limit N` (default 20) and `--json` are optional. Two limits tune what it finds: `--min-overlap PERCENT` (default 50) is how much of their words two corrections must share to be one lesson, and `--max-chars N` (default 300) is the longest turn still read as a correction. Pass the same limits with `--propose`, since they decide which lessons exist.
+`lorectl mem mine` reads the archive for corrections you made to an agent, such as "no, use pnpm not npm", standing rules such as "make sure the docs are never pushed", and instructions you had to repeat. It groups the ones that say the same thing into lessons and keeps those that state a rule. Lessons rank first by how much they read like a standing rule: "from now on", "always", "never", and "make sure" raise one ("make sure" less when the same turn also says to push, merge, or the like), and a PR or issue number, a branch name, a URL, a masked secret, a one-off order like "push this branch", or a chore with a rule tacked on with "and" ("delete the runtimes and build them on my ssd from now on") lowers it. Then lessons you gave in more conversations rank higher, then newer ones. A resumed or forked copy of a conversation counts once. Each lesson prints with its receipts: the sessions it came from, the date, what you said, and what the agent had just done. Under a lesson, `may conflict with` lists up to three later turns in the same repository about the same command (PR, push, commit, branch, merge, rebase, tests, mocks, docs, permission). Lore does not judge them: read them, or let the agent judge them through `mine_candidates`, before you accept the lesson. A lesson that scores below zero reads as a one-off order and is left out; the first line counts them, and `--all` lists them too. It is a dry run: it writes nothing. `--limit N` (default 20) and `--json` are optional. Two limits tune what it finds: `--min-overlap PERCENT` (default 50) is how much of their words two corrections must share to be one lesson, and `--max-chars N` (default 300) is the longest turn still read as a correction. Pass the same limits with `--propose`, since they decide which lessons exist.
 
 `lorectl mem mine --propose <ID>...` files the lessons you name into the inbox, each with its receipts in the body, for you to accept or reject like any proposal. It never files the same lesson twice.
 
@@ -197,7 +214,7 @@ The server offers six tools. All but `propose_memory` are read only.
 - `read_session` returns one session in order, paged at 24,000 characters. It leaves out thinking and raw tool payloads.
 - `recall_memory` returns accepted notes for the directory the agent is working in, each with its freshness label.
 - `read_note` returns one note in full, with its freshness when the agent passes its working directory.
-- `mine_candidates` returns the miner's candidate lessons in the same order as `mem mine`, each with up to 5 receipts: session, agent, date, the correction, and what the agent had just done. Replies are paged: each carries `total` and a `next_cursor` to pass back until it is null, and the description asks the agent to read every page first. It also asks the agent to group candidates by meaning, write each group as one short rule, and file it with `propose_memory`, citing the sessions. Lore makes no model calls; the agent does the grouping, and you still accept or reject each proposal.
+- `mine_candidates` returns the miner's candidate lessons in the same order as `mem mine`, each with up to 5 receipts: session, agent, date, the repository with the `repo:<key>` scope a note for it takes, the correction, and what the agent had just done. Pass `cwd` to also get the current directory's repository as `cwd_repo`. Replies are paged: each carries `total` and a `next_cursor` to pass back until it is null, and the description asks the agent to read every page first. It also asks the agent to group candidates by meaning, write each group as one short rule, and file it with `propose_memory`, citing the sessions. Lore makes no model calls; the agent does the grouping, and you still accept or reject each proposal.
 - `propose_memory` files one proposal into the vault's `_inbox/<agent>-<session>.jsonl`. It answers with the proposal id and the inbox file.
 
 `propose_memory` is the only tool that writes. It never accepts, edits, or deletes notes, and retiring a note needs a person. You review its proposals with `lorectl mem inbox`, `mem accept`, and `mem reject`. Secrets in a proposal are masked before it is stored. `title`, `body`, `type`, and `scope` are required. `type` is one of `convention`, `decision`, `fact`, `howto`, or `pitfall`. `scope` is `global` or `repo`. A `repo` proposal needs `cwd` and may carry up to 8 `anchors`, each a `path` relative to the repo root with optional `lines`. `updates` names a note id to supersede. `session_id` is the agent's own session id. Lore records the source as unverified unless it can match it.

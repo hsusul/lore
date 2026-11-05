@@ -77,6 +77,17 @@ pub(crate) fn scan_into(
     archive_dir: &Path,
     since: Option<std::time::SystemTime>,
 ) -> Result<(rusqlite::Connection, usize, DrainSummary), CliError> {
+    let (conn, recovered, summary, _) = scan_until(archive_dir, since, None)?;
+    Ok((conn, recovered, summary))
+}
+
+/// [`scan_into`] that starts no new source after `deadline`, and also
+/// returns how many sources it left queued.
+pub(crate) fn scan_until(
+    archive_dir: &Path,
+    since: Option<std::time::SystemTime>,
+    deadline: Option<std::time::Instant>,
+) -> Result<(rusqlite::Connection, usize, DrainSummary, usize), CliError> {
     std::fs::create_dir_all(archive_dir).map_err(|_| CliError::Storage(StorageError::Io))?;
 
     // Before anything opens the database. See the module docs.
@@ -101,14 +112,14 @@ pub(crate) fn scan_into(
     // Safe here only because the lock is held: without it this would reclaim a
     // concurrently-running writer's jobs.
     let recovered = worker.recover()?;
-    let summary = worker.scan_since(&NullSink, since)?;
+    let (summary, left) = worker.scan_until(&NullSink, since, deadline)?;
 
     // Close the worker's connection before stamping, so the write below is the
     // only one open. Not required for correctness — WAL permits both, and the
     // worker is idle by now — but it keeps "the scan is over" a fact about the
     // process rather than a claim about the worker's internal state.
     drop(worker);
-    Ok((conn, recovered, summary))
+    Ok((conn, recovered, summary, left))
 }
 
 /// `--since` as given and the moment it reaches back to: a whole number of
@@ -122,6 +133,9 @@ pub(crate) fn window(given: &str) -> Result<(String, std::time::SystemTime), Cli
         _ => return Err(bad()),
     };
     let count: u64 = given[..given.len() - 1].parse().map_err(|_| bad())?;
+    if count == 0 {
+        return Err(bad());
+    }
     let back = std::time::Duration::from_secs(count.checked_mul(unit).ok_or_else(bad)?);
     let at = std::time::SystemTime::now()
         .checked_sub(back)
@@ -268,5 +282,13 @@ mod tests {
         // Guards the saturating conversion: a negative or zero stamp would make
         // "when did Lore last look?" unanswerable.
         assert!(now_ms() > 1_700_000_000_000, "clock before 2023");
+    }
+
+    #[test]
+    fn window_requires_positive_count() {
+        assert!(window("0d").is_err());
+        assert!(window("0h").is_err());
+        assert!(window("0m").is_err());
+        assert!(window("30d").is_ok());
     }
 }

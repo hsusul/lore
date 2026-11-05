@@ -253,6 +253,9 @@ pub struct ScanProgress {
     /// Number of segments enriched with Git evidence.
     #[ts(type = "number")]
     pub enriched: i64,
+    /// Every session file modified in the last 30 days has been read. Older
+    /// history may still be scanning; `done` says when everything is.
+    pub recent_done: bool,
     /// The scan pass has finished.
     pub done: bool,
 }
@@ -333,32 +336,149 @@ pub struct RescanResult {
     pub enriched: i64,
 }
 
-/// Reactive event emitted over IPC when a session is ingested or updated.
+/// One time the user said it: a turn the miner found, with where it was said.
+/// Payload element of [`LessonDto::receipts`]. Every text is redacted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct SessionIngestedEvent {
+pub struct ReceiptDto {
     pub session_id: String,
     pub agent_id: String,
-    pub title: Option<String>,
-    pub parse_status: String,
+    /// The repository's display name, when the archive linked one.
+    pub repo: Option<String>,
+    /// Epoch milliseconds.
+    #[ts(type = "number | null")]
+    pub at_ms: Option<i64>,
+    /// The user's turn, on one line.
+    pub text: String,
+    /// The assistant turn it answers, cut short.
+    pub preceding: Option<String>,
 }
 
-/// Reactive event emitted over IPC when the search index is updated for a session.
+/// A lesson mined from the user's corrections, waiting for review.
+/// Payload element of `list_lessons`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct IndexUpdatedEvent {
-    pub session_id: String,
+pub struct LessonDto {
+    /// Stable for as long as its oldest receipt is.
+    pub id: String,
+    /// The newest receipt's text that states a rule.
+    pub text: String,
+    /// The same rule, phrased for an agent to read.
+    pub suggested_rule: String,
+    /// Distinct conversations among the receipts.
     #[ts(type = "number")]
-    pub documents_indexed: i64,
+    pub conversations: i64,
+    /// Epoch milliseconds of the newest receipt.
+    #[ts(type = "number | null")]
+    pub latest_ms: Option<i64>,
+    /// The newest receipt from each session, newest first.
+    pub receipts: Vec<ReceiptDto>,
 }
 
-/// Reactive event emitted over IPC when a background job fails.
+/// An accepted note in the vault. Payload element of `list_notes`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct JobFailedEvent {
-    pub job_id: String,
+pub struct NoteDto {
+    pub id: String,
+    /// The note file, relative to the vault.
+    pub path: String,
+    pub title: String,
+    /// `global`, or `repo:<key>`.
+    pub scope: String,
+    pub note_type: String,
+    /// The start of the note's body.
+    pub excerpt: String,
+}
+
+/// One note in the session-start section. Element of [`AgentsReadDto::notes`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReadNoteDto {
+    pub id: String,
+    pub title: String,
+    pub path: String,
+    /// The freshness word agents see: fresh, moved, changed, gone, unanchored.
+    pub freshness: String,
+    /// Whether its line fits the section; a note past the byte cap is chosen
+    /// but left out.
+    pub shown: bool,
+}
+
+/// What an agent is given at session start in one directory: the same section
+/// `lorectl hook session-start` prints. Payload of `agents_read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentsReadDto {
+    /// The repository's key and name, when the directory is in one.
+    pub repo_key: Option<String>,
+    pub repo_name: Option<String>,
+    /// The notes chosen, best first, at most `note_cap`.
+    pub notes: Vec<ReadNoteDto>,
+    /// Every active note that applies in this directory, chosen or not.
+    #[ts(type = "number")]
+    pub total: i64,
+    #[ts(type = "number")]
+    pub note_cap: i64,
+    #[ts(type = "number")]
+    pub char_cap: i64,
+    /// The section exactly as an agent reads it; empty when no note applies.
+    pub text: String,
+}
+
+/// One problem the skills doctor found, described, with the fix it suggests.
+/// Element of [`SkillsReportDto::findings`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillFindingDto {
+    /// The kebab-case kind, as in `lorectl skills doctor --json`.
     pub kind: String,
-    pub error: String,
+    /// The skill it is about; `None` for a finding about a whole agent.
+    pub skill: Option<String>,
+    pub description: String,
+    /// Suggested, never run.
+    pub fix: String,
+    pub fix_kind: String,
+}
+
+/// How many skills one folder holds. Element of [`SkillsReportDto::folders`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillFolderDto {
+    /// The folder, with the home directory written `~`.
+    pub path: String,
+    #[ts(type = "number")]
+    pub skills: i64,
+}
+
+/// What the skills doctor found on this machine. Payload of `skills_report`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillsReportDto {
+    /// Distinct skill names.
+    #[ts(type = "number")]
+    pub skills: i64,
+    pub folders: Vec<SkillFolderDto>,
+    /// Worst first.
+    pub findings: Vec<SkillFindingDto>,
+}
+
+/// How one installed skill has been used, from the archive. Element of the
+/// payload of `skill_usage`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillUsageDto {
+    pub skill: String,
+    /// Times it ran: a `Skill` tool call, `/name`, or `[$name](path)`.
+    #[ts(type = "number")]
+    pub uses: i64,
+    /// Sessions it ran in.
+    #[ts(type = "number")]
+    pub sessions: i64,
+    /// Epoch milliseconds of the newest use; null when it never ran.
+    #[ts(type = "number | null")]
+    pub last_ms: Option<i64>,
+    /// Corrections the person made right after it ran, newest first.
+    pub reprompts: Vec<ReceiptDto>,
 }
 
 /// Cumulative token usage and estimated cost across the entire archive.
@@ -373,15 +493,6 @@ pub struct TokenTotalsDto {
     pub total_cache_tokens: i64,
     #[ts(type = "number")]
     pub est_cost_usd: f64,
-}
-
-/// Reactive event emitted over IPC when a secret finding is discovered during ingest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct SecretFlaggedEvent {
-    pub session_id: String,
-    pub rule: String,
-    pub severity: String,
 }
 
 /// Response from an explicit, user-initiated update check (GAP-M8-02 / ADR-0005).

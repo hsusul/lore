@@ -5,7 +5,7 @@
 #[path = "common/archive.rs"]
 mod archive;
 
-use lore_memory::mine::{corrections, find_conflicts, lessons};
+use lore_memory::mine::{corrections, find_conflicts, lessons, read_turns};
 
 #[test]
 fn a_conflict_copied_into_a_fork_is_listed_once() {
@@ -40,7 +40,7 @@ fn a_conflict_copied_into_a_fork_is_listed_once() {
         ],
     );
     let mut found = lessons(corrections(&conn).unwrap());
-    find_conflicts(&conn, &mut found).unwrap();
+    find_conflicts(&read_turns(&conn).unwrap(), &mut found);
     let listed: Vec<(String, &str)> = found[0]
         .conflicts
         .iter()

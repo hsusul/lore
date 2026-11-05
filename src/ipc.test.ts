@@ -133,6 +133,7 @@ describe("ipc contract", () => {
         skipped: 0,
         failed: 0,
         enriched: 0,
+        recent_done: true,
         done: true,
       },
     });
@@ -224,6 +225,64 @@ describe("ipc contract", () => {
 
     const hitField: import("./ipc").SearchHitField = "title";
     expect(hitField).toBe("title");
+  });
+
+  it("listLessons invokes list_lessons and passes the lessons through", async () => {
+    const { listLessons } = await import("./ipc");
+    const lesson = {
+      id: "a1b2c3d4e5",
+      text: "I told you, pnpm not npm",
+      suggested_rule: "Pnpm not npm",
+      conversations: 3,
+      latest_ms: 1_785_751_203_000,
+      receipts: [],
+    };
+    invoke.mockResolvedValueOnce([lesson]);
+    expect(await listLessons()).toEqual([lesson]);
+    expect(invoke).toHaveBeenCalledWith("list_lessons");
+  });
+
+  it("listNotes and agentsRead invoke their commands with the directory", async () => {
+    const { agentsRead, listNotes } = await import("./ipc");
+    invoke.mockResolvedValueOnce([]);
+    expect(await listNotes()).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("list_notes");
+    const read = { repo_key: null, repo_name: null, notes: [], total: 0, note_cap: 10, char_cap: 2000, text: "" };
+    invoke.mockResolvedValueOnce(read);
+    expect(await agentsRead("/Users/me/code/lore")).toEqual(read);
+    expect(invoke).toHaveBeenCalledWith("agents_read", { cwd: "/Users/me/code/lore" });
+  });
+
+  it("skillsReport invokes skills_report and passes the report through", async () => {
+    const { skillsReport } = await import("./ipc");
+    const report = { skills: 2, folders: [{ path: "~/.claude/skills", skills: 2 }], findings: [] };
+    invoke.mockResolvedValueOnce(report);
+    expect(await skillsReport()).toEqual(report);
+    expect(invoke).toHaveBeenCalledWith("skills_report");
+  });
+
+  it("acceptLesson, retireNote, and editNote invoke their commands and resolve with the note path", async () => {
+    const { acceptLesson, editNote, retireNote } = await import("./ipc");
+    invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
+    expect(await acceptLesson("abc123")).toBe("global/use-pnpm-not-npm.md");
+    expect(invoke).toHaveBeenCalledWith("accept_lesson", { id: "abc123", title: null });
+    invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
+    expect(await acceptLesson("abc123", "Use pnpm")).toBe("global/use-pnpm-not-npm.md");
+    expect(invoke).toHaveBeenCalledWith("accept_lesson", { id: "abc123", title: "Use pnpm" });
+    invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
+    expect(await retireNote("use-pnpm-not-npm", "pnpm is gone")).toBe("global/use-pnpm-not-npm.md");
+    expect(invoke).toHaveBeenCalledWith("retire_note", { key: "use-pnpm-not-npm", reason: "pnpm is gone" });
+    invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
+    expect(await editNote("use-pnpm-not-npm", "Use pnpm everywhere", "The lockfile is pnpm-lock.yaml.")).toBe("global/use-pnpm-not-npm.md");
+    expect(invoke).toHaveBeenCalledWith("edit_note", { key: "use-pnpm-not-npm", title: "Use pnpm everywhere", body: "The lockfile is pnpm-lock.yaml." });
+  });
+
+  it("skillUsage invokes skill_usage and passes the rows through", async () => {
+    const { skillUsage } = await import("./ipc");
+    const rows = [{ skill: "review", uses: 3, sessions: 2, last_ms: 1_785_751_203_000, reprompts: [] }];
+    invoke.mockResolvedValueOnce(rows);
+    expect(await skillUsage()).toEqual(rows);
+    expect(invoke).toHaveBeenCalledWith("skill_usage");
   });
 
   it("getTokenTotals, relinkSegmentRepository, and checkForUpdates invoke expected commands", async () => {

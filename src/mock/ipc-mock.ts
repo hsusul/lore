@@ -433,7 +433,7 @@ export function createMockHandlers(
       const all = buildSampleSessions(now);
       const present = new Set(sessions.map((s) => s.summary.id));
       const chunk = Math.ceil(all.length / 4);
-      const tally: ScanProgress = { discovered: all.length, ingested: 0, skipped: 0, failed: 0, enriched: 0, done: false };
+      const tally: ScanProgress = { discovered: all.length, ingested: 0, skipped: 0, failed: 0, enriched: 0, recent_done: false, done: false };
       for (let i = 0; i < all.length; i += chunk) {
         for (const session of all.slice(i, i + chunk)) {
           if (present.has(session.summary.id)) {
@@ -450,7 +450,7 @@ export function createMockHandlers(
         emit("scan_progress", { ...tally });
         await sleep(scanStepMs);
       }
-      emit("scan_progress", { ...tally, done: true });
+      emit("scan_progress", { ...tally, recent_done: true, done: true });
       const { discovered, ingested, skipped, failed, enriched } = tally;
       return { discovered, ingested, skipped, failed, enriched };
     },
@@ -469,6 +469,72 @@ export function createMockHandlers(
       return null;
     },
     backup_now: () => null,
+
+    // Memory
+    list_lessons: () => [
+      {
+        id: "a1b2c3d4e5",
+        text: "I told you, pnpm not npm",
+        suggested_rule: "Pnpm not npm",
+        conversations: 2,
+        latest_ms: sessions[0]?.summary.started_at ?? null,
+        receipts: sessions.slice(0, 2).map((s) => ({
+          session_id: s.summary.id,
+          agent_id: s.summary.agent_id,
+          repo: null,
+          at_ms: s.summary.started_at,
+          text: "no, use pnpm not npm",
+          preceding: "Running npm install.",
+        })),
+      },
+    ],
+
+    list_notes: () => [
+      {
+        id: "01JD0000000000000000000001",
+        path: "global/never-push-to-main.md",
+        title: "Never push to main",
+        scope: "global",
+        note_type: "convention",
+        excerpt: "Open a PR.",
+      },
+    ],
+    agents_read: () => ({
+      repo_key: null,
+      repo_name: null,
+      notes: [
+        { id: "01JD0000000000000000000001", title: "Never push to main", path: "global/never-push-to-main.md", freshness: "unanchored", shown: true },
+      ],
+      total: 1,
+      note_cap: 10,
+      char_cap: 2000,
+      text: "Lore memory for this repo:\n- [unanchored] Never push to main (01JD0000000000000000000001)\n",
+    }),
+
+    accept_lesson: () => "global/use-pnpm-not-npm.md",
+    retire_note: () => "global/never-push-to-main.md",
+    edit_note: () => "global/never-push-to-main.md",
+    skill_usage: () => [
+      { skill: "code-review", uses: 22, sessions: 15, last_ms: 1_785_751_203_000, reprompts: [{ session_id: "s1", agent_id: "claude-code", repo: "lore", at_ms: 1_785_751_203_000, text: "no, you missed the tests, look again", preceding: "Reviewed it, looks fine." }] },
+      { skill: "taste-skill", uses: 0, sessions: 0, last_ms: null, reprompts: [] },
+    ],
+
+    skills_report: () => ({
+      skills: 64,
+      folders: [
+        { path: "~/.claude/skills", skills: 38 },
+        { path: "~/.codex/skills", skills: 12 },
+      ],
+      findings: [
+        {
+          kind: "name-mismatch",
+          skill: "taste-skill",
+          description: "SKILL.md names it taste, so agents look it up as taste and the folder never matches.",
+          fix: "Change the name line in SKILL.md to taste-skill.",
+          fix_kind: "edit",
+        },
+      ],
+    }),
 
     // Usage and updates
     get_token_totals: () => ({

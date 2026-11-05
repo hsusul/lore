@@ -6,7 +6,7 @@
 #[path = "common/archive.rs"]
 mod archive;
 
-use lore_memory::mine::{corrections, find_conflicts, lessons};
+use lore_memory::mine::{corrections, find_conflicts, lessons, read_turns};
 
 #[test]
 fn later_turns_about_the_same_command_are_listed_newest_first() {
@@ -38,7 +38,7 @@ fn later_turns_about_the_same_command_are_listed_newest_first() {
         ],
     );
     let mut found = lessons(corrections(&conn).unwrap());
-    find_conflicts(&conn, &mut found).unwrap();
+    find_conflicts(&read_turns(&conn).unwrap(), &mut found);
     let listed: Vec<(String, Vec<(String, String)>)> = found
         .iter()
         .map(|l| {

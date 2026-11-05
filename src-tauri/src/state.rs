@@ -9,7 +9,7 @@ use lore_core::pipeline::{ProgressEvent, ProgressSink};
 use lore_core::storage::blob::BlobStore;
 use lore_core::watcher::SessionWatcher;
 use lore_core::worker::{self, WorkerConfig, WorkerHandle};
-use lore_ipc::{IndexUpdatedEvent, JobFailedEvent, ScanProgress, SessionIngestedEvent};
+use lore_ipc::ScanProgress;
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter};
 
@@ -76,42 +76,14 @@ impl ProgressSink for WorkerSink {
                         ..ScanProgress::default()
                     };
                 }
-                ProgressEvent::ScanFinished => progress.done = true,
-                ProgressEvent::Ingested {
-                    agent_id,
-                    session_id,
-                    ..
-                } => {
-                    progress.ingested += 1;
-                    let _ = self.app.emit(
-                        "session_ingested",
-                        SessionIngestedEvent {
-                            session_id: session_id.clone(),
-                            agent_id,
-                            title: None,
-                            parse_status: "ok".to_string(),
-                        },
-                    );
-                    let _ = self.app.emit(
-                        "index_updated",
-                        IndexUpdatedEvent {
-                            session_id,
-                            documents_indexed: 1,
-                        },
-                    );
+                ProgressEvent::RecentFinished => progress.recent_done = true,
+                ProgressEvent::ScanFinished => {
+                    progress.recent_done = true;
+                    progress.done = true;
                 }
+                ProgressEvent::Ingested { .. } => progress.ingested += 1,
                 ProgressEvent::Skipped { .. } => progress.skipped += 1,
-                ProgressEvent::Failed { agent_id, kind } => {
-                    progress.failed += 1;
-                    let _ = self.app.emit(
-                        "job_failed",
-                        JobFailedEvent {
-                            job_id: "".to_string(),
-                            kind: format!("{kind:?}"),
-                            error: format!("Ingest failed for adapter {agent_id}"),
-                        },
-                    );
-                }
+                ProgressEvent::Failed { .. } => progress.failed += 1,
                 ProgressEvent::Requeued { .. } => {}
             }
             let _ = self.app.emit("scan_progress", *progress);

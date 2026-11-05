@@ -26,9 +26,12 @@ use rusqlite::Connection;
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
 
-/// How many hits one `search` prints. Bounded so a broad query cannot page the
-/// whole archive into a terminal; `SearchPage` carries a cursor for later.
-const SEARCH_LIMIT: i64 = 20;
+/// How many sessions one `search` prints. Bounded so a broad query cannot page
+/// the whole archive into a terminal; `SearchPage` carries a cursor for later.
+const SEARCH_LIMIT: usize = 20;
+/// How many hits are read to fill [`SEARCH_LIMIT`] sessions. One session can
+/// match many times, so a page of 20 hits once showed only 10 sessions.
+const SEARCH_HITS: i64 = 200;
 // A compile-time check rather than a test: the bound is a property of the
 // constant, so it should fail the build, not a test run.
 const _: () = assert!(SEARCH_LIMIT > 0 && SEARCH_LIMIT <= 100);
@@ -48,11 +51,24 @@ pub fn search(invocation: &Invocation) -> Result<u8, CliError> {
         .ok_or_else(|| CliError::Usage("`lorectl search` needs a QUERY".into()))?;
     let (conn, _dir) = open_reader(invocation)?;
 
-    let page = search::search_page(&conn, query_text, SEARCH_LIMIT, None, SortOrder::Relevance)?;
+    let page = search::search_page(&conn, query_text, SEARCH_HITS, None, SortOrder::Relevance)?;
+    // Each session once, at its best hit, with how many hits it had here.
+    let mut sessions: Vec<(&lore_ipc::SearchHit, usize)> = Vec::new();
+    for hit in &page.hits {
+        match sessions
+            .iter_mut()
+            .find(|(s, _)| s.session_id == hit.session_id)
+        {
+            Some((_, matches)) => *matches += 1,
+            None => sessions.push((hit, 1)),
+        }
+    }
+    let more = sessions.len() > SEARCH_LIMIT || page.next_cursor.is_some();
+    sessions.truncate(SEARCH_LIMIT);
 
     let mut stdout = std::io::stdout().lock();
     if invocation.json {
-        for hit in &page.hits {
+        for (hit, matches) in &sessions {
             let line = serde_json::json!({
                 "session_id": hit.session_id,
                 "agent_id": hit.agent_id,
@@ -61,21 +77,25 @@ pub fn search(invocation: &Invocation) -> Result<u8, CliError> {
                 "source_kind": hit.source_kind,
                 "field": hit.field,
                 "snippet": hit.snippet,
+                "matches": matches,
             });
             let _ = writeln!(stdout, "{line}");
         }
-    } else if page.hits.is_empty() {
+    } else if sessions.is_empty() {
         // Says what was searched, not what exists. "No matches" is a fact about
         // this query against what has been archived — not evidence that the work
         // never happened.
         let _ = writeln!(stdout, "no matches in the archive for {query_text:?}");
     } else {
-        for hit in &page.hits {
+        for (hit, matches) in &sessions {
             let title = hit.title.as_deref().unwrap_or("(untitled)");
             let _ = writeln!(stdout, "{}  {}  {}", hit.session_id, hit.agent_id, title);
             let _ = writeln!(stdout, "    {}", hit.snippet.replace('\n', " "));
+            if *matches > 1 {
+                let _ = writeln!(stdout, "    and {} more matches here", matches - 1);
+            }
         }
-        if page.next_cursor.is_some() {
+        if more {
             let _ = writeln!(stdout, "(more matches not shown)");
         }
     }
