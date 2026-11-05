@@ -110,6 +110,65 @@ pub struct CapturedRepo {
     pub history_truncated: bool,
 }
 
+/// Read-only repository identity facts sufficient to derive repository identity
+/// without reading working-tree status, file diffs, or ahead/behind counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedIdentity {
+    pub common_dir: PathBuf,
+    pub workdir: Option<PathBuf>,
+    pub remotes: Vec<String>,
+    pub root_commits: Vec<String>,
+    pub history_truncated: bool,
+}
+
+/// Borrowed view of repository identity facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapturedIdentityRef<'a> {
+    pub common_dir: &'a Path,
+    pub workdir: Option<&'a Path>,
+    pub remotes: &'a [String],
+    pub root_commits: &'a [String],
+    pub history_truncated: bool,
+}
+
+impl CapturedIdentity {
+    #[must_use]
+    pub fn as_ref(&self) -> CapturedIdentityRef<'_> {
+        CapturedIdentityRef {
+            common_dir: &self.common_dir,
+            workdir: self.workdir.as_deref(),
+            remotes: &self.remotes,
+            root_commits: &self.root_commits,
+            history_truncated: self.history_truncated,
+        }
+    }
+}
+
+impl CapturedRepo {
+    #[must_use]
+    pub fn as_identity(&self) -> CapturedIdentityRef<'_> {
+        CapturedIdentityRef {
+            common_dir: &self.common_dir,
+            workdir: self.workdir.as_deref(),
+            remotes: &self.remotes,
+            root_commits: &self.root_commits,
+            history_truncated: self.history_truncated,
+        }
+    }
+}
+
+impl<'a> From<&'a CapturedRepo> for CapturedIdentityRef<'a> {
+    fn from(r: &'a CapturedRepo) -> Self {
+        r.as_identity()
+    }
+}
+
+impl<'a> From<&'a CapturedIdentity> for CapturedIdentityRef<'a> {
+    fn from(i: &'a CapturedIdentity) -> Self {
+        i.as_ref()
+    }
+}
+
 /// Upper bound on commits walked to find the root set, so a very large history
 /// cannot make capture unbounded. Beyond this the root set is treated as unknown.
 const ROOT_WALK_LIMIT: usize = 50_000;
@@ -144,6 +203,70 @@ pub fn capture(path: &Path) -> Option<CapturedRepo> {
     } else {
         None
     }
+}
+
+/// Capture read-only identity facts for the repository containing `path`.
+///
+/// Unlike [`capture`], this skips reading dirtiness, changed file paths,
+/// ahead/behind counts, and commit subject. It is designed for queries that
+/// only need to resolve which repository a directory is (e.g. `resolve_repository`).
+#[must_use]
+pub fn capture_identity(path: &Path) -> Option<CapturedIdentity> {
+    if !path.is_absolute() {
+        return None;
+    }
+    if let Some(facts) = capture_identity_gix(path) {
+        return Some(facts);
+    }
+    if looks_like_repo(path) {
+        capture_identity_via_git(path)
+    } else {
+        None
+    }
+}
+
+fn capture_identity_gix(path: &Path) -> Option<CapturedIdentity> {
+    let repo = gix::discover(path).ok()?;
+
+    let raw_common = repo.common_dir();
+    let common_dir = raw_common
+        .canonicalize()
+        .unwrap_or_else(|_| raw_common.to_path_buf());
+    let workdir = repo
+        .workdir()
+        .map(|w| w.canonicalize().unwrap_or_else(|_| w.to_path_buf()));
+
+    let remotes = collect_remotes(&repo);
+    let (root_commits, history_truncated) = if remotes.is_empty() {
+        (Vec::new(), false)
+    } else {
+        collect_root_commits(&repo)
+    };
+
+    Some(CapturedIdentity {
+        common_dir,
+        workdir,
+        remotes,
+        root_commits,
+        history_truncated,
+    })
+}
+
+fn capture_identity_via_git(path: &Path) -> Option<CapturedIdentity> {
+    let common_raw = run_git(path, &["rev-parse", "--git-common-dir"])?;
+    let common_dir = resolve_dir(path, common_raw.trim());
+    let workdir = run_git(path, &["rev-parse", "--show-toplevel"])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| resolve_dir(path, &s));
+
+    Some(CapturedIdentity {
+        common_dir,
+        workdir,
+        remotes: Vec::new(),
+        root_commits: Vec::new(),
+        history_truncated: false,
+    })
 }
 
 /// Cheap ancestor check for a `.git` entry, so the fallback never spawns a
