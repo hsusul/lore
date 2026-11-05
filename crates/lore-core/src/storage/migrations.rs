@@ -267,6 +267,15 @@ fn ledger_shape_matches(conn: &Connection) -> Result<bool> {
 /// migrations (`NeedsUpgrade`) are exactly what this function is for, so only
 /// `TooNew` and `Inconsistent` are refused.
 pub fn run(conn: &Connection) -> Result<()> {
+    match compatibility(conn)? {
+        Compatibility::Ok => return Ok(()),
+        Compatibility::NotAnArchive | Compatibility::NeedsUpgrade { .. } => {}
+        Compatibility::TooNew { archive, supported } => {
+            return Err(StorageError::SchemaTooNew { archive, supported });
+        }
+        Compatibility::Inconsistent(why) => return Err(StorageError::SchemaInconsistent(why)),
+    }
+
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
             version    INTEGER PRIMARY KEY,
@@ -275,16 +284,6 @@ pub fn run(conn: &Connection) -> Result<()> {
             applied_at INTEGER NOT NULL
         );",
     )?;
-
-    match compatibility(conn)? {
-        // Nothing applied yet, or every applied migration agrees with this
-        // build: both are this function's normal input.
-        Compatibility::Ok | Compatibility::NotAnArchive | Compatibility::NeedsUpgrade { .. } => {}
-        Compatibility::TooNew { archive, supported } => {
-            return Err(StorageError::SchemaTooNew { archive, supported });
-        }
-        Compatibility::Inconsistent(why) => return Err(StorageError::SchemaInconsistent(why)),
-    }
 
     let mut previous = 0_i64;
     for m in MIGRATIONS {
