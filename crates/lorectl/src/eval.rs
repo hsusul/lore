@@ -26,7 +26,11 @@ const POLICIES: &str = "never, starting-bar";
 pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let usage = |m: String| CliError::Usage(m);
     let mut parser = lexopt::Parser::from_args(&invocation.rest);
-    let (mut policy, mut vault_dir, mut json) = (String::from("never"), None, invocation.json);
+    let (mut policy, mut vault_dir, mut json) = (
+        String::from("never"),
+        invocation.vault.clone(),
+        invocation.json,
+    );
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
             Short('h') | Long("help") => {

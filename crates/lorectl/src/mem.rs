@@ -86,9 +86,13 @@ fn usage(message: impl Into<String>) -> CliError {
     CliError::Usage(message.into())
 }
 
-fn parse(sub: &str, rest: &[String]) -> Result<MemArgs, CliError> {
+fn parse(
+    sub: &str,
+    rest: &[String],
+    default_vault: Option<&std::path::Path>,
+) -> Result<MemArgs, CliError> {
     let mut parser = lexopt::Parser::from_args(rest);
-    let mut vault = None;
+    let mut vault = default_vault.map(PathBuf::from);
     let mut limit = None;
     let mut cwd = None;
     let mut json = false;
@@ -173,9 +177,16 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     }
     if crate::review::SUBCOMMANDS.contains(&sub) {
         let archive = invocation.archive_dir().ok();
-        return crate::review::run(sub, &invocation.rest, invocation.json, USAGE, archive);
+        return crate::review::run(
+            sub,
+            &invocation.rest,
+            invocation.json,
+            USAGE,
+            archive,
+            invocation.vault.as_deref(),
+        );
     }
-    let args = parse(sub, &invocation.rest)?;
+    let args = parse(sub, &invocation.rest, invocation.vault.as_deref())?;
     let Some(sub) = args.sub else {
         print!("{USAGE}");
         return Ok(exit::OK);
@@ -403,7 +414,21 @@ mod tests {
 
     fn args(sub: &str, rest: &[&str]) -> Result<MemArgs, CliError> {
         let rest: Vec<String> = rest.iter().map(|s| s.to_string()).collect();
-        parse(sub, &rest)
+        parse(sub, &rest, None)
+    }
+
+    #[test]
+    fn default_vault_is_used_when_not_overridden() {
+        let default_vault = std::path::Path::new("/default/日本語_vault");
+        let parsed = parse("init", &[], Some(default_vault)).unwrap();
+        assert_eq!(parsed.vault, Some(PathBuf::from("/default/日本語_vault")));
+
+        let rest_override: Vec<String> = vec!["--vault".into(), "/override/日本語_vault".into()];
+        let parsed_override = parse("init", &rest_override, Some(default_vault)).unwrap();
+        assert_eq!(
+            parsed_override.vault,
+            Some(PathBuf::from("/override/日本語_vault"))
+        );
     }
 
     #[test]

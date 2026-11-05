@@ -195,11 +195,15 @@ pub fn run(
     json: bool,
     usage_text: &str,
     archive: Option<PathBuf>,
+    default_vault: Option<&std::path::Path>,
 ) -> Result<u8, CliError> {
-    let args = parse(sub, rest)?;
+    let mut args = parse(sub, rest)?;
     if args.help {
         print!("{usage_text}");
         return Ok(exit::OK);
+    }
+    if args.vault.is_none() {
+        args.vault = default_vault.map(PathBuf::from);
     }
     let json = json || args.json;
     let vault = Vault::open(&vault::resolve_dir(args.vault.as_deref())?)?;

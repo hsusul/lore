@@ -34,7 +34,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let usage = |m: String| CliError::Usage(m);
     let mut parser = lexopt::Parser::from_args(&invocation.rest);
     let (mut limit, mut json) = (DEFAULT_LIMIT, invocation.json);
-    let (mut propose, mut ids, mut vault_dir) = (false, Vec::new(), None::<PathBuf>);
+    let (mut propose, mut ids, mut vault_dir) = (false, Vec::new(), invocation.vault.clone());
     let mut limits = mine::Limits::default();
     let mut all = false;
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
