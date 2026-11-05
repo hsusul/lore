@@ -23,10 +23,14 @@ USAGE:
       Reads the archive read only. Prints the case count and each skip reason.
 
   lore-replay run --cases FILE --case ID --arm ARM --trial N --out DIR
-                  [--arms FILE] [--model sonnet] [--max-turns 25] [--keep]
+                  [--arms FILE] [--model sonnet] [--max-turns 6] [--keep]
       Replay one case. Writes DIR/<case id, : as _>/<arm>-<trial>/run.json.
       ARM is none, own, file, lore, or oracle; file, lore, and oracle take their
-      text from --arms (default: arms.json beside the cases file).
+      text from --arms (default: arms.json beside the cases file). Every arm
+      and trial of a case runs in DIR/<case>/scratch with the same argv, so they
+      share Claude Code's prompt cache; the arm's context goes in a
+      <system-reminder> block before the prompt. Runs of one case wait for each
+      other (a lock on DIR/<case>/scratch.lock).
       This starts Claude Code, which sends the session to the model provider.
       Set LORE_REPLAY_CLAUDE to use a claude other than the one on PATH.
 
@@ -158,7 +162,11 @@ fn cases_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
 fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let (mut cases_file, mut case, mut arm, mut trial, mut out, mut arms) =
         (None, None, None, None, None, None);
-    let (mut model, mut max_turns, mut keep_scratch) = ("sonnet".to_owned(), 25_u32, false);
+    let (mut model, mut max_turns, mut keep_scratch) = (
+        "sonnet".to_owned(),
+        lore_replay::run::DEFAULT_MAX_TURNS,
+        false,
+    );
     while let Some(arg) = parser.next()? {
         match arg {
             Long("cases") => cases_file = Some(path(parser)?),
@@ -197,14 +205,7 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
         keep_scratch,
     };
     let record = lore_replay::run::run(&case, &arm, &opts)?;
-    println!(
-        "{}",
-        serde_json::json!({
-            "case": record.case, "arm": record.arm, "trial": record.trial,
-            "fidelity": record.fidelity, "seconds": record.seconds,
-            "cost_usd": record.cost_usd, "is_error": record.is_error,
-        })
-    );
+    println!("{}", lore_replay::run::progress(&record));
     Ok(())
 }
 

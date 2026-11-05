@@ -244,9 +244,29 @@ impl<'de> Deserialize<'de> for Fidelity {
     }
 }
 
+/// The current replay harness. 1 put the arm's context in the system prompt
+/// and gave every run its own scratch path; 2 shares one scratch path per case
+/// and delivers the context in the final user message, so every run of a case
+/// shares a prompt-cache prefix. Records without the field are 1.
+pub const HARNESS: u32 = 2;
+
+/// How harness 2 delivers an arm's context: a `<system-reminder>` block
+/// before the prompt, in the final user message.
+pub const DELIVERY: &str = "user-message";
+
+fn harness_one() -> u32 {
+    1
+}
+
 /// `run.json`: one replay of one case under one arm.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
+    /// See [`HARNESS`].
+    #[serde(default = "harness_one")]
+    pub harness: u32,
+    /// See [`DELIVERY`]; `None` in harness 1 records (the system prompt).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<String>,
     pub case: String,
     pub arm: ArmName,
     pub trial: u32,
@@ -472,6 +492,17 @@ pub struct GradeLine {
     pub cost_usd: Option<f64>,
     #[serde(default)]
     pub graded_by: Option<String>,
+    /// The run's harness version (see [`HARNESS`]); `None` reads as 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<u32>,
+}
+
+impl GradeLine {
+    /// The harness version, 1 when the line does not say.
+    #[must_use]
+    pub fn harness_version(&self) -> u32 {
+        self.harness.unwrap_or(1)
+    }
 }
 
 impl GradeLine {

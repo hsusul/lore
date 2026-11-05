@@ -38,7 +38,7 @@ use std::path::Path;
 pub use error::{Error, Result};
 pub use types::{
     Action, Arm, ArmName, ArmsFile, Case, Fidelity, GradeLine, Grader, Label, LabeledCase,
-    RunRecord, ShownLine, Verdict,
+    RunRecord, ShownLine, Verdict, DELIVERY, HARNESS,
 };
 
 /// The case `id` from a `cases.jsonl` file. Blank lines are allowed; any

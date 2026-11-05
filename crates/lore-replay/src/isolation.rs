@@ -113,6 +113,10 @@ fn absolute_paths(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
+/// The variable that tells the `gh` stub where to log. The stub reads it at
+/// call time, so the stub itself is the same file in every run of a case.
+pub const OUTWARD_LOG_ENV: &str = "LORE_REPLAY_OUTWARD_LOG";
+
 /// The environment additions for the agent and the shell it runs.
 #[derive(Debug, Clone)]
 pub struct ToolEnv {
@@ -121,11 +125,10 @@ pub struct ToolEnv {
     pub outward_log: PathBuf,
 }
 
-/// Build `run_dir/home`: a git config with the person's name and email (the
-/// real one sits under the hidden home folder), a private XDG config folder,
-/// and a `gh` stub first on `PATH`.
-pub fn tool_env(run_dir: &Path) -> Result<ToolEnv> {
-    let home = run_dir.join("home");
+/// Build `home`: a git config with the person's name and email (the real one
+/// sits under the hidden home folder), a private XDG config folder, and a
+/// `gh` stub first on `PATH` that logs to `outward_log`.
+pub fn tool_env(home: &Path, outward_log: &Path) -> Result<ToolEnv> {
     let bin = home.join("bin");
     let xdg = home.join("xdg");
     for dir in [&bin, &xdg] {
@@ -139,11 +142,9 @@ pub fn tool_env(run_dir: &Path) -> Result<ToolEnv> {
     );
     std::fs::write(&gitconfig, config).map_err(|e| Error::io("write", &gitconfig, e))?;
 
-    let outward_log = run_dir.join("outward.log");
     let gh = bin.join("gh");
     let stub = format!(
-        "#!/bin/sh\nprintf 'gh %s\\n' \"$*\" >> {}\necho 'gh: no network in this environment' >&2\nexit 1\n",
-        shell_quote(&outward_log.to_string_lossy())
+        "#!/bin/sh\nprintf 'gh %s\\n' \"$*\" >> \"${OUTWARD_LOG_ENV}\"\necho 'gh: no network in this environment' >&2\nexit 1\n"
     );
     std::fs::write(&gh, stub).map_err(|e| Error::io("write", &gh, e))?;
     make_executable(&gh)?;
@@ -158,8 +159,9 @@ pub fn tool_env(run_dir: &Path) -> Result<ToolEnv> {
             ("GIT_CONFIG_GLOBAL".into(), gitconfig.into_os_string()),
             ("XDG_CONFIG_HOME".into(), xdg.into_os_string()),
             ("PATH".into(), path),
+            (OUTWARD_LOG_ENV.into(), outward_log.as_os_str().to_owned()),
         ],
-        outward_log,
+        outward_log: outward_log.to_owned(),
     })
 }
 
@@ -189,11 +191,6 @@ fn global_git(key: &str) -> String {
 fn git_config_value(value: &str) -> String {
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
-}
-
-/// `s` as one single-quoted shell word.
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
@@ -266,7 +263,6 @@ mod tests {
 
     #[test]
     fn quoting_keeps_odd_values_whole() {
-        assert_eq!(shell_quote("/tmp/a'b"), "'/tmp/a'\\''b'");
         assert_eq!(git_config_value("A \"B\" \\"), "\"A \\\"B\\\" \\\\\"");
     }
 }

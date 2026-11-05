@@ -58,6 +58,11 @@ fn snapshot(repo: &Path) -> String {
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 rec="$REC"
 mkdir -p "$rec"
+if [ -n "$SPAN_LOG" ]; then
+  echo start >> "$SPAN_LOG"
+  sleep 1
+  echo end >> "$SPAN_LOG"
+fi
 printf '%s\n' "$@" > "$rec/argv"
 env > "$rec/env"
 pwd -P > "$rec/cwd"
@@ -166,22 +171,38 @@ fn fixture(prompt_line: usize) -> Fixture {
     }
 }
 
-fn replay(f: &Fixture, arm: &str, extra: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_lore-replay"))
-        .args(["run", "--cases"])
+fn command(f: &Fixture, arm: &str, trial: u32, rec: &Path, extra: &[&str]) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lore-replay"));
+    cmd.args(["run", "--cases"])
         .arg(&f.cases)
-        .args(["--case", "s_abc:4", "--arm", arm, "--trial", "1", "--out"])
+        .args(["--case", "s_abc:4", "--arm", arm, "--trial"])
+        .arg(trial.to_string())
+        .arg("--out")
         .arg(f.root.join("runs"))
         .args(extra)
         .env("HOME", &f.home)
         .env("CLAUDE_CONFIG_DIR", &f.claude_dir)
         .env("LORE_REPLAY_CLAUDE", f.root.join("fake-claude"))
-        .env("REC", f.root.join("rec"))
+        .env("REC", rec)
+        .env_remove("SPAN_LOG")
         .env_remove("GIT_CONFIG_GLOBAL")
         .env_remove("CLAUDE_CODE_DISABLE_CLAUDE_MDS")
-        .env_remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
+        .env_remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY");
+    cmd
+}
+
+fn replay(f: &Fixture, arm: &str, extra: &[&str]) -> std::process::Output {
+    command(f, arm, 1, &f.root.join("rec"), extra)
         .output()
         .unwrap()
+}
+
+fn ok(out: &std::process::Output) {
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn read(path: &Path) -> String {
@@ -199,7 +220,8 @@ fn a_replay_is_isolated_and_recorded() {
         String::from_utf8_lossy(&out.stderr)
     );
     let run_dir = f.root.join("runs/s_abc_4/oracle-1");
-    let wd = run_dir.join("wd");
+    let scratch = f.root.join("runs/s_abc_4/scratch");
+    let wd = scratch.join("wd");
     let rec = f.root.join("rec");
 
     let argv: Vec<String> = read(&rec.join("argv")).lines().map(str::to_owned).collect();
@@ -221,9 +243,9 @@ fn a_replay_is_isolated_and_recorded() {
     }
     assert_eq!(after("--setting-sources"), "");
     assert_eq!(after("--model"), "sonnet");
-    assert_eq!(after("--max-turns"), "25");
+    assert_eq!(after("--max-turns"), "6");
     assert_eq!(after("--output-format"), "stream-json");
-    assert_eq!(after("--append-system-prompt"), "Do it the other way.");
+    assert!(!argv.contains(&"--append-system-prompt".to_owned()));
     let settings: Value = serde_json::from_str(&after("--settings")).unwrap();
     assert_eq!(
         settings["sandbox"]["filesystem"]["denyRead"],
@@ -238,17 +260,24 @@ fn a_replay_is_isolated_and_recorded() {
     ] {
         assert!(env.lines().any(|l| l == var), "env lacks {var}");
     }
-    let gitconfig = run_dir.join("home/gitconfig");
+    let gitconfig = scratch.join("home/gitconfig");
     assert!(env.contains(&format!("GIT_CONFIG_GLOBAL={}", gitconfig.display())));
     assert!(read(&gitconfig).contains("Pat Q"));
     assert!(env.contains(&format!(
         "XDG_CONFIG_HOME={}",
-        run_dir.join("home/xdg").display()
+        scratch.join("home/xdg").display()
     )));
-    assert!(env.contains(&format!("PATH={}:", run_dir.join("home/bin").display())));
+    assert!(env.contains(&format!("PATH={}:", scratch.join("home/bin").display())));
+    assert!(env.contains(&format!(
+        "LORE_REPLAY_OUTWARD_LOG={}",
+        run_dir.join("outward.log").display()
+    )));
 
     assert_eq!(read(&rec.join("cwd")).trim(), wd.display().to_string());
-    assert_eq!(read(&rec.join("stdin")), "now fix it");
+    assert_eq!(
+        read(&rec.join("stdin")),
+        "<system-reminder>\nDo it the other way.\n</system-reminder>\n\nnow fix it"
+    );
     assert_eq!(
         git(&wd, JAN_01, &["rev-parse", "HEAD"]),
         f.first,
@@ -310,9 +339,11 @@ fn a_replay_is_isolated_and_recorded() {
             "arm",
             "case",
             "cost_usd",
+            "delivery",
             "events",
             "fidelity",
             "foreign_paths",
+            "harness",
             "is_error",
             "model",
             "outward",
@@ -323,6 +354,8 @@ fn a_replay_is_isolated_and_recorded() {
         ]
     );
     assert_eq!(record["case"], "s_abc:4");
+    assert_eq!(record["harness"], 2);
+    assert_eq!(record["delivery"], "user-message");
     assert_eq!(record["arm"], "oracle");
     assert_eq!(record["trial"], 1);
     assert_eq!(
@@ -378,11 +411,84 @@ fn a_run_deletes_its_scratch_and_keeps_the_record() {
         String::from_utf8_lossy(&out.stderr)
     );
     let run_dir = f.root.join("runs/s_abc_4/oracle-1");
-    for scratch in ["wd", "home", "claude-project"] {
-        assert!(
-            !run_dir.join(scratch).exists(),
-            "{scratch} outlived the run"
-        );
+    for scratch in [
+        f.root.join("runs/s_abc_4/scratch"),
+        run_dir.join("claude-project"),
+    ] {
+        assert!(!scratch.exists(), "{} outlived the run", scratch.display());
     }
     assert!(run_dir.join("run.json").is_file());
+}
+
+/// Every arm and trial of a case sends the same argv from the same folder,
+/// so they share a prompt-cache prefix; only the final user message differs.
+#[test]
+fn every_run_of_a_case_shares_the_cache_prefix() {
+    let f = fixture(2);
+    std::fs::write(
+        f.root.join("eval/arms.json"),
+        json!({"s_abc:4": {"file": "FILE", "lore": "LORE", "oracle": "ORACLE"}}).to_string(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(&f.claude_dir).unwrap();
+    std::fs::write(f.claude_dir.join("CLAUDE.md"), "OWN").unwrap();
+    let mut seen = Vec::new();
+    for (arm, trial) in [
+        ("none", 1),
+        ("none", 2),
+        ("own", 1),
+        ("file", 1),
+        ("lore", 1),
+        ("oracle", 1),
+        ("oracle", 2),
+    ] {
+        let rec = f.root.join(format!("rec-{arm}-{trial}"));
+        ok(&command(&f, arm, trial, &rec, &[]).output().unwrap());
+        seen.push((
+            arm,
+            std::fs::read(rec.join("argv")).unwrap(),
+            read(&rec.join("cwd")),
+            read(&rec.join("stdin")),
+        ));
+    }
+    let (_, argv0, cwd0, _) = &seen[0];
+    assert!(!String::from_utf8_lossy(argv0).contains("--append-system-prompt"));
+    assert!(String::from_utf8_lossy(argv0).contains("--resume"));
+    for (arm, argv, cwd, stdin) in &seen {
+        assert_eq!(argv, argv0, "argv differs for {arm}");
+        assert_eq!(cwd, cwd0, "cwd differs for {arm}");
+        let want = match *arm {
+            "none" => "now fix it".to_owned(),
+            "own" => format!(
+                "<system-reminder>\nContents of {}:\nOWN\n</system-reminder>\n\nnow fix it",
+                f.claude_dir.join("CLAUDE.md").display()
+            ),
+            other => format!(
+                "<system-reminder>\n{}\n</system-reminder>\n\nnow fix it",
+                other.to_uppercase()
+            ),
+        };
+        assert_eq!(stdin, &want, "stdin for {arm}");
+    }
+}
+
+/// Two runs of one case share its scratch, so the second waits for the first.
+#[test]
+fn runs_of_one_case_never_overlap() {
+    let f = fixture(2);
+    let spans = f.root.join("spans");
+    let children: Vec<_> = [1, 2]
+        .into_iter()
+        .map(|trial| {
+            command(&f, "none", trial, &f.root.join(format!("rec-{trial}")), &[])
+                .env("SPAN_LOG", &spans)
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in children {
+        ok(&child.wait_with_output().unwrap());
+    }
+    assert_eq!(read(&spans), "start\nend\nstart\nend\n");
 }

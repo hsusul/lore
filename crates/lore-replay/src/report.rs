@@ -730,6 +730,7 @@ mod tests {
             foreign_paths: Vec::new(),
             cost_usd: None,
             graded_by: None,
+            harness: None,
         }
     }
 

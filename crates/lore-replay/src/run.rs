@@ -1,13 +1,27 @@
 //! One replay: a case, an arm, a trial.
 //!
-//! The run directory holds everything the replay made: the scratch clone
-//! (`wd`), the real project folder Claude Code writes into
-//! (`claude-project`), the stub tools (`home`), `outward.log`, and the record
-//! (`run.json`). The only thing outside it is the project-folder symlink,
-//! which is removed when the agent exits.
+//! Every run of a case shares one prompt-cache prefix (harness 2, see
+//! [`HARNESS`]). Claude Code caches by prefix: tools, then the system prompt,
+//! then the messages. The scratch path appears in the system prompt and in
+//! the rewritten history, so every arm and trial of a case runs in the same
+//! scratch folder, `<out>/<case>/scratch/wd`, resumes the same session id,
+//! and gets the same argv; the arm's context arrives in the final user
+//! message instead of the system prompt. The first run of a case writes the
+//! cache and the rest read it.
 //!
-//! The clone, the project folder, and the stubs are deleted when the run ends,
-//! unless [`RunOptions::keep_scratch`] is set. Each clone is a full copy of the
+//! Sharing a path means runs of one case must not overlap, so a run holds an
+//! exclusive lock on `<out>/<case>/scratch.lock` from before it rebuilds the
+//! scratch until after it removes it. A second run of the case waits.
+//!
+//! The scratch (the clone `wd` and the stub tools `home`) is rebuilt fresh
+//! before each run. The run directory, `<out>/<case>/<arm>-<trial>`, holds what
+//! is the run's own: the real project folder Claude Code writes into
+//! (`claude-project`), `outward.log`, and the record (`run.json`). The only
+//! thing outside both is the project-folder symlink, removed when the agent
+//! exits.
+//!
+//! The scratch and the project folder are deleted when the run ends, unless
+//! [`RunOptions::keep_scratch`] is set. Each clone is a full copy of the
 //! repository, and a few hundred kept clones of one large repository filled a
 //! disk.
 
@@ -23,12 +37,15 @@ use crate::error::{Error, Result};
 use crate::isolation::{self, project_slug};
 use crate::prefix::{self, Rewrite};
 use crate::scratch::{self, Source};
-use crate::types::{Arm, Case, RunRecord};
+use crate::types::{Arm, Case, RunRecord, DELIVERY, HARNESS};
 
 /// Overrides the `claude` found on `PATH`.
 pub const CLAUDE_ENV: &str = "LORE_REPLAY_CLAUDE";
 /// How much of the agent's stderr the record keeps, in characters.
 const STDERR_TAIL: usize = 2000;
+/// `--max-turns` unless the caller says otherwise. Of 103 real runs, 88 ended
+/// within 4 turns.
+pub const DEFAULT_MAX_TURNS: u32 = 6;
 
 #[derive(Debug, Clone)]
 pub struct RunOptions {
@@ -37,42 +54,52 @@ pub struct RunOptions {
     pub trial: u32,
     pub model: String,
     pub max_turns: u32,
-    /// Keep `wd`, `home`, and `claude-project` after the run, for inspection.
+    /// Keep the scratch and `claude-project` after the run, for inspection.
     pub keep_scratch: bool,
+}
+
+/// `<out>/<case id, : as _>`: the case's run directories, scratch, and lock.
+#[must_use]
+pub fn case_dir(out: &Path, case_id: &str) -> PathBuf {
+    out.join(case_id.replace(':', "_"))
 }
 
 /// `<out>/<case id, : as _>/<arm>-<trial>`.
 #[must_use]
 pub fn run_dir(case: &Case, arm: &Arm, opts: &RunOptions) -> PathBuf {
-    opts.out
-        .join(case.id.replace(':', "_"))
-        .join(format!("{}-{}", arm.name(), opts.trial))
+    case_dir(&opts.out, &case.id).join(format!("{}-{}", arm.name(), opts.trial))
 }
 
 /// Replay `case` under `arm`, write `run.json` in its run directory, and
-/// return the record. A previous run in the same directory is replaced.
+/// return the record. A previous run in the same directory is replaced. Waits
+/// while another run of the same case holds the case's scratch.
 pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
-    let dir = run_dir(case, arm, opts);
-    match std::fs::remove_dir_all(&dir) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(Error::io("remove the old run", &dir, e)),
-    }
+    let case_root = case_dir(&opts.out, &case.id);
+    std::fs::create_dir_all(&case_root).map_err(|e| Error::io("create", &case_root, e))?;
+    let case_root =
+        std::fs::canonicalize(&case_root).map_err(|e| Error::io("resolve", &case_root, e))?;
+    // Declared first, so it is released last: after the scratch is removed.
+    let _lock = CaseLock::take(&case_root.join("scratch.lock"))?;
+
+    let dir = case_root.join(format!("{}-{}", arm.name(), opts.trial));
+    remove_if_present(&dir, "remove the old run")?;
     std::fs::create_dir_all(&dir).map_err(|e| Error::io("create", &dir, e))?;
-    let dir = std::fs::canonicalize(&dir).map_err(|e| Error::io("resolve", &dir, e))?;
+    let scratch_root = case_root.join("scratch");
+    remove_if_present(&scratch_root, "remove the old scratch")?;
+    std::fs::create_dir_all(&scratch_root).map_err(|e| Error::io("create", &scratch_root, e))?;
     let _scratch = Scratch {
-        dir: dir.clone(),
+        paths: vec![scratch_root.clone(), dir.join("claude-project")],
         keep: opts.keep_scratch,
     };
 
     let source = scratch::source(case);
-    let wd = dir.join("wd");
+    let wd = scratch_root.join("wd");
     if let Source::Commit { toplevel, commit } = &source {
         scratch::clone_at(toplevel, commit, case.branch.as_deref(), &wd)?;
     }
     std::fs::create_dir_all(&wd).map_err(|e| Error::io("create", &wd, e))?;
 
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = case_session_id(&case.id);
     let project_real = dir.join("claude-project");
     std::fs::create_dir_all(&project_real).map_err(|e| Error::io("create", &project_real, e))?;
     let projects = claude_projects_dir().ok_or(Error::NoHome)?;
@@ -94,33 +121,9 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     let prefix_path = project_real.join(format!("{session_id}.jsonl"));
     std::fs::write(&prefix_path, &prefix.text).map_err(|e| Error::io("write", &prefix_path, e))?;
 
-    let tools = isolation::tool_env(&dir)?;
-    let mut args: Vec<String> = vec!["-p".into()];
-    if prefix.has_messages {
-        args.extend([
-            "--resume".into(),
-            session_id.clone(),
-            "--fork-session".into(),
-        ]);
-    }
-    args.extend([
-        "--no-session-persistence".into(),
-        "--model".into(),
-        opts.model.clone(),
-        "--output-format".into(),
-        "stream-json".into(),
-        "--verbose".into(),
-        "--max-turns".into(),
-        opts.max_turns.to_string(),
-        "--setting-sources".into(),
-        String::new(),
-        "--strict-mcp-config".into(),
-        "--settings".into(),
-        isolation::settings().to_string(),
-    ]);
-    if let Some(extra) = appended_context(arm, &wd).filter(|t| !t.is_empty()) {
-        args.extend(["--append-system-prompt".into(), extra]);
-    }
+    let tools = isolation::tool_env(&scratch_root.join("home"), &dir.join("outward.log"))?;
+    let args = agent_args(prefix.has_messages.then_some(session_id.as_str()), opts);
+    let prompt = user_message(arm_context(arm, &wd).as_deref(), &case.prompt);
 
     let program = std::env::var_os(CLAUDE_ENV).unwrap_or_else(|| "claude".into());
     let mut cmd = Command::new(&program);
@@ -139,7 +142,6 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
         source,
     })?;
     let stdin = child.stdin.take().map(|mut pipe| {
-        let prompt = case.prompt.clone();
         std::thread::spawn(move || {
             // A closed pipe means the agent stopped reading; its exit says why.
             let _ = pipe.write_all(prompt.as_bytes());
@@ -172,11 +174,10 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     drop(link);
     waited.map_err(|e| Error::io("wait for", Path::new(&program), e))?;
 
-    let result = events
-        .iter()
-        .rev()
-        .find(|e| e.get("type").and_then(Value::as_str) == Some("result"));
+    let result = result_event(&events);
     let record = RunRecord {
+        harness: HARNESS,
+        delivery: Some(DELIVERY.to_owned()),
         case: case.id.clone(),
         arm: arm.name(),
         trial: opts.trial,
@@ -206,11 +207,110 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     Ok(record)
 }
 
-/// The text the arm appends to the system prompt. `own` reads the person's
+/// The agent's argv. It depends only on the case (through the session id)
+/// and the options shared by a sweep, never on the arm or the trial, so every
+/// run of a case sends the same tools and system prompt.
+fn agent_args(resume: Option<&str>, opts: &RunOptions) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-p".into()];
+    if let Some(session_id) = resume {
+        args.extend([
+            "--resume".into(),
+            session_id.into(),
+            "--fork-session".into(),
+        ]);
+    }
+    args.extend([
+        "--no-session-persistence".into(),
+        "--model".into(),
+        opts.model.clone(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--verbose".into(),
+        "--max-turns".into(),
+        opts.max_turns.to_string(),
+        "--setting-sources".into(),
+        String::new(),
+        "--strict-mcp-config".into(),
+        "--settings".into(),
+        isolation::settings().to_string(),
+    ]);
+    args
+}
+
+/// The final user message: the arm's context in a `<system-reminder>` block,
+/// then the original prompt. No block when the context is absent or empty.
+#[must_use]
+pub fn user_message(context: Option<&str>, prompt: &str) -> String {
+    match context.filter(|c| !c.is_empty()) {
+        Some(context) => format!("<system-reminder>\n{context}\n</system-reminder>\n\n{prompt}"),
+        None => prompt.to_owned(),
+    }
+}
+
+/// The session id a case's prefix is written under: derived from the case
+/// id, so every run of the case resumes the same id and sends the same argv.
+/// Runs of a case never overlap (see [`run`]), so they never share it at once.
+#[must_use]
+pub fn case_session_id(case_id: &str) -> String {
+    let fnv = |seed: u64| {
+        case_id.bytes().fold(seed, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        })
+    };
+    let mut bytes = [0_u8; 16];
+    bytes[..8].copy_from_slice(&fnv(0xcbf2_9ce4_8422_2325).to_be_bytes());
+    bytes[8..].copy_from_slice(&fnv(0x8422_2325_cbf2_9ce4).to_be_bytes());
+    uuid::Builder::from_random_bytes(bytes)
+        .into_uuid()
+        .to_string()
+}
+
+/// The last `result` event of a run.
+#[must_use]
+pub fn result_event(events: &[Value]) -> Option<&Value> {
+    events
+        .iter()
+        .rev()
+        .find(|e| e.get("type").and_then(Value::as_str) == Some("result"))
+}
+
+/// True when the run failed because the subscription's usage limit was hit:
+/// an error with zero turns or zero cost, or a result that says "hit your
+/// ... limit". Such a run returns at once and costs nothing, so a sweep that
+/// kept going would burn through every remaining run the same way.
+#[must_use]
+pub fn usage_limited(record: &RunRecord) -> bool {
+    let result = result_event(&record.events);
+    let text = result
+        .and_then(|r| r.get("result"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_lowercase();
+    if text.contains("hit your") && text.contains("limit") {
+        return true;
+    }
+    let turns = result
+        .and_then(|r| r.get("num_turns"))
+        .and_then(Value::as_u64);
+    record.is_error == Some(true) && (turns == Some(0) || record.cost_usd == Some(0.0))
+}
+
+/// The one-line progress record `run` and `sweep` print for each run.
+#[must_use]
+pub fn progress(record: &RunRecord) -> String {
+    serde_json::json!({
+        "case": record.case, "arm": record.arm, "trial": record.trial,
+        "fidelity": record.fidelity, "seconds": record.seconds,
+        "cost_usd": record.cost_usd, "is_error": record.is_error,
+    })
+    .to_string()
+}
+
+/// The text the arm adds before the prompt. `own` reads the person's
 /// CLAUDE.md files now, not when the case was extracted: the arm measures the
 /// instructions they keep today. Claude Code's own loading of those files is
 /// switched off for every arm, so this is the only way they arrive.
-fn appended_context(arm: &Arm, wd: &Path) -> Option<String> {
+fn arm_context(arm: &Arm, wd: &Path) -> Option<String> {
     match arm {
         Arm::None => None,
         Arm::File(text) | Arm::Lore(text) | Arm::Oracle(text) => Some(text.clone()),
@@ -240,9 +340,38 @@ fn tail(s: &str, chars: usize) -> String {
     s.chars().skip(skip).collect()
 }
 
+fn remove_if_present(dir: &Path, action: &'static str) -> Result<()> {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::io(action, dir, e)),
+    }
+}
+
+/// An exclusive lock on a case's scratch, held until drop. Blocks while
+/// another run of the case holds it.
+struct CaseLock {
+    _file: std::fs::File,
+}
+
+impl CaseLock {
+    fn take(path: &Path) -> Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|e| Error::io("open the lock", path, e))?;
+        file.lock()
+            .map_err(|e| Error::io("lock the case scratch", path, e))?;
+        // The lock is released when the file closes.
+        Ok(Self { _file: file })
+    }
+}
+
 /// Removes a run's scratch folders on drop, so a failed run is cleaned up too.
 struct Scratch {
-    dir: PathBuf,
+    paths: Vec<PathBuf>,
     keep: bool,
 }
 
@@ -251,8 +380,8 @@ impl Drop for Scratch {
         if self.keep {
             return;
         }
-        for name in ["wd", "home", "claude-project"] {
-            let _ = std::fs::remove_dir_all(self.dir.join(name));
+        for path in &self.paths {
+            let _ = std::fs::remove_dir_all(path);
         }
     }
 }
@@ -312,5 +441,52 @@ mod tests {
     fn tail_keeps_the_last_characters() {
         assert_eq!(tail("abcdé", 2), "dé");
         assert_eq!(tail("ab", 5), "ab");
+    }
+
+    #[test]
+    fn the_context_goes_before_the_prompt_in_a_reminder() {
+        assert_eq!(
+            user_message(Some("Do X."), "fix it"),
+            "<system-reminder>\nDo X.\n</system-reminder>\n\nfix it"
+        );
+        assert_eq!(user_message(None, "fix it"), "fix it");
+        assert_eq!(user_message(Some(""), "fix it"), "fix it");
+    }
+
+    #[test]
+    fn a_case_has_one_stable_session_id() {
+        let id = case_session_id("s_abc:4");
+        assert_eq!(id, case_session_id("s_abc:4"));
+        assert_ne!(id, case_session_id("s_abc:5"));
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
+    }
+
+    fn record(is_error: bool, cost: Option<f64>, result: Value) -> RunRecord {
+        serde_json::from_value(serde_json::json!({
+            "case": "c", "arm": "none", "trial": 0, "model": "m", "fidelity": "no-cwd",
+            "foreign_paths": [], "prefix_lines": 0, "seconds": 0.0, "cost_usd": cost,
+            "is_error": is_error, "stderr": "", "outward": [], "events": [result],
+        }))
+        .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn a_usage_limit_is_recognised() {
+        let limit = serde_json::json!({"type": "result", "is_error": true, "num_turns": 0,
+            "result": "You've hit your 5-hour limit"});
+        assert!(usage_limited(&record(true, Some(0.0), limit)));
+        let free = serde_json::json!({"type": "result", "is_error": true, "num_turns": 3});
+        assert!(usage_limited(&record(true, Some(0.0), free)));
+        let real = serde_json::json!({"type": "result", "is_error": true, "num_turns": 3});
+        assert!(!usage_limited(&record(true, Some(0.4), real)));
+        let ok = serde_json::json!({"type": "result", "is_error": false, "num_turns": 0});
+        assert!(!usage_limited(&record(false, Some(0.0), ok)));
+    }
+
+    #[test]
+    fn old_records_read_as_harness_one() {
+        let r = record(false, None, Value::Null);
+        assert_eq!(r.harness, 1);
+        assert_eq!(r.delivery, None);
     }
 }
