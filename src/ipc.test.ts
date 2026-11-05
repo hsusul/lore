@@ -285,6 +285,13 @@ describe("ipc contract", () => {
     expect(invoke).toHaveBeenCalledWith("skill_usage");
   });
 
+  it("accountName invokes account_name", async () => {
+    const { accountName } = await import("./ipc");
+    invoke.mockResolvedValueOnce("Henry Su");
+    expect(await accountName()).toBe("Henry Su");
+    expect(invoke).toHaveBeenCalledWith("account_name");
+  });
+
   it("getTokenTotals, relinkSegmentRepository, and checkForUpdates invoke expected commands", async () => {
     const { checkForUpdates, getTokenTotals, relinkSegmentRepository } = await import("./ipc");
 

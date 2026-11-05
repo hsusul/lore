@@ -389,6 +389,11 @@ export function skillUsage(): Promise<SkillUsageDto[]> {
   return invoke<SkillUsageDto[]>("skill_usage");
 }
 
+/** The person's name for the map's centre: the Mac account's full name, else the user name. */
+export function accountName(): Promise<string | null> {
+  return invoke<string | null>("account_name");
+}
+
 /** Calculate cumulative token usage and estimated cost across all sessions. */
 export function getTokenTotals(): Promise<TokenTotalsDto> {
   return invoke<TokenTotalsDto>("get_token_totals");

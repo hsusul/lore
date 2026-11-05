@@ -15,4 +15,9 @@ scope: string, note_type: string,
 /**
  * The start of the note's body.
  */
-excerpt: string, };
+excerpt: string, 
+/**
+ * For a repo-scoped note, the repository's name in the archive, from the
+ * sessions it was learned in; `None` when none of them is linked to one.
+ */
+repo_name: string | null, };

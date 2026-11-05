@@ -1,6 +1,7 @@
 //! Lore's memory, read for the desktop app: lessons mined from the archive,
 //! the notes in the vault, and what an agent is given at session start.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use lore_core::paths::ARCHIVE_DB_FILENAME;
@@ -31,11 +32,13 @@ pub async fn list_lessons(state: State<'_, AppState>) -> Result<Vec<LessonDto>, 
 /// Every active note in the vault, by path. No vault yet is not an error: it
 /// is how Lore starts, so the list is empty.
 #[tauri::command]
-pub async fn list_notes() -> Result<Vec<NoteDto>, String> {
+pub async fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteDto>, String> {
     let Some(vault) = open_vault() else {
         return Ok(Vec::new());
     };
-    notes(&vault).map_err(|e| e.to_string())
+    let conn = lore_core::storage::open_read_only(&state.archive_dir.join(ARCHIVE_DB_FILENAME))
+        .map_err(|e| e.to_string())?;
+    notes(&vault, &conn).map_err(|e| e.to_string())
 }
 
 /// What an agent starting a session in `cwd` is given: the section
@@ -140,19 +143,49 @@ fn open_vault() -> Option<Vault> {
     Vault::open(&vault::resolve_dir(None).ok()?).ok()
 }
 
-fn notes(vault: &Vault) -> Result<Vec<NoteDto>, VaultError> {
+fn notes(vault: &Vault, conn: &Connection) -> Result<Vec<NoteDto>, VaultError> {
     let hits = vault.index()?.list_every_active()?;
+    // A scope is one repository, so the first note that names it names all.
+    let mut names: HashMap<String, String> = HashMap::new();
     Ok(hits
         .into_iter()
-        .map(|h| NoteDto {
-            id: h.id,
-            path: h.path,
-            title: h.title,
-            scope: h.scope,
-            note_type: h.note_type,
-            excerpt: h.excerpt,
+        .map(|h| {
+            let repo_name = if h.scope.starts_with("repo:") {
+                if !names.contains_key(&h.scope) {
+                    if let Some(name) = learned_in_repo(vault, conn, &h.path) {
+                        names.insert(h.scope.clone(), name);
+                    }
+                }
+                names.get(&h.scope).cloned()
+            } else {
+                None
+            };
+            NoteDto {
+                id: h.id,
+                path: h.path,
+                title: h.title,
+                scope: h.scope,
+                note_type: h.note_type,
+                excerpt: h.excerpt,
+                repo_name,
+            }
         })
         .collect())
+}
+
+/// The archive's name for the repository a note's source sessions ran in.
+fn learned_in_repo(vault: &Vault, conn: &Connection, rel: &str) -> Option<String> {
+    let note = Note::parse(&vault.read(rel).ok()?).ok()?;
+    note.sources.iter().find_map(|source| {
+        conn.query_row(
+            "SELECT r.display_name FROM session_segment seg
+               JOIN repository r ON r.id = seg.repository_id
+              WHERE seg.session_id = ?1 ORDER BY seg.seq_start LIMIT 1",
+            [source.session.as_str()],
+            |r| r.get(0),
+        )
+        .ok()
+    })
 }
 
 fn agents_read_in(vault: &Vault, cwd: &Path) -> Result<AgentsReadDto, VaultError> {
@@ -303,7 +336,8 @@ pub(crate) mod tests {
     #[test]
     fn every_active_note_is_listed_in_any_scope() {
         let dir = tempfile::tempdir().unwrap();
-        let listed: Vec<(String, String, String)> = notes(&vault(dir.path()))
+        let conn = lore_core::storage::open_in_memory().unwrap();
+        let listed: Vec<(String, String, String)> = notes(&vault(dir.path()), &conn)
             .unwrap()
             .into_iter()
             .map(|n| (n.path, n.title, n.scope))
@@ -321,6 +355,51 @@ pub(crate) mod tests {
                     "Other repo".to_owned(),
                     "repo:aaaaaaaaaaaaaaaa".to_owned()
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_repo_note_is_named_by_the_repository_its_session_ran_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = archive(dir.path(), &[&[("user", "hello")]]);
+        let session = session_id(&conn, 1);
+        conn.execute_batch(
+            "INSERT INTO repository (id, identity_key, display_name, created_at, updated_at)
+               VALUES ('r_1', 'k_1', 'beeclean', 0, 0);
+             UPDATE session_segment SET repository_id = 'r_1';",
+        )
+        .unwrap();
+        let (vault, _) = Vault::init(&dir.path().join("vault")).unwrap();
+        let note = format!(
+            "---\ntype: fact\ntitle: Ask first\nscope: repo:bbbbbbbbbbbbbbbb\nsources:\n  - codex:{session}\n---\nAsk.\n"
+        );
+        vault.add(&note).unwrap();
+        vault
+            .add("---\ntype: fact\ntitle: Same repo, no source\nscope: repo:bbbbbbbbbbbbbbbb\n---\nStill beeclean.\n")
+            .unwrap();
+        vault
+            .add("---\ntype: fact\ntitle: Unlinked\nscope: repo:cccccccccccccccc\n---\nNo session.\n")
+            .unwrap();
+        vault
+            .add("---\ntype: convention\ntitle: Everywhere\n---\nGlobal.\n")
+            .unwrap();
+
+        let named: Vec<(String, Option<String>)> = notes(&vault, &conn)
+            .unwrap()
+            .into_iter()
+            .map(|n| (n.title, n.repo_name))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("Everywhere".to_owned(), None),
+                ("Ask first".to_owned(), Some("beeclean".to_owned())),
+                (
+                    "Same repo, no source".to_owned(),
+                    Some("beeclean".to_owned())
+                ),
+                ("Unlinked".to_owned(), None),
             ]
         );
     }
@@ -381,7 +460,7 @@ pub(crate) mod tests {
 
         let rel = accept_in(&conn, &vault, &id, Some("  Use pnpm, not npm  ")).unwrap();
         assert_eq!(rel, "global/use-pnpm-not-npm.md");
-        let kept: Vec<(String, String)> = notes(&vault)
+        let kept: Vec<(String, String)> = notes(&vault, &conn)
             .unwrap()
             .into_iter()
             .map(|n| (n.path, n.title))
@@ -430,7 +509,7 @@ pub(crate) mod tests {
         let (retired, _) = review::retire(&vault, &rel, "pnpm is gone now").unwrap();
         assert_eq!(retired, rel);
         assert!(
-            notes(&vault).unwrap().is_empty(),
+            notes(&vault, &conn).unwrap().is_empty(),
             "a retired note is no longer active"
         );
     }

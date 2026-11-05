@@ -388,6 +388,9 @@ pub struct NoteDto {
     pub note_type: String,
     /// The start of the note's body.
     pub excerpt: String,
+    /// For a repo-scoped note, the repository's name in the archive, from the
+    /// sessions it was learned in; `None` when none of them is linked to one.
+    pub repo_name: Option<String>,
 }
 
 /// One note in the session-start section. Element of [`AgentsReadDto::notes`].
