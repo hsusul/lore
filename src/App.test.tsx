@@ -838,6 +838,7 @@ describe("window shell", () => {
     expect(screen.queryByRole("option", { name: /Fix flaky retry backoff/ })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
+    fireEvent.click(await screen.findByRole("button", { name: /full archive/ }));
     await screen.findByRole("option", { name: /Fix flaky retry backoff/ });
     fireEvent.click(screen.getByRole("button", { name: "Map" }));
     expect(await screen.findByText("You're caught up")).toBeTruthy();
