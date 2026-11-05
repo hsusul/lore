@@ -183,7 +183,7 @@ pub struct FileEventDto {
 }
 
 /// One provenance-labeled git observation for the session's git rail. The UI
-/// must keep `agent_recorded`, `lore_captured`, and `lore_reverified` visually
+/// must keep `agent_recorded`, `lore_captured`, `lore_reflog`, and `lore_reverified` visually
 /// distinct and never collapse them into one unlabeled "session-time" rail.
 /// Agent-recorded patches are not git observations — they surface as
 /// `file_event.source = agent_patch` (see GIT_INTEGRATION.md §4). Payload
@@ -192,7 +192,7 @@ pub struct FileEventDto {
 #[ts(export)]
 pub struct GitObservationDto {
     pub segment_id: Option<String>,
-    /// `agent_recorded` | `agent_patch` | `lore_captured` | `lore_reverified`.
+    /// `agent_recorded` | `agent_patch` | `lore_captured` | `lore_reflog` | `lore_reverified`.
     pub source: String,
     /// Time claimed by the source event, when any.
     #[ts(type = "number | null")]

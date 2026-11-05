@@ -378,6 +378,87 @@ pub fn reverify(path: &Path, commit_sha: &str, branch: Option<&str>) -> Option<R
     })
 }
 
+/// What HEAD pointed at at one moment, as the repository's HEAD reflog recorded
+/// it. These are `lore_reflog` observations: Lore read them from the
+/// repository, and they describe the moment itself, not the time of reading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadAt {
+    /// The commit HEAD pointed at (full hex).
+    pub commit_sha: String,
+    /// When the reflog entry that moved HEAD there was written, in ms.
+    pub entry_ms: i64,
+    /// The branch HEAD was on, from the latest checkout entry at or before the
+    /// moment. `None` when HEAD was detached, or when no checkout entry in the
+    /// reflog says.
+    pub branch: Option<String>,
+}
+
+/// The commit HEAD pointed at in the repository containing `path` at `at_ms`,
+/// read from HEAD's reflog (the worktree's own, for a linked worktree).
+///
+/// Returns `None` when the reflog cannot be read, or when its oldest entry is
+/// newer than `at_ms`: an expired or missing reflog cannot say, and the oldest
+/// entry is not an answer for a time before it. Read-only.
+#[must_use]
+pub fn head_at(path: &Path, at_ms: i64) -> Option<HeadAt> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let repo = gix::discover(path).ok()?;
+    let head = repo.find_reference("HEAD").ok()?;
+    let mut log = head.log_iter();
+    let lines = log.all().ok()??;
+    let entries = lines.filter_map(Result::ok).map(|line| ReflogEntry {
+        ms: line.signature.seconds().saturating_mul(1000),
+        new_oid: line.new_oid().to_hex().to_string(),
+        message: line.message.to_string(),
+    });
+    head_at_in(entries, at_ms)
+}
+
+/// One HEAD reflog line, oldest first in a file.
+struct ReflogEntry {
+    ms: i64,
+    new_oid: String,
+    message: String,
+}
+
+fn head_at_in(entries: impl IntoIterator<Item = ReflogEntry>, at_ms: i64) -> Option<HeadAt> {
+    let mut found: Option<HeadAt> = None;
+    let mut branch: Option<String> = None;
+    for (i, entry) in entries.into_iter().enumerate() {
+        if i == 0 && entry.ms > at_ms {
+            return None;
+        }
+        if entry.ms > at_ms {
+            break;
+        }
+        if let Some(to) = checkout_target(&entry.message) {
+            branch = (!looks_like_oid(to)).then(|| to.to_string());
+        }
+        if entry.new_oid.bytes().all(|b| b == b'0') {
+            continue;
+        }
+        found = Some(HeadAt {
+            commit_sha: entry.new_oid,
+            entry_ms: entry.ms,
+            branch: None,
+        });
+    }
+    found.map(|head| HeadAt { branch, ..head })
+}
+
+/// The `<to>` of a `checkout: moving from <from> to <to>` reflog message.
+fn checkout_target(message: &str) -> Option<&str> {
+    let rest = message.trim().strip_prefix("checkout: moving from ")?;
+    let (_, to) = rest.rsplit_once(" to ")?;
+    Some(to.trim()).filter(|to| !to.is_empty())
+}
+
+fn looks_like_oid(s: &str) -> bool {
+    s.len() >= 7 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Normalized, credential-free fetch remotes (sorted, deduped).
 fn collect_remotes(repo: &gix::Repository) -> Vec<String> {
     let mut out = Vec::new();
@@ -907,5 +988,97 @@ mod tests {
             normalize_remote_url("ユーザー:パスワード@github.com:org/日本.git").as_deref(),
             Some("github.com/org/日本")
         );
+    }
+
+    fn entry(secs: i64, oid: &str, message: &str) -> ReflogEntry {
+        ReflogEntry {
+            ms: secs * 1000,
+            new_oid: oid.repeat(40 / oid.len()),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn head_at_picks_the_last_entry_at_or_before_the_moment() {
+        let log = || {
+            vec![
+                entry(100, "a", "clone: from github.com/org/repo"),
+                entry(200, "b", "checkout: moving from main to feat"),
+                entry(300, "c", "commit: more"),
+                entry(400, "d", "checkout: moving from feat to 1234567abc"),
+            ]
+        };
+        assert_eq!(head_at_in(log(), 99_999), None, "before the oldest entry");
+        let at = head_at_in(log(), 100_000).unwrap();
+        assert_eq!(
+            (at.commit_sha.as_str(), at.branch),
+            ("a".repeat(40).as_str(), None)
+        );
+        let at = head_at_in(log(), 350_000).unwrap();
+        assert_eq!(at.commit_sha, "c".repeat(40));
+        assert_eq!(at.entry_ms, 300_000);
+        assert_eq!(at.branch.as_deref(), Some("feat"));
+        let at = head_at_in(log(), 500_000).unwrap();
+        assert_eq!(at.commit_sha, "d".repeat(40));
+        assert_eq!(at.branch, None, "a checkout to a commit is detached");
+    }
+
+    #[test]
+    fn head_at_skips_entries_that_point_at_no_commit() {
+        let log = vec![
+            entry(100, "a", "commit: x"),
+            entry(200, "0", "branch: deleted"),
+        ];
+        assert_eq!(head_at_in(log, 300_000).unwrap().commit_sha, "a".repeat(40));
+        assert_eq!(head_at_in(Vec::new(), 300_000), None);
+    }
+
+    #[test]
+    fn head_at_reads_a_real_reflog() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path();
+        let git = |args: &[&str], date: &str| {
+            let out = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "core.logAllRefUpdates=true",
+                ])
+                .args(args)
+                .current_dir(repo)
+                .env("GIT_COMMITTER_DATE", date)
+                .env("GIT_AUTHOR_DATE", date)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"], "1000000000 +0000");
+        git(
+            &["commit", "-q", "--allow-empty", "-m", "one"],
+            "1000000000 +0000",
+        );
+        let first = git(&["rev-parse", "HEAD"], "1000000000 +0000");
+        git(&["switch", "-q", "-c", "feat"], "1000000100 +0000");
+        git(
+            &["commit", "-q", "--allow-empty", "-m", "two"],
+            "1000000200 +0000",
+        );
+        let second = git(&["rev-parse", "HEAD"], "1000000200 +0000");
+
+        let repo = repo.canonicalize().unwrap();
+        assert_eq!(head_at(&repo, 999_999_999_000), None);
+        assert_eq!(head_at(&repo, 1_000_000_050_000).unwrap().commit_sha, first);
+        let at = head_at(&repo, 1_000_000_300_000).unwrap();
+        assert_eq!(at.commit_sha, second);
+        assert_eq!(at.branch.as_deref(), Some("feat"));
+        assert_eq!(head_at(Path::new("relative"), 1), None);
     }
 }

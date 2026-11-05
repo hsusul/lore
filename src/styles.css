@@ -784,6 +784,11 @@ mark {
   background: var(--accent-fill);
 }
 
+.obs--lore_reflog .obs__source::before {
+  border-color: var(--link);
+  border-style: dashed;
+}
+
 .obs--lore_reverified .obs__source::before {
   border-color: var(--link);
   transform: rotate(45deg);
