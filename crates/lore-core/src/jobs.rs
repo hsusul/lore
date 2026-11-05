@@ -89,21 +89,19 @@ pub fn enqueue(conn: &Connection, job: &NewJob<'_>, capacity: usize) -> Result<E
 }
 
 fn insert_pending_job(conn: &Connection, job: &NewJob<'_>, capacity: usize) -> Result<()> {
-    let active: i64 = conn.query_row(
-        "SELECT count(*) FROM job WHERE state IN ('pending','running')",
-        [],
-        |row| row.get(0),
-    )?;
+    let active: i64 = conn
+        .prepare_cached("SELECT count(*) FROM job WHERE state IN ('pending','running')")?
+        .query_row([], |row| row.get(0))?;
     if usize::try_from(active).unwrap_or(usize::MAX) >= capacity {
         return Err(JobQueueError::Full { limit: capacity });
     }
 
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO job
             (id, kind, priority, state, attempts, payload_json, created_at, updated_at)
          VALUES (?1,?2,?3,'pending',0,?4,unixepoch('now')*1000,unixepoch('now')*1000)",
-        params![job.id, job.kind, job.priority, job.payload_json],
-    )?;
+    )?
+    .execute(params![job.id, job.kind, job.priority, job.payload_json])?;
     Ok(())
 }
 
@@ -151,11 +149,8 @@ pub fn schedule_source(
     capacity: usize,
 ) -> Result<SourceSchedule> {
     let existing: Option<(String, Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT state, payload_json, error_kind FROM job WHERE id = ?1",
-            [job.id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
+        .prepare_cached("SELECT state, payload_json, error_kind FROM job WHERE id = ?1")?
+        .query_row([job.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .optional()?;
     match existing.as_ref().map(|(state, ..)| state.as_str()) {
         None => {
@@ -166,20 +161,20 @@ pub fn schedule_source(
             // A later discovery pass may have better scheduling metadata (for
             // example, a file was appended and now has a newer mtime). Refresh
             // the pending row without creating duplicate work.
-            conn.execute(
+            conn.prepare_cached(
                 "UPDATE job SET priority = ?2, payload_json = ?3,
                                 updated_at = unixepoch('now')*1000
                  WHERE id = ?1 AND state = 'pending'",
-                params![job.id, job.priority, job.payload_json],
-            )?;
+            )?
+            .execute(params![job.id, job.priority, job.payload_json])?;
             Ok(SourceSchedule::CoalescedPending)
         }
         Some("running") => {
-            conn.execute(
+            conn.prepare_cached(
                 "UPDATE job SET redo = 1, updated_at = unixepoch('now')*1000
                  WHERE id = ?1 AND state = 'running'",
-                [job.id],
-            )?;
+            )?
+            .execute([job.id])?;
             Ok(SourceSchedule::MarkedRedo)
         }
         Some("done")
@@ -200,14 +195,14 @@ pub fn schedule_source(
         }
         Some("done" | "failed") => {
             // Re-arm the finished job for another run with the latest payload.
-            conn.execute(
+            conn.prepare_cached(
                 "UPDATE job SET state = 'pending', redo = 0, error = NULL, error_kind = NULL,
                                 attempts = 0,
                                 priority = ?2, payload_json = ?3,
                                 updated_at = unixepoch('now')*1000
                  WHERE id = ?1",
-                params![job.id, job.priority, job.payload_json],
-            )?;
+            )?
+            .execute(params![job.id, job.priority, job.payload_json])?;
             Ok(SourceSchedule::Enqueued)
         }
         Some(_) => Err(JobQueueError::InvalidState),
@@ -217,38 +212,36 @@ pub fn schedule_source(
 /// Complete a claimed task, honoring a `redo` flag set while it ran: if the
 /// source changed mid-run the task returns to `pending` instead of `done`.
 pub fn finish(conn: &Connection, id: &str) -> Result<FinishOutcome> {
-    let changed = conn.execute(
-        "UPDATE job SET state = 'done', updated_at = unixepoch('now')*1000
-         WHERE id = ?1 AND state = 'running' AND redo = 0",
-        [id],
-    )?;
+    let changed = conn
+        .prepare_cached(
+            "UPDATE job SET state = 'done', updated_at = unixepoch('now')*1000
+             WHERE id = ?1 AND state = 'running' AND redo = 0",
+        )?
+        .execute([id])?;
     if changed == 1 {
         return Ok(FinishOutcome::Done);
     }
     let redo: Option<i64> = conn
-        .query_row(
-            "SELECT redo FROM job WHERE id = ?1 AND state = 'running'",
-            [id],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT redo FROM job WHERE id = ?1 AND state = 'running'")?
+        .query_row([id], |row| row.get(0))
         .optional()?;
     let Some(redo) = redo else {
         return Err(JobQueueError::NotRunning);
     };
     if redo != 0 {
-        conn.execute(
+        conn.prepare_cached(
             "UPDATE job SET state = 'pending', redo = 0, error = NULL, error_kind = NULL,
                             updated_at = unixepoch('now')*1000
              WHERE id = ?1",
-            [id],
-        )?;
+        )?
+        .execute([id])?;
         Ok(FinishOutcome::Requeued)
     } else {
-        conn.execute(
+        conn.prepare_cached(
             "UPDATE job SET state = 'done', updated_at = unixepoch('now')*1000
              WHERE id = ?1",
-            [id],
-        )?;
+        )?
+        .execute([id])?;
         Ok(FinishOutcome::Done)
     }
 }

@@ -152,16 +152,15 @@ impl<'a> Pipeline<'a> {
         let mut enqueued = 0;
         let tx = self.conn.unchecked_transaction()?;
         for source in &report.sessions {
-            let metadata = std::fs::metadata(&source.path).ok();
-            let recent = since.is_none_or(|since| {
-                metadata
-                    .as_ref()
-                    .and_then(|meta| meta.modified().ok())
-                    .is_some_and(|mtime| mtime >= since)
-            });
+            let recent = since.is_none_or(|since| source.mtime.is_some_and(|mtime| mtime >= since));
             if recent
-                && self.schedule(&tx, source.agent.0, &source.path, metadata.as_ref())?
-                    == SourceSchedule::Enqueued
+                && self.schedule_with_info(
+                    &tx,
+                    source.agent.0,
+                    &source.path,
+                    source.size,
+                    source.mtime,
+                )? == SourceSchedule::Enqueued
             {
                 enqueued += 1;
             }
@@ -275,20 +274,30 @@ impl<'a> Pipeline<'a> {
         path: &Path,
         metadata: Option<&std::fs::Metadata>,
     ) -> jobs::Result<SourceSchedule> {
+        let size = metadata.map_or(0, std::fs::Metadata::len);
+        let mtime = metadata.and_then(|meta| meta.modified().ok());
+        self.schedule_with_info(conn, agent_id, path, size, mtime)
+    }
+
+    fn schedule_with_info(
+        &self,
+        conn: &Connection,
+        agent_id: &str,
+        path: &Path,
+        size: u64,
+        mtime: Option<std::time::SystemTime>,
+    ) -> jobs::Result<SourceSchedule> {
         let id = job_id(agent_id, path);
         // Prefer recent sessions during a large first scan so the archive
         // becomes useful immediately instead of waiting behind months-old,
         // potentially multi-megabyte histories. The path remains the stable
         // coalescing identity; mtime only controls claim order.
-        let priority = metadata
-            .and_then(|meta| meta.modified().ok())
-            .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
+        let priority = mtime
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
             .unwrap_or(0);
-        let size = metadata.map_or(0, std::fs::Metadata::len);
-        let mtime_ns = metadata
-            .and_then(|meta| meta.modified().ok())
-            .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
+        let mtime_ns = mtime
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|elapsed| elapsed.as_nanos().to_string())
             .unwrap_or_default();
         let payload = encode_payload(agent_id, path, size, &mtime_ns);
@@ -338,13 +347,13 @@ impl<'a> Pipeline<'a> {
                 .map(|s| s.path.as_path())
                 .collect();
 
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare_cached(
                 "SELECT id, current_path, state FROM source_artifact WHERE agent_id = ?1",
             )?;
             let rows: Vec<(String, String, String)> = stmt
                 .query_map([agent_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            let mut update_stmt = conn.prepare(
+            let mut update_stmt = conn.prepare_cached(
                 "UPDATE source_artifact
                  SET state = ?2, last_seen_at = ?3 WHERE id = ?1",
             )?;
@@ -521,14 +530,16 @@ fn job_id(agent_id: &str, path: &Path) -> String {
 }
 
 fn encode_payload(agent_id: &str, path: &Path, size: u64, mtime_ns: &str) -> String {
-    serde_json::json!({
-        "agent_id": agent_id,
-        "path": path.to_string_lossy(),
-        "size": size,
-        "mtime_ns": mtime_ns,
-        "parser_version": crate::ingest::PARSER_VERSION,
-    })
-    .to_string()
+    use std::fmt::Write as _;
+    let path_str = path.to_string_lossy();
+    let escaped_path = serde_json::to_string(&path_str).unwrap_or_else(|_| "\"\"".into());
+    let mut out = String::with_capacity(64 + agent_id.len() + mtime_ns.len() + escaped_path.len());
+    let _ = write!(
+        out,
+        "{{\"agent_id\":\"{agent_id}\",\"mtime_ns\":\"{mtime_ns}\",\"parser_version\":\"{}\",\"path\":{escaped_path},\"size\":{size}}}",
+        crate::ingest::PARSER_VERSION
+    );
+    out
 }
 
 fn decode_payload(payload: &str) -> Option<(String, PathBuf)> {
@@ -582,6 +593,15 @@ mod tests {
         assert_eq!(agent, "codex");
         assert_eq!(path, PathBuf::from("/x/rollout.jsonl"));
         assert!(decode_payload("not json").is_none());
+    }
+
+    #[test]
+    fn payload_round_trips_non_ascii_and_special_characters() {
+        let path = Path::new("/x/プロジェクト/セッション-\"日本語\".jsonl");
+        let encoded = encode_payload("claude-code", path, 1024, "987654321");
+        let (agent, decoded_path) = decode_payload(&encoded).unwrap();
+        assert_eq!(agent, "claude-code");
+        assert_eq!(decoded_path, path);
     }
 
     #[test]
