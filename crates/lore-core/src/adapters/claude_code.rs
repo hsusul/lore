@@ -448,6 +448,8 @@ fn parts_from_content(content: &Value, session: &mut ParsedSession) -> Vec<Parse
                 }),
             },
             "tool_use" => raw_part(ordinal, PartKind::ToolUse, block),
+            // Its base64 moves to the blob store at ingest (`payloads`).
+            "image" => raw_part(ordinal, PartKind::Attachment, block),
             "tool_result" => {
                 let text = tool_result_text(block);
                 ParsedPart {
@@ -1366,6 +1368,22 @@ mod tests {
         let session = adapter.parse_str(jsonl, "s_ignore");
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
         assert_eq!(session.messages.len(), 1);
+    }
+
+    #[test]
+    fn an_image_block_is_an_attachment() {
+        let jsonl = "{\"type\":\"user\",\"sessionId\":\"s_i\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"iVBO\"}},{\"type\":\"text\",\"text\":\"see this\"}]}}\n";
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "s_i");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        let parts = &session.messages[0].parts;
+        assert_eq!(parts[0].kind, PartKind::Attachment);
+        assert_eq!(
+            parts[0].content_json.as_deref(),
+            Some(
+                r#"{"source":{"data":"iVBO","media_type":"image/png","type":"base64"},"type":"image"}"#
+            )
+        );
+        assert_eq!(parts[1].text.as_deref(), Some("see this"));
     }
 
     #[test]

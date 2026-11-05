@@ -188,8 +188,16 @@ fn parse_from(
                         earlier_results.extend(paired);
                         seq += 1;
                     }
+                    "agent_message" => {
+                        let msg = agent_message(p, seq, ts, model.clone(), line_start);
+                        session.messages.push(msg);
+                        contexts.push((cwd.clone(), model.clone()));
+                        seq += 1;
+                    }
                     // tool_search_* / web_search_call are recorded but not yet modeled.
-                    "tool_search_call" | "tool_search_output" | "web_search_call" => {}
+                    // additional_tools lists tool definitions, not conversation.
+                    "tool_search_call" | "tool_search_output" | "web_search_call"
+                    | "additional_tools" => {}
                     other => {
                         session.note_partial(format!("unknown response_item: {}", bounded(other)));
                     }
@@ -228,7 +236,10 @@ fn parse_from(
                     | "web_search_start"
                     | "web_search_end"
                     | "task_complete"
-                    | "turn_aborted" => {}
+                    | "turn_aborted"
+                    // Repeats a finished item (command output, reasoning, a
+                    // message) that a response_item already carries.
+                    | "item_completed" => {}
                     // A genuinely new event_msg subtype: degrade to a bounded,
                     // content-free note rather than dropping it silently.
                     other => {
@@ -405,6 +416,27 @@ fn message_item(
         metadata_json: None,
         parts: text_parts(p.get("content")),
     }
+}
+
+/// A message one Codex agent sent another, such as a subagent's final answer
+/// to its parent. It is filed as tool output, not as the person's turn, so it
+/// never reads as something the user said. Only its plain text is kept; an
+/// encrypted payload has no text.
+fn agent_message(
+    p: &Value,
+    seq: i64,
+    ts: Option<i64>,
+    model: Option<String>,
+    offset: i64,
+) -> ParsedMessage {
+    let mut msg = message_item(p, seq, ts, model, offset);
+    msg.role = Role::Tool;
+    msg.metadata_json = serde_json::to_string(&serde_json::json!({
+        "author": p.get("author"),
+        "recipient": p.get("recipient"),
+    }))
+    .ok();
+    msg
 }
 
 fn reasoning_item(
@@ -1843,6 +1875,29 @@ mod tests {
         // world_state and inter_agent_communication_metadata should NOT create notes
         assert!(!s.notes.iter().any(|n| n.message.contains("world_state")
             || n.message.contains("inter_agent_communication_metadata")));
+    }
+
+    #[test]
+    fn agent_messages_are_kept_and_tool_bookkeeping_is_skipped() {
+        let jsonl = concat!(
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"additional_tools\",\"role\":\"developer\",\"tools\":[]}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"agent_message\",\"author\":\"/root/scan\",\"recipient\":\"/root\",\"content\":[{\"type\":\"input_text\",\"text\":\"Message Type: FINAL_ANSWER\\nPayload:\\nNo candidate found.\"},{\"type\":\"encrypted_content\",\"encrypted_content\":\"gAAA\"}]}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"CommandExecution\",\"aggregated_output\":\"ok\"}}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(jsonl, "s_agents");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok, "{:?}", s.notes);
+        assert_eq!(s.messages.len(), 1);
+        let m = &s.messages[0];
+        assert_eq!(m.role, Role::Tool);
+        assert_eq!(m.parts.len(), 1);
+        assert_eq!(
+            m.parts[0].text.as_deref(),
+            Some("Message Type: FINAL_ANSWER\nPayload:\nNo candidate found.")
+        );
+        assert_eq!(
+            m.metadata_json.as_deref(),
+            Some(r#"{"author":"/root/scan","recipient":"/root"}"#)
+        );
     }
 
     #[test]
