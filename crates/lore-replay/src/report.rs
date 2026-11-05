@@ -3,6 +3,11 @@
 //!
 //! The rules, in the order the report applies them:
 //!
+//! - Grades from one harness version only (see [`crate::types::HARNESS`]):
+//!   mixed versions are refused unless one is picked.
+//! - Trial 0 is `sweep`'s screening run, which decides whether a case runs
+//!   at all, so it is left out of every rate: the rates are conditional on
+//!   the cases that reproduced at screening.
 //! - A case counts only when its label says `mistake` and `visible`.
 //! - A run's verdict is the deterministic one when it exists, else the
 //!   judge's. UNKNOWN and unjudged runs are excluded and counted.
@@ -31,7 +36,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::label::{read_labels, read_lines};
-use crate::types::{ArmName, ArmsFile, GradeLine, ShownLine, Verdict};
+use crate::types::{ArmName, ArmsFile, GradeLine, ScreenLine, ShownLine, Verdict};
 
 /// The bootstrap's seed unless `--seed` says otherwise: the preregistration
 /// date, so a rerun prints the same intervals.
@@ -130,6 +135,9 @@ pub struct Input {
     pub shown: Vec<ShownLine>,
     /// (case, arm) pairs whose context is empty.
     pub empty: HashSet<(String, ArmName)>,
+    /// From a screen file: cases that did not reproduce (`k`) of the cases
+    /// screened (`n`).
+    pub screened_out: Option<Count>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -229,6 +237,10 @@ pub struct Report {
     pub runs_excluded_unknown: usize,
     /// Runs of cases the label excludes.
     pub runs_on_excluded_cases: usize,
+    /// Trial 0 runs (screening), left out of every rate.
+    pub screening_runs_excluded: usize,
+    /// Cases that did not reproduce at screening, of the cases screened.
+    pub screened_out: Option<Count>,
     pub stop: StopRule,
     pub arms: Vec<ArmSummary>,
     pub per_case: Vec<CaseRow>,
@@ -268,6 +280,9 @@ pub fn analyze(input: &Input, data: Data, seed: u64) -> Report {
     for g in &input.grades {
         runs.insert((g.case.as_str(), g.arm, g.trial), g);
     }
+    let before = runs.len();
+    runs.retain(|(_, _, trial), _| *trial != 0);
+    let screening_runs_excluded = before - runs.len();
     let mut raw: HashMap<(&str, ArmName), (usize, usize)> = HashMap::new();
     let (mut with_verdict, mut unknown, mut outside) = (0, 0, 0);
     let mut agreement = Count::default();
@@ -442,6 +457,8 @@ pub fn analyze(input: &Input, data: Data, seed: u64) -> Report {
         runs_with_verdict: with_verdict,
         runs_excluded_unknown: unknown,
         runs_on_excluded_cases: outside,
+        screening_runs_excluded,
+        screened_out: input.screened_out,
         stop,
         arms: arm_summaries,
         per_case,
@@ -528,6 +545,20 @@ impl Report {
                 s,
                 "Intervals: 95%, cluster bootstrap over cases, {} resamples, seed {} ({tag}).",
                 self.resamples, self.seed
+            );
+        }
+        if let Some(c) = self.screened_out {
+            let _ = writeln!(
+                s,
+                "screened out: {} of {} cases did not reproduce in the screening run ({tag}).",
+                c.k, c.n
+            );
+        }
+        if self.screened_out.is_some() || self.screening_runs_excluded > 0 {
+            let _ = writeln!(
+                s,
+                "Rates are conditional on cases that reproduced at screening; the {} screening runs (trial 0) are left out of every rate ({tag}).",
+                self.screening_runs_excluded
             );
         }
         let _ = writeln!(
@@ -661,8 +692,49 @@ pub struct ReportOptions {
     pub grades: PathBuf,
     pub shown: Option<PathBuf>,
     pub arms: Option<PathBuf>,
+    /// `sweep`'s `screen.jsonl`.
+    pub screen: Option<PathBuf>,
+    /// Report only grades of this harness version.
+    pub harness: Option<u32>,
     pub data: Data,
     pub seed: u64,
+}
+
+/// Keep the grades of one harness version: `pick` when given, else the only
+/// version present. Mixed versions without a pick are an error.
+pub fn one_harness(grades: Vec<GradeLine>, pick: Option<u32>) -> Result<Vec<GradeLine>> {
+    let versions: std::collections::BTreeSet<u32> =
+        grades.iter().map(GradeLine::harness_version).collect();
+    match pick {
+        Some(v) => Ok(grades
+            .into_iter()
+            .filter(|g| g.harness_version() == v)
+            .collect()),
+        None if versions.len() > 1 => Err(Error::MixedHarness(
+            versions
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(" and "),
+        )),
+        None => Ok(grades),
+    }
+}
+
+/// Cases screened out (`k`) of cases screened (`n`), the last verdict per
+/// case winning.
+#[must_use]
+pub fn screen_count(lines: &[ScreenLine]) -> Count {
+    let mut last: HashMap<&str, Verdict> = HashMap::new();
+    for line in lines {
+        if let Some(v) = line.verdict {
+            last.insert(line.case.as_str(), v);
+        }
+    }
+    Count {
+        k: last.values().filter(|v| **v != Verdict::Yes).count(),
+        n: last.len(),
+    }
 }
 
 /// Read the files the report needs.
@@ -700,12 +772,20 @@ pub fn load(opts: &ReportOptions) -> Result<Input> {
         }
         None => Vec::new(),
     };
+    let screened_out = match &opts.screen {
+        Some(path) => {
+            read_required(path)?;
+            Some(screen_count(&read_lines(path)?))
+        }
+        None => None,
+    };
     Ok(Input {
         labeled: labels.iter().filter(|c| c.label.is_some()).count(),
         cases,
-        grades: read_lines(&opts.grades)?,
+        grades: one_harness(read_lines(&opts.grades)?, opts.harness)?,
         shown,
         empty,
+        screened_out,
     })
 }
 
@@ -741,9 +821,9 @@ mod tests {
         let mut cases = Vec::new();
         for (i, &(n, a)) in per_case.iter().enumerate() {
             let id = format!("c:{i}");
-            for t in 0..3 {
-                grades.push(grade(&id, ArmName::None, t, Some(t < n as u32)));
-                grades.push(grade(&id, arm, t, Some(t < a as u32)));
+            for t in 1..=3 {
+                grades.push(grade(&id, ArmName::None, t, Some(t <= n as u32)));
+                grades.push(grade(&id, arm, t, Some(t <= a as u32)));
             }
             cases.push((id, "w".to_owned()));
         }
@@ -852,7 +932,7 @@ mod tests {
         det_only.judge = None;
         inp.grades.push(det_only);
         // A later line for the same run replaces the earlier one.
-        inp.grades.push(grade("c:0", ArmName::None, 0, None));
+        inp.grades.push(grade("c:0", ArmName::None, 1, None));
         let r = analyze(&inp, Data::Synthetic, DEFAULT_SEED);
         assert_eq!(r.runs_excluded_unknown, 3);
         assert_eq!(r.runs_on_excluded_cases, 1);

@@ -67,12 +67,17 @@ USAGE:
       records an `own` text.
 
   lore-replay report --labels FILE --grades FILE --data real|synthetic
-                     [--shown FILE] [--arms FILE] [--json] [--seed N]
+                     [--shown FILE] [--arms FILE] [--screen FILE] [--harness N]
+                     [--json] [--seed N]
       The preregistered analysis: per-arm case-weighted repeat rates and paired
       differences against none, with 95% cluster-bootstrap intervals over cases,
       the stop rule, spread, grader agreement, oracle validity, and (with
       --shown) exists/shown/followed. --arms marks arms with empty context as
-      same as none. Every number is tagged with --data. Reads only.
+      same as none. Trial 0, sweep's screening run, is left out of every rate,
+      so rates are conditional on cases that reproduced at screening; --screen
+      (sweep's screen.jsonl) reports how many cases did not. Grades from more
+      than one harness version are refused unless --harness picks one. Every
+      number is tagged with --data. Reads only.
 ";
 
 enum Failure {
@@ -373,6 +378,7 @@ fn grade_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
 
 fn report_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let (mut labels, mut grades, mut shown, mut arms, mut data) = (None, None, None, None, None);
+    let (mut screen, mut harness) = (None, None);
     let (mut json, mut seed) = (false, report::DEFAULT_SEED);
     while let Some(arg) = parser.next()? {
         match arg {
@@ -380,6 +386,8 @@ fn report_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
             Long("grades") => grades = Some(path(parser)?),
             Long("shown") => shown = Some(path(parser)?),
             Long("arms") => arms = Some(path(parser)?),
+            Long("screen") => screen = Some(path(parser)?),
+            Long("harness") => harness = Some(parser.value()?.parse::<u32>()?),
             Long("data") => {
                 data = Some(text(parser)?.parse::<Data>().map_err(Failure::Usage)?);
             }
@@ -398,6 +406,8 @@ fn report_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
         grades: grades.ok_or_else(|| need("--grades"))?,
         shown,
         arms,
+        screen,
+        harness,
         data: data.ok_or_else(|| need("--data"))?,
         seed,
     };
