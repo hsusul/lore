@@ -298,6 +298,16 @@ describe("ipc contract", () => {
     expect(invoke).toHaveBeenCalledWith("reject_proposal", { id: "P1", reason: "not a rule" });
   });
 
+  it("findLessons and lessonAgents invoke their commands", async () => {
+    const { findLessons, lessonAgents } = await import("./ipc");
+    invoke.mockResolvedValueOnce("Filed: 1 rule.");
+    expect(await findLessons("codex")).toBe("Filed: 1 rule.");
+    expect(invoke).toHaveBeenCalledWith("find_lessons", { agent: "codex" });
+    invoke.mockResolvedValueOnce([]);
+    expect(await lessonAgents()).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("lesson_agents");
+  });
+
   it("accountName invokes account_name", async () => {
     const { accountName } = await import("./ipc");
     invoke.mockResolvedValueOnce("Henry Su");

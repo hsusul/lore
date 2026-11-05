@@ -532,6 +532,10 @@ export function createMockHandlers(
     accept_proposal: () => "global/use-pnpm-not-npm.md",
     reject_proposal: () => undefined,
     find_lessons: () => "Filed: 1 rule.",
+    lesson_agents: () => [
+      { id: "claude-code", label: "Claude Code", installed: true, signed_in: true, sign_in: "claude auth login" },
+      { id: "codex", label: "Codex", installed: true, signed_in: false, sign_in: "codex login" },
+    ],
     skill_usage: () => [
       { skill: "code-review", uses: 22, sessions: 15, last_ms: 1_785_751_203_000, reprompts: [{ session_id: "s1", agent_id: "claude-code", repo: "lore", at_ms: 1_785_751_203_000, text: "no, you missed the tests, look again", preceding: "Reviewed it, looks fine." }] },
       { skill: "taste-skill", uses: 0, sessions: 0, last_ms: null, reprompts: [] },

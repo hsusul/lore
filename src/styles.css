@@ -1723,3 +1723,31 @@ textarea.mist-ed:focus {
   margin-bottom: 16px;
   color: var(--mist-t1);
 }
+
+.mist-seg {
+  display: flex;
+  gap: 4px;
+  margin-top: 24px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--mist-well);
+}
+
+.mist .mist-seg button {
+  flex: 1;
+  height: 32px;
+  border-radius: 7px;
+  color: var(--mist-t2);
+  font-size: 13px;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.mist .mist-seg button:hover {
+  color: var(--mist-t1);
+}
+
+.mist .mist-seg button.sel {
+  background: var(--mist-surf);
+  color: var(--mist-t1);
+  box-shadow: var(--mist-sh), 0 0 0 1px var(--mist-line);
+}

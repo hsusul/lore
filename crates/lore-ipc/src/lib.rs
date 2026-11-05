@@ -416,6 +416,20 @@ pub struct ProposalDto {
     pub proposed_ms: i64,
 }
 
+/// An agent that can write lessons from the app. Element of the payload of
+/// `lesson_agents`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LessonAgentDto {
+    /// `claude-code` or `codex`, as `find_lessons` takes it.
+    pub id: String,
+    pub label: String,
+    pub installed: bool,
+    pub signed_in: bool,
+    /// The command that signs it in, for the person to run in a terminal.
+    pub sign_in: String,
+}
+
 /// One note in the session-start section. Element of [`AgentsReadDto::notes`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
