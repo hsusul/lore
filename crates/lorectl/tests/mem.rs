@@ -207,6 +207,25 @@ fn mem_reindex_names_both_paths_of_a_duplicate_id_and_exits_7() {
 }
 
 #[test]
+fn mem_show_finds_note_by_filename_and_path_without_extension() {
+    let (dir, vault) = init();
+    let note = "---\nid: 01JD0000000000000000000099\ntype: fact\ntitle: 日本 Note\n---\nBody.\n";
+    lorectl(&vault, &["add", &note_file(dir.path(), "nihon.md", note)]);
+
+    let out_slug = lorectl(&vault, &["show", "日本-note"]);
+    assert_eq!(code(&out_slug), 0, "{}", stderr(&out_slug));
+
+    let out_file = lorectl(&vault, &["show", "日本-note.md"]);
+    assert_eq!(code(&out_file), 0, "{}", stderr(&out_file));
+
+    let out_no_ext = lorectl(&vault, &["show", "global/日本-note"]);
+    assert_eq!(code(&out_no_ext), 0, "{}", stderr(&out_no_ext));
+
+    let out_path = lorectl(&vault, &["show", "global/日本-note.md"]);
+    assert_eq!(code(&out_path), 0, "{}", stderr(&out_path));
+}
+
+#[test]
 fn mem_help_prints_only_the_mem_section() {
     for args in [
         &["mem", "--help"][..],

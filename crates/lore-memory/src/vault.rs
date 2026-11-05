@@ -469,16 +469,30 @@ impl Vault {
     /// The vault-relative path of the note named by `key`: a path, an id, or a
     /// slug that only one note has.
     pub fn find(&self, key: &str) -> Result<String, VaultError> {
-        if key.contains('/') || key.ends_with(".md") {
+        if key.contains('/') {
             let rel =
                 RelPath::parse(key).map_err(|e| VaultError::BadPath(key.into(), e.to_string()))?;
-            return if self.root.join(rel.as_str()).is_file() {
-                Ok(rel.as_str().to_string())
-            } else {
-                Err(VaultError::NotFound(key.into()))
-            };
+            if self.root.join(rel.as_str()).is_file() {
+                return Ok(rel.as_str().to_string());
+            }
+            let with_md = format!("{}.md", rel.as_str());
+            if self.root.join(&with_md).is_file() {
+                return Ok(with_md);
+            }
+            return Err(VaultError::NotFound(key.into()));
         }
-        let mut paths = self.index()?.lookup(key)?;
+        let slug = key.strip_suffix(".md").unwrap_or(key);
+        let mut paths = self.index()?.lookup(slug)?;
+        if paths.is_empty() && slug != key {
+            paths = self.index()?.lookup(key)?;
+        }
+        if paths.is_empty() {
+            if let Ok(rel) = RelPath::parse(key) {
+                if self.root.join(rel.as_str()).is_file() {
+                    return Ok(rel.as_str().to_string());
+                }
+            }
+        }
         match paths.len() {
             0 => Err(VaultError::NotFound(key.into())),
             1 => Ok(paths.remove(0)),

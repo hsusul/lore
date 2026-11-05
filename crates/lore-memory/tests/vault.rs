@@ -379,6 +379,14 @@ fn vault_reindex_skips_dot_directories_and_the_inbox() {
         vault.find("prune-worktrees").unwrap(),
         "global/prune-worktrees.md"
     );
+    assert_eq!(
+        vault.find("prune-worktrees.md").unwrap(),
+        "global/prune-worktrees.md"
+    );
+    assert_eq!(
+        vault.find("global/prune-worktrees").unwrap(),
+        "global/prune-worktrees.md"
+    );
 }
 
 #[test]
