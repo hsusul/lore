@@ -48,7 +48,9 @@ pub fn inventory(roots: &Roots) -> Inventory {
     for location in LOCATIONS {
         let root = roots.dir(location);
         for skills_dir in skills_dirs(&root, location.layout) {
-            for (name, path) in skill_folders(&skills_dir) {
+            let canonical_skills_dir =
+                fs::canonicalize(&skills_dir).unwrap_or_else(|_| skills_dir.clone());
+            for (name, path, file_type) in skill_folders(&skills_dir) {
                 let relative = path.strip_prefix(&root).unwrap_or(&path);
                 let plugin = plugin_source(location.provenance, relative, &locks);
                 let loaded = !location.agents.is_empty()
@@ -57,14 +59,23 @@ pub fn inventory(roots: &Roots) -> Inventory {
                     elsewhere.entry(name).or_insert(path);
                     continue;
                 }
-                let real_path = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                let is_symlink = file_type.as_ref().is_some_and(|ft| ft.is_symlink());
+                let real_path = if is_symlink {
+                    fs::canonicalize(&path).unwrap_or_else(|_| path.clone())
+                } else {
+                    canonical_skills_dir.join(&name)
+                };
                 let (hash, skill_md) = hashes
                     .entry(real_path.clone())
                     .or_insert_with(|| hash_dir(&real_path))
                     .clone();
-                let mode = match fs::read_link(&path) {
-                    Ok(target) => Mode::Symlink { target },
-                    Err(_) => Mode::Copy,
+                let mode = if is_symlink {
+                    match fs::read_link(&path) {
+                        Ok(target) => Mode::Symlink { target },
+                        Err(_) => Mode::Copy,
+                    }
+                } else {
+                    Mode::Copy
                 };
                 let source = source(
                     location,
@@ -258,12 +269,11 @@ fn find_skills_dirs(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 }
 
 /// Child folders holding a SKILL.md, by name. Symlinks are followed.
-fn skill_folders(dir: &Path) -> Vec<(SkillName, PathBuf)> {
+fn skill_folders(dir: &Path) -> Vec<(SkillName, PathBuf, Option<fs::FileType>)> {
     children(dir)
         .unwrap_or_default()
         .into_iter()
         .filter(|(_, path, _)| path.join("SKILL.md").is_file())
-        .map(|(name, path, _)| (name, path))
         .collect()
 }
 
