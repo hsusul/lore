@@ -42,6 +42,8 @@ pub enum Error {
     ProjectDirOccupied(PathBuf),
     #[error("the home directory is unknown (HOME is unset)")]
     NoHome,
+    #[error("the model judge gave no answer: {0}")]
+    Judge(String),
 }
 
 impl Error {

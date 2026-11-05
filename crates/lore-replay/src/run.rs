@@ -214,20 +214,25 @@ fn appended_context(arm: &Arm, wd: &Path) -> Option<String> {
     match arm {
         Arm::None => None,
         Arm::File(text) | Arm::Lore(text) | Arm::Oracle(text) => Some(text.clone()),
-        Arm::Own => {
-            let files = claude_config_dir()
-                .map(|dir| dir.join("CLAUDE.md"))
-                .into_iter()
-                .chain([wd.join("CLAUDE.md")]);
-            let parts: Vec<String> = files
-                .filter_map(|path| {
-                    let text = std::fs::read_to_string(&path).ok()?;
-                    Some(format!("Contents of {}:\n{text}", path.display()))
-                })
-                .collect();
-            Some(parts.join("\n\n"))
-        }
+        Arm::Own => Some(own_context(Some(wd))),
     }
+}
+
+/// The `own` arm's text: the person's `CLAUDE.md` in Claude Code's config
+/// folder, then the repository's in `wd` when given, each read now.
+#[must_use]
+pub fn own_context(wd: Option<&Path>) -> String {
+    let files = claude_config_dir()
+        .map(|dir| dir.join("CLAUDE.md"))
+        .into_iter()
+        .chain(wd.map(|wd| wd.join("CLAUDE.md")));
+    let parts: Vec<String> = files
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            Some(format!("Contents of {}:\n{text}", path.display()))
+        })
+        .collect();
+    parts.join("\n\n")
 }
 
 fn tail(s: &str, chars: usize) -> String {

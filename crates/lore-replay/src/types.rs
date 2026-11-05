@@ -7,6 +7,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
@@ -266,9 +267,282 @@ pub struct RunRecord {
     pub events: Vec<Value>,
 }
 
+/// How a run is checked for a repeat of the labeled mistake. A closed set:
+/// the labeling judge picks one, and anything it writes that is not one of
+/// the deterministic kinds, or whose regex does not compile, is a [`Judge`].
+///
+/// [`Judge`]: Grader::Judge
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "RawGrader", into = "RawGrader")]
+pub enum Grader {
+    /// The final message asks the person whether or which way to proceed.
+    AsksPermission,
+    /// Any tool call, or refused `gh` call, matches.
+    ToolPattern(Regex),
+    /// Any written or edited file path matches.
+    FileWritten(Regex),
+    /// The final message matches.
+    TextPattern(Regex),
+    /// Only the model judge can tell; `rubric` is its hint (may be empty).
+    Judge { rubric: String },
+}
+
+impl Grader {
+    /// The prototype's `kind` string.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::AsksPermission => "asks_permission",
+            Self::ToolPattern(_) => "tool_pattern",
+            Self::FileWritten(_) => "file_written",
+            Self::TextPattern(_) => "text_pattern",
+            Self::Judge { .. } => "judge",
+        }
+    }
+
+    /// The judge's hint: the rubric, when this is a judge grader with one.
+    #[must_use]
+    pub fn rubric(&self) -> Option<&str> {
+        match self {
+            Self::Judge { rubric } if !rubric.trim().is_empty() => Some(rubric),
+            _ => None,
+        }
+    }
+}
+
+impl PartialEq for Grader {
+    fn eq(&self, other: &Self) -> bool {
+        RawGrader::from(self.clone()) == RawGrader::from(other.clone())
+    }
+}
+
+/// A grader as JSON: `{"kind", "pattern"}` or `{"kind": "judge", "rubric"}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RawGrader {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric: Option<String>,
+}
+
+impl From<RawGrader> for Grader {
+    /// Never fails: a bad or missing pattern becomes a judge grader, with the
+    /// pattern kept as the judge's hint.
+    fn from(raw: RawGrader) -> Self {
+        let regex = |make: fn(Regex) -> Self| match raw.pattern.as_deref() {
+            Some(p) => match Regex::new(p) {
+                Ok(re) => make(re),
+                Err(_) => Self::Judge {
+                    rubric: format!("{} pattern that is not a valid regex here: {p}", raw.kind),
+                },
+            },
+            None => Self::Judge {
+                rubric: raw.rubric.clone().unwrap_or_default(),
+            },
+        };
+        match raw.kind.as_str() {
+            "asks_permission" => Self::AsksPermission,
+            "tool_pattern" => regex(Self::ToolPattern),
+            "file_written" => regex(Self::FileWritten),
+            "text_pattern" => regex(Self::TextPattern),
+            _ => Self::Judge {
+                rubric: raw.rubric.clone().unwrap_or_default(),
+            },
+        }
+    }
+}
+
+impl From<Grader> for RawGrader {
+    fn from(grader: Grader) -> Self {
+        let kind = grader.kind().to_owned();
+        let (pattern, rubric) = match grader {
+            Grader::AsksPermission => (None, None),
+            Grader::ToolPattern(re) | Grader::FileWritten(re) | Grader::TextPattern(re) => {
+                (Some(re.as_str().to_owned()), None)
+            }
+            Grader::Judge { rubric } => (None, Some(rubric)),
+        };
+        Self {
+            kind,
+            pattern,
+            rubric,
+        }
+    }
+}
+
+/// The labeling judge's reading of one case.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Label {
+    /// The case id, as the judge echoed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The corrected turn did something the correction rejects.
+    #[serde(default, deserialize_with = "null_default")]
+    pub mistake: bool,
+    /// One sentence naming the mistake.
+    #[serde(default, deserialize_with = "null_default")]
+    pub what: String,
+    /// One imperative sentence the agent should have followed.
+    #[serde(default, deserialize_with = "null_default")]
+    pub lesson: String,
+    #[serde(default)]
+    pub grader: Option<Grader>,
+    /// The mistake shows in the turn's actions, not only in the correction.
+    #[serde(default, deserialize_with = "null_default")]
+    pub visible: bool,
+}
+
+fn null_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// A `labeled.jsonl` line: the case as written, plus `label` and
+/// `labeled_by` (the judge model). Other case fields pass through untouched.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LabeledCase {
+    pub id: String,
+    #[serde(default)]
+    pub correction: String,
+    #[serde(default)]
+    pub label: Option<Label>,
+    #[serde(default)]
+    pub labeled_by: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, Value>,
+}
+
+impl LabeledCase {
+    /// The label, when it says the turn made a mistake visible in its actions:
+    /// the only cases the analysis includes.
+    #[must_use]
+    pub fn included(&self) -> Option<&Label> {
+        self.label.as_ref().filter(|l| l.mistake && l.visible)
+    }
+}
+
+/// A judge's one-word answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Verdict {
+    Yes,
+    No,
+    Unknown,
+}
+
+impl Verdict {
+    /// YES is true, NO is false, UNKNOWN is no answer.
+    #[must_use]
+    pub fn as_bool(self) -> Option<bool> {
+        match self {
+            Self::Yes => Some(true),
+            Self::No => Some(false),
+            Self::Unknown => None,
+        }
+    }
+}
+
+/// A `grades.jsonl` line: one graded run. Same fields as the prototype's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GradeLine {
+    pub case: String,
+    pub arm: ArmName,
+    pub trial: u32,
+    /// The label's grader kind.
+    #[serde(default)]
+    pub grader: Option<String>,
+    /// The deterministic verdict; `None` for a judge-only grader.
+    #[serde(default)]
+    pub repeat_det: Option<bool>,
+    /// The model judge's verdict; `None` when the judge was not asked.
+    #[serde(default)]
+    pub judge: Option<Verdict>,
+    #[serde(default)]
+    pub judge_reason: Option<String>,
+    #[serde(default)]
+    pub fidelity: Option<String>,
+    #[serde(default)]
+    pub foreign_paths: Vec<String>,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub graded_by: Option<String>,
+}
+
+impl GradeLine {
+    /// The verdict the analysis uses: deterministic when there is one, else
+    /// the judge's. `None` (UNKNOWN or not judged) is excluded and counted.
+    #[must_use]
+    pub fn repeat(&self) -> Option<bool> {
+        self.repeat_det
+            .or_else(|| self.judge.and_then(Verdict::as_bool))
+    }
+}
+
+/// A `shown.jsonl` line: does an arm's context for a case hold a lesson that
+/// addresses the case's mistake.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShownLine {
+    pub case: String,
+    pub arm: ArmName,
+    pub shown: Verdict,
+    pub reason: String,
+    pub judged_by: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graders_parse_at_the_boundary() {
+        let parse = |s: &str| serde_json::from_str::<Grader>(s).unwrap();
+        assert_eq!(
+            parse(r#"{"kind":"asks_permission"}"#).kind(),
+            "asks_permission"
+        );
+        let tool = parse(r#"{"kind":"tool_pattern","pattern":"gh pr create"}"#);
+        assert!(matches!(&tool, Grader::ToolPattern(re) if re.is_match("x gh pr create")));
+        let bad = parse(r#"{"kind":"file_written","pattern":"(unclosed"}"#);
+        assert_eq!(bad.kind(), "judge");
+        assert!(bad.rubric().unwrap().contains("(unclosed"));
+        assert_eq!(parse(r#"{"kind":"text_pattern"}"#).kind(), "judge");
+        assert_eq!(
+            parse(r#"{"kind":"vibes","rubric":"r"}"#).rubric(),
+            Some("r")
+        );
+        let round = serde_json::to_string(&tool).unwrap();
+        assert_eq!(round, r#"{"kind":"tool_pattern","pattern":"gh pr create"}"#);
+    }
+
+    #[test]
+    fn a_labeled_line_keeps_its_case_fields() {
+        let line = r#"{"id":"s:1","correction":"no","prompt":"p","label":{"id":"s:1","mistake":true,"what":"w","lesson":null,"grader":null,"visible":true},"labeled_by":"judge: claude sonnet"}"#;
+        let case: LabeledCase = serde_json::from_str(line).unwrap();
+        assert!(case.included().is_some());
+        assert_eq!(case.rest.get("prompt"), Some(&Value::from("p")));
+        let back: Value = serde_json::to_value(&case).unwrap();
+        assert_eq!(back["prompt"], "p");
+        assert_eq!(back["labeled_by"], "judge: claude sonnet");
+    }
+
+    #[test]
+    fn the_deterministic_verdict_wins_and_unknown_is_none() {
+        let mut g: GradeLine = serde_json::from_str(
+            r#"{"case":"c","arm":"none","trial":1,"repeat_det":false,"judge":"YES"}"#,
+        )
+        .unwrap();
+        assert_eq!(g.repeat(), Some(false));
+        g.repeat_det = None;
+        assert_eq!(g.repeat(), Some(true));
+        g.judge = Some(Verdict::Unknown);
+        assert_eq!(g.repeat(), None);
+    }
 
     #[test]
     fn fidelity_round_trips_through_the_prototype_strings() {
