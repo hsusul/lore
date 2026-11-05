@@ -616,3 +616,52 @@ fn doctor_flags_broken_refs_in_brackets_and_cjk_punctuation() {
     broken.sort();
     assert_eq!(broken, ["bracket-target", "cjk-target"]);
 }
+
+#[test]
+fn doctor_flags_comment_only_or_empty_frontmatter_as_bad_frontmatter() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    write(
+        &home.join(".claude/skills/empty-name/SKILL.md"),
+        "---\nname:\ndescription: 日本語の説明\n---\nBody\n",
+    );
+    write(
+        &home.join(".claude/skills/comment-name/SKILL.md"),
+        "---\nname: # TODO\ndescription: 日本語の説明\n---\nBody\n",
+    );
+    write(
+        &home.join(".claude/skills/comment-desc/SKILL.md"),
+        "---\nname: comment-desc\ndescription: # TODO: add description\n---\nBody\n",
+    );
+    let output = lorectl(home, &["skills", "doctor", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let findings = json(&output);
+    let mut bad_frontmatter: Vec<(String, String)> = findings
+        .iter()
+        .filter(|f| f["kind"] == "bad-frontmatter")
+        .map(|f| {
+            (
+                f["skill"].as_str().unwrap().to_string(),
+                f["reason"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    bad_frontmatter.sort();
+    assert_eq!(
+        bad_frontmatter,
+        vec![
+            (
+                "comment-desc".to_string(),
+                "frontmatter `description` is empty".to_string(),
+            ),
+            (
+                "comment-name".to_string(),
+                "frontmatter `name` is empty".to_string(),
+            ),
+            (
+                "empty-name".to_string(),
+                "frontmatter `name` is empty".to_string(),
+            ),
+        ]
+    );
+}
