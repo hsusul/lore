@@ -79,7 +79,7 @@ fn verified(invocation: &Invocation, cases: &[Case]) -> BTreeSet<String> {
         query::find_session(&conn, session)
             .ok()
             .flatten()
-            .is_some_and(|o| o.archive_id == session && o.agent_id == case.proposal.agent.as_str())
+            .is_some_and(|o| o.agent_id == case.proposal.agent.as_str())
     };
     (cases.iter().filter(held))
         .map(|case| case.proposal.session.as_str().to_owned())

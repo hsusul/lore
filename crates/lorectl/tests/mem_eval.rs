@@ -158,3 +158,96 @@ fn eval_refuses_a_policy_it_does_not_know() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn eval_with_archive_verifies_sessions_by_native_id() {
+    let home = tempfile::tempdir().unwrap();
+    ok(&lorectl(home.path(), &["mem", "init"], ""));
+
+    let archive_dir = home.path().join("archive");
+    std::fs::create_dir_all(&archive_dir).unwrap();
+    let conn =
+        lore_core::storage::open(&archive_dir.join(lore_core::paths::ARCHIVE_DB_FILENAME)).unwrap();
+    conn.execute(
+        "INSERT INTO agent (id, display_name) VALUES ('codex', 'Codex')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO agent_session (id, agent_id, native_session_id, dedupe_key)
+         VALUES ('s_arch_1', 'codex', 'rollout-2026-08-26-test', 'd1')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO agent_session (id, agent_id, native_session_id, dedupe_key)
+         VALUES ('s_arch_2', 'codex', 'rollout-2026-08-27-test', 'd2')",
+        [],
+    )
+    .unwrap();
+
+    let vault = lore_memory::vault::Vault::open(&home.path().join("vault")).unwrap();
+
+    let p1 = lore_memory::inbox::Proposal {
+        id: lore_memory::note::NoteId::parse("01JD0000000000000000000001").unwrap(),
+        agent: lore_memory::note::AgentKind::Codex,
+        session: lore_memory::note::SessionId::parse("s_arch_1").unwrap(),
+        source_verified: false,
+        note_type: lore_memory::note::NoteType::Fact,
+        scope: lore_memory::note::Scope::Repo(
+            lore_memory::note::RepoKey::parse("81444c90f1ff44ac").unwrap(),
+        ),
+        title: "Migrations are not idempotent".into(),
+        body: "Run the migration twice and it fails.\n".into(),
+        anchors: vec![lore_memory::note::Anchor {
+            path: lore_memory::note::RelPath::parse("src/db.rs").unwrap(),
+            lines: None,
+            hash: Some(lore_memory::note::LineHash::parse("b3:0123456789abcdef").unwrap()),
+            commit: None,
+        }],
+        relation: None,
+        proposed_at: time::OffsetDateTime::from_unix_timestamp(1_800_000_001).unwrap(),
+    };
+    let p2 = lore_memory::inbox::Proposal {
+        id: lore_memory::note::NoteId::parse("01JD0000000000000000000002").unwrap(),
+        agent: lore_memory::note::AgentKind::Codex,
+        session: lore_memory::note::SessionId::parse("rollout-2026-08-27-test").unwrap(),
+        source_verified: false,
+        note_type: lore_memory::note::NoteType::Fact,
+        scope: lore_memory::note::Scope::Repo(
+            lore_memory::note::RepoKey::parse("81444c90f1ff44ac").unwrap(),
+        ),
+        title: "Migrations are not idempotent here".into(),
+        body: "Run the migration twice and it fails.\n".into(),
+        anchors: vec![lore_memory::note::Anchor {
+            path: lore_memory::note::RelPath::parse("src/db.rs").unwrap(),
+            lines: None,
+            hash: Some(lore_memory::note::LineHash::parse("b3:0123456789abcdef").unwrap()),
+            commit: None,
+        }],
+        relation: None,
+        proposed_at: time::OffsetDateTime::from_unix_timestamp(1_800_000_002).unwrap(),
+    };
+
+    lore_memory::inbox::propose(&vault, p1).unwrap();
+    lore_memory::inbox::propose(&vault, p2).unwrap();
+    ok(&lorectl(
+        home.path(),
+        &["mem", "accept", "01JD0000000000000000000001"],
+        "",
+    ));
+    ok(&lorectl(
+        home.path(),
+        &["mem", "accept", "01JD0000000000000000000002"],
+        "",
+    ));
+
+    let out = ok(&lorectl(
+        home.path(),
+        &["mem", "eval", "--policy", "starting-bar", "--json"],
+        "",
+    ));
+    let report: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(report["auto_accepted"], 1);
+    assert_eq!(report["agreed"], 1);
+}
