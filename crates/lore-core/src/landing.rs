@@ -140,6 +140,8 @@ pub fn live_worktrees(conn: &Connection, repository_id: &str) -> Result<Vec<Path
 /// tree structure.
 pub struct LandingIndex {
     blobs: std::collections::HashSet<gix::ObjectId>,
+    staged: std::collections::HashSet<gix::ObjectId>,
+    repo: Option<gix::Repository>,
 }
 
 impl LandingIndex {
@@ -149,7 +151,10 @@ impl LandingIndex {
     /// answer", not "the content is absent".
     #[must_use]
     pub fn build(worktree: &Path) -> Option<Self> {
-        Self::build_until(&gix::discover(worktree).ok()?, None)
+        let repo = gix::discover(worktree).ok()?;
+        let mut index = Self::build_until(&repo, None)?;
+        index.repo = Some(repo);
+        Some(index)
     }
 
     /// The walk behind [`LandingIndex::build`], abandoned with `None` once
@@ -157,6 +162,10 @@ impl LandingIndex {
     fn build_until(repo: &gix::Repository, deadline: Option<Instant>) -> Option<Self> {
         let mut blobs = std::collections::HashSet::new();
         let mut seen_trees = std::collections::HashSet::new();
+        let staged: std::collections::HashSet<gix::ObjectId> = repo
+            .index()
+            .map(|index| index.entries().iter().map(|e| e.id).collect())
+            .unwrap_or_default();
 
         // `Reference::id()` PANICS on a symbolic target (HEAD, and any ref that
         // points at another ref), and a real repository is full of them. Peel
@@ -193,7 +202,11 @@ impl LandingIndex {
                 collect_tree(repo, tree.detach(), &mut blobs, &mut seen_trees);
             }
         }
-        Some(Self { blobs })
+        Some(Self {
+            blobs,
+            staged,
+            repo: None,
+        })
     }
 
     /// Whether this repository's history contains `oid`.
@@ -233,10 +246,8 @@ fn collect_tree(
     let Ok(tree) = obj.try_into_tree() else {
         return;
     };
-    let Ok(entries) = tree.iter().collect::<std::result::Result<Vec<_>, _>>() else {
-        return;
-    };
-    for entry in entries {
+    for entry in tree.iter() {
+        let Ok(entry) = entry else { continue };
         let id = entry.oid().to_owned();
         if entry.mode().is_tree() {
             collect_tree(repo, id, out, seen);
@@ -262,22 +273,33 @@ pub fn classify(worktree: &Path, index: &LandingIndex, oid: &str) -> Landing {
     if index.contains(oid) {
         return Landing::Committed;
     }
-    // Not in history. Three outcomes, not two: in the index (a reset discards
-    // it), merely present (a reset does not), or absent. Collapsing the first
-    // two produces advice that is wrong half the time.
-    let Ok(repo) = gix::discover(worktree) else {
-        return Landing::NoObservedLanding;
-    };
     let Ok(id) = gix::ObjectId::from_hex(oid.as_bytes()) else {
         return Landing::NoObservedLanding;
     };
-    if repo.find_object(id).is_err() {
-        return Landing::NoObservedLanding;
-    }
-    if index_contains(&repo, id) {
-        Landing::Staged
+    if let Some(repo) = &index.repo {
+        if repo.find_object(id).is_err() {
+            return Landing::NoObservedLanding;
+        }
+        if index.staged.contains(&id) {
+            Landing::Staged
+        } else {
+            Landing::Unreferenced
+        }
     } else {
-        Landing::Unreferenced
+        // Not in history. Three outcomes, not two: in the index (a reset discards
+        // it), merely present (a reset does not), or absent. Collapsing the first
+        // two produces advice that is wrong half the time.
+        let Ok(repo) = gix::discover(worktree) else {
+            return Landing::NoObservedLanding;
+        };
+        if repo.find_object(id).is_err() {
+            return Landing::NoObservedLanding;
+        }
+        if index_contains(&repo, id) {
+            Landing::Staged
+        } else {
+            Landing::Unreferenced
+        }
     }
 }
 
