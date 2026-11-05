@@ -43,6 +43,11 @@ vi.mock("./ipc", () => ({
   getSetting: vi.fn(),
   getJsonSetting: vi.fn(),
   setSetting: vi.fn(),
+  listLessons: vi.fn(),
+  listNotes: vi.fn(),
+  accountName: vi.fn(),
+  acceptLesson: vi.fn(),
+  retireNote: vi.fn(),
 }));
 
 import App from "./App";
@@ -155,7 +160,7 @@ afterEach(() => {
 });
 
 async function renderLoaded() {
-  render(<App />);
+  render(<App startOn="sessions" />);
   await screen.findByRole("option", { name: /Fix flaky retry backoff/ });
 }
 
@@ -558,10 +563,10 @@ describe("scan", () => {
       within(screen.getByRole("banner"))
         .getAllByRole("button")
         .map((b) => b.getAttribute("aria-label"));
-    expect(toolbar()).toEqual(["Rescan", "Command Palette", "Search Filters"]);
+    expect(toolbar()).toEqual(["Map", "Rescan", "Command Palette", "Search Filters"]);
     fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
     expect((await screen.findByRole("alert")).textContent).toBe("Scan failed: background ingestion worker unavailable");
-    expect(toolbar()).toEqual(["Scan failed", "Rescan", "Command Palette", "Search Filters"]);
+    expect(toolbar()).toEqual(["Map", "Scan failed", "Rescan", "Command Palette", "Search Filters"]);
 
     await user.click(screen.getByRole("button", { name: "Scan failed" }));
     const popover = screen.getByRole("dialog", { name: "Scan failed" });
@@ -574,7 +579,7 @@ describe("scan", () => {
 describe("states", () => {
   it("never shows a failed first load as an empty archive, and recovers on retry", async () => {
     m.listRepositories.mockRejectedValueOnce(new Error("database is locked"));
-    render(<App />);
+    render(<App startOn="sessions" />);
     expect(await screen.findByText("Lore could not open the archive.")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: /searchable place/ })).toBeNull();
 
@@ -586,7 +591,7 @@ describe("states", () => {
     m.listDetectedAgents.mockResolvedValue([{ ...agents[0], session_count: 0 }]);
     m.listRepositories.mockResolvedValue([]);
     m.listSessionsPage.mockResolvedValue({ sessions: [], next_cursor: null });
-    render(<App />);
+    render(<App startOn="sessions" />);
 
     expect(await screen.findByRole("heading", { name: "Every agent session you have run, in one searchable place." })).toBeTruthy();
     expect(screen.getByText("~/.claude/projects")).toBeTruthy();
@@ -821,6 +826,20 @@ describe("window shell", () => {
     await screen.findByRole("dialog", { name: "New Folder" });
     await user.keyboard("Ideas{Enter}");
     await waitFor(() => expect(m.createFolder).toHaveBeenCalledWith("Ideas"));
+  });
+
+  it("opens on the map, and moves between the map and the sessions", async () => {
+    m.listLessons.mockResolvedValue([]);
+    m.listNotes.mockResolvedValue([]);
+    m.accountName.mockResolvedValue("Henry Su");
+    render(<App />);
+    expect(await screen.findByText("You're caught up")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Fix flaky retry backoff/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
+    await screen.findByRole("option", { name: /Fix flaky retry backoff/ });
+    fireEvent.click(screen.getByRole("button", { name: "Map" }));
+    expect(await screen.findByText("You're caught up")).toBeTruthy();
   });
 
   it("reaches Settings by mouse through the palette button", async () => {
