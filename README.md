@@ -234,6 +234,12 @@ Before text is indexed, Lore scans it for secrets with fixed rules for known key
 
 When you connect `lorectl mcp` to an agent, the redacted text it returns goes to that agent's model provider, as any tool result does.
 
+### Replays talk to a model provider
+
+`lore-replay` is an evaluation tool, not part of the app. It measures whether lessons stop an agent from repeating a mistake a person already corrected, by replaying a Claude Code session from just before the correction. `lore-replay cases` only reads the archive and the session files. `lore-replay run` starts Claude Code, which sends the session's earlier turns and the prompt to Anthropic under your own login, billed to it. The crate holds no networking code itself and nothing in the archive depends on it, but it is not covered by the no-network guarantee above.
+
+Each replay runs in a scratch clone at the commit HEAD pointed at when the prompt was given, inside Claude Code's OS sandbox with no network and no reads of `/Users` or `/Volumes`, with `gh` replaced by a stub that refuses. Its session goes into a symlinked project folder that Lore never ingests, removed when the run ends. The original repository is never written to.
+
 ## Development
 
 `npm run tauri dev` runs the desktop app. `npm run dev` serves the UI with a built-in sample archive and reads no files. `scripts/synth-archive.sh` writes a fake Claude Code and Codex profile to test against. Never point a development run at your real history. Set `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `LORE_ARCHIVE_DIR`, and `LORE_VAULT_DIR` first.
@@ -244,6 +250,7 @@ crates/lore-memory/  vault, notes, index, anchors, recall, inbox, review
 crates/lore-skills/  skill inventory and doctor
 crates/lore-ipc/     IPC types and generated TypeScript bindings
 crates/lorectl/      the lorectl command line and MCP server
+crates/lore-replay/  correction-point replays for the lesson eval (starts Claude Code)
 src-tauri/, src/     Tauri 2 desktop shell and React UI
 ```
 

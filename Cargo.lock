@@ -2894,6 +2894,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-replay"
+version = "0.2.0"
+dependencies = [
+ "lexopt",
+ "lore-core",
+ "lore-memory",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "lore-skills"
 version = "0.2.0"
 dependencies = [
