@@ -425,3 +425,60 @@ fn search_with_path_filter_normalizes_leading_and_windows_separators() {
         assert_eq!(hits, vec![a_session_id(archive.path())], "{filter}");
     }
 }
+
+#[test]
+fn search_with_worktree_filter_resolves_worktree_path_and_name() {
+    let archive = tempfile::tempdir().unwrap();
+    let homes = tempfile::tempdir().unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../lore-core/fixtures/codex/patch_apply.jsonl");
+    let day = homes.path().join("codex/sessions/2026/08/11");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::copy(fixture, day.join("rollout-000000000003.jsonl")).unwrap();
+    assert_eq!(code(&lorectl(archive.path(), homes.path(), &["scan"])), 0);
+
+    let sid = a_session_id(archive.path());
+    let db_path = archive.path().join(lore_core::paths::ARCHIVE_DB_FILENAME);
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    conn.execute(
+        "INSERT INTO repository (id, identity_key, display_name, primary_path, identity_confidence, created_at, updated_at)
+         VALUES ('repo_1', 'gcd:1', 'repo', '/work/repo', 'high', 0, 0)",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktree (id, repository_id, path, git_common_dir_hash, branch_hint, is_primary, is_missing)
+         VALUES ('wt_feat', 'repo_1', '/work/repo-wt/feat', 'gcd:1', 'feat', 0, 0)",
+        [],
+    ).unwrap();
+    conn.execute(
+        "UPDATE session_segment SET repository_id = 'repo_1', worktree_id = 'wt_feat' WHERE session_id = ?1",
+        [&sid],
+    ).unwrap();
+    lore_core::search::reproject_for_test(&conn, &sid).unwrap();
+
+    for filter in [
+        "worktree:wt_feat",
+        "worktree:feat",
+        "worktree:feat/",
+        "worktree:/work/repo-wt/feat",
+        "worktree:repo-wt/feat",
+    ] {
+        let out = lorectl(archive.path(), homes.path(), &["--json", "search", filter]);
+        assert_eq!(
+            code(&out),
+            0,
+            "{filter}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let hits: Vec<String> = stdout(&out)
+            .lines()
+            .map(|l| {
+                serde_json::from_str::<serde_json::Value>(l).unwrap()["session_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(hits, vec![sid.clone()], "{filter}");
+    }
+}
