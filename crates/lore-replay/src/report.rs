@@ -582,7 +582,8 @@ impl Report {
             s,
             "\nPer case, repeats of graded trials per arm; \"=none\" marks an empty context reported as same as none ({tag}):"
         );
-        for row in &self.per_case {
+        let idle = self.per_case.iter().filter(|r| r.cells.is_empty()).count();
+        for row in self.per_case.iter().filter(|r| !r.cells.is_empty()) {
             let cells: Vec<String> = row
                 .cells
                 .iter()
@@ -591,12 +592,14 @@ impl Report {
                     format!("{} {}/{}{mark}", c.arm, c.repeats, c.trials)
                 })
                 .collect();
-            let cells = if cells.is_empty() {
-                "no graded trials".to_owned()
-            } else {
-                cells.join("  ")
-            };
-            let _ = writeln!(s, "  {}  {cells}  ({}) ({tag})", row.case, row.what);
+            let what = crate::claude::head(&row.what, 70);
+            let _ = writeln!(s, "  {}  {}  ({what}) ({tag})", row.case, cells.join("  "));
+        }
+        if idle > 0 {
+            let _ = writeln!(
+                s,
+                "  {idle} more included case(s) have no graded trials in any arm ({tag})."
+            );
         }
 
         let _ = writeln!(
