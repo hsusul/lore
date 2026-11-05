@@ -462,6 +462,25 @@ pub struct SkillsReportDto {
     pub findings: Vec<SkillFindingDto>,
 }
 
+/// How one installed skill has been used, from the archive. Element of the
+/// payload of `skill_usage`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillUsageDto {
+    pub skill: String,
+    /// Times it ran: a `Skill` tool call, `/name`, or `[$name](path)`.
+    #[ts(type = "number")]
+    pub uses: i64,
+    /// Sessions it ran in.
+    #[ts(type = "number")]
+    pub sessions: i64,
+    /// Epoch milliseconds of the newest use; null when it never ran.
+    #[ts(type = "number | null")]
+    pub last_ms: Option<i64>,
+    /// Corrections the person made right after it ran, newest first.
+    pub reprompts: Vec<ReceiptDto>,
+}
+
 /// Cumulative token usage and estimated cost across the entire archive.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]

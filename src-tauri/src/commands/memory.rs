@@ -221,7 +221,7 @@ fn lesson_dto(lesson: Lesson) -> LessonDto {
     }
 }
 
-fn receipt_dto(c: Candidate) -> ReceiptDto {
+pub(crate) fn receipt_dto(c: Candidate) -> ReceiptDto {
     ReceiptDto {
         session_id: c.session,
         agent_id: c.agent,
@@ -233,7 +233,7 @@ fn receipt_dto(c: Candidate) -> ReceiptDto {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use lore_core::adapters::{AdapterRegistry, DiscoveryRoots};
@@ -243,7 +243,7 @@ mod tests {
 
     /// Codex rollouts of `(role, text)` turns, one per session, ingested into an
     /// in-memory archive. Session `i` starts on 2026-08-`i+1`.
-    fn archive(dir: &std::path::Path, sessions: &[&[(&str, &str)]]) -> Connection {
+    pub(crate) fn archive(dir: &std::path::Path, sessions: &[&[(&str, &str)]]) -> Connection {
         let root = dir.join("codex/sessions");
         for (i, turns) in sessions.iter().enumerate() {
             let day = root.join(format!("2026/08/{:02}", i + 1));

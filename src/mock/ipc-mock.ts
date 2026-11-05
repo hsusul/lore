@@ -514,6 +514,10 @@ export function createMockHandlers(
     accept_lesson: () => "global/use-pnpm-not-npm.md",
     retire_note: () => "global/never-push-to-main.md",
     edit_note: () => "global/never-push-to-main.md",
+    skill_usage: () => [
+      { skill: "code-review", uses: 22, sessions: 15, last_ms: 1_785_751_203_000, reprompts: [{ session_id: "s1", agent_id: "claude-code", repo: "lore", at_ms: 1_785_751_203_000, text: "no, you missed the tests, look again", preceding: "Reviewed it, looks fine." }] },
+      { skill: "taste-skill", uses: 0, sessions: 0, last_ms: null, reprompts: [] },
+    ],
 
     skills_report: () => ({
       skills: 64,
