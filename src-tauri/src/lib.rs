@@ -71,7 +71,8 @@ pub fn run() {
             account_name,
             list_proposals,
             accept_proposal,
-            reject_proposal
+            reject_proposal,
+            find_lessons
         ])
         .build(tauri::generate_context!());
     let app = match app {

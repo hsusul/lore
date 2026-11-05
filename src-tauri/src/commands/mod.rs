@@ -1,5 +1,6 @@
 pub mod export;
 pub mod folders;
+pub mod lessons;
 pub mod memory;
 pub mod repositories;
 pub mod search;
@@ -9,6 +10,7 @@ pub mod system;
 
 pub use export::*;
 pub use folders::*;
+pub use lessons::*;
 pub use memory::*;
 pub use repositories::*;
 pub use search::*;

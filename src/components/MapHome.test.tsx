@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { NoteDto, ProposalDto, SessionSummary } from "../ipc";
@@ -11,6 +17,7 @@ vi.mock("../ipc", () => ({
   getSession: vi.fn(),
   listSessionMessagesPage: vi.fn(),
   listProposals: vi.fn(),
+  findLessons: vi.fn(),
   listNotes: vi.fn(),
   accountName: vi.fn(),
   acceptProposal: vi.fn(),
@@ -34,7 +41,12 @@ const pnpm: ProposalDto = {
   repo_name: "lore",
   proposed_ms: 1_785_751_203_000,
 };
-const tests: ProposalDto = { ...pnpm, id: "P2", title: "Run the tests before saying done", body: "The agent said it was done before testing.\n" };
+const tests: ProposalDto = {
+  ...pnpm,
+  id: "P2",
+  title: "Run the tests before saying done",
+  body: "The agent said it was done before testing.\n",
+};
 const push: NoteDto = {
   id: "N1",
   path: "global/never-push-to-main.md",
@@ -63,7 +75,13 @@ const summary = (id: string, title: string): SessionSummary => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
-  m.listSessionsPage.mockResolvedValue({ sessions: [summary("s1", "Add analytics to onboarding"), summary("s2", "Fix the retry backoff")], next_cursor: null });
+  m.listSessionsPage.mockResolvedValue({
+    sessions: [
+      summary("s1", "Add analytics to onboarding"),
+      summary("s2", "Fix the retry backoff"),
+    ],
+    next_cursor: null,
+  });
   m.searchPage.mockResolvedValue({
     hits: [
       {
@@ -87,15 +105,68 @@ beforeEach(() => {
     file_events: [],
     next_message_cursor: null,
     messages: [
-      { id: "m1", seq: 0, role: "user", event_kind: "message", is_sidechain: false, ts: null, model: null, parts: [{ ordinal: 0, kind: "text", text: "add analytics events", content_json: null, searchable: true }] },
-      { id: "m2", seq: 1, role: "assistant", event_kind: "message", is_sidechain: false, ts: null, model: null, parts: [{ ordinal: 0, kind: "tool_use", text: null, content_json: '{"name":"Edit"}', searchable: false }] },
-      { id: "m3", seq: 2, role: "assistant", event_kind: "message", is_sidechain: false, ts: null, model: null, parts: [{ ordinal: 0, kind: "text", text: "Added the events.", content_json: null, searchable: true }] },
+      {
+        id: "m1",
+        seq: 0,
+        role: "user",
+        event_kind: "message",
+        is_sidechain: false,
+        ts: null,
+        model: null,
+        parts: [
+          {
+            ordinal: 0,
+            kind: "text",
+            text: "add analytics events",
+            content_json: null,
+            searchable: true,
+          },
+        ],
+      },
+      {
+        id: "m2",
+        seq: 1,
+        role: "assistant",
+        event_kind: "message",
+        is_sidechain: false,
+        ts: null,
+        model: null,
+        parts: [
+          {
+            ordinal: 0,
+            kind: "tool_use",
+            text: null,
+            content_json: '{"name":"Edit"}',
+            searchable: false,
+          },
+        ],
+      },
+      {
+        id: "m3",
+        seq: 2,
+        role: "assistant",
+        event_kind: "message",
+        is_sidechain: false,
+        ts: null,
+        model: null,
+        parts: [
+          {
+            ordinal: 0,
+            kind: "text",
+            text: "Added the events.",
+            content_json: null,
+            searchable: true,
+          },
+        ],
+      },
     ],
   });
   m.listProposals.mockResolvedValue([pnpm, tests]);
   m.listNotes.mockResolvedValue([push]);
   m.accountName.mockResolvedValue("Henry Su");
-  m.acceptProposal.mockResolvedValue("repos/016fc9809d74377f/use-pnpm-not-npm.md");
+  m.acceptProposal.mockResolvedValue(
+    "repos/016fc9809d74377f/use-pnpm-not-npm.md",
+  );
   m.rejectProposal.mockResolvedValue(undefined);
   m.retireNote.mockResolvedValue("global/never-push-to-main.md");
 });
@@ -104,13 +175,27 @@ describe("MapHome", () => {
   it("opens on the next lesson to review, with what was said, and maps every lesson and note", async () => {
     render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
     const card = await screen.findByRole("region", { name: "Opened item" });
-    expect(within(card).getByRole("heading", { name: "Use pnpm, not npm" })).toBeTruthy();
+    expect(
+      within(card).getByRole("heading", { name: "Use pnpm, not npm" }),
+    ).toBeTruthy();
     expect(within(card).getByText("lore")).toBeTruthy();
-    expect(within(card).getByText("The agent ran npm install, and the person wanted pnpm.")).toBeTruthy();
+    expect(
+      within(card).getByText(
+        "The agent ran npm install, and the person wanted pnpm.",
+      ),
+    ).toBeTruthy();
     expect(within(card).getByText("“pnpm, again”")).toBeTruthy();
-    expect(within(card).getByText("codex, session s2, 2026-10-20")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "2 lessons waiting" })).toBeTruthy();
-    expect(screen.getByRole("img", { name: "Map of 3 lessons and notes in 2 areas" })).toBeTruthy();
+    expect(
+      within(card).getByText("codex, session s2, 2026-10-20"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "2 lessons waiting" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("img", {
+        name: "Map of 3 lessons and notes in 2 areas",
+      }),
+    ).toBeTruthy();
   });
 
   it("accepts the lesson and moves on to the next", async () => {
@@ -118,26 +203,47 @@ describe("MapHome", () => {
     const card = await screen.findByRole("region", { name: "Opened item" });
     m.listProposals.mockResolvedValue([tests]);
     fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
-    await waitFor(() => expect(m.acceptProposal).toHaveBeenCalledWith("P1", undefined));
-    expect(await screen.findByRole("heading", { name: "Run the tests before saying done" })).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toBe("Accepted. Agents get it from their next session.");
+    await waitFor(() =>
+      expect(m.acceptProposal).toHaveBeenCalledWith("P1", undefined),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        name: "Run the tests before saying done",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Accepted. Agents get it from their next session.",
+    );
   });
 
   it("accepts an edited rule", async () => {
     render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
     const card = await screen.findByRole("region", { name: "Opened item" });
     fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
-    fireEvent.change(within(card).getByRole("textbox", { name: "Rule" }), { target: { value: "Use pnpm everywhere" } });
+    fireEvent.change(within(card).getByRole("textbox", { name: "Rule" }), {
+      target: { value: "Use pnpm everywhere" },
+    });
     fireEvent.click(within(card).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(m.acceptProposal).toHaveBeenCalledWith("P1", "Use pnpm everywhere"));
+    await waitFor(() =>
+      expect(m.acceptProposal).toHaveBeenCalledWith(
+        "P1",
+        "Use pnpm everywhere",
+      ),
+    );
   });
 
   it("asks again later: the lesson leaves the queue for now", async () => {
     render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
     const card = await screen.findByRole("region", { name: "Opened item" });
-    fireEvent.click(within(card).getByRole("button", { name: "Ask again if it recurs" }));
-    expect(screen.getByRole("heading", { name: "Run the tests before saying done" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "1 lesson waiting" })).toBeTruthy();
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Ask again if it recurs" }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Run the tests before saying done" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "1 lesson waiting" }),
+    ).toBeTruthy();
     expect(m.acceptProposal).not.toHaveBeenCalled();
   });
 
@@ -146,16 +252,56 @@ describe("MapHome", () => {
     const card = await screen.findByRole("region", { name: "Opened item" });
     m.listProposals.mockResolvedValue([tests]);
     fireEvent.click(within(card).getByRole("button", { name: "Reject" }));
-    await waitFor(() => expect(m.rejectProposal).toHaveBeenCalledWith("P1", "Rejected in the Lore app"));
-    expect(await screen.findByRole("heading", { name: "Run the tests before saying done" })).toBeTruthy();
+    await waitFor(() =>
+      expect(m.rejectProposal).toHaveBeenCalledWith(
+        "P1",
+        "Rejected in the Lore app",
+      ),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        name: "Run the tests before saying done",
+      }),
+    ).toBeTruthy();
   });
 
-  it("points at /lore-lessons when no lesson waits", async () => {
+  it("finds lessons with the person's agent when none wait, then shows them", async () => {
     m.listProposals.mockResolvedValue([]);
+    let finish: (report: string) => void = () => {};
+    m.findLessons.mockReturnValue(new Promise((resolve) => (finish = resolve)));
     render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
     expect(await screen.findByText("You're caught up")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /Run \/lore-lessons/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /lessons? waiting/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /lessons? waiting/ }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Find lessons" }));
+    expect(
+      await screen.findByRole("heading", { name: /Finding lessons/ }),
+    ).toBeTruthy();
+    m.listProposals.mockResolvedValue([pnpm]);
+    finish("Filed: 1 rule.");
+    expect(
+      await screen.findByRole("heading", { name: "Use pnpm, not npm" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Your agent filed 1 lesson.")).toBeTruthy();
+  });
+
+  it("says why finding lessons failed", async () => {
+    m.listProposals.mockResolvedValue([]);
+    m.findLessons.mockRejectedValue(
+      "Claude Code is not installed. Install it, sign in, then try again.",
+    );
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Find lessons" }),
+    );
+    expect(
+      await screen.findByText(
+        "Claude Code is not installed. Install it, sign in, then try again.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Find lessons" })).toBeTruthy();
   });
 
   it("lists notes, and retires one", async () => {
@@ -163,11 +309,18 @@ describe("MapHome", () => {
     await screen.findByRole("region", { name: "Opened item" });
     fireEvent.click(screen.getByRole("button", { name: "Notes" }));
     const list = screen.getByRole("region", { name: "Notes" });
-    fireEvent.click(within(list).getByRole("button", { name: /Never push to main/ }));
+    fireEvent.click(
+      within(list).getByRole("button", { name: /Never push to main/ }),
+    );
     const card = screen.getByRole("region", { name: "Opened item" });
     expect(within(card).getByText("Henry")).toBeTruthy();
     fireEvent.click(within(card).getByRole("button", { name: "Retire" }));
-    await waitFor(() => expect(m.retireNote).toHaveBeenCalledWith("N1", "Retired in the Lore app"));
+    await waitFor(() =>
+      expect(m.retireNote).toHaveBeenCalledWith(
+        "N1",
+        "Retired in the Lore app",
+      ),
+    );
   });
 
   it("closes the card to look around; the logo or the pill brings it back", async () => {
@@ -188,16 +341,26 @@ describe("MapHome", () => {
     await screen.findByRole("region", { name: "Opened item" });
     fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
     const card = screen.getByRole("region", { name: "Sessions" });
-    fireEvent.click(await within(card).findByRole("button", { name: /Add analytics to onboarding/ }));
+    fireEvent.click(
+      await within(card).findByRole("button", {
+        name: /Add analytics to onboarding/,
+      }),
+    );
 
-    const reader = await within(card).findByRole("article", { name: "Add analytics to onboarding" });
+    const reader = await within(card).findByRole("article", {
+      name: "Add analytics to onboarding",
+    });
     expect(within(reader).getByText("add analytics events")).toBeTruthy();
     expect(within(reader).getByText("Ran Edit")).toBeTruthy();
     expect(within(reader).getByText("Added the events.")).toBeTruthy();
     expect(within(reader).getByText(/Claude Code, .*, 48 min/)).toBeTruthy();
 
     fireEvent.click(within(card).getByRole("button", { name: "‹ Sessions" }));
-    expect(await within(card).findByRole("button", { name: /Fix the retry backoff/ })).toBeTruthy();
+    expect(
+      await within(card).findByRole("button", {
+        name: /Fix the retry backoff/,
+      }),
+    ).toBeTruthy();
   });
 
   it("searches sessions from the rail and shows the matching snippet", async () => {
@@ -207,8 +370,12 @@ describe("MapHome", () => {
     const field = screen.getByRole("searchbox", { name: "Search sessions" });
     expect(document.activeElement).toBe(field);
     fireEvent.change(field, { target: { value: "retry" } });
-    await waitFor(() => expect(m.searchPage).toHaveBeenCalledWith("retry", 50, null));
-    const row = await screen.findByRole("button", { name: /Fix the retry backoff/ });
+    await waitFor(() =>
+      expect(m.searchPage).toHaveBeenCalledWith("retry", 50, null),
+    );
+    const row = await screen.findByRole("button", {
+      name: /Fix the retry backoff/,
+    });
     expect(within(row).getByText("retry").tagName).toBe("MARK");
   });
 
@@ -229,6 +396,8 @@ describe("MapHome", () => {
     render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
     expect(await screen.findByText("archive is locked")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("region", { name: "Opened item" })).toBeTruthy();
+    expect(
+      await screen.findByRole("region", { name: "Opened item" }),
+    ).toBeTruthy();
   });
 });
