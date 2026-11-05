@@ -377,6 +377,11 @@ export function retireNote(key: string, reason: string): Promise<string> {
   return invoke<string>("retire_note", { key, reason });
 }
 
+/** Rewrite the note named by `key` with an edited title and body; its timeline is kept. Resolves with the note's vault path. */
+export function editNote(key: string, title: string, body: string): Promise<string> {
+  return invoke<string>("edit_note", { key, title, body });
+}
+
 /** Calculate cumulative token usage and estimated cost across all sessions. */
 export function getTokenTotals(): Promise<TokenTotalsDto> {
   return invoke<TokenTotalsDto>("get_token_totals");

@@ -513,6 +513,7 @@ export function createMockHandlers(
 
     accept_lesson: () => "global/use-pnpm-not-npm.md",
     retire_note: () => "global/never-push-to-main.md",
+    edit_note: () => "global/never-push-to-main.md",
 
     skills_report: () => ({
       skills: 64,

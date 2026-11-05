@@ -261,8 +261,8 @@ describe("ipc contract", () => {
     expect(invoke).toHaveBeenCalledWith("skills_report");
   });
 
-  it("acceptLesson and retireNote invoke their commands and resolve with the note path", async () => {
-    const { acceptLesson, retireNote } = await import("./ipc");
+  it("acceptLesson, retireNote, and editNote invoke their commands and resolve with the note path", async () => {
+    const { acceptLesson, editNote, retireNote } = await import("./ipc");
     invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
     expect(await acceptLesson("abc123")).toBe("global/use-pnpm-not-npm.md");
     expect(invoke).toHaveBeenCalledWith("accept_lesson", { id: "abc123", title: null });
@@ -272,6 +272,9 @@ describe("ipc contract", () => {
     invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
     expect(await retireNote("use-pnpm-not-npm", "pnpm is gone")).toBe("global/use-pnpm-not-npm.md");
     expect(invoke).toHaveBeenCalledWith("retire_note", { key: "use-pnpm-not-npm", reason: "pnpm is gone" });
+    invoke.mockResolvedValueOnce("global/use-pnpm-not-npm.md");
+    expect(await editNote("use-pnpm-not-npm", "Use pnpm everywhere", "The lockfile is pnpm-lock.yaml.")).toBe("global/use-pnpm-not-npm.md");
+    expect(invoke).toHaveBeenCalledWith("edit_note", { key: "use-pnpm-not-npm", title: "Use pnpm everywhere", body: "The lockfile is pnpm-lock.yaml." });
   });
 
   it("getTokenTotals, relinkSegmentRepository, and checkForUpdates invoke expected commands", async () => {

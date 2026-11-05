@@ -6,9 +6,10 @@ use std::path::Path;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_ipc::{AgentsReadDto, LessonDto, NoteDto, ReadNoteDto, ReceiptDto};
 use lore_memory::mine::{self, Candidate, Lesson, Limits};
+use lore_memory::note::Note;
 use lore_memory::session_start::{self, CHAR_CAP, NOTE_CAP};
 use lore_memory::vault::{self, Vault, VaultError};
-use lore_memory::{filing, inbox, review};
+use lore_memory::{filing, inbox, index, review};
 use rusqlite::Connection;
 use tauri::State;
 
@@ -75,6 +76,40 @@ pub async fn retire_note(key: String, reason: String) -> Result<String, String> 
     review::retire(&vault, &key, &reason)
         .map(|(rel, _)| rel)
         .map_err(|e| e.to_string())
+}
+
+/// Rewrite the note named by `key` with `title` and `body`, as the person
+/// edited them: one commit in the vault. The note's `## Timeline` stays as it
+/// was, since it is Lore's record of where the note came from. Secrets are
+/// masked, as in a proposal. Returns the note's path.
+#[tauri::command]
+pub async fn edit_note(key: String, title: String, body: String) -> Result<String, String> {
+    let vault = open_vault().ok_or("no vault yet; `lorectl mem init` creates one")?;
+    edit_in(&vault, &key, &title, &body)
+}
+
+fn edit_in(vault: &Vault, key: &str, title: &str, body: &str) -> Result<String, String> {
+    let title = title.trim();
+    inbox::check_line("title", title).map_err(|e| e.to_string())?;
+    if body
+        .lines()
+        .any(|l| l.trim_end() == inbox::TIMELINE_HEADING)
+    {
+        return Err("the `## Timeline` section is Lore's to write".to_owned());
+    }
+    let rel = vault.find(key).map_err(|e| e.to_string())?;
+    let mut note = Note::parse(&vault.read(&rel).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("{rel}: {e}"))?;
+    let (_, timeline) = index::split_timeline(&note.body);
+    let statement = inbox::redact(body.trim()).map_err(|e| e.to_string())?;
+    note.body = match (statement.is_empty(), timeline.is_empty()) {
+        (true, _) => timeline.to_owned(),
+        (false, true) => format!("{statement}\n"),
+        (false, false) => format!("{statement}\n\n{timeline}"),
+    };
+    note.title = inbox::redact(title).map_err(|e| e.to_string())?;
+    vault.write(&rel, &note).map_err(|e| e.to_string())?;
+    Ok(rel)
 }
 
 fn accept_in(
@@ -315,6 +350,14 @@ mod tests {
         assert_eq!((read.note_cap, read.char_cap), (10, 2_000));
     }
 
+    fn id_of(vault: &Vault, rel: &str) -> String {
+        Note::parse(&vault.read(rel).unwrap())
+            .unwrap()
+            .id
+            .as_str()
+            .to_owned()
+    }
+
     #[test]
     fn accepting_a_lesson_keeps_one_note_and_only_once() {
         let dir = tempfile::tempdir().unwrap();
@@ -351,6 +394,37 @@ mod tests {
         assert_eq!(
             accept_in(&conn, &vault, "nope", None),
             Err("no lesson `nope` in the archive".to_owned())
+        );
+
+        let edited = edit_in(
+            &vault,
+            &id_of(&vault, &rel),
+            " Use pnpm everywhere ",
+            "The lockfile is pnpm-lock.yaml.\n",
+        )
+        .unwrap();
+        assert_eq!(edited, rel, "an edit keeps the file where it is");
+        let text = vault.read(&rel).unwrap();
+        let note = Note::parse(&text).unwrap();
+        assert_eq!(note.title, "Use pnpm everywhere");
+        assert!(
+            note.body
+                .starts_with("The lockfile is pnpm-lock.yaml.\n\n## Timeline\n"),
+            "{}",
+            note.body
+        );
+        assert_eq!(
+            note.body.matches("## Timeline").count(),
+            1,
+            "the timeline is kept, once"
+        );
+        assert_eq!(
+            edit_in(&vault, &rel, "Use pnpm", "## Timeline\n- forged\n"),
+            Err("the `## Timeline` section is Lore's to write".to_owned())
+        );
+        assert!(
+            edit_in(&vault, &rel, "  ", "text").is_err(),
+            "a note needs a title"
         );
 
         let (retired, _) = review::retire(&vault, &rel, "pnpm is gone now").unwrap();
