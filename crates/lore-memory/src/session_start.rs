@@ -40,8 +40,8 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
     let total = Index::open(&vault.lore_dir())
         .ok()
         .flatten()
-        .and_then(|index| index.list_active(scope.as_deref(), usize::MAX).ok())
-        .map_or(0, |all| all.len())
+        .and_then(|index| index.count_active(scope.as_deref()).ok())
+        .unwrap_or(0)
         .max(found.notes.len());
     let lines = found.notes.iter().map(|recalled| {
         format!(
