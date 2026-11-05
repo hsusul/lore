@@ -20,7 +20,7 @@ USAGE:
       Reads the archive read only. Prints the case count and each skip reason.
 
   lore-replay run --cases FILE --case ID --arm ARM --trial N --out DIR
-                  [--arms FILE] [--model sonnet] [--max-turns 25]
+                  [--arms FILE] [--model sonnet] [--max-turns 25] [--keep]
       Replay one case. Writes DIR/<case id, : as _>/<arm>-<trial>/run.json.
       ARM is none, own, file, lore, or oracle; file, lore, and oracle take their
       text from --arms (default: arms.json beside the cases file).
@@ -128,7 +128,7 @@ fn cases_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
 fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let (mut cases_file, mut case, mut arm, mut trial, mut out, mut arms) =
         (None, None, None, None, None, None);
-    let (mut model, mut max_turns) = ("sonnet".to_owned(), 25_u32);
+    let (mut model, mut max_turns, mut keep_scratch) = ("sonnet".to_owned(), 25_u32, false);
     while let Some(arg) = parser.next()? {
         match arg {
             Long("cases") => cases_file = Some(path(parser)?),
@@ -141,6 +141,7 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
             Long("arms") => arms = Some(path(parser)?),
             Long("model") => model = text(parser)?,
             Long("max-turns") => max_turns = parser.value()?.parse::<u32>()?,
+            Long("keep") => keep_scratch = true,
             Short('h') | Long("help") => {
                 print!("{USAGE}");
                 return Ok(());
@@ -163,6 +164,7 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
         trial,
         model,
         max_turns,
+        keep_scratch,
     };
     let record = lore_replay::run::run(&case, &arm, &opts)?;
     println!(

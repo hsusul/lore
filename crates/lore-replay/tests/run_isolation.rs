@@ -166,12 +166,13 @@ fn fixture(prompt_line: usize) -> Fixture {
     }
 }
 
-fn replay(f: &Fixture, arm: &str) -> std::process::Output {
+fn replay(f: &Fixture, arm: &str, extra: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_lore-replay"))
         .args(["run", "--cases"])
         .arg(&f.cases)
         .args(["--case", "s_abc:4", "--arm", arm, "--trial", "1", "--out"])
         .arg(f.root.join("runs"))
+        .args(extra)
         .env("HOME", &f.home)
         .env("CLAUDE_CONFIG_DIR", &f.claude_dir)
         .env("LORE_REPLAY_CLAUDE", f.root.join("fake-claude"))
@@ -191,7 +192,7 @@ fn read(path: &Path) -> String {
 fn a_replay_is_isolated_and_recorded() {
     let f = fixture(2);
     let before = snapshot(&f.repo);
-    let out = replay(&f, "oracle");
+    let out = replay(&f, "oracle", &["--keep"]);
     assert!(
         out.status.success(),
         "{}",
@@ -342,7 +343,7 @@ fn a_replay_is_isolated_and_recorded() {
 #[test]
 fn an_empty_prefix_starts_a_fresh_session() {
     let f = fixture(0);
-    let out = replay(&f, "none");
+    let out = replay(&f, "none", &[]);
     assert!(
         out.status.success(),
         "{}",
@@ -358,11 +359,30 @@ fn an_empty_prefix_starts_a_fresh_session() {
 #[test]
 fn an_arm_without_its_text_is_refused() {
     let f = fixture(2);
-    let out = replay(&f, "file");
+    let out = replay(&f, "file", &[]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("no `file` text"));
     assert!(
         !f.root.join("rec/argv").exists(),
         "the agent must not start"
     );
+}
+
+#[test]
+fn a_run_deletes_its_scratch_and_keeps_the_record() {
+    let f = fixture(2);
+    let out = replay(&f, "oracle", &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let run_dir = f.root.join("runs/s_abc_4/oracle-1");
+    for scratch in ["wd", "home", "claude-project"] {
+        assert!(
+            !run_dir.join(scratch).exists(),
+            "{scratch} outlived the run"
+        );
+    }
+    assert!(run_dir.join("run.json").is_file());
 }

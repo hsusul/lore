@@ -5,6 +5,11 @@
 //! (`claude-project`), the stub tools (`home`), `outward.log`, and the record
 //! (`run.json`). The only thing outside it is the project-folder symlink,
 //! which is removed when the agent exits.
+//!
+//! The clone, the project folder, and the stubs are deleted when the run ends,
+//! unless [`RunOptions::keep_scratch`] is set. Each clone is a full copy of the
+//! repository, and a few hundred kept clones of one large repository filled a
+//! disk.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -32,6 +37,8 @@ pub struct RunOptions {
     pub trial: u32,
     pub model: String,
     pub max_turns: u32,
+    /// Keep `wd`, `home`, and `claude-project` after the run, for inspection.
+    pub keep_scratch: bool,
 }
 
 /// `<out>/<case id, : as _>/<arm>-<trial>`.
@@ -53,6 +60,10 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     }
     std::fs::create_dir_all(&dir).map_err(|e| Error::io("create", &dir, e))?;
     let dir = std::fs::canonicalize(&dir).map_err(|e| Error::io("resolve", &dir, e))?;
+    let _scratch = Scratch {
+        dir: dir.clone(),
+        keep: opts.keep_scratch,
+    };
 
     let source = scratch::source(case);
     let wd = dir.join("wd");
@@ -222,6 +233,23 @@ fn appended_context(arm: &Arm, wd: &Path) -> Option<String> {
 fn tail(s: &str, chars: usize) -> String {
     let skip = s.chars().count().saturating_sub(chars);
     s.chars().skip(skip).collect()
+}
+
+/// Removes a run's scratch folders on drop, so a failed run is cleaned up too.
+struct Scratch {
+    dir: PathBuf,
+    keep: bool,
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if self.keep {
+            return;
+        }
+        for name in ["wd", "home", "claude-project"] {
+            let _ = std::fs::remove_dir_all(self.dir.join(name));
+        }
+    }
 }
 
 /// The replay's Claude Code project folder: a symlink under `projects/` to a
