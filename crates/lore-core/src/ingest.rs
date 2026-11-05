@@ -62,7 +62,10 @@ use crate::storage::{Result, StorageError};
 /// v12: Claude Code's bookkeeping events (`api-request`, `atis-latch`,
 /// `file-history-snapshot` and the like) no longer mark a session partially
 /// parsed, so sessions flagged for them at v11 clear only after a re-parse.
-pub const PARSER_VERSION: &str = "12";
+///
+/// v13: Codex messages between agents are kept as tool output, and Claude
+/// image blocks are attachments, so archives gain them only after a re-parse.
+pub const PARSER_VERSION: &str = "13";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
