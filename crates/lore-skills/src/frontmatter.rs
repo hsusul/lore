@@ -100,21 +100,37 @@ fn scalar(inline: &str, continuation: &[&str]) -> Result<String, String> {
     let more = continuation
         .iter()
         .map(|l| l.trim())
-        .filter(|l| !l.is_empty());
+        .filter(|l| !l.is_empty() && !l.starts_with('#'));
     if inline.starts_with(['|', '>']) {
         let sep = if inline.starts_with('|') { "\n" } else { " " };
-        return Ok(more.collect::<Vec<_>>().join(sep));
+        let text = more.collect::<Vec<_>>().join(sep);
+        if text.is_empty() {
+            return Err("is empty".into());
+        }
+        return Ok(text);
     }
+    let inline = if inline.starts_with('#') { "" } else { inline };
     let joined = std::iter::once(inline)
         .chain(more)
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
+    if joined.is_empty() {
+        return Err("is empty".into());
+    }
     if let Some(body) = joined.strip_prefix('"') {
-        return quoted(body, '"');
+        let value = quoted(body, '"')?;
+        if value.trim().is_empty() {
+            return Err("is empty".into());
+        }
+        return Ok(value);
     }
     if let Some(body) = joined.strip_prefix('\'') {
-        return quoted(body, '\'');
+        let value = quoted(body, '\'')?;
+        if value.trim().is_empty() {
+            return Err("is empty".into());
+        }
+        return Ok(value);
     }
     if let Some(c) = joined.chars().next() {
         if "[{*&!%@`".contains(c) || joined.starts_with("- ") {
@@ -123,7 +139,17 @@ fn scalar(inline: &str, continuation: &[&str]) -> Result<String, String> {
             ));
         }
     }
-    let value = joined.split(" #").next().unwrap_or_default().trim();
+    let value = joined
+        .split(" #")
+        .next()
+        .unwrap_or_default()
+        .split("\t#")
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if value.is_empty() || value == "null" || value == "~" {
+        return Err("is empty".into());
+    }
     if value.contains(": ") {
         return Err("contains `: ` outside quotes".into());
     }
@@ -297,6 +323,56 @@ mod tests {
     #[test]
     fn unclosed_fence_error_has_no_redundant_frontmatter_prefix() {
         assert_eq!(front("---\nname: x\n").unwrap_err(), "has no closing `---`");
+    }
+
+    #[test]
+    fn rejects_empty_values_and_comment_only_values() {
+        for (text, needle) in [
+            (
+                "---\nname: # comment\ndescription: d\n---\n",
+                "`name` is empty",
+            ),
+            (
+                "---\nname: # 日本語コメント\ndescription: d\n---\n",
+                "`name` is empty",
+            ),
+            (
+                "---\nname: x\ndescription: # comment\n---\n",
+                "`description` is empty",
+            ),
+            ("---\nname:\ndescription: d\n---\n", "`name` is empty"),
+            (
+                "---\nname: x\ndescription:\n---\n",
+                "`description` is empty",
+            ),
+            ("---\nname: \"\"\ndescription: d\n---\n", "`name` is empty"),
+            (
+                "---\nname: x\ndescription: ''\n---\n",
+                "`description` is empty",
+            ),
+            ("---\nname: null\ndescription: d\n---\n", "`name` is empty"),
+            ("---\nname: ~\ndescription: d\n---\n", "`name` is empty"),
+            (
+                "---\nname: x\ndescription: >\n  # comment only\n---\n",
+                "`description` is empty",
+            ),
+        ] {
+            let error = front(text).unwrap_err();
+            assert!(error.contains(needle), "{text:?} gave {error:?}");
+        }
+    }
+
+    #[test]
+    fn parses_non_ascii_and_strips_comments_in_continuation() {
+        let fm = front(
+            "---\nname: 日本語スキル\ndescription: >\n  Line 1\n  # comment line\n  Line 2 # trailing\n---\n",
+        )
+        .unwrap();
+        assert_eq!(fm.name, "日本語スキル");
+        assert_eq!(fm.description, "Line 1 Line 2 # trailing");
+
+        let fm_plain = front("---\nname: x\ndescription: 日本語の説明 # コメント\n---\n").unwrap();
+        assert_eq!(fm_plain.description, "日本語の説明");
     }
 
     #[test]
