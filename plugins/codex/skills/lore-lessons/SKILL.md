@@ -15,9 +15,18 @@ Call `recall_memory` with `cwd` set to the absolute path of the current director
 
 Call `mine_candidates` with `cwd` set to the absolute path of the current directory. While its `next_cursor` is not null, call it again with the same `cwd` and `cursor` set to that value. Read every page before you decide anything. If there are no candidates, say so and stop.
 
-Each candidate has the person's words, a suggested rule, receipts, and `may_conflict_with`. A receipt names the session, agent, date, and repository, and quotes what the person said. The reply's `cwd_repo` is the repository at the current directory.
+Each candidate has the person's words, a suggested rule, receipts, and `may_conflict_with`. A receipt names the session, agent, date, and repository. It quotes the person's `correction`, what the agent had just done as `before`, and the agent's reply as `after`. The reply's `cwd_repo` is the repository at the current directory.
 
-## 3. Keep standing rules only
+## 3. Understand each candidate
+
+A correction alone is often unclear. "no, cause you never get to access it" means nothing without the turn it answers. For every receipt, read `before`, then `correction`, then `after`, and work out two things.
+
+- What the agent did that the person did not want.
+- What the person wanted instead.
+
+If `before` and `after` do not make both clear, drop the candidate. Do not guess.
+
+## 4. Keep standing rules only
 
 Keep a candidate only when it states a rule a future session should follow. Drop these.
 
@@ -26,24 +35,29 @@ Keep a candidate only when it states a rule a future session should follow. Drop
 - Explanations of what happened.
 - Venting.
 
-## 4. Group by meaning
+## 5. Group by meaning
 
 Put candidates that mean the same thing in one group, even when the words differ or have typos. One group becomes one rule. The group keeps all its receipts.
 
-## 5. Check later turns
+## 6. Check later turns
 
 For each group, read its `may_conflict_with` turns. If a later turn overrides the rule, leave the group out. If a later turn only narrows it, keep the rule and say so in the body. A turn about something else is no conflict.
 
-## 6. Write the rule
+## 7. Write the rule
 
-Write each rule as one short imperative sentence in plain words, such as "Run the tests before you push." Start from the suggested rule, then fix its wording and typos. Leave out branch, PR, and file names unless the rule is about them. Keep it under 120 characters.
+Write each rule as one short imperative sentence in plain words, such as "Run the tests before you push." It must make sense to an agent that never saw the conversation.
 
-## 7. File each rule once
+- Name the thing the rule is about. Write "Keep docs out of git", not "Never track them".
+- Never start with it, this, that, they, cause, because, so, yes, or no. Lore refuses those titles.
+- Build the rule from what you worked out in step 3, not from the person's words alone. Fix wording and typos.
+- Leave out branch, PR, and file names unless the rule is about them. Keep it under 120 characters.
+
+## 8. File each rule once
 
 Call `propose_memory` once per rule with these fields.
 
 - `title` is the rule.
-- `body` is one sentence of context, then a Receipts list. Each item quotes the person's words and names the agent, session, and date from one receipt.
+- `body` is one sentence on what the agent did and what the person wanted instead, then a Receipts list. Each item quotes the person's words and names the agent, session, and date from one receipt.
 - `type` is `convention`, or `pitfall` when the rule warns against a mistake.
 - `scope` is `repo`, with `cwd` set to the current directory, when `cwd_repo` is not null and every receipt's `repo.scope` equals `cwd_repo.scope`. Otherwise it is `global`.
 - `session_id` is the session of the newest receipt.
@@ -53,14 +67,14 @@ If `propose_memory` refuses the session because another agent recorded it, use t
 A body looks like this.
 
 ```
-Said in 2 sessions while reviewing pull requests.
+The agent pushed without formatting, and the person wanted `cargo fmt` run first.
 
 Receipts:
 - "always run cargo fmt before pushing" (claude-code, session 0193a, 2026-10-12)
 - "you forgot fmt again, run it before every push" (codex, session 0194c, 2026-10-20)
 ```
 
-## 8. Report
+## 9. Report
 
 End with two short lists.
 

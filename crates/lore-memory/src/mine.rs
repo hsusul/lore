@@ -24,8 +24,12 @@ const MATCH_MEMBERS: usize = 8;
 
 /// A correction longer than this is a new task that happens to say "no".
 const MAX_CHARS: usize = 300;
-/// Characters kept of the assistant turn a correction answers.
-const PRECEDING_CHARS: usize = 200;
+/// Characters kept of the assistant turn a correction answers: enough for
+/// whoever writes the lesson to see what the agent had done.
+const PRECEDING_CHARS: usize = 600;
+/// Characters kept of the assistant turn that answers the correction, which
+/// often says in the agent's words what it got wrong.
+const FOLLOWING_CHARS: usize = 400;
 /// A repeat shares at least this much of its words, per mille, with an
 /// earlier user turn, and has at least `MIN_REPEAT_WORDS` of them.
 const REPEAT_PER_MILLE: usize = 700;
@@ -138,6 +142,8 @@ pub struct Candidate {
     pub text: String,
     /// The assistant turn it answers, redacted, cut short.
     pub preceding: Option<String>,
+    /// The assistant turn that answers it, redacted, cut short.
+    pub following: Option<String>,
     pub signal: Signal,
 }
 
@@ -266,6 +272,10 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
                     preceding: before
                         .filter(|b| !b.user)
                         .map(|b| one_line(&b.text).chars().take(PRECEDING_CHARS).collect()),
+                    following: turns
+                        .get(i + 1)
+                        .filter(|a| a.session == turn.session && !a.user)
+                        .map(|a| one_line(&a.text).chars().take(FOLLOWING_CHARS).collect()),
                     text,
                     signal,
                 },
@@ -874,6 +884,7 @@ pub fn find_conflicts(turns: &Turns, lessons: &mut [Lesson]) {
                 at_ms: t.at_ms,
                 text: one_line(&t.text),
                 preceding: None,
+                following: None,
                 signal: Signal::Correction,
             })
             .collect();
