@@ -170,20 +170,29 @@ fn persist_rows(
     )?;
 
     let session_id = session_id_for(agent_id, parsed);
-    let existing_sources = session_sources(tx, &session_id)?;
-    let kept = KeptRows::save(tx, &session_id)?;
+    let mut check_existing =
+        tx.prepare_cached("SELECT EXISTS(SELECT 1 FROM agent_session WHERE id = ?1)")?;
+    let is_existing: bool = check_existing.query_row([&session_id], |r| r.get(0))?;
 
-    // Explicitly delete search projections first so the FTS external-content
-    // delete trigger fires (an FK cascade would not fire it), then cascade-delete
-    // the rest of the session's rows. Idempotent replace.
-    tx.execute(
-        "DELETE FROM search_document WHERE session_id = ?1",
-        params![session_id],
-    )?;
-    tx.execute(
-        "DELETE FROM agent_session WHERE id = ?1",
-        params![session_id],
-    )?;
+    let (existing_sources, kept) = if is_existing {
+        let existing_sources = session_sources(tx, &session_id)?;
+        let kept = KeptRows::save(tx, &session_id)?;
+
+        // Explicitly delete search projections first so the FTS external-content
+        // delete trigger fires (an FK cascade would not fire it), then cascade-delete
+        // the rest of the session's rows. Idempotent replace.
+        tx.execute(
+            "DELETE FROM search_document WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM agent_session WHERE id = ?1",
+            params![session_id],
+        )?;
+        (existing_sources, kept)
+    } else {
+        (Vec::new(), KeptRows::empty())
+    };
     let high_water = search_high_water(tx)?;
 
     // Deleting the logical session above cascades its source links. Preserve
@@ -253,17 +262,38 @@ fn persist_rows(
 /// `git_observation` rows are wide and restored whole.
 struct KeptRows {
     folder: Option<(String, i64)>,
+    has_temp: bool,
 }
 
 impl KeptRows {
+    fn empty() -> Self {
+        Self {
+            folder: None,
+            has_temp: false,
+        }
+    }
+
     fn save(tx: &Connection, session_id: &str) -> Result<Self> {
-        let folder = tx
-            .query_row(
-                "SELECT folder_id, added_at FROM session_folder WHERE session_id = ?1",
-                [session_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+        let mut folder_stmt = tx.prepare_cached(
+            "SELECT folder_id, added_at FROM session_folder WHERE session_id = ?1",
+        )?;
+        let folder = folder_stmt
+            .query_row([session_id], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
+
+        let mut check_evidence = tx.prepare_cached(
+            "SELECT EXISTS(SELECT 1 FROM git_observation WHERE session_id = ?1) \
+             OR EXISTS(SELECT 1 FROM session_segment WHERE session_id = ?1 AND repository_id IS NOT NULL)",
+        )?;
+        let has_evidence: bool = check_evidence.query_row([session_id], |r| r.get(0))?;
+
+        if !has_evidence {
+            return Ok(Self {
+                folder,
+                has_temp: false,
+            });
+        }
+
         tx.execute_batch(
             "DROP TABLE IF EXISTS temp.kept_git_observation;
              DROP TABLE IF EXISTS temp.kept_segment;",
@@ -279,7 +309,10 @@ impl KeptRows {
              FROM session_segment WHERE session_id = ?1",
             [session_id],
         )?;
-        Ok(Self { folder })
+        Ok(Self {
+            folder,
+            has_temp: true,
+        })
     }
 
     /// Restore after the parsed rows are inserted. A segment keeps its
@@ -291,53 +324,55 @@ impl KeptRows {
     /// changed may now describe another repository.
     fn restore(&self, tx: &Connection, session_id: &str) -> Result<()> {
         if let Some((folder_id, added_at)) = &self.folder {
-            tx.execute(
+            let mut insert_folder = tx.prepare_cached(
                 "INSERT INTO session_folder (session_id, folder_id, added_at) VALUES (?1,?2,?3)",
-                params![session_id, folder_id, added_at],
+            )?;
+            insert_folder.execute(params![session_id, folder_id, added_at])?;
+        }
+        if self.has_temp {
+            tx.execute(
+                "UPDATE session_segment SET
+                    repository_id = (SELECT k.repository_id FROM temp.kept_segment k
+                                     WHERE k.id = session_segment.id),
+                    worktree_id = (SELECT k.worktree_id FROM temp.kept_segment k
+                                   WHERE k.id = session_segment.id),
+                    resolution_confidence = (SELECT k.resolution_confidence
+                                             FROM temp.kept_segment k
+                                             WHERE k.id = session_segment.id)
+                 WHERE session_id = ?1 AND EXISTS (
+                    SELECT 1 FROM temp.kept_segment k
+                    WHERE k.id = session_segment.id AND k.cwd IS session_segment.cwd
+                      AND k.repository_id IS NOT NULL)",
+                [session_id],
+            )?;
+            tx.execute(
+                "UPDATE git_observation SET observed_at = (
+                    SELECT k.observed_at FROM temp.kept_git_observation k
+                    WHERE k.id = git_observation.id)
+                 WHERE session_id = ?1 AND EXISTS (
+                    SELECT 1 FROM temp.kept_git_observation k
+                    WHERE k.id = git_observation.id AND k.source = git_observation.source
+                      AND k.branch IS git_observation.branch
+                      AND k.commit_sha IS git_observation.commit_sha)",
+                [session_id],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO git_observation
+                 SELECT * FROM temp.kept_git_observation k
+                 WHERE k.source IN ('lore_captured', 'lore_reverified')
+                   AND (k.segment_id IS NULL
+                        OR EXISTS (
+                            SELECT 1 FROM session_segment seg
+                            JOIN temp.kept_segment ks ON ks.id = seg.id
+                            WHERE seg.id = k.segment_id AND seg.session_id = ?1
+                              AND ks.cwd IS seg.cwd))",
+                [session_id],
+            )?;
+            tx.execute_batch(
+                "DROP TABLE temp.kept_git_observation;
+                 DROP TABLE temp.kept_segment;",
             )?;
         }
-        tx.execute(
-            "UPDATE session_segment SET
-                repository_id = (SELECT k.repository_id FROM temp.kept_segment k
-                                 WHERE k.id = session_segment.id),
-                worktree_id = (SELECT k.worktree_id FROM temp.kept_segment k
-                               WHERE k.id = session_segment.id),
-                resolution_confidence = (SELECT k.resolution_confidence
-                                         FROM temp.kept_segment k
-                                         WHERE k.id = session_segment.id)
-             WHERE session_id = ?1 AND EXISTS (
-                SELECT 1 FROM temp.kept_segment k
-                WHERE k.id = session_segment.id AND k.cwd IS session_segment.cwd
-                  AND k.repository_id IS NOT NULL)",
-            [session_id],
-        )?;
-        tx.execute(
-            "UPDATE git_observation SET observed_at = (
-                SELECT k.observed_at FROM temp.kept_git_observation k
-                WHERE k.id = git_observation.id)
-             WHERE session_id = ?1 AND EXISTS (
-                SELECT 1 FROM temp.kept_git_observation k
-                WHERE k.id = git_observation.id AND k.source = git_observation.source
-                  AND k.branch IS git_observation.branch
-                  AND k.commit_sha IS git_observation.commit_sha)",
-            [session_id],
-        )?;
-        tx.execute(
-            "INSERT OR IGNORE INTO git_observation
-             SELECT * FROM temp.kept_git_observation k
-             WHERE k.source IN ('lore_captured', 'lore_reverified')
-               AND (k.segment_id IS NULL
-                    OR EXISTS (
-                        SELECT 1 FROM session_segment seg
-                        JOIN temp.kept_segment ks ON ks.id = seg.id
-                        WHERE seg.id = k.segment_id AND seg.session_id = ?1
-                          AND ks.cwd IS seg.cwd))",
-            [session_id],
-        )?;
-        tx.execute_batch(
-            "DROP TABLE temp.kept_git_observation;
-             DROP TABLE temp.kept_segment;",
-        )?;
         crate::search::project_session_git(tx, session_id)
     }
 }
@@ -1479,7 +1514,7 @@ fn session_id_for(agent_id: &str, parsed: &ParsedSession) -> String {
 }
 
 fn session_sources(tx: &Connection, session_id: &str) -> Result<Vec<SessionSourceRow>> {
-    let mut statement = tx.prepare(
+    let mut statement = tx.prepare_cached(
         "SELECT source_artifact_id, first_seq, last_seq
          FROM session_source WHERE session_id = ?1",
     )?;
@@ -2231,5 +2266,12 @@ mod tests {
             session_id_for("claude-code", &s3),
             session_id_for("claude-code", &s4)
         );
+    }
+
+    #[test]
+    fn kept_rows_empty_has_no_temp() {
+        let kept = KeptRows::empty();
+        assert!(kept.folder.is_none());
+        assert!(!kept.has_temp);
     }
 }
