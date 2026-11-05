@@ -453,6 +453,26 @@ fn append_filters(
     Ok(())
 }
 
+/// Strip a trailing `.git` suffix case-insensitively without byte slicing.
+fn strip_git_suffix(s: &str) -> &str {
+    s.len()
+        .checked_sub(4)
+        .filter(|&at| {
+            s.get(at..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(".git"))
+        })
+        .and_then(|at| s.get(..at))
+        .unwrap_or(s)
+}
+
+/// Normalize a repo query string: trim trailing slashes, strip `.git`, and
+/// extract the last path component if a path or owner/repo was specified.
+fn normalize_repo_name(value: &str) -> String {
+    let trimmed = value.trim_end_matches(['/', '\\']);
+    let without_git = strip_git_suffix(trimmed);
+    path_basename(without_git).to_lowercase()
+}
+
 /// Resolve a `repo:` value to the repository ids it names: the value itself as
 /// an id (so `repo:<id>` keeps working, even for an id with no `repository`
 /// row), plus every repository whose display name, or whose root's last path
@@ -465,7 +485,8 @@ fn append_filters(
 /// in the value are ordinary characters. The `repository` table is one row per
 /// repository, so a full read per query is small.
 fn resolve_repository_ids(conn: &Connection, value: &str) -> Result<Vec<String>> {
-    let wanted = value.to_lowercase();
+    let wanted = normalize_repo_name(value);
+    let raw_wanted = value.to_lowercase();
     let mut ids = vec![value.to_string()];
     let mut stmt = conn.prepare("SELECT id, display_name, primary_path FROM repository")?;
     let rows = stmt.query_map([], |row| {
@@ -477,11 +498,16 @@ fn resolve_repository_ids(conn: &Connection, value: &str) -> Result<Vec<String>>
     })?;
     for row in rows {
         let (id, display_name, primary_path) = row?;
-        let by_name = display_name.to_lowercase() == wanted;
-        let by_root = primary_path
-            .as_deref()
-            .is_some_and(|p| path_basename(p).to_lowercase() == wanted);
-        if (by_name || by_root) && !ids.contains(&id) {
+        let name_lower = display_name.to_lowercase();
+        let by_name = (!wanted.is_empty() && name_lower == wanted) || name_lower == raw_wanted;
+        let by_root = primary_path.as_deref().is_some_and(|p| {
+            let base = path_basename(p).to_lowercase();
+            let base_normalized = strip_git_suffix(&base);
+            (!wanted.is_empty() && (base == wanted || base_normalized == wanted))
+                || base == raw_wanted
+        });
+        let by_id = id == value || (!wanted.is_empty() && id.to_lowercase() == wanted);
+        if (by_name || by_root || by_id) && !ids.contains(&id) {
             ids.push(id);
         }
     }
@@ -875,7 +901,7 @@ fn parse_query(raw: &str) -> ParsedQuery {
         if let Some(value) = token.strip_prefix("agent:") {
             agent = clean_filter(value);
         } else if let Some(value) = token.strip_prefix("path:") {
-            path = clean_filter(value);
+            path = clean_path_filter(value);
         } else if let Some(value) = token.strip_prefix("tool:") {
             tool = clean_filter(value);
         } else if let Some(value) = token.strip_prefix("model:") {
@@ -938,6 +964,29 @@ fn clean_filter(value: &str) -> Option<String> {
         .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
         .collect();
     (!clean.is_empty()).then_some(clean)
+}
+
+/// Normalize and clean a path filter: sanitize separators, remove traversal,
+/// strip leading slashes and drive letters, but preserve directory intent when
+/// a trailing separator was provided.
+fn clean_path_filter(value: &str) -> Option<String> {
+    let clean: String = value
+        .chars()
+        .filter(|&c| !c.is_control() && !crate::is_zero_width(c))
+        .collect();
+    if clean.is_empty() {
+        return None;
+    }
+    let has_trailing_sep = clean.ends_with('/') || clean.ends_with('\\');
+    let sanitized = crate::adapters::common::sanitize_path(&clean);
+    if sanitized.is_empty() {
+        return None;
+    }
+    if has_trailing_sep {
+        Some(format!("{sanitized}/"))
+    } else {
+        Some(sanitized)
+    }
 }
 
 /// Build a safe FTS5 MATCH expression: each plain term becomes a quoted phrase
