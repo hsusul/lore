@@ -169,7 +169,6 @@ pub fn mentions(body: &str) -> Vec<String> {
     let mut i = 0;
     while i < bytes.len() {
         let rest = body.get(i..).unwrap_or_default();
-        let prev = i.checked_sub(1).and_then(|p| bytes.get(p)).copied();
         if let Some(after) = rest.strip_prefix("**") {
             let name = name_prefix(after);
             let tail = after.get(name.len()..).and_then(|t| t.strip_prefix("**"));
@@ -189,7 +188,8 @@ pub fn mentions(body: &str) -> Vec<String> {
                 }
             }
         } else if let Some(after) = rest.strip_prefix('/') {
-            let opens = prev.is_none_or(|p| p.is_ascii_whitespace() || b"(`\"'".contains(&p));
+            let prev = body.get(..i).and_then(|b| b.chars().next_back());
+            let opens = prev.is_none_or(opens_mention);
             let name = name_prefix(after);
             let tail = after.get(name.len()..).unwrap_or_default();
             if opens && !name.is_empty() && ends_mention(tail) {
@@ -201,6 +201,10 @@ pub fn mentions(body: &str) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+fn opens_mention(c: char) -> bool {
+    c.is_whitespace() || "([{\"'\u{feff}«‹“‘（【「『《〈〔〖".contains(c)
 }
 
 fn line_around(body: &str, at: usize) -> &str {
@@ -238,7 +242,9 @@ fn ends_mention(tail: &str) -> bool {
     let mut chars = tail.chars();
     match chars.next() {
         None => true,
-        Some(c) if c.is_whitespace() || "),;!?`'\"".contains(c) => true,
+        Some(c) if c.is_whitespace() || "),;!?`'\"[]{}»›”’）】」』》〉〕〗".contains(c) => {
+            true
+        }
         Some('.') => chars.next().is_none_or(char::is_whitespace),
         Some(_) => false,
     }
@@ -307,6 +313,21 @@ mod tests {
         assert_eq!(
             mentions(body),
             ["how", "poteto-mode", "principle-x", "swarm"]
+        );
+    }
+
+    #[test]
+    fn mentions_recognizes_brackets_and_cjk_punctuation() {
+        let body = "See [/bracket-skill] and {/brace-skill}.\n\
+                    日本語の「/cjk-quote-skill」や（/cjk-paren-skill）を参照。";
+        assert_eq!(
+            mentions(body),
+            [
+                "brace-skill",
+                "bracket-skill",
+                "cjk-paren-skill",
+                "cjk-quote-skill"
+            ]
         );
     }
 }
