@@ -681,9 +681,11 @@ fn collect_jsonl(dir: &std::path::Path, out: &mut Vec<SessionRef>) {
             collect_jsonl(&entry.path(), out);
         } else {
             let file_name = entry.file_name();
-            if std::path::Path::new(&file_name)
-                .extension()
-                .is_some_and(|e| e == "jsonl")
+            // A workflow's `journal.jsonl` logs its steps, not a conversation.
+            if file_name != "journal.jsonl"
+                && std::path::Path::new(&file_name)
+                    .extension()
+                    .is_some_and(|e| e == "jsonl")
             {
                 let meta = entry.metadata().ok();
                 let native_id = std::path::Path::new(&file_name)
@@ -935,6 +937,8 @@ mod tests {
         .unwrap();
         std::fs::write(subagents.join("agent-1.jsonl"), "{}\n").unwrap();
         std::fs::write(workflow.join("agent-2.jsonl"), "{}\n").unwrap();
+        // The workflow's own journal logs its steps; it is not a transcript.
+        std::fs::write(workflow.join("journal.jsonl"), "{\"type\":\"launched\"}\n").unwrap();
 
         let sessions = ClaudeCodeAdapter::new().discover_sessions(&DiscoveryRoots::new(vec![root]));
         let mut found: Vec<String> = sessions
