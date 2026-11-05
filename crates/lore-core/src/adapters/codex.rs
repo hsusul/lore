@@ -256,7 +256,9 @@ fn parse_from(
                 seq += 1;
             }
             // Known non-conversation record types.
-            "world_state" | "inter_agent_communication_metadata" => {}
+            // token_usage_record repeats per-response usage; session totals
+            // come from event_msg token_count.
+            "world_state" | "inter_agent_communication_metadata" | "token_usage_record" => {}
             other => {
                 session.note_partial(format!("unknown record type: {}", bounded(other)));
             }
@@ -420,8 +422,8 @@ fn message_item(
 
 /// A message one Codex agent sent another, such as a subagent's final answer
 /// to its parent. It is filed as tool output, not as the person's turn, so it
-/// never reads as something the user said. Only its plain text is kept; an
-/// encrypted payload has no text.
+/// never reads as something the user said. Only its plain text is kept, which
+/// names the sender; an encrypted payload has no text.
 fn agent_message(
     p: &Value,
     seq: i64,
@@ -429,14 +431,10 @@ fn agent_message(
     model: Option<String>,
     offset: i64,
 ) -> ParsedMessage {
-    let mut msg = message_item(p, seq, ts, model, offset);
-    msg.role = Role::Tool;
-    msg.metadata_json = serde_json::to_string(&serde_json::json!({
-        "author": p.get("author"),
-        "recipient": p.get("recipient"),
-    }))
-    .ok();
-    msg
+    ParsedMessage {
+        role: Role::Tool,
+        ..message_item(p, seq, ts, model, offset)
+    }
 }
 
 fn reasoning_item(
@@ -1882,7 +1880,8 @@ mod tests {
         let jsonl = concat!(
             "{\"type\":\"response_item\",\"payload\":{\"type\":\"additional_tools\",\"role\":\"developer\",\"tools\":[]}}\n",
             "{\"type\":\"response_item\",\"payload\":{\"type\":\"agent_message\",\"author\":\"/root/scan\",\"recipient\":\"/root\",\"content\":[{\"type\":\"input_text\",\"text\":\"Message Type: FINAL_ANSWER\\nPayload:\\nNo candidate found.\"},{\"type\":\"encrypted_content\",\"encrypted_content\":\"gAAA\"}]}}\n",
-            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"CommandExecution\",\"aggregated_output\":\"ok\"}}}\n"
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"CommandExecution\",\"aggregated_output\":\"ok\"}}}\n",
+            "{\"type\":\"token_usage_record\",\"payload\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n"
         );
         let s = CodexAdapter::new().parse_str(jsonl, "s_agents");
         assert_eq!(s.status, crate::model::ParseStatus::Ok, "{:?}", s.notes);
@@ -1893,10 +1892,6 @@ mod tests {
         assert_eq!(
             m.parts[0].text.as_deref(),
             Some("Message Type: FINAL_ANSWER\nPayload:\nNo candidate found.")
-        );
-        assert_eq!(
-            m.metadata_json.as_deref(),
-            Some(r#"{"author":"/root/scan","recipient":"/root"}"#)
         );
     }
 
