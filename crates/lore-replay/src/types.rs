@@ -75,7 +75,7 @@ pub struct Case {
     pub signal: Signal,
 }
 
-/// Which context a replay adds to the agent's system prompt.
+/// Which context a replay adds before the prompt, in the final user message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArmName {
     /// Nothing: the agent's base behavior.
