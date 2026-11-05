@@ -17,7 +17,11 @@ pub fn doctor(inventory: &Inventory) -> Vec<Finding> {
     for record in &inventory.records {
         by_name.entry(&record.name).or_default().push(record);
     }
-    let reach = reachable(&inventory.records);
+    let reach = if inventory.records.iter().any(|r| !r.refs.is_empty()) {
+        reachable(&inventory.records)
+    } else {
+        BTreeMap::new()
+    };
 
     let mut findings = Vec::new();
     for (name, records) in &by_name {
@@ -58,6 +62,10 @@ fn first_path(record: &SkillRecord) -> PathBuf {
 /// Separate copies on disk in two or more locations. Links to one folder are
 /// one copy, so they never count.
 fn duplicate(name: &str, records: &[&SkillRecord]) -> Option<Finding> {
+    let total_installs: usize = records.iter().map(|r| r.installs.len()).sum();
+    if total_installs <= 1 {
+        return None;
+    }
     let mut copies: Vec<(usize, &Path, &Path)> = records
         .iter()
         .flat_map(|r| &r.installs)
@@ -70,13 +78,19 @@ fn duplicate(name: &str, records: &[&SkillRecord]) -> Option<Finding> {
         })
         .collect();
     copies.sort();
-    let mut seen_real = BTreeSet::new();
-    copies.retain(|(_, real, _)| seen_real.insert(*real));
-    let locations: BTreeSet<usize> = copies.iter().map(|(order, ..)| *order).collect();
-    (locations.len() > 1).then(|| Finding::Duplicate {
+    let mut unique_copies: Vec<(usize, &Path, &Path)> = Vec::with_capacity(copies.len());
+    for copy in copies {
+        if !unique_copies.iter().any(|c| c.1 == copy.1) {
+            unique_copies.push(copy);
+        }
+    }
+    let has_multiple_locations = unique_copies
+        .first()
+        .is_some_and(|first| unique_copies.last().is_some_and(|last| first.0 != last.0));
+    has_multiple_locations.then(|| Finding::Duplicate {
         skill: name.to_string(),
-        paths: copies
-            .iter()
+        paths: unique_copies
+            .into_iter()
             .map(|(_, _, path)| path.to_path_buf())
             .collect(),
     })
@@ -93,17 +107,18 @@ fn managed(install: &Install, roots: &Roots) -> bool {
 
 fn per_record(record: &SkillRecord, roots: &Roots) -> Vec<Finding> {
     let mut out = Vec::new();
-    let path = first_path(record);
-    // The copy a fix may point at: the first one the user owns.
-    let owned = record
-        .installs
-        .iter()
-        .find(|i| !managed(i, roots))
-        .map(|i| i.path.clone());
+    let get_owned = || {
+        record
+            .installs
+            .iter()
+            .find(|i| !managed(i, roots))
+            .map(|i| i.path.clone())
+    };
     if let Some(reason) = &record.frontmatter_error {
+        let path = first_path(record);
         out.push(Finding::BadFrontmatter {
             skill: record.name.clone(),
-            path: owned.unwrap_or_else(|| path.clone()),
+            path: get_owned().unwrap_or(path),
             reason: reason.clone(),
         });
     } else if let Some(declared) = record.declared_name.as_ref().filter(|d| **d != record.name) {
@@ -111,7 +126,7 @@ fn per_record(record: &SkillRecord, roots: &Roots) -> Vec<Finding> {
         // agent manages (Hugging Face's `cli` declares `hf-cli`) chose that
         // name, and the agent loads it as declared. Only a copy the user owns
         // is theirs to rename.
-        if let Some(owned) = owned {
+        if let Some(owned) = get_owned() {
             out.push(Finding::NameMismatch {
                 skill: record.name.clone(),
                 declared: declared.clone(),
@@ -122,7 +137,7 @@ fn per_record(record: &SkillRecord, roots: &Roots) -> Vec<Finding> {
     if record.source == Source::Unknown {
         out.push(Finding::UnknownSource {
             skill: record.name.clone(),
-            path,
+            path: first_path(record),
         });
     }
     out
@@ -145,6 +160,9 @@ fn broken_refs(
     by_name: &BTreeMap<&str, Vec<&SkillRecord>>,
     inventory: &Inventory,
 ) -> Vec<Finding> {
+    if record.refs.is_empty() {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let mut agents: BTreeMap<Agent, &Path> = BTreeMap::new();
     for install in &record.installs {
@@ -211,15 +229,28 @@ fn codex_budget(by_name: &BTreeMap<&str, Vec<&SkillRecord>>) -> Option<Finding> 
 /// Group by skill; groups ordered by their worst finding, then by name; the
 /// agent-wide `CodexBudget` sorts as its own group.
 fn sort(findings: &mut [Finding]) {
-    let mut worst: BTreeMap<Option<String>, u8> = BTreeMap::new();
+    let mut worst: BTreeMap<String, u8> = BTreeMap::new();
+    let mut none_worst = u8::MAX;
     for finding in findings.iter() {
-        let key = finding.skill().map(str::to_string);
-        let rank = worst.entry(key).or_insert(u8::MAX);
-        *rank = (*rank).min(finding.rank());
+        if let Some(skill) = finding.skill() {
+            if let Some(rank) = worst.get_mut(skill) {
+                *rank = (*rank).min(finding.rank());
+            } else {
+                worst.insert(skill.to_string(), finding.rank());
+            }
+        } else {
+            none_worst = none_worst.min(finding.rank());
+        }
     }
-    findings.sort_by_cached_key(|f| {
-        let key = f.skill().map(str::to_string);
-        let group = worst.get(&key).copied().unwrap_or(u8::MAX);
-        (group, key, f.rank())
+    findings.sort_by(|a, b| {
+        let a_group = a
+            .skill()
+            .and_then(|s| worst.get(s).copied())
+            .unwrap_or(none_worst);
+        let b_group = b
+            .skill()
+            .and_then(|s| worst.get(s).copied())
+            .unwrap_or(none_worst);
+        (a_group, a.skill(), a.rank()).cmp(&(b_group, b.skill(), b.rank()))
     });
 }
