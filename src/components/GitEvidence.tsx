@@ -9,6 +9,10 @@ const PROVENANCE: Record<string, { label: string; help: string }> = {
   agent_recorded: { label: "Agent recorded", help: "The agent wrote this down during the session." },
   agent_patch: { label: "Agent patch", help: "Taken from a patch the agent recorded." },
   lore_captured: { label: "Lore observed", help: "Lore read this from the repository." },
+  lore_reflog: {
+    label: "Lore read the reflog",
+    help: "Where HEAD pointed when the session began, from the repository's reflog.",
+  },
   lore_reverified: { label: "Lore re-verified", help: "Lore checked this again later." },
 };
 

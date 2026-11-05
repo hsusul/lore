@@ -8,7 +8,12 @@
 //!   it, so they attach to one Repository; `GIT_INTEGRATION.md` §2);
 //! - upserts the Worktree and a `git_common_dir` identity-evidence row;
 //! - records a `lore_captured` GitObservation whose branch/HEAD/dirty state is
-//!   labeled `current_only` — true at capture, never backdated to session time.
+//!   labeled `current_only` — true at capture, never backdated to session time;
+//! - records a `lore_reflog` GitObservation for the commit HEAD pointed at when
+//!   the segment began, read from HEAD's reflog and labeled `exact_event`. The
+//!   reflog wrote that moment down itself, so this is the one Lore-observed row
+//!   that describes session time. Reflogs expire and worktrees get removed, so
+//!   recording it at ingest keeps what a later read could no longer recover.
 //!
 //! [`reverify_session`] is the companion batch pass: it re-checks recorded
 //! commits/branches against the repository as it exists now and records
@@ -24,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::git::{self, CapturedIdentityRef, CapturedRepo};
+use crate::git::{self, CapturedIdentityRef, CapturedRepo, HeadAt};
 use crate::ingest::det_id;
 use crate::storage::Result;
 
@@ -74,14 +79,20 @@ pub fn enrich_session(conn: &Connection, session_id: &str) -> Result<usize> {
     // Capture is filesystem I/O: do it before opening the write transaction,
     // coalescing repeated cwds so one repository is read at most once.
     let mut cache: HashMap<String, Option<CapturedRepo>> = HashMap::new();
-    let mut resolved: Vec<(String, CapturedRepo)> = Vec::new();
-    for (segment_id, cwd) in segments {
+    let mut resolved: Vec<Reading> = Vec::new();
+    for (segment_id, cwd, began_ms) in segments {
         let facts = cache
             .entry(cwd.clone())
             .or_insert_with(|| git::capture(Path::new(&cwd)))
             .clone();
         if let Some(facts) = facts {
-            resolved.push((segment_id, facts));
+            let head_at_start =
+                began_ms.and_then(|at| Some((at, git::head_at(Path::new(&cwd), at)?)));
+            resolved.push(Reading {
+                segment_id,
+                facts,
+                head_at_start,
+            });
         }
     }
     if resolved.is_empty() {
@@ -91,8 +102,11 @@ pub fn enrich_session(conn: &Connection, session_id: &str) -> Result<usize> {
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
     let mut enriched = 0;
-    for (segment_id, facts) in &resolved {
-        link_segment(&tx, session_id, segment_id, facts)?;
+    for reading in &resolved {
+        link_segment(&tx, session_id, &reading.segment_id, &reading.facts)?;
+        if let Some((at, head)) = &reading.head_at_start {
+            record_reflog_head(&tx, session_id, &reading.segment_id, *at, head)?;
+        }
         enriched += 1;
     }
     // Repository/worktree linkage and the lore_captured observations just
@@ -437,16 +451,62 @@ fn commit_targets(
     Ok(rows)
 }
 
-/// Segments with a recorded cwd that are not yet linked to a repository.
-fn unresolved_segments(conn: &Connection, session_id: &str) -> Result<Vec<(String, String)>> {
+/// What Lore read from one segment's repository before linking it.
+struct Reading {
+    segment_id: String,
+    facts: CapturedRepo,
+    /// When the segment began, and the commit HEAD pointed at then.
+    head_at_start: Option<(i64, HeadAt)>,
+}
+
+/// Segments with a recorded cwd that are not yet linked to a repository, each
+/// with when its first message was written.
+fn unresolved_segments(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<(String, String, Option<i64>)>> {
     let mut stmt = conn.prepare(
-        "SELECT id, cwd FROM session_segment
-         WHERE session_id = ?1 AND cwd IS NOT NULL AND repository_id IS NULL",
+        "SELECT s.id, s.cwd, (SELECT min(m.ts) FROM message m WHERE m.segment_id = s.id)
+         FROM session_segment s
+         WHERE s.session_id = ?1 AND s.cwd IS NOT NULL AND s.repository_id IS NULL",
     )?;
     let rows = stmt
-        .query_map([session_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .query_map([session_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Record the commit HEAD pointed at when a segment began. The first reading
+/// stands: a later enrichment of the same segment cannot overwrite it, because
+/// by then the reflog may have expired or moved.
+fn record_reflog_head(
+    tx: &Connection,
+    session_id: &str,
+    segment_id: &str,
+    began_ms: i64,
+    head: &HeadAt,
+) -> Result<()> {
+    let metadata = serde_json::json!({ "method": "reflog", "entry_at": head.entry_ms }).to_string();
+    tx.execute(
+        "INSERT INTO git_observation
+            (id, session_id, segment_id, source, event_ts, observed_at, temporal_confidence,
+             branch, commit_sha, metadata_json)
+         VALUES (?1, ?2, ?3, 'lore_reflog', ?4, unixepoch('now')*1000, 'exact_event',
+                 ?5, ?6, ?7)
+         ON CONFLICT(id) DO NOTHING",
+        params![
+            det_id("gr", &[session_id, segment_id]),
+            session_id,
+            segment_id,
+            began_ms,
+            head.branch,
+            head.commit_sha,
+            metadata,
+        ],
+    )?;
+    Ok(())
 }
 
 /// The resolved repository identity for a captured repo.

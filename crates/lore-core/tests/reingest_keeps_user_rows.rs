@@ -324,6 +324,7 @@ fn git_evidence_keeps_when_it_was_first_observed_across_a_parser_bump() {
     let observed = vec![
         ("agent_recorded".to_string(), 1000),
         ("lore_captured".to_string(), 1000),
+        ("lore_reflog".to_string(), 1000),
         ("lore_reverified".to_string(), 2000),
     ];
     assert_eq!(git_evidence(&archive.conn).0, observed, "the seed took");
@@ -340,6 +341,7 @@ fn git_evidence_keeps_when_it_was_first_observed_across_a_parser_bump() {
     let projected = vec![
         ("agent_recorded".to_string(), 1000),
         ("lore_captured".to_string(), 1000),
+        ("lore_reflog".to_string(), 1000),
         ("lore_reverified".to_string(), 2000),
         ("segment_link".to_string(), 0),
     ];

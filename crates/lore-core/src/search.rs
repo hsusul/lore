@@ -177,7 +177,12 @@ impl GitFilters {
 /// The provenance classes a `git-source:` filter may name. An unrecognised
 /// value is rejected at parse time rather than silently matching nothing, so a
 /// typo cannot look like "no sessions have this".
-const GIT_SOURCE_CLASSES: &[&str] = &["agent_recorded", "lore_captured", "lore_reverified"];
+const GIT_SOURCE_CLASSES: &[&str] = &[
+    "agent_recorded",
+    "lore_captured",
+    "lore_reflog",
+    "lore_reverified",
+];
 
 /// Search the archive, returning the first page only. `raw` is the user's query
 /// (plain terms plus optional `agent:`, `path:`, `tool:`, and `has:error`

@@ -359,7 +359,7 @@ impl KeptRows {
             tx.execute(
                 "INSERT OR IGNORE INTO git_observation
                  SELECT * FROM temp.kept_git_observation k
-                 WHERE k.source IN ('lore_captured', 'lore_reverified')
+                 WHERE k.source IN ('lore_captured', 'lore_reflog', 'lore_reverified')
                    AND (k.segment_id IS NULL
                         OR EXISTS (
                             SELECT 1 FROM session_segment seg

@@ -2,7 +2,7 @@
 
 /**
  * One provenance-labeled git observation for the session's git rail. The UI
- * must keep `agent_recorded`, `lore_captured`, and `lore_reverified` visually
+ * must keep `agent_recorded`, `lore_captured`, `lore_reflog`, and `lore_reverified` visually
  * distinct and never collapse them into one unlabeled "session-time" rail.
  * Agent-recorded patches are not git observations — they surface as
  * `file_event.source = agent_patch` (see GIT_INTEGRATION.md §4). Payload
@@ -10,7 +10,7 @@
  */
 export type GitObservationDto = { segment_id: string | null, 
 /**
- * `agent_recorded` | `agent_patch` | `lore_captured` | `lore_reverified`.
+ * `agent_recorded` | `agent_patch` | `lore_captured` | `lore_reflog` | `lore_reverified`.
  */
 source: string, 
 /**
