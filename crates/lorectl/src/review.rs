@@ -144,10 +144,11 @@ fn value(parser: &mut lexopt::Parser) -> Result<String, CliError> {
 /// `path` or `path:lines`.
 fn parse_anchor(text: &str) -> Result<Anchor, CliError> {
     let (path, lines) = match text.rsplit_once(':') {
-        Some((path, lines)) if LineRange::parse(lines).is_ok() => {
-            (path, LineRange::parse(lines).ok())
-        }
-        _ => (text, None),
+        Some((path, lines)) => (
+            path,
+            Some(LineRange::parse(lines).map_err(|e| field("anchor", e))?),
+        ),
+        None => (text, None),
     };
     Ok(Anchor {
         path: RelPath::parse(path).map_err(|e| field("anchor", e))?,
@@ -367,5 +368,26 @@ mod tests {
         assert_eq!(anchor.path.as_str(), "src/a.rs");
         assert_eq!(anchor.lines.unwrap().to_string(), "12-20");
         assert_eq!(parse_anchor("src/a.rs").unwrap().lines, None);
+        let cjk = parse_anchor("src/日本語.rs:5-10").unwrap();
+        assert_eq!(cjk.path.as_str(), "src/日本語.rs");
+        assert_eq!(cjk.lines.unwrap().to_string(), "5-10");
+    }
+
+    #[test]
+    fn bad_anchor_lines_are_rejected() {
+        for bad in [
+            "src/a.rs:10..20",
+            "src/日本語.rs:10..20",
+            "src/a.rs:foo",
+            "src/a.rs:0",
+            "src/a.rs:20-10",
+            "src/a.rs:",
+        ] {
+            assert!(
+                parse_anchor(bad).is_err(),
+                "expected error for {bad}, got {:?}",
+                parse_anchor(bad)
+            );
+        }
     }
 }

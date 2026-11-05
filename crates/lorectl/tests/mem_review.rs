@@ -405,3 +405,34 @@ fn a_torn_line_with_a_stray_byte_does_not_break_review() {
     let accepted = ok(&lorectl(&vault, &["accept", &second], ""));
     assert!(accepted.starts_with("accepted "), "{accepted}");
 }
+
+#[test]
+fn mem_propose_refuses_invalid_line_range_in_anchor() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    ok(&lorectl(&vault, &["init"], ""));
+
+    let o = lorectl(
+        &vault,
+        &[
+            "propose",
+            "--agent",
+            "codex",
+            "--session",
+            "s1",
+            "--type",
+            "howto",
+            "--title",
+            "Check lines",
+            "--anchor",
+            "src/日本語.rs:10..20",
+        ],
+        "Some body text.\n",
+    );
+    assert_eq!(o.status.code(), Some(7));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        stderr.contains("expected lines like `12-20`, got `10..20`"),
+        "unexpected stderr: {stderr}"
+    );
+}
