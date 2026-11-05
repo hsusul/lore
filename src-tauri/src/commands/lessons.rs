@@ -58,6 +58,13 @@ fn find(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     dirs.iter().map(|d| d.join(name)).find(|p| p.is_file())
 }
 
+/// The `lorectl` bundled next to the app's own binary (`Contents/MacOS`),
+/// else one installed in `dirs`.
+fn lorectl_in(own: Option<&Path>, dirs: &[PathBuf]) -> Option<PathBuf> {
+    own.and_then(|d| find("lorectl", &[d.to_owned()]))
+        .or_else(|| find("lorectl", dirs))
+}
+
 /// The MCP config that gives the run Lore's tools over `archive`.
 fn mcp_config(lorectl: &Path, archive: &Path) -> serde_json::Value {
     serde_json::json!({ "mcpServers": { "lore": {
@@ -138,9 +145,7 @@ pub async fn find_lessons(state: State<'_, AppState>) -> Result<String, String> 
     let own = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(Path::to_path_buf));
-    let lorectl = own
-        .and_then(|d| find("lorectl", &[d]))
-        .or_else(|| find("lorectl", &dirs))
+    let lorectl = lorectl_in(own.as_deref(), &dirs)
         .ok_or("lorectl is not installed, so Claude Code cannot reach Lore's tools.")?;
     let config = state.archive_dir.join("find-lessons.mcp.json");
     std::fs::write(
@@ -218,6 +223,24 @@ mod tests {
             Some(dir.path().join("claude"))
         );
         assert_eq!(find("lorectl", &[dir.path().to_owned()]), None);
+    }
+
+    #[test]
+    fn prefers_the_lorectl_bundled_with_the_app() {
+        let bundle = tempfile::tempdir().unwrap();
+        let installed = tempfile::tempdir().unwrap();
+        std::fs::write(installed.path().join("lorectl"), "").unwrap();
+        let dirs = [installed.path().to_owned()];
+        assert_eq!(
+            lorectl_in(Some(bundle.path()), &dirs),
+            Some(installed.path().join("lorectl"))
+        );
+        std::fs::write(bundle.path().join("lorectl"), "").unwrap();
+        assert_eq!(
+            lorectl_in(Some(bundle.path()), &dirs),
+            Some(bundle.path().join("lorectl"))
+        );
+        assert_eq!(lorectl_in(None, &[]), None);
     }
 
     #[test]

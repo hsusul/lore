@@ -8,7 +8,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build && cargo build --release --locked -p lorectl"
   },
   "app": {
     "windows": [
@@ -57,7 +57,11 @@
     "shortDescription": "A local, private archive of your Claude Code and Codex sessions",
     "longDescription": "Lore keeps a local archive of your Claude Code and Codex sessions, linked to the git repositories they worked in. Search and read them in the app. Everything stays on your machine.",
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": "-",
+      "files": {
+        "MacOS/lorectl": "../target/release/lorectl"
+      }
     }
   },
   "plugins": {}
