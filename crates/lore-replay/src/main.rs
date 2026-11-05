@@ -10,6 +10,7 @@ use lexopt::prelude::*;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_replay::grade::GradeOptions;
 use lore_replay::label::LabelOptions;
+use lore_replay::report::{self, Data};
 use lore_replay::run::RunOptions;
 use lore_replay::{cases, ArmName, Error};
 
@@ -44,6 +45,14 @@ USAGE:
       per case and arm (file, lore, own) whether the arm's context holds a
       lesson for the case's mistake; own is today's CLAUDE.md unless --arms
       records an `own` text.
+
+  lore-replay report --labels FILE --grades FILE --data real|synthetic
+                     [--shown FILE] [--arms FILE] [--json] [--seed N]
+      The preregistered analysis: per-arm case-weighted repeat rates and paired
+      differences against none, with 95% cluster-bootstrap intervals over cases,
+      the stop rule, spread, grader agreement, oracle validity, and (with
+      --shown) exists/shown/followed. --arms marks arms with empty context as
+      same as none. Every number is tagged with --data. Reads only.
 ";
 
 enum Failure {
@@ -84,6 +93,7 @@ fn dispatch() -> Result<(), Failure> {
         Some(Value(cmd)) if cmd == "run" => run_cmd(&mut parser),
         Some(Value(cmd)) if cmd == "label" => label_cmd(&mut parser),
         Some(Value(cmd)) if cmd == "grade" => grade_cmd(&mut parser),
+        Some(Value(cmd)) if cmd == "report" => report_cmd(&mut parser),
         Some(Short('h') | Long("help")) => {
             print!("{USAGE}");
             Ok(())
@@ -258,6 +268,49 @@ fn grade_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
         shown_out,
     };
     println!("{}", lore_replay::grade::grade(&opts)?.summary());
+    Ok(())
+}
+
+fn report_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
+    let (mut labels, mut grades, mut shown, mut arms, mut data) = (None, None, None, None, None);
+    let (mut json, mut seed) = (false, report::DEFAULT_SEED);
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Long("labels") => labels = Some(path(parser)?),
+            Long("grades") => grades = Some(path(parser)?),
+            Long("shown") => shown = Some(path(parser)?),
+            Long("arms") => arms = Some(path(parser)?),
+            Long("data") => {
+                data = Some(text(parser)?.parse::<Data>().map_err(Failure::Usage)?);
+            }
+            Long("json") => json = true,
+            Long("seed") => seed = parser.value()?.parse::<u64>()?,
+            Short('h') | Long("help") => {
+                print!("{USAGE}");
+                return Ok(());
+            }
+            other => return Err(Failure::Usage(other.unexpected().to_string())),
+        }
+    }
+    let need = |flag: &str| Failure::Usage(format!("{flag} is required"));
+    let opts = report::ReportOptions {
+        labels: labels.ok_or_else(|| need("--labels"))?,
+        grades: grades.ok_or_else(|| need("--grades"))?,
+        shown,
+        arms,
+        data: data.ok_or_else(|| need("--data"))?,
+        seed,
+    };
+    let result = report::analyze(&report::load(&opts)?, opts.data, opts.seed);
+    if json {
+        let text = serde_json::to_string_pretty(&result).map_err(|source| Error::Json {
+            path: opts.grades.clone(),
+            source,
+        })?;
+        println!("{text}");
+    } else {
+        print!("{}", result.text());
+    }
     Ok(())
 }
 

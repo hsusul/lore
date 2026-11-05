@@ -27,6 +27,7 @@ pub mod isolation;
 pub mod label;
 pub mod prefix;
 pub mod pyjson;
+pub mod report;
 pub mod run;
 pub mod scratch;
 pub mod session;
