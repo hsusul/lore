@@ -156,7 +156,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         }
     }
     let last = match (last_scan, window_scan) {
-        (None, Some((at, since))) => format!(
+        (last, Some((at, since))) if last.is_none_or(|l| at > l) => format!(
             "{}, of files modified since {} only; `lorectl scan` reads the rest",
             describe_last_scan(Some(at)),
             crate::receipt::date(since).unwrap_or_else(|| since.to_string())

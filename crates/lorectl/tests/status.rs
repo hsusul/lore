@@ -664,3 +664,59 @@ fn a_windowed_scan_says_when_and_how_far_back_it_looked() {
     );
     assert!((29..=31).contains(&((at - since) / 86_400_000)), "{json}");
 }
+
+#[test]
+fn a_windowed_scan_after_a_full_scan_says_when_and_how_far_back_it_looked() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = parent.path().join("プロジェクト-日本");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "initial"]);
+
+    let homes = empty_homes();
+    seed_codex_session_in(&repo, homes.path());
+    let archive = tempfile::tempdir().unwrap();
+
+    let full_scan = lorectl_in(&repo, archive.path(), homes.path(), &["scan"]);
+    assert_eq!(
+        code(&full_scan),
+        0,
+        "{}",
+        String::from_utf8_lossy(&full_scan.stderr)
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(15));
+
+    let window_scan = lorectl_in(
+        &repo,
+        archive.path(),
+        homes.path(),
+        &["scan", "--since", "30d"],
+    );
+    assert_eq!(
+        code(&window_scan),
+        0,
+        "{}",
+        String::from_utf8_lossy(&window_scan.stderr)
+    );
+
+    let text = stdout(&lorectl_in(
+        &repo,
+        archive.path(),
+        homes.path(),
+        &["status"],
+    ));
+    assert!(text.contains("repository  プロジェクト-日本"), "{text}");
+    let line = text.lines().find(|l| l.starts_with("last scan")).unwrap();
+    let masked: String = line
+        .chars()
+        .map(|c| if c.is_ascii_digit() { 'N' } else { c })
+        .collect();
+    assert_eq!(
+        masked,
+        "last scan   less than a minute ago, of files modified since NNNN-NN-NN only; \
+         `lorectl scan` reads the rest"
+    );
+}
