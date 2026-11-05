@@ -262,3 +262,14 @@ fn split_timeline_only_splits_on_exact_heading() {
     assert_eq!(statement4, "");
     assert_eq!(timeline4, "## Timeline\n- 2026-11-01 noted\n");
 }
+
+#[test]
+fn index_count_active_matches_list_active_len() {
+    let (_dir, vault) = fixture_vault();
+    let index = vault.index().unwrap();
+    let repo = "repo:3f9a1c0b5e2d7a46";
+    for scope in [Some(repo), None, Some("repo:nonexistent")] {
+        let expected = index.list_active(scope, usize::MAX).unwrap().len();
+        assert_eq!(index.count_active(scope).unwrap(), expected);
+    }
+}

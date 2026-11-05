@@ -251,6 +251,15 @@ impl Index {
         Ok(hits)
     }
 
+    /// How many active notes apply in `repo` (or globally if `None`).
+    pub fn count_active(&self, repo: Option<&str>) -> Result<usize, IndexError> {
+        let mut statement = self.conn.prepare_cached(
+            "SELECT count(*) FROM notes WHERE status = 'active' AND scope IN ('global', ?1)",
+        )?;
+        let count: i64 = statement.query_row(params![repo.unwrap_or("global")], |r| r.get(0))?;
+        Ok(usize::try_from(count).unwrap_or_default())
+    }
+
     /// Every active note, in any scope, by path.
     pub fn list_every_active(&self) -> Result<Vec<Hit>, IndexError> {
         let statement = self.conn.prepare_cached(
