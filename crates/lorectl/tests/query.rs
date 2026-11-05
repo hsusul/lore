@@ -149,6 +149,65 @@ fn inspect_reports_a_session_that_exists() {
 }
 
 #[test]
+fn inspect_finds_session_by_native_session_id() {
+    let (archive, homes) = scanned_archive();
+    let conn = lore_core::storage::open_read_only(&archive.path().join("lore.db")).unwrap();
+    let (sid, native_id): (String, String) = conn
+        .query_row(
+            "SELECT id, native_session_id FROM agent_session WHERE native_session_id IS NOT NULL LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+
+    let out = lorectl(
+        archive.path(),
+        homes.path(),
+        &["--json", "inspect", &native_id],
+    );
+    assert_eq!(
+        code(&out),
+        0,
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).unwrap();
+    assert_eq!(value["session_id"], sid);
+    assert!(value["message_count"].as_i64().unwrap() > 0);
+}
+
+#[test]
+fn inspect_finds_session_with_non_ascii_native_id() {
+    let archive = tempfile::tempdir().unwrap();
+    let homes = tempfile::tempdir().unwrap();
+    let claude_dir = homes.path().join("claude/projects/p");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    let session_file = claude_dir.join("session-nonascii.jsonl");
+    std::fs::write(
+        &session_file,
+        "{\"type\":\"user\",\"uuid\":\"u-1\",\"sessionId\":\"セッション-日本語-42\",\"cwd\":\"/repo\",\"message\":{\"role\":\"user\",\"content\":\"日本語テスト\"}}\n",
+    )
+    .unwrap();
+    let scan_out = lorectl(archive.path(), homes.path(), &["scan"]);
+    assert_eq!(code(&scan_out), 0);
+
+    let out = lorectl(
+        archive.path(),
+        homes.path(),
+        &["--json", "inspect", "セッション-日本語-42"],
+    );
+    assert_eq!(
+        code(&out),
+        0,
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_str(stdout(&out).trim()).unwrap();
+    assert_eq!(value["agent_id"], "claude-code");
+    assert!(value["message_count"].as_i64().unwrap() > 0);
+}
+
+#[test]
 fn inspecting_an_unknown_session_is_a_usage_error_not_an_archive_error() {
     // The archive is fine; the argument was wrong. Reporting this as an archive
     // problem would send someone to debug their database.
