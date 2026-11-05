@@ -43,10 +43,11 @@ vi.mock("./ipc", () => ({
   getSetting: vi.fn(),
   getJsonSetting: vi.fn(),
   setSetting: vi.fn(),
-  listLessons: vi.fn(),
+  listProposals: vi.fn(),
   listNotes: vi.fn(),
   accountName: vi.fn(),
-  acceptLesson: vi.fn(),
+  acceptProposal: vi.fn(),
+  rejectProposal: vi.fn(),
   retireNote: vi.fn(),
 }));
 
@@ -829,7 +830,7 @@ describe("window shell", () => {
   });
 
   it("opens on the map, and moves between the map and the sessions", async () => {
-    m.listLessons.mockResolvedValue([]);
+    m.listProposals.mockResolvedValue([]);
     m.listNotes.mockResolvedValue([]);
     m.accountName.mockResolvedValue("Henry Su");
     render(<App />);

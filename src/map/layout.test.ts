@@ -1,25 +1,20 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import type { LessonDto, NoteDto, ReceiptDto } from "../ipc";
+import type { NoteDto, ProposalDto } from "../ipc";
 import { areasOf, CENTRE, layout } from "./layout";
 
-const receipt = (repo: string | null): ReceiptDto => ({
-  session_id: "s",
-  agent_id: "claude-code",
-  repo,
-  at_ms: 0,
-  text: "no, use pnpm",
-  preceding: null,
-});
-
-const lesson = (id: string, repos: (string | null)[], conversations = repos.length): LessonDto => ({
+/** A proposal the agent filed, with `n` receipts, scoped to `repo` or everywhere. */
+const lesson = (id: string, repo: string | null, n = 1): ProposalDto => ({
   id,
-  text: `said ${id}`,
-  suggested_rule: `Rule ${id}`,
-  conversations,
-  latest_ms: 0,
-  receipts: repos.map(receipt),
+  title: `Rule ${id}`,
+  body: `What went wrong.\n\nReceipts:\n${Array.from({ length: n }, (_, i) => `- "said ${i}" (codex, session s${i}, 2026-10-0${i + 1})`).join("\n")}\n`,
+  scope: repo ? `repo:${repo}key` : "global",
+  note_type: "convention",
+  agent_id: "codex",
+  session_id: "s0",
+  repo_name: repo,
+  proposed_ms: 0,
 });
 
 const note = (id: string, scope: string, repo_name: string | null = null): NoteDto => ({
@@ -33,9 +28,9 @@ const note = (id: string, scope: string, repo_name: string | null = null): NoteD
 });
 
 describe("areasOf", () => {
-  it("puts each item in its repository, the centre first and named for the person", () => {
+  it("puts each item in its scope's repository, the centre first and named for the person", () => {
     const areas = areasOf(
-      [lesson("a", ["beeclean", "beeclean", "lore"]), lesson("b", [null]), lesson("c", ["lore"])],
+      [lesson("a", "beeclean", 3), lesson("b", null), lesson("c", "lore")],
       [note("n1", "global"), note("n2", "repo:016fc9809d74377f", "beeclean"), note("n3", "repo:aaaaaaaaaaaaaaaa")],
       "Henry",
     );
@@ -54,7 +49,7 @@ describe("areasOf", () => {
 
 describe("layout", () => {
   const areas = areasOf(
-    [...Array.from({ length: 30 }, (_, i) => lesson(`b${i}`, ["beeclean"])), lesson("l1", ["lore"], 4), lesson("g1", [null])],
+    [...Array.from({ length: 30 }, (_, i) => lesson(`b${i}`, "beeclean")), lesson("l1", "lore", 4), lesson("g1", null)],
     [note("n1", "global"), note("n2", "global"), ...Array.from({ length: 8 }, (_, i) => note(`v${i}`, "repo:k", "verbatim"))],
     "Henry",
   );
@@ -84,7 +79,7 @@ describe("layout", () => {
     for (const c of clusters.slice(1)) expect(nearest(c)).toBeLessThan(60);
   });
 
-  it("keeps every dot inside its cluster, and grows a lesson heard in more conversations", () => {
+  it("keeps every dot inside its cluster, and grows a lesson with more receipts", () => {
     for (const d of model.dots) {
       const c = model.clusters.find((k) => k.key === d.area);
       expect(c).toBeDefined();

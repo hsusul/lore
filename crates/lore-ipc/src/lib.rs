@@ -393,6 +393,29 @@ pub struct NoteDto {
     pub repo_name: Option<String>,
 }
 
+/// A lesson an agent wrote and filed for review: a proposal in the vault's
+/// inbox that no decision names yet. Payload element of `list_proposals`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProposalDto {
+    pub id: String,
+    /// The rule, as the agent wrote it.
+    pub title: String,
+    /// What went wrong and the receipts, as the agent wrote them.
+    pub body: String,
+    /// `global`, or `repo:<key>`.
+    pub scope: String,
+    pub note_type: String,
+    /// The agent that filed it, and the session it cites.
+    pub agent_id: String,
+    pub session_id: String,
+    /// The archive's name for the repository that session ran in.
+    pub repo_name: Option<String>,
+    /// Epoch milliseconds.
+    #[ts(type = "number")]
+    pub proposed_ms: i64,
+}
+
 /// One note in the session-start section. Element of [`AgentsReadDto::notes`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

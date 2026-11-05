@@ -29,6 +29,7 @@ import type { TokenTotalsDto } from "../crates/lore-ipc/bindings/TokenTotalsDto"
 import type { LessonDto } from "../crates/lore-ipc/bindings/LessonDto";
 import type { ReceiptDto } from "../crates/lore-ipc/bindings/ReceiptDto";
 import type { NoteDto } from "../crates/lore-ipc/bindings/NoteDto";
+import type { ProposalDto } from "../crates/lore-ipc/bindings/ProposalDto";
 import type { ReadNoteDto } from "../crates/lore-ipc/bindings/ReadNoteDto";
 import type { AgentsReadDto } from "../crates/lore-ipc/bindings/AgentsReadDto";
 import type { SkillsReportDto } from "../crates/lore-ipc/bindings/SkillsReportDto";
@@ -105,6 +106,7 @@ export type {
   LessonDto,
   ReceiptDto,
   NoteDto,
+  ProposalDto,
   ReadNoteDto,
   AgentsReadDto,
   SkillsReportDto,
@@ -387,6 +389,21 @@ export function editNote(key: string, title: string, body: string): Promise<stri
 /** How each installed skill has been used: uses, sessions, newest use, and the corrections right after it ran. Most reprompted first. */
 export function skillUsage(): Promise<SkillUsageDto[]> {
   return invoke<SkillUsageDto[]>("skill_usage");
+}
+
+/** The lessons agents wrote and filed for review, oldest first. Empty when there is no vault yet. */
+export function listProposals(): Promise<ProposalDto[]> {
+  return invoke<ProposalDto[]>("list_proposals");
+}
+
+/** Accept proposal `id`, titled `title` when the person edited it. Resolves with the note's vault path. */
+export function acceptProposal(id: string, title?: string): Promise<string> {
+  return invoke<string>("accept_proposal", { id, title: title ?? null });
+}
+
+/** Reject proposal `id` with `reason`. */
+export function rejectProposal(id: string, reason: string): Promise<void> {
+  return invoke<void>("reject_proposal", { id, reason });
 }
 
 /** The person's name for the map's centre: the Mac account's full name, else the user name. */

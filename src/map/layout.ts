@@ -1,20 +1,21 @@
-import type { LessonDto, NoteDto } from "../ipc";
+import type { NoteDto, ProposalDto } from "../ipc";
+import { receipts } from "./proposal";
 
 /**
  * The map: what holds in every repository sits in the centre, named for the
  * person, and each repository is a cluster around it. Every dot is a real
- * lesson waiting for review or an accepted note. Coordinates are map units;
+ * lesson an agent filed for review, or an accepted note. Coordinates are map units;
  * the view scales them to the window.
  */
 
 export const CENTRE = "global";
 
-export type Item = { kind: "lesson"; lesson: LessonDto } | { kind: "note"; note: NoteDto };
+export type Item = { kind: "lesson"; lesson: ProposalDto } | { kind: "note"; note: NoteDto };
 
 export interface Area {
   key: string;
   name: string;
-  lessons: LessonDto[];
+  lessons: ProposalDto[];
   notes: NoteDto[];
 }
 
@@ -55,25 +56,14 @@ const GAP = 6;
 const LIFT = 9;
 const GOLDEN = 2.39996;
 
-/** The repository a lesson was said in most; the centre when none is linked. */
-function lessonArea(lesson: LessonDto): string {
-  const counts = new Map<string, number>();
-  for (const receipt of lesson.receipts) {
-    if (receipt.repo) counts.set(receipt.repo, (counts.get(receipt.repo) ?? 0) + 1);
-  }
-  let best: string | null = null;
-  for (const [repo, n] of counts) if (best === null || n > (counts.get(best) ?? 0)) best = repo;
-  return best ?? CENTRE;
-}
-
-/** A note's scope, as the name of its repository; an unnamed repository keeps its scope key. */
-function noteArea(note: NoteDto): string {
-  if (note.scope === CENTRE) return CENTRE;
-  return note.repo_name ?? note.scope;
+/** A scope, as the name of its repository; an unnamed repository keeps its scope key. */
+function areaOf(item: { scope: string; repo_name: string | null }): string {
+  if (item.scope === CENTRE) return CENTRE;
+  return item.repo_name ?? item.scope;
 }
 
 /** Group lessons and notes into areas: the centre first, then repositories by size, then name. */
-export function areasOf(lessons: LessonDto[], notes: NoteDto[], person: string): Area[] {
+export function areasOf(lessons: ProposalDto[], notes: NoteDto[], person: string): Area[] {
   const byKey = new Map<string, Area>();
   const area = (key: string): Area => {
     let found = byKey.get(key);
@@ -85,8 +75,8 @@ export function areasOf(lessons: LessonDto[], notes: NoteDto[], person: string):
     return found;
   };
   area(CENTRE);
-  for (const lesson of lessons) area(lessonArea(lesson)).lessons.push(lesson);
-  for (const note of notes) area(noteArea(note)).notes.push(note);
+  for (const lesson of lessons) area(areaOf(lesson)).lessons.push(lesson);
+  for (const note of notes) area(areaOf(note)).notes.push(note);
   const size = (a: Area) => a.lessons.length + a.notes.length;
   return [...byKey.values()].sort(
     (a, b) => Number(b.key === CENTRE) - Number(a.key === CENTRE) || size(b) - size(a) || a.name.localeCompare(b.name),
@@ -148,7 +138,8 @@ function pack(areas: Area[]): { key: string; x: number; y: number }[] {
   return out;
 }
 
-const lessonRadius = (lesson: LessonDto) => 2.6 + Math.min(3, Math.max(0, lesson.conversations - 1)) * 0.6;
+/** A lesson backed by more receipts is drawn larger. */
+const lessonRadius = (lesson: ProposalDto) => 2.6 + Math.min(3, Math.max(0, receipts(lesson.body).length - 1)) * 0.6;
 const NOTE_RADIUS = 2.2;
 
 /** Lay out every area: clusters packed, and each cluster's dots in a sunflower, lessons in the middle. */
@@ -163,7 +154,7 @@ export function layout(areas: Area[]): MapModel {
       ...a.lessons.map((lesson) => ({
         id: `lesson:${lesson.id}`,
         area: a.key,
-        label: lesson.suggested_rule || lesson.text,
+        label: lesson.title,
         item: { kind: "lesson", lesson } as Item,
         r: lessonRadius(lesson),
       })),

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use lore_core::paths::ARCHIVE_DB_FILENAME;
-use lore_ipc::{AgentsReadDto, LessonDto, NoteDto, ReadNoteDto, ReceiptDto};
+use lore_ipc::{AgentsReadDto, LessonDto, NoteDto, ProposalDto, ReadNoteDto, ReceiptDto};
 use lore_memory::mine::{self, Candidate, Lesson, Limits};
 use lore_memory::note::Note;
 use lore_memory::session_start::{self, CHAR_CAP, NOTE_CAP};
@@ -139,6 +139,60 @@ fn accept_in(
     filing::keep(vault, lesson, &title).map_err(|e| e.to_string())
 }
 
+/// The lessons agents wrote and filed for review, oldest first. No vault yet
+/// is an empty list.
+#[tauri::command]
+pub async fn list_proposals(state: State<'_, AppState>) -> Result<Vec<ProposalDto>, String> {
+    let Some(vault) = open_vault() else {
+        return Ok(Vec::new());
+    };
+    let conn = lore_core::storage::open_read_only(&state.archive_dir.join(ARCHIVE_DB_FILENAME))
+        .map_err(|e| e.to_string())?;
+    proposals(&vault, &conn).map_err(|e| e.to_string())
+}
+
+/// Accept proposal `id`, with its title replaced by `title` when the person
+/// edited it: one note file and one commit. Returns the note's path.
+#[tauri::command]
+pub async fn accept_proposal(id: String, title: Option<String>) -> Result<String, String> {
+    let vault = open_vault().ok_or("no vault yet; `lorectl mem init` creates one")?;
+    let edits = review::Edits {
+        title: title.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()),
+        body: None,
+    };
+    review::accept_edited(&vault, &id, None, &edits)
+        .map(|accepted| accepted.rel)
+        .map_err(|e| e.to_string())
+}
+
+/// Reject proposal `id` with `reason`. Only the decision log changes.
+#[tauri::command]
+pub async fn reject_proposal(id: String, reason: String) -> Result<(), String> {
+    let vault = open_vault().ok_or("no vault yet; `lorectl mem init` creates one")?;
+    review::reject(&vault, &id, &reason)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn proposals(vault: &Vault, conn: &Connection) -> Result<Vec<ProposalDto>, review::ReviewError> {
+    Ok(review::inbox(vault)?
+        .proposals
+        .into_iter()
+        .map(|p| ProposalDto {
+            repo_name: session_repo(conn, p.session.as_str()),
+            id: p.id.as_str().to_owned(),
+            title: p.title,
+            body: p.body,
+            scope: p.scope.to_string(),
+            note_type: p.note_type.as_str().to_owned(),
+            agent_id: p.agent.as_str().to_owned(),
+            session_id: p.session.as_str().to_owned(),
+            proposed_ms: i64::try_from(p.proposed_at.unix_timestamp_nanos() / 1_000_000)
+                .unwrap_or(i64::MAX),
+        })
+        .collect())
+}
+
 fn open_vault() -> Option<Vault> {
     Vault::open(&vault::resolve_dir(None).ok()?).ok()
 }
@@ -176,16 +230,21 @@ fn notes(vault: &Vault, conn: &Connection) -> Result<Vec<NoteDto>, VaultError> {
 /// The archive's name for the repository a note's source sessions ran in.
 fn learned_in_repo(vault: &Vault, conn: &Connection, rel: &str) -> Option<String> {
     let note = Note::parse(&vault.read(rel).ok()?).ok()?;
-    note.sources.iter().find_map(|source| {
-        conn.query_row(
-            "SELECT r.display_name FROM session_segment seg
-               JOIN repository r ON r.id = seg.repository_id
-              WHERE seg.session_id = ?1 ORDER BY seg.seq_start LIMIT 1",
-            [source.session.as_str()],
-            |r| r.get(0),
-        )
-        .ok()
-    })
+    note.sources
+        .iter()
+        .find_map(|source| session_repo(conn, source.session.as_str()))
+}
+
+/// The archive's name for the repository an archived session ran in.
+fn session_repo(conn: &Connection, session: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT r.display_name FROM session_segment seg
+           JOIN repository r ON r.id = seg.repository_id
+          WHERE seg.session_id = ?1 ORDER BY seg.seq_start LIMIT 1",
+        [session],
+        |r| r.get(0),
+    )
+    .ok()
 }
 
 fn agents_read_in(vault: &Vault, cwd: &Path) -> Result<AgentsReadDto, VaultError> {
@@ -402,6 +461,89 @@ pub(crate) mod tests {
                 ("Unlinked".to_owned(), None),
             ]
         );
+    }
+
+    fn agent_proposal(id: &str, session: &str, title: &str) -> lore_memory::inbox::Proposal {
+        use lore_memory::note::{AgentKind, NoteId, NoteType, Scope, SessionId};
+        lore_memory::inbox::Proposal {
+            id: NoteId::parse(id).unwrap(),
+            agent: AgentKind::Codex,
+            session: SessionId::parse(session).unwrap(),
+            source_verified: true,
+            note_type: NoteType::Convention,
+            scope: Scope::Global,
+            title: title.to_owned(),
+            body: "The agent pushed unformatted code.\n".to_owned(),
+            anchors: Vec::new(),
+            relation: None,
+            proposed_at: time::OffsetDateTime::from_unix_timestamp(1_785_000_000).unwrap(),
+        }
+    }
+
+    #[test]
+    fn agent_proposals_are_listed_then_accepted_edited_or_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = archive(dir.path(), &[&[("user", "hello")]]);
+        let session = session_id(&conn, 1);
+        conn.execute_batch(
+            "INSERT INTO repository (id, identity_key, display_name, created_at, updated_at)
+               VALUES ('r_1', 'k_1', 'lore', 0, 0);
+             UPDATE session_segment SET repository_id = 'r_1';",
+        )
+        .unwrap();
+        let (vault, _) = Vault::init(&dir.path().join("vault")).unwrap();
+        let fmt = "01JD0000000000000000000011";
+        let vague = "01JD0000000000000000000012";
+        lore_memory::inbox::propose(
+            &vault,
+            agent_proposal(fmt, &session, "Run cargo fmt before you push"),
+        )
+        .unwrap();
+        lore_memory::inbox::propose(
+            &vault,
+            agent_proposal(vague, &session, "Keep the log short"),
+        )
+        .unwrap();
+
+        let listed: Vec<(String, String, Option<String>, i64)> = proposals(&vault, &conn)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.id, p.title, p.repo_name, p.proposed_ms))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (
+                    fmt.to_owned(),
+                    "Run cargo fmt before you push".to_owned(),
+                    Some("lore".to_owned()),
+                    1_785_000_000_000
+                ),
+                (
+                    vague.to_owned(),
+                    "Keep the log short".to_owned(),
+                    Some("lore".to_owned()),
+                    1_785_000_000_000
+                ),
+            ]
+        );
+
+        let edits = review::Edits {
+            title: Some("Run cargo fmt before every push".to_owned()),
+            body: None,
+        };
+        let rel = review::accept_edited(&vault, fmt, None, &edits)
+            .unwrap()
+            .rel;
+        assert_eq!(rel, "global/run-cargo-fmt-before-every-push.md");
+        assert!(review::reject(&vault, vague, "not a rule").unwrap());
+        assert!(proposals(&vault, &conn).unwrap().is_empty());
+        let kept: Vec<String> = notes(&vault, &conn)
+            .unwrap()
+            .into_iter()
+            .map(|n| n.title)
+            .collect();
+        assert_eq!(kept, ["Run cargo fmt before every push"]);
     }
 
     #[test]
