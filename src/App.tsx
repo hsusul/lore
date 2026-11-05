@@ -624,7 +624,7 @@ export default function App({
     <TooltipProvider>
       {onMap ? (
         <MapHome
-          onSessions={() => setHome("sessions")}
+          onArchive={() => setHome("sessions")}
           onSettings={() => overlay({ kind: "settings" })}
         />
       ) : (

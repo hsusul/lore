@@ -1591,3 +1591,129 @@ textarea.mist-ed:focus {
 .mist .mist-waiting:hover {
   background: var(--mist-tint);
 }
+
+.mist-main.tall {
+  bottom: 20px;
+  max-height: none;
+}
+
+.mist-qbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  margin: 12px 0 16px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--mist-surf);
+  box-shadow: inset 0 0 0 1px var(--mist-line);
+  color: var(--mist-t2);
+  transition: box-shadow 0.15s;
+}
+
+.mist-qbar:focus-within {
+  box-shadow: inset 0 0 0 1px var(--mist-acs2);
+}
+
+.mist-qbar input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--mist-t1);
+  font: inherit;
+}
+
+.mist-qbar input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.mist-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.mist-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mist-sn {
+  overflow: hidden;
+  color: var(--mist-t2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mist-sn mark {
+  background: none;
+  color: var(--mist-t1);
+  font-weight: 600;
+}
+
+.mist .mist-it .mist-tx {
+  flex: 1;
+  min-width: 0;
+}
+
+.mist .mist-back,
+.mist .mist-archive {
+  color: var(--mist-t2);
+  font-size: 12px;
+}
+
+.mist .mist-back:hover,
+.mist .mist-archive:hover {
+  color: var(--mist-t1);
+}
+
+.mist .mist-archive {
+  margin-top: 20px;
+}
+
+.mist-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin: 28px 0 24px;
+}
+
+.mist-turn {
+  display: flex;
+  gap: 12px;
+}
+
+.mist-turn p {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mist-turn.you .mist-dot {
+  background: var(--mist-ac);
+}
+
+.mist-turn.tool p {
+  color: var(--mist-t2);
+  font-size: 12px;
+}
+
+.mist-w {
+  font-size: 12px;
+  color: var(--mist-t2);
+}
+
+/* The search field stays at the top while the list scrolls under it. */
+.mist-pin {
+  position: sticky;
+  top: -20px;
+  z-index: 1;
+  margin: -20px -32px 0;
+  padding: 20px 32px 1px;
+  background: var(--mist-surf);
+}

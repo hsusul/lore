@@ -4,6 +4,7 @@ import { acceptProposal, accountName, listNotes, listProposals, rejectProposal, 
 import { areasOf, CENTRE, layout, type Dot, type Item } from "../map/layout";
 import { receipts, why } from "../map/proposal";
 import { MapCanvas } from "./MapCanvas";
+import { SessionsList, SessionView } from "./MapSessions";
 
 /** The rings of the logo (assets/brand/lore-mark.svg), drawn in the current color. */
 function Mark({ className = "mist-mark" }: { className?: string }) {
@@ -69,7 +70,7 @@ type Data =
   | { status: "failed"; error: string }
   | { status: "ready"; lessons: ProposalDto[]; notes: NoteDto[]; person: string };
 
-type Page = "today" | "notes";
+type Page = "today" | "notes" | "sessions";
 
 function LessonDetail({
   lesson,
@@ -164,7 +165,7 @@ function NoteDetail({ note, scope, busy, onRetire }: { note: NoteDto; scope: str
  * floating rail sits at the left, and one card on the right holds the next
  * lesson to review or the item opened on the map.
  */
-export function MapHome({ onSessions, onSettings }: { onSessions: () => void; onSettings: () => void }) {
+export function MapHome({ onArchive, onSettings }: { onArchive: () => void; onSettings: () => void }) {
   const [data, setData] = useState<Data>({ status: "loading" });
   const [page, setPage] = useState<Page>("today");
   const [open, setOpen] = useState<Item | null>(null);
@@ -172,6 +173,8 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [session, setSession] = useState<string | null>(null);
+  const [focusSearch, setFocusSearch] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -204,12 +207,22 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
     }
     setPage(next);
     setOpen(null);
+    setSession(null);
     setCardShown(true);
     setNotice(null);
   };
 
+  const search = () => {
+    setPage("sessions");
+    setOpen(null);
+    setSession(null);
+    setCardShown(true);
+    setFocusSearch((n) => n + 1);
+  };
+
   const select = (dot: Dot) => {
     setOpen(dot.item);
+    setSession(null);
     setCardShown(true);
     setNotice(null);
   };
@@ -268,15 +281,18 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
         <button type="button" className="mist-home" aria-label="Today" onClick={() => go("today")}>
           <Mark />
         </button>
-        <RailButton icon="search" label="Search" onClick={onSessions} className="find" />
+        <RailButton icon="search" label="Search" onClick={search} className="find" />
         <RailButton icon="today" label="Review" selected={cardShown && page === "today" && !open} onClick={() => go("today")} />
         <RailButton icon="notes" label="Notes" selected={cardShown && page === "notes" && !open} onClick={() => go("notes")} />
-        <RailButton icon="sessions" label="Sessions" onClick={onSessions} />
+        <RailButton icon="sessions" label="Sessions" selected={cardShown && page === "sessions" && !open} onClick={() => go("sessions")} />
         <RailButton icon="settings" label="Settings" onClick={onSettings} className="set" />
       </nav>
 
       {cardShown && data.status === "ready" && (
-        <section className={`mist-main${shown ? " mdet" : ""}`} aria-label={shown ? "Opened item" : page === "notes" ? "Notes" : "Today"}>
+        <section
+          className={`mist-main${shown ? " mdet" : page === "sessions" ? " tall" : ""}`}
+          aria-label={shown ? "Opened item" : page === "notes" ? "Notes" : page === "sessions" ? "Sessions" : "Today"}
+        >
           <button type="button" className="mist-shut" aria-label="Close" onClick={() => setCardShown(false)}>
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
               <path d="M6 6l12 12M18 6L6 18" />
@@ -318,6 +334,17 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
                 </h2>
               </>
             )}
+            {!shown && page === "sessions" &&
+              (session ? (
+                <SessionView id={session} onBack={() => setSession(null)} />
+              ) : (
+                <>
+                  <SessionsList onOpen={setSession} focusSearch={focusSearch} />
+                  <button type="button" className="mist-archive" onClick={onArchive}>
+                    Folders, exports and filters in the full archive
+                  </button>
+                </>
+              ))}
             {!shown && page === "notes" && (
               <>
                 <div className="mist-kind">Notes</div>
