@@ -277,6 +277,14 @@ describe("ipc contract", () => {
     expect(invoke).toHaveBeenCalledWith("edit_note", { key: "use-pnpm-not-npm", title: "Use pnpm everywhere", body: "The lockfile is pnpm-lock.yaml." });
   });
 
+  it("skillUsage invokes skill_usage and passes the rows through", async () => {
+    const { skillUsage } = await import("./ipc");
+    const rows = [{ skill: "review", uses: 3, sessions: 2, last_ms: 1_785_751_203_000, reprompts: [] }];
+    invoke.mockResolvedValueOnce(rows);
+    expect(await skillUsage()).toEqual(rows);
+    expect(invoke).toHaveBeenCalledWith("skill_usage");
+  });
+
   it("getTokenTotals, relinkSegmentRepository, and checkForUpdates invoke expected commands", async () => {
     const { checkForUpdates, getTokenTotals, relinkSegmentRepository } = await import("./ipc");
 

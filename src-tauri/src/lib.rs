@@ -66,7 +66,8 @@ pub fn run() {
             skills_report,
             accept_lesson,
             retire_note,
-            edit_note
+            edit_note,
+            skill_usage
         ])
         .build(tauri::generate_context!());
     let app = match app {

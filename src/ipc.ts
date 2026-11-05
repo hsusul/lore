@@ -32,6 +32,7 @@ import type { NoteDto } from "../crates/lore-ipc/bindings/NoteDto";
 import type { ReadNoteDto } from "../crates/lore-ipc/bindings/ReadNoteDto";
 import type { AgentsReadDto } from "../crates/lore-ipc/bindings/AgentsReadDto";
 import type { SkillsReportDto } from "../crates/lore-ipc/bindings/SkillsReportDto";
+import type { SkillUsageDto } from "../crates/lore-ipc/bindings/SkillUsageDto";
 import type { SkillFindingDto } from "../crates/lore-ipc/bindings/SkillFindingDto";
 import type { SkillFolderDto } from "../crates/lore-ipc/bindings/SkillFolderDto";
 
@@ -107,6 +108,7 @@ export type {
   ReadNoteDto,
   AgentsReadDto,
   SkillsReportDto,
+  SkillUsageDto,
   SkillFindingDto,
   SkillFolderDto,
 };
@@ -380,6 +382,11 @@ export function retireNote(key: string, reason: string): Promise<string> {
 /** Rewrite the note named by `key` with an edited title and body; its timeline is kept. Resolves with the note's vault path. */
 export function editNote(key: string, title: string, body: string): Promise<string> {
   return invoke<string>("edit_note", { key, title, body });
+}
+
+/** How each installed skill has been used: uses, sessions, newest use, and the corrections right after it ran. Most reprompted first. */
+export function skillUsage(): Promise<SkillUsageDto[]> {
+  return invoke<SkillUsageDto[]>("skill_usage");
 }
 
 /** Calculate cumulative token usage and estimated cost across all sessions. */

@@ -154,20 +154,30 @@ const TURNS: &str = "SELECT m.session_id, s.agent_id, m.seq, m.role, m.ts, sd.re
     ORDER BY m.session_id, m.seq, p.ordinal";
 
 /// One message: its parts' text joined.
-struct Turn {
-    session: String,
+pub(crate) struct Turn {
+    pub(crate) session: String,
     agent: String,
-    seq: i64,
-    user: bool,
-    at_ms: Option<i64>,
+    pub(crate) seq: i64,
+    pub(crate) user: bool,
+    pub(crate) at_ms: Option<i64>,
     text: String,
     repo: Option<String>,
     repo_path: Option<String>,
 }
 
+/// A user turn that invoked a skill or slash command by name: `/name` or
+/// `[$name](path)`, read before harness blocks are stripped, since a slash
+/// command's turn can be nothing but them.
+pub(crate) struct Invoked {
+    pub(crate) session: String,
+    pub(crate) seq: i64,
+    pub(crate) at_ms: Option<i64>,
+    pub(crate) name: String,
+}
+
 /// Every user and assistant turn in the archive, read once so the miner's
 /// passes can share it: reading them is most of what a mining call costs.
-pub struct Turns(Vec<Turn>);
+pub struct Turns(pub(crate) Vec<Turn>, pub(crate) Vec<Invoked>);
 
 /// Every candidate in the archive, by session then turn. Read only.
 pub fn corrections(conn: &Connection) -> rusqlite::Result<Vec<Candidate>> {
@@ -200,6 +210,14 @@ pub fn corrections_within(conn: &Connection, limits: &Limits) -> rusqlite::Resul
 /// [`corrections_within`] over turns already read.
 #[must_use]
 pub fn corrections_in(turns: &Turns, limits: &Limits) -> Vec<Candidate> {
+    corrections_at(turns, limits)
+        .into_iter()
+        .map(|(_, c)| c)
+        .collect()
+}
+
+/// [`corrections_in`], each with the index of its turn in `turns.0`.
+pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Candidate)> {
     let turns = &turns.0;
     let mut found = Vec::new();
     let mut earlier: Vec<BTreeSet<String>> = Vec::new();
@@ -217,6 +235,7 @@ pub fn corrections_in(turns: &Turns, limits: &Limits) -> Vec<Candidate> {
         let text = one_line(&turn.text);
         let words = content_words(&text);
         let signal = if text.starts_with('<')
+            || text.starts_with(REINVOKED)
             || text.chars().count() > limits.max_chars
             || is_question(&text)
             || is_invocation(&text)
@@ -236,18 +255,21 @@ pub fn corrections_in(turns: &Turns, limits: &Limits) -> Vec<Candidate> {
             None
         };
         if let Some(signal) = signal {
-            found.push(Candidate {
-                session: turn.session.clone(),
-                agent: turn.agent.clone(),
-                repo: turn.repo.clone(),
-                repo_path: turn.repo_path.clone(),
-                at_ms: turn.at_ms,
-                preceding: before
-                    .filter(|b| !b.user)
-                    .map(|b| one_line(&b.text).chars().take(PRECEDING_CHARS).collect()),
-                text,
-                signal,
-            });
+            found.push((
+                i,
+                Candidate {
+                    session: turn.session.clone(),
+                    agent: turn.agent.clone(),
+                    repo: turn.repo.clone(),
+                    repo_path: turn.repo_path.clone(),
+                    at_ms: turn.at_ms,
+                    preceding: before
+                        .filter(|b| !b.user)
+                        .map(|b| one_line(&b.text).chars().take(PRECEDING_CHARS).collect()),
+                    text,
+                    signal,
+                },
+            ));
         }
         earlier.push(words);
     }
@@ -280,11 +302,20 @@ pub fn read_turns(conn: &Connection) -> rusqlite::Result<Turns> {
             }),
         }
     }
+    let mut invoked = Vec::new();
     for turn in &mut turns {
+        if let Some(name) = turn.user.then(|| invoked_name(&turn.text)).flatten() {
+            invoked.push(Invoked {
+                session: turn.session.clone(),
+                seq: turn.seq,
+                at_ms: turn.at_ms,
+                name,
+            });
+        }
         turn.text = strip_harness(&turn.text);
     }
     turns.retain(|t| !t.text.trim().is_empty());
-    Ok(Turns(turns))
+    Ok(Turns(turns, invoked))
 }
 
 /// `text` without the blocks an agent harness injects into a turn, such as
@@ -319,6 +350,39 @@ fn strip_harness(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// How Claude Code opens the user turn it writes when a skill already loaded
+/// in the session is invoked again. The harness wrote it, not the person.
+const REINVOKED: &str = "(Re-invocation of /";
+
+/// The skill or command a raw user turn invokes: the `<command-name>` Claude
+/// Code writes for a slash command, or a leading `/name` or `[$name](path)`.
+fn invoked_name(raw: &str) -> Option<String> {
+    let text = raw.trim_start();
+    if let Some(rest) = text.strip_prefix(REINVOKED) {
+        return rest
+            .split([' ', '\u{2014}'])
+            .next()
+            .map(str::to_owned)
+            .filter(|n| !n.is_empty());
+    }
+    if let Some(rest) = text
+        .find("<command-name>")
+        .map(|i| &text[i + "<command-name>".len()..])
+    {
+        let name = rest.split("</command-name>").next()?.trim();
+        return Some(name.trim_start_matches('/').to_owned()).filter(|n| !n.is_empty());
+    }
+    if let Some(rest) = text.strip_prefix("[$") {
+        return rest
+            .split(']')
+            .next()
+            .map(str::to_owned)
+            .filter(|n| !n.is_empty());
+    }
+    let first = text.split_whitespace().next()?;
+    (is_invocation(first)).then(|| first[1..].to_owned())
 }
 
 /// Whether `text` starts by invoking a skill, `[$name](path) ...`, or a slash

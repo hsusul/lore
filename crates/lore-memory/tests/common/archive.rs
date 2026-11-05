@@ -76,12 +76,17 @@ pub fn claude_archive(dir: &Path, sessions: &[(&str, &[Turn<'_>])]) -> Connectio
             let uuid = format!("{}-{n:04}", &sid[..30]);
             let message = if *role == "user" {
                 serde_json::json!({"role": "user", "content": text})
+            } else if *role == "skill" {
+                // An assistant turn that only loads a skill, as Claude Code logs one.
+                serde_json::json!({"role": "assistant", "model": "claude-x",
+                    "content": [{"type": "tool_use", "id": format!("toolu_{n:04}"),
+                        "name": "Skill", "input": {"skill": text}}]})
             } else {
                 serde_json::json!({"role": "assistant", "model": "claude-x",
                     "content": [{"type": "text", "text": text}]})
             };
             lines.push(serde_json::json!({
-                "type": role, "uuid": uuid, "parentUuid": prev, "sessionId": sid,
+                "type": if *role == "skill" { "assistant" } else { role }, "uuid": uuid, "parentUuid": prev, "sessionId": sid,
                 "timestamp": ts, "cwd": "/repo/app", "version": "2.1.0",
                 "isSidechain": false, "userType": "external", "message": message,
             }));
