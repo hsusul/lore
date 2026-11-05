@@ -2900,6 +2900,7 @@ dependencies = [
  "lexopt",
  "lore-core",
  "lore-memory",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

@@ -8,6 +8,8 @@ use std::process::ExitCode;
 
 use lexopt::prelude::*;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
+use lore_replay::grade::GradeOptions;
+use lore_replay::label::LabelOptions;
 use lore_replay::run::RunOptions;
 use lore_replay::{cases, ArmName, Error};
 
@@ -26,6 +28,22 @@ USAGE:
       text from --arms (default: arms.json beside the cases file).
       This starts Claude Code, which sends the session to the model provider.
       Set LORE_REPLAY_CLAUDE to use a claude other than the one on PATH.
+
+  lore-replay label --cases FILE --out FILE [--model sonnet] [--batch 8]
+      Ask a model judge, BATCH cases at a time, whether each corrected turn made
+      a mistake, what it was, the lesson, and how to grade a repeat. Appends one
+      labeled case per line to FILE; cases already labeled there are skipped.
+      This sends the cases to the model provider through claude -p.
+
+  lore-replay grade --labels FILE --runs DIR --out FILE [--model sonnet]
+                    [--no-judge] [--arms FILE --shown-out FILE]
+      Grade every DIR/*/*/run.json: a deterministic verdict when the label
+      names a deterministic grader, and a model-judge verdict on every run
+      (none with --no-judge). Errored and empty runs are skipped and counted;
+      runs already graded in FILE are skipped. With --shown-out, also judge once
+      per case and arm (file, lore, own) whether the arm's context holds a
+      lesson for the case's mistake; own is today's CLAUDE.md unless --arms
+      records an `own` text.
 ";
 
 enum Failure {
@@ -64,6 +82,8 @@ fn dispatch() -> Result<(), Failure> {
     match parser.next()? {
         Some(Value(cmd)) if cmd == "cases" => cases_cmd(&mut parser),
         Some(Value(cmd)) if cmd == "run" => run_cmd(&mut parser),
+        Some(Value(cmd)) if cmd == "label" => label_cmd(&mut parser),
+        Some(Value(cmd)) if cmd == "grade" => grade_cmd(&mut parser),
         Some(Short('h') | Long("help")) => {
             print!("{USAGE}");
             Ok(())
@@ -175,6 +195,69 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
             "cost_usd": record.cost_usd, "is_error": record.is_error,
         })
     );
+    Ok(())
+}
+
+fn label_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
+    let (mut cases_file, mut out) = (None, None);
+    let (mut model, mut batch) = ("sonnet".to_owned(), 8_usize);
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Long("cases") => cases_file = Some(path(parser)?),
+            Long("out") => out = Some(path(parser)?),
+            Long("model") => model = text(parser)?,
+            Long("batch") => batch = parser.value()?.parse::<usize>()?,
+            Short('h') | Long("help") => {
+                print!("{USAGE}");
+                return Ok(());
+            }
+            other => return Err(Failure::Usage(other.unexpected().to_string())),
+        }
+    }
+    let need = |flag: &str| Failure::Usage(format!("{flag} is required"));
+    if batch == 0 {
+        return Err(Failure::Usage("--batch must be at least 1".into()));
+    }
+    let opts = LabelOptions {
+        cases: cases_file.ok_or_else(|| need("--cases"))?,
+        out: out.ok_or_else(|| need("--out"))?,
+        model,
+        batch,
+    };
+    println!("{}", lore_replay::label::label(&opts)?.summary());
+    Ok(())
+}
+
+fn grade_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
+    let (mut labels, mut runs, mut out, mut arms, mut shown_out) = (None, None, None, None, None);
+    let (mut model, mut judge) = ("sonnet".to_owned(), true);
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Long("labels") => labels = Some(path(parser)?),
+            Long("runs") => runs = Some(path(parser)?),
+            Long("out") => out = Some(path(parser)?),
+            Long("model") => model = text(parser)?,
+            Long("no-judge") => judge = false,
+            Long("arms") => arms = Some(path(parser)?),
+            Long("shown-out") => shown_out = Some(path(parser)?),
+            Short('h') | Long("help") => {
+                print!("{USAGE}");
+                return Ok(());
+            }
+            other => return Err(Failure::Usage(other.unexpected().to_string())),
+        }
+    }
+    let need = |flag: &str| Failure::Usage(format!("{flag} is required"));
+    let opts = GradeOptions {
+        labels: labels.ok_or_else(|| need("--labels"))?,
+        runs: runs.ok_or_else(|| need("--runs"))?,
+        out: out.ok_or_else(|| need("--out"))?,
+        model,
+        judge,
+        arms,
+        shown_out,
+    };
+    println!("{}", lore_replay::grade::grade(&opts)?.summary());
     Ok(())
 }
 

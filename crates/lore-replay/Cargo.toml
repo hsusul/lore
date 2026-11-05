@@ -27,6 +27,8 @@ lore-core = { path = "../lore-core" }
 lore-memory = { path = "../lore-memory" }
 # Argument parsing, as in lorectl: a zero-dependency pull parser.
 lexopt = "0.3"
+# The labels' tool, file, and text patterns. Already in the graph.
+regex = "1"
 thiserror = "1"
 # `lore_core::storage` hands back a `rusqlite::Connection`; the native session
 # id is one read-only SELECT on it. Same version as lore-core, features theirs.

@@ -10,7 +10,8 @@
 //! holds no networking code itself; the agent it starts does.
 //!
 //! `cases` only reads: the archive, opened read only, and Claude Code's
-//! session files.
+//! session files. `label` and `grade` ask a model judge through `claude -p`
+//! (also under the person's login); `grade --no-judge` and `report` only read.
 //!
 //! Each replay is isolated so that it measures the agent and not a leak:
 //! a scratch clone at the commit HEAD pointed at when the prompt was given,
@@ -19,9 +20,13 @@
 //! ingests. See [`isolation`] for why each rule exists.
 
 pub mod cases;
+pub mod claude;
 pub mod error;
+pub mod grade;
 pub mod isolation;
+pub mod label;
 pub mod prefix;
+pub mod pyjson;
 pub mod run;
 pub mod scratch;
 pub mod session;
@@ -30,7 +35,10 @@ pub mod types;
 use std::path::Path;
 
 pub use error::{Error, Result};
-pub use types::{Action, Arm, ArmName, ArmsFile, Case, Fidelity, RunRecord};
+pub use types::{
+    Action, Arm, ArmName, ArmsFile, Case, Fidelity, GradeLine, Grader, Label, LabeledCase,
+    RunRecord, ShownLine, Verdict,
+};
 
 /// The case `id` from a `cases.jsonl` file. Blank lines are allowed; any
 /// other line must be a case.
