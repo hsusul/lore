@@ -972,6 +972,25 @@ mod tests {
         assert_eq!(sessions.len(), 1);
     }
 
+    // `lore-replay` keeps its sessions out of the archive by writing them under
+    // a project folder that is a symlink to a directory outside the root.
+    #[cfg(unix)]
+    #[test]
+    fn discovery_skips_sessions_in_a_symlinked_project_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("projects");
+        std::fs::create_dir_all(root.join("real-project")).unwrap();
+        std::fs::write(root.join("real-project/kept.jsonl"), "{}\n").unwrap();
+        let replay = dir.path().join("replay-run/claude-project");
+        std::fs::create_dir_all(&replay).unwrap();
+        std::fs::write(replay.join("replayed.jsonl"), "{}\n").unwrap();
+        std::os::unix::fs::symlink(&replay, root.join("-tmp-replay-wd")).unwrap();
+
+        let sessions = ClaudeCodeAdapter::new().discover_sessions(&DiscoveryRoots::new(vec![root]));
+        let names: Vec<_> = sessions.iter().filter_map(|s| s.path.file_name()).collect();
+        assert_eq!(names, ["kept.jsonl"]);
+    }
+
     #[test]
     fn extracts_notebook_edit_file_events() {
         let jsonl = r#"{"type":"user","message":{"role":"user","content":"edit notebook"}}
