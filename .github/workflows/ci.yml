@@ -33,9 +33,9 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy (deny warnings)
-        run: cargo clippy --locked -p lore-core -p lore-ipc -p lore-memory -p lore-skills -p lorectl --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked -p lore-core -p lore-ipc -p lore-memory -p lore-replay -p lore-skills -p lorectl --all-targets --all-features -- -D warnings
       - name: Test (locked)
-        run: cargo test --locked -p lore-core -p lore-ipc -p lore-memory -p lore-skills -p lorectl --all-targets
+        run: cargo test --locked -p lore-core -p lore-ipc -p lore-memory -p lore-replay -p lore-skills -p lorectl --all-targets
       - name: Network-boundary guard (call-site)
         # One per network-incapable package: each crate owns its own scanner, so
         # a change made for one cannot weaken the guarantee for the other.

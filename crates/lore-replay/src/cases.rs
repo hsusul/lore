@@ -266,9 +266,13 @@ mod tests {
             human("no, not like that", "2026-01-01T00:03:00Z"),
         ];
         let late = 1_767_225_780_000; // 00:03:00
-        let found = locate(&entries, &receipt("no, not like that", Some(late))).ok().unwrap();
+        let found = locate(&entries, &receipt("no, not like that", Some(late)))
+            .ok()
+            .unwrap();
         assert_eq!((found.prompt_line, found.correction_line), (2, 3));
-        let early = locate(&entries, &receipt("no, not like that", None)).ok().unwrap();
+        let early = locate(&entries, &receipt("no, not like that", None))
+            .ok()
+            .unwrap();
         assert_eq!((early.prompt_line, early.correction_line), (0, 1));
     }
 

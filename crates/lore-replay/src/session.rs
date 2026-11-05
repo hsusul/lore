@@ -71,7 +71,9 @@ pub fn content_text(entry: &Value) -> String {
 /// line, not a compaction summary or a command wrapper.
 #[must_use]
 pub fn is_human(entry: &Value) -> bool {
-    if str_field(entry, "type") != Some("user") || flag(entry, "isSidechain") || flag(entry, "isMeta")
+    if str_field(entry, "type") != Some("user")
+        || flag(entry, "isSidechain")
+        || flag(entry, "isMeta")
     {
         return false;
     }
@@ -121,7 +123,8 @@ pub fn assistant_actions(entries: &[Value]) -> Vec<Action> {
 #[must_use]
 pub fn timestamp_ms(entry: &Value) -> Option<i64> {
     let ts = str_field(entry, "timestamp")?;
-    let at = time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339).ok()?;
+    let at =
+        time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339).ok()?;
     i64::try_from(at.unix_timestamp_nanos() / 1_000_000).ok()
 }
 

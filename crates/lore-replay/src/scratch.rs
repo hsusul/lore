@@ -85,7 +85,16 @@ fn toplevel(cwd: &Path) -> Option<PathBuf> {
 /// `commit`, on `branch` when the clone has that branch. The clone keeps
 /// every local branch and no remote, so the agent cannot push anywhere.
 pub fn clone_at(toplevel: &Path, commit: &str, branch: Option<&str>, dest: &Path) -> Result<()> {
-    git(None, &[os("clone"), os("-q"), os("--no-checkout"), toplevel.into(), dest.into()])?;
+    git(
+        None,
+        &[
+            os("clone"),
+            os("-q"),
+            os("--no-checkout"),
+            toplevel.into(),
+            dest.into(),
+        ],
+    )?;
     let fetch = [
         os("fetch"),
         os("-q"),
@@ -97,13 +106,22 @@ pub fn clone_at(toplevel: &Path, commit: &str, branch: Option<&str>, dest: &Path
     // here only loses other branches.
     let _ = run(Some(dest), &fetch);
     git(Some(dest), &[os("remote"), os("remove"), os("origin")])?;
-    git(Some(dest), &[os("checkout"), os("-q"), os("--detach"), os(commit)])?;
+    git(
+        Some(dest),
+        &[os("checkout"), os("-q"), os("--detach"), os(commit)],
+    )?;
     if let Some(branch) = branch {
         let reference = format!("refs/heads/{branch}");
-        let exists = run(Some(dest), &[os("rev-parse"), os("-q"), os("--verify"), os(&reference)])
-            .is_ok_and(|o| o.status.success());
+        let exists = run(
+            Some(dest),
+            &[os("rev-parse"), os("-q"), os("--verify"), os(&reference)],
+        )
+        .is_ok_and(|o| o.status.success());
         if exists {
-            let _ = run(Some(dest), &[os("checkout"), os("-q"), os("-B"), os(branch), os(commit)]);
+            let _ = run(
+                Some(dest),
+                &[os("checkout"), os("-q"), os("-B"), os(branch), os(commit)],
+            );
         }
     }
     Ok(())
@@ -194,7 +212,10 @@ mod tests {
         assert_eq!(source(&case(Some(gone), now)).fidelity(), Fidelity::CwdGone);
         let plain = tmp.path().join("plain");
         std::fs::create_dir(&plain).unwrap();
-        assert_eq!(source(&case(Some(plain), now)).fidelity(), Fidelity::NotARepo);
+        assert_eq!(
+            source(&case(Some(plain), now)).fidelity(),
+            Fidelity::NotARepo
+        );
 
         let repo = tmp.path().join("repo");
         std::fs::create_dir(&repo).unwrap();

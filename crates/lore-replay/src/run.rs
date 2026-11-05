@@ -86,7 +86,11 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     let tools = isolation::tool_env(&dir)?;
     let mut args: Vec<String> = vec!["-p".into()];
     if prefix.has_messages {
-        args.extend(["--resume".into(), session_id.clone(), "--fork-session".into()]);
+        args.extend([
+            "--resume".into(),
+            session_id.clone(),
+            "--fork-session".into(),
+        ]);
     }
     args.extend([
         "--no-session-persistence".into(),
@@ -139,7 +143,10 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     });
     let mut events = Vec::new();
     if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).split(b'\n').map_while(std::io::Result::ok) {
+        for line in BufReader::new(stdout)
+            .split(b'\n')
+            .map_while(std::io::Result::ok)
+        {
             if let Ok(event) = serde_json::from_slice::<Value>(&line) {
                 events.push(event);
             }
@@ -150,9 +157,7 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     if let Some(handle) = stdin {
         let _ = handle.join();
     }
-    let stderr = stderr
-        .and_then(|h| h.join().ok())
-        .unwrap_or_default();
+    let stderr = stderr.and_then(|h| h.join().ok()).unwrap_or_default();
     drop(link);
     waited.map_err(|e| Error::io("wait for", Path::new(&program), e))?;
 
@@ -169,8 +174,12 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
         foreign_paths: isolation::foreign_paths(&case.actions, source.toplevel()),
         prefix_lines: case.prompt_line,
         seconds,
-        cost_usd: result.and_then(|r| r.get("total_cost_usd")).and_then(Value::as_f64),
-        is_error: result.and_then(|r| r.get("is_error")).and_then(Value::as_bool),
+        cost_usd: result
+            .and_then(|r| r.get("total_cost_usd"))
+            .and_then(Value::as_f64),
+        is_error: result
+            .and_then(|r| r.get("is_error"))
+            .and_then(Value::as_bool),
         stderr: tail(&stderr, STDERR_TAIL),
         outward: std::fs::read_to_string(&tools.outward_log)
             .map(|log| log.lines().map(str::to_owned).collect())
@@ -228,7 +237,8 @@ impl ProjectLink {
         }
         match std::fs::symlink_metadata(path) {
             Ok(meta) if meta.file_type().is_symlink() => {
-                std::fs::remove_file(path).map_err(|e| Error::io("remove the stale link", path, e))?;
+                std::fs::remove_file(path)
+                    .map_err(|e| Error::io("remove the stale link", path, e))?;
             }
             Ok(_) => return Err(Error::ProjectDirOccupied(path.to_owned())),
             Err(_) => {}

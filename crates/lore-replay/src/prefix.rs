@@ -206,8 +206,14 @@ mod tests {
     #[test]
     fn replace_path_respects_component_ends() {
         assert_eq!(replace_path("/a/b", "/a/b", "/x").as_deref(), Some("/x"));
-        assert_eq!(replace_path("/a/b/c /a/b", "/a/b", "/x").as_deref(), Some("/x/c /x"));
+        assert_eq!(
+            replace_path("/a/b/c /a/b", "/a/b", "/x").as_deref(),
+            Some("/x/c /x")
+        );
         assert_eq!(replace_path("/a/bc", "/a/b", "/x"), None);
-        assert_eq!(replace_path("'/a/b'", "/a/b", "/x").as_deref(), Some("'/x'"));
+        assert_eq!(
+            replace_path("'/a/b'", "/a/b", "/x").as_deref(),
+            Some("'/x'")
+        );
     }
 }

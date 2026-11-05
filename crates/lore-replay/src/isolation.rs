@@ -101,7 +101,10 @@ fn absolute_paths(text: &str) -> impl Iterator<Item = &str> {
     let ends = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ';' | '&' | '|' | '`');
     text.char_indices().filter_map(move |(i, _)| {
         let rest = &text[i..];
-        let starts_word = text[..i].chars().next_back().is_none_or(|c| !is_path_char(c));
+        let starts_word = text[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_path_char(c));
         if !starts_word || !ROOTS.iter().any(|root| rest.starts_with(root)) {
             return None;
         }
@@ -203,7 +206,10 @@ mod tests {
             project_slug(Path::new("/private/tmp/run_1/wd.x")),
             "-private-tmp-run-1-wd-x"
         );
-        assert_eq!(project_slug(Path::new("/Volumes/990 Pro/a")), "-Volumes-990-Pro-a");
+        assert_eq!(
+            project_slug(Path::new("/Volumes/990 Pro/a")),
+            "-Volumes-990-Pro-a"
+        );
     }
 
     #[test]
@@ -212,7 +218,10 @@ mod tests {
         assert_eq!(s["sandbox"]["enabled"], true);
         assert_eq!(s["sandbox"]["allowUnsandboxedCommands"], false);
         assert_eq!(s["sandbox"]["failIfUnavailable"], true);
-        assert_eq!(s["sandbox"]["filesystem"]["denyRead"], json!(["/Users", "/Volumes"]));
+        assert_eq!(
+            s["sandbox"]["filesystem"]["denyRead"],
+            json!(["/Users", "/Volumes"])
+        );
         assert_eq!(s["sandbox"]["network"]["allowedDomains"], json!([]));
         assert_eq!(s["permissions"]["defaultMode"], "acceptEdits");
         assert_eq!(
