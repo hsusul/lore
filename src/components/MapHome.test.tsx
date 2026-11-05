@@ -18,6 +18,7 @@ vi.mock("../ipc", () => ({
   listSessionMessagesPage: vi.fn(),
   listProposals: vi.fn(),
   findLessons: vi.fn(),
+  lessonAgents: vi.fn(),
   listNotes: vi.fn(),
   accountName: vi.fn(),
   acceptProposal: vi.fn(),
@@ -73,8 +74,26 @@ const summary = (id: string, title: string): SessionSummary => ({
   est_cost_usd: null,
 });
 
+const agent = (
+  id: string,
+  label: string,
+  signed_in: boolean,
+  installed = true,
+) => ({
+  id,
+  label,
+  installed,
+  signed_in,
+  sign_in: id === "codex" ? "codex login" : "claude auth login",
+});
+
 beforeEach(() => {
   vi.resetAllMocks();
+  localStorage.clear();
+  m.lessonAgents.mockResolvedValue([
+    agent("claude-code", "Claude Code", true),
+    agent("codex", "Codex", true),
+  ]);
   m.listSessionsPage.mockResolvedValue({
     sessions: [
       summary("s1", "Add analytics to onboarding"),
@@ -265,7 +284,7 @@ describe("MapHome", () => {
     ).toBeTruthy();
   });
 
-  it("finds lessons with the person's agent when none wait, then shows them", async () => {
+  it("finds lessons with the chosen agent when none wait, then shows them", async () => {
     m.listProposals.mockResolvedValue([]);
     let finish: (report: string) => void = () => {};
     m.findLessons.mockReturnValue(new Promise((resolve) => (finish = resolve)));
@@ -275,33 +294,115 @@ describe("MapHome", () => {
       screen.queryByRole("button", { name: /lessons? waiting/ }),
     ).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Find lessons" }));
+    const choice = await screen.findByRole("radiogroup", {
+      name: "Agent that writes lessons",
+    });
+    fireEvent.click(within(choice).getByRole("radio", { name: "Codex" }));
+    expect(localStorage.getItem("lore.lessons-agent")).toBe("codex");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Find lessons with Codex" }),
+    );
+    expect(m.findLessons).toHaveBeenCalledWith("codex");
     expect(
-      await screen.findByRole("heading", { name: /Finding lessons/ }),
+      await screen.findByRole("heading", {
+        name: /Finding lessons Codex is reading/,
+      }),
     ).toBeTruthy();
     m.listProposals.mockResolvedValue([pnpm]);
     finish("Filed: 1 rule.");
     expect(
       await screen.findByRole("heading", { name: "Use pnpm, not npm" }),
     ).toBeTruthy();
-    expect(screen.getByText("Your agent filed 1 lesson.")).toBeTruthy();
+    expect(screen.getByText("Codex filed 1 lesson.")).toBeTruthy();
+  });
+
+  it("finds more lessons from a lesson, while others still wait", async () => {
+    m.findLessons.mockResolvedValue("done");
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    const card = await screen.findByRole("region", { name: "Opened item" });
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Find more lessons" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Find lessons with Claude Code",
+      }),
+    );
+    await waitFor(() =>
+      expect(m.findLessons).toHaveBeenCalledWith("claude-code"),
+    );
+    expect(
+      await screen.findByText("Claude Code found no new lessons."),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Use pnpm, not npm" }),
+    ).toBeTruthy();
+  });
+
+  it("offers only the agent that is signed in", async () => {
+    m.listProposals.mockResolvedValue([]);
+    m.lessonAgents.mockResolvedValue([
+      agent("claude-code", "Claude Code", true),
+      agent("codex", "Codex", false),
+    ]);
+    m.findLessons.mockResolvedValue("done");
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Find lessons with Claude Code",
+      }),
+    );
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(m.findLessons).toHaveBeenCalledWith("claude-code");
+  });
+
+  it("asks the person to sign in when no agent can write lessons", async () => {
+    m.listProposals.mockResolvedValue([]);
+    m.lessonAgents.mockResolvedValue([
+      agent("claude-code", "Claude Code", false),
+      agent("codex", "Codex", false, false),
+    ]);
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    expect(
+      await screen.findByRole("heading", {
+        name: /Sign in to Claude Code or Codex/,
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText("claude auth login")).toBeTruthy();
+    expect(screen.getByText("Not installed")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Find lessons/ })).toBeNull();
+
+    m.lessonAgents.mockResolvedValue([
+      agent("claude-code", "Claude Code", true),
+      agent("codex", "Codex", false, false),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(
+      await screen.findByRole("button", {
+        name: "Find lessons with Claude Code",
+      }),
+    ).toBeTruthy();
   });
 
   it("says why finding lessons failed", async () => {
     m.listProposals.mockResolvedValue([]);
     m.findLessons.mockRejectedValue(
-      "Claude Code is not installed. Install it, sign in, then try again.",
+      "Claude Code did not finish its report: Not logged in",
     );
     render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Find lessons" }),
+      await screen.findByRole("button", {
+        name: "Find lessons with Claude Code",
+      }),
     );
     expect(
       await screen.findByText(
-        "Claude Code is not installed. Install it, sign in, then try again.",
+        "Claude Code did not finish its report: Not logged in",
       ),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Find lessons" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Find lessons with Claude Code" }),
+    ).toBeTruthy();
   });
 
   it("lists notes, and retires one", async () => {

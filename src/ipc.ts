@@ -26,6 +26,7 @@ import type { SessionDetail } from "../crates/lore-ipc/bindings/SessionDetail";
 import type { SessionPage } from "../crates/lore-ipc/bindings/SessionPage";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 import type { TokenTotalsDto } from "../crates/lore-ipc/bindings/TokenTotalsDto";
+import type { LessonAgentDto } from "../crates/lore-ipc/bindings/LessonAgentDto";
 import type { LessonDto } from "../crates/lore-ipc/bindings/LessonDto";
 import type { ReceiptDto } from "../crates/lore-ipc/bindings/ReceiptDto";
 import type { NoteDto } from "../crates/lore-ipc/bindings/NoteDto";
@@ -103,6 +104,7 @@ export type {
   SessionPage,
   SessionSummary,
   TokenTotalsDto,
+  LessonAgentDto,
   LessonDto,
   ReceiptDto,
   NoteDto,
@@ -406,9 +408,14 @@ export function rejectProposal(id: string, reason: string): Promise<void> {
   return invoke<void>("reject_proposal", { id, reason });
 }
 
-/** Run the person's Claude Code on the lore-lessons skill; resolves with its report once it finishes. */
-export function findLessons(): Promise<string> {
-  return invoke<string>("find_lessons");
+/** Run the person's `agent` (`claude-code` or `codex`) on the lore-lessons skill; resolves with its report once it finishes. */
+export function findLessons(agent: string): Promise<string> {
+  return invoke<string>("find_lessons", { agent });
+}
+
+/** Which agents can write lessons: Claude Code and Codex, each installed or not and signed in or not. */
+export function lessonAgents(): Promise<LessonAgentDto[]> {
+  return invoke<LessonAgentDto[]>("lesson_agents");
 }
 
 /** The person's name for the map's centre: the Mac account's full name, else the user name. */

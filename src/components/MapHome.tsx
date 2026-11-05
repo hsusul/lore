@@ -8,48 +8,16 @@ import {
   listProposals,
   rejectProposal,
   retireNote,
+  type LessonAgentDto,
   type NoteDto,
   type ProposalDto,
 } from "../ipc";
 import { areasOf, CENTRE, layout, type Dot, type Item } from "../map/layout";
 import { receipts, why } from "../map/proposal";
+import { FindLessons } from "./FindLessons";
+import { Mark } from "./Mark";
 import { MapCanvas } from "./MapCanvas";
 import { SessionsList, SessionView } from "./MapSessions";
-
-/** The rings of the logo (assets/brand/lore-mark.svg), drawn in the current color. */
-function Mark({ className = "mist-mark" }: { className?: string }) {
-  return (
-    <svg viewBox="18 14 108 68" className={className} aria-hidden="true">
-      <g className="r2">
-        <circle
-          cx="90"
-          cy="48"
-          r="30"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="7"
-          strokeLinecap="round"
-          strokeDasharray="176.98 11.52"
-          transform="rotate(191 90 48)"
-        />
-      </g>
-      <g className="r1">
-        <circle
-          cx="64"
-          cy="48"
-          r="20"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="7"
-          strokeLinecap="round"
-          strokeDasharray="117.98 7.68"
-          transform="rotate(191 64 48)"
-        />
-      </g>
-      <circle cx="28" cy="48" r="7" fill="currentColor" />
-    </svg>
-  );
-}
 
 /** The prototype's rail icons: 24-unit strokes in the current color. */
 const ICONS = {
@@ -123,7 +91,7 @@ type Data =
       person: string;
     };
 
-type Page = "today" | "notes" | "sessions";
+type Page = "today" | "notes" | "sessions" | "find";
 
 function LessonDetail({
   lesson,
@@ -132,6 +100,7 @@ function LessonDetail({
   onAccept,
   onSkip,
   onReject,
+  onFindMore,
 }: {
   lesson: ProposalDto;
   scope: string;
@@ -139,6 +108,7 @@ function LessonDetail({
   onAccept: (title?: string) => void;
   onSkip: () => void;
   onReject: () => void;
+  onFindMore: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(lesson.title);
@@ -224,6 +194,9 @@ function LessonDetail({
           </>
         )}
       </div>
+      <button type="button" className="mist-archive" onClick={onFindMore}>
+        Find more lessons
+      </button>
     </>
   );
 }
@@ -280,7 +253,7 @@ export function MapHome({
   const [notice, setNotice] = useState<string | null>(null);
   const [session, setSession] = useState<string | null>(null);
   const [focusSearch, setFocusSearch] = useState(0);
-  const [finding, setFinding] = useState(false);
+  const [finding, setFinding] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -367,23 +340,24 @@ export function MapHome({
   };
 
   // Lessons the agent files show up as they would after any review: reload.
-  const find = async () => {
-    setFinding(true);
+  const find = async (agent: LessonAgentDto) => {
+    setFinding(agent.label);
     setNotice(null);
     const before = lessons.length;
     try {
-      await findLessons();
+      await findLessons(agent.id);
       const filed = (await listProposals()).length - before;
       await load();
+      setPage("today");
       setNotice(
         filed > 0
-          ? `Your agent filed ${filed} ${filed === 1 ? "lesson" : "lessons"}.`
-          : "Your agent found no new lessons.",
+          ? `${agent.label} filed ${filed} ${filed === 1 ? "lesson" : "lessons"}.`
+          : `${agent.label} found no new lessons.`,
       );
     } catch (e) {
       setNotice(String(e));
     } finally {
-      setFinding(false);
+      setFinding(null);
     }
   };
 
@@ -540,6 +514,11 @@ export function MapHome({
                   setOpen(null);
                   setNotice(null);
                 }}
+                onFindMore={() => {
+                  setPage("find");
+                  setOpen(null);
+                  setNotice(null);
+                }}
               />
             )}
             {shown?.kind === "note" && (
@@ -555,40 +534,12 @@ export function MapHome({
                 }
               />
             )}
-            {!shown &&
-              page === "today" &&
-              (finding ? (
-                <div role="status">
-                  <Mark className="mist-mark mist-spin mist-finding" />
-                  <h2 className="mist-h2">
-                    Finding lessons{" "}
-                    <span className="mist-hw">
-                      Claude Code is reading your corrections. This takes a few
-                      minutes.
-                    </span>
-                  </h2>
-                </div>
-              ) : (
-                <>
-                  <div className="mist-kind">You're caught up</div>
-                  <h2 className="mist-h2">
-                    Find new lessons{" "}
-                    <span className="mist-hw">
-                      Claude Code reads your past corrections and writes them
-                      here.
-                    </span>
-                  </h2>
-                  <div className="mist-acts">
-                    <button
-                      type="button"
-                      className="mist-btn pri"
-                      onClick={() => void find()}
-                    >
-                      Find lessons
-                    </button>
-                  </div>
-                </>
-              ))}
+            {!shown && (page === "today" || page === "find") && (
+              <FindLessons
+                finding={finding}
+                onFind={(agent) => void find(agent)}
+              />
+            )}
             {!shown &&
               page === "sessions" &&
               (session ? (

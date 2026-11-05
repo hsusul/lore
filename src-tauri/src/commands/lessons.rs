@@ -1,8 +1,8 @@
-//! Find lessons: run the person's own Claude Code, headless, on the
+//! Find lessons: run the person's own Claude Code or Codex, headless, on the
 //! lore-lessons skill, with Lore's MCP server, so their agent reads each mined
 //! correction with the turns around it and files the readable ones as
-//! proposals. Lore opens no connection itself; Claude Code does, as the person
-//! signed it in, and only when they press the button.
+//! proposals. Lore opens no connection itself; the agent does, signed in as
+//! the person signed it in, and only when they press the button.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -10,12 +10,15 @@ use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use lore_ipc::LessonAgentDto;
 use tauri::State;
 
 use crate::state::AppState;
 
-/// The skill both plugins ship, so the app needs no plugin installed.
-const SKILL: &str = include_str!("../../../plugins/claude-code/skills/lore-lessons/SKILL.md");
+/// The skill each plugin ships, so the app needs no plugin installed.
+const CLAUDE_SKILL: &str =
+    include_str!("../../../plugins/claude-code/skills/lore-lessons/SKILL.md");
+const CODEX_SKILL: &str = include_str!("../../../plugins/codex/skills/lore-lessons/SKILL.md");
 
 /// What the headless run adds to the skill: it starts in no repository.
 const FROM_THE_APP: &str = "\n\n## Running from the Lore app\n\n\
@@ -33,6 +36,123 @@ const TOOLS: [&str; 3] = [
 
 /// A run reads every candidate and may take a while; past this it is stopped.
 const LIMIT: Duration = Duration::from_secs(20 * 60);
+
+/// The agents that can write lessons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Agent {
+    Claude,
+    Codex,
+}
+
+impl Agent {
+    const ALL: [Agent; 2] = [Agent::Claude, Agent::Codex];
+
+    fn parse(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.id() == id)
+    }
+
+    /// As `LORE_AGENT` and the archive name it.
+    fn id(self) -> &'static str {
+        match self {
+            Agent::Claude => "claude-code",
+            Agent::Codex => "codex",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Agent::Claude => "Claude Code",
+            Agent::Codex => "Codex",
+        }
+    }
+
+    fn binary(self) -> &'static str {
+        match self {
+            Agent::Claude => "claude",
+            Agent::Codex => "codex",
+        }
+    }
+
+    /// What signs the agent in, for the person to run in a terminal.
+    fn sign_in(self) -> &'static str {
+        match self {
+            Agent::Claude => "claude auth login",
+            Agent::Codex => "codex login",
+        }
+    }
+
+    /// The command that reports whether the agent is signed in.
+    fn status_args(self) -> &'static [&'static str] {
+        match self {
+            Agent::Claude => &["auth", "status"],
+            Agent::Codex => &["login", "status"],
+        }
+    }
+
+    /// Whether the status command's output says the agent is signed in.
+    fn signed_in(self, success: bool, stdout: &str) -> bool {
+        match self {
+            Agent::Claude => serde_json::from_str::<serde_json::Value>(stdout.trim())
+                .is_ok_and(|v| v["loggedIn"].as_bool() == Some(true)),
+            Agent::Codex => success,
+        }
+    }
+
+    /// What the run is asked to do. It goes on stdin: the skill opens with
+    /// `---`, which `claude` would read as an option if it were an argument.
+    fn prompt(self) -> String {
+        let skill = match self {
+            Agent::Claude => CLAUDE_SKILL,
+            Agent::Codex => CODEX_SKILL,
+        };
+        format!("{skill}{FROM_THE_APP}")
+    }
+
+    /// The arguments for one headless run with only Lore's MCP server, given
+    /// a scratch folder for the files it needs.
+    fn arguments(self, lorectl: &Path, archive: &Path, scratch: &Path) -> Vec<String> {
+        let owned = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        match self {
+            Agent::Claude => {
+                let mut args = owned(&["-p", "--mcp-config"]);
+                args.push(scratch.join("find-lessons.mcp.json").display().to_string());
+                args.extend(owned(&["--strict-mcp-config", "--allowedTools"]));
+                args.extend(owned(&TOOLS));
+                args.extend(owned(&["--output-format", "json"]));
+                args
+            }
+            Agent::Codex => {
+                // TOML values: a JSON string is a valid TOML basic string.
+                let quoted =
+                    |p: &Path| serde_json::Value::from(p.display().to_string()).to_string();
+                let mut args = owned(&[
+                    "exec",
+                    "--skip-git-repo-check",
+                    "--ephemeral",
+                    "-s",
+                    "read-only",
+                ]);
+                for config in [
+                    "approval_policy=\"never\"".to_owned(),
+                    "mcp_servers.lore.default_tools_approval_mode=\"approve\"".to_owned(),
+                    format!("mcp_servers.lore.command={}", quoted(lorectl)),
+                    format!(
+                        "mcp_servers.lore.args=[\"mcp\",\"--archive\",{}]",
+                        quoted(archive)
+                    ),
+                    "mcp_servers.lore.env={LORE_AGENT=\"codex\"}".to_owned(),
+                ] {
+                    args.push("-c".to_owned());
+                    args.push(config);
+                }
+                args.push("-o".to_owned());
+                args.push(scratch.join("find-lessons.last.txt").display().to_string());
+                args.push("-".to_owned());
+                args
+            }
+        }
+    }
+}
 
 /// Folders an app opened from Finder does not have on its PATH.
 fn search_dirs(home: &Path, path: Option<&str>) -> Vec<PathBuf> {
@@ -65,7 +185,7 @@ fn lorectl_in(own: Option<&Path>, dirs: &[PathBuf]) -> Option<PathBuf> {
         .or_else(|| find("lorectl", dirs))
 }
 
-/// The MCP config that gives the run Lore's tools over `archive`.
+/// The MCP config that gives a Claude Code run Lore's tools over `archive`.
 fn mcp_config(lorectl: &Path, archive: &Path) -> serde_json::Value {
     serde_json::json!({ "mcpServers": { "lore": {
         "command": lorectl,
@@ -74,37 +194,25 @@ fn mcp_config(lorectl: &Path, archive: &Path) -> serde_json::Value {
     }}})
 }
 
-/// What the run is asked to do. It goes on stdin: the skill opens with `---`,
-/// which `claude` would read as an option if it were an argument.
-fn prompt() -> String {
-    format!("{SKILL}{FROM_THE_APP}")
-}
-
-/// `claude`'s arguments for one headless run of the skill.
-fn arguments(config: &Path) -> Vec<String> {
-    let mut args = vec![
-        "-p".to_owned(),
-        "--mcp-config".to_owned(),
-        config.display().to_string(),
-        "--strict-mcp-config".to_owned(),
-        "--allowedTools".to_owned(),
-    ];
-    args.extend(TOOLS.iter().map(|t| (*t).to_owned()));
-    args.extend(["--output-format".to_owned(), "json".to_owned()]);
-    args
+/// Why a run left no report, from the end of what it printed.
+fn no_report(label: &str, said: &str) -> String {
+    let said = said.trim();
+    let tail: String = said
+        .chars()
+        .skip(said.chars().count().saturating_sub(300))
+        .collect();
+    if tail.is_empty() {
+        format!("{label} did not finish its report")
+    } else {
+        format!("{label} did not finish its report: {tail}")
+    }
 }
 
 /// The agent's closing report from `claude -p --output-format json`, or why
 /// there is none, from what it printed to stderr.
 fn report(stdout: &str, stderr: &str) -> Result<String, String> {
-    let value: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|_| {
-        let said: String = stderr.trim().chars().take(300).collect();
-        if said.is_empty() {
-            "Claude Code did not finish its report".to_owned()
-        } else {
-            format!("Claude Code did not finish its report: {said}")
-        }
-    })?;
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).map_err(|_| no_report("Claude Code", stderr))?;
     let text = value["result"]
         .as_str()
         .unwrap_or_default()
@@ -131,43 +239,98 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<String> {
     })
 }
 
-/// Run the person's Claude Code on the lore-lessons skill and return its
-/// report. Proposals it files land in the vault's inbox for review.
-#[tauri::command]
-pub async fn find_lessons(state: State<'_, AppState>) -> Result<String, String> {
+/// Where the agents and lorectl are looked for, and the PATH a run gets.
+struct Found {
+    home: PathBuf,
+    dirs: Vec<PathBuf>,
+}
+
+fn found() -> Result<Found, String> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("HOME is not set")?;
     let path = std::env::var("PATH").ok();
-    let dirs = search_dirs(&home, path.as_deref());
-    let claude = find("claude", &dirs)
-        .ok_or("Claude Code is not installed. Install it, sign in, then try again.")?;
+    Ok(Found {
+        dirs: search_dirs(&home, path.as_deref()),
+        home,
+    })
+}
+
+/// Which agents can write lessons: installed, and signed in. Checked locally
+/// by each agent's own status command.
+#[tauri::command]
+pub async fn lesson_agents() -> Result<Vec<LessonAgentDto>, String> {
+    let found = found()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = std::env::join_paths(&found.dirs).map_err(|e| e.to_string())?;
+        Ok(Agent::ALL
+            .into_iter()
+            .map(|agent| {
+                let binary = find(agent.binary(), &found.dirs);
+                let signed_in = binary.as_ref().is_some_and(|bin| {
+                    Command::new(bin)
+                        .args(agent.status_args())
+                        .env("PATH", &path)
+                        .stdin(Stdio::null())
+                        .output()
+                        .is_ok_and(|o| {
+                            agent.signed_in(o.status.success(), &String::from_utf8_lossy(&o.stdout))
+                        })
+                });
+                LessonAgentDto {
+                    id: agent.id().to_owned(),
+                    label: agent.label().to_owned(),
+                    installed: binary.is_some(),
+                    signed_in,
+                    sign_in: agent.sign_in().to_owned(),
+                }
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Run the person's `agent` on the lore-lessons skill and return its report.
+/// Proposals it files land in the vault's inbox for review.
+#[tauri::command]
+pub async fn find_lessons(state: State<'_, AppState>, agent: String) -> Result<String, String> {
+    let agent = Agent::parse(&agent).ok_or("unknown agent")?;
+    let Found { home, dirs } = found()?;
+    let label = agent.label();
+    let binary = find(agent.binary(), &dirs)
+        .ok_or_else(|| format!("{label} is not installed. Install it, sign in, then try again."))?;
     let own = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(Path::to_path_buf));
     let lorectl = lorectl_in(own.as_deref(), &dirs)
-        .ok_or("lorectl is not installed, so Claude Code cannot reach Lore's tools.")?;
-    let config = state.archive_dir.join("find-lessons.mcp.json");
-    std::fs::write(
-        &config,
-        mcp_config(&lorectl, &state.archive_dir).to_string(),
-    )
-    .map_err(|e| e.to_string())?;
+        .ok_or_else(|| format!("lorectl is missing, so {label} cannot reach Lore's tools."))?;
+    let scratch = state.archive_dir.clone();
+    let last = scratch.join("find-lessons.last.txt");
+    let _ = std::fs::remove_file(&last);
+    if agent == Agent::Claude {
+        std::fs::write(
+            scratch.join("find-lessons.mcp.json"),
+            mcp_config(&lorectl, &state.archive_dir).to_string(),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    let args = agent.arguments(&lorectl, &state.archive_dir, &scratch);
     let joined = std::env::join_paths(&dirs).map_err(|e| e.to_string())?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        let mut child = Command::new(&claude)
-            .args(arguments(&config))
+        let mut child = Command::new(&binary)
+            .args(&args)
             .current_dir(&home)
             .env("PATH", joined)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("could not start Claude Code: {e}"))?;
+            .map_err(|e| format!("could not start {label}: {e}"))?;
         if let Some(mut stdin) = child.stdin.take() {
             stdin
-                .write_all(prompt().as_bytes())
+                .write_all(agent.prompt().as_bytes())
                 .map_err(|e| e.to_string())?;
         }
         // Read both pipes while it runs, so a long report cannot fill one and stall it.
@@ -180,13 +343,22 @@ pub async fn find_lessons(state: State<'_, AppState>) -> Result<String, String> 
             }
             if started.elapsed() > LIMIT {
                 let _ = child.kill();
-                return Err("Claude Code took more than 20 minutes and was stopped.".to_owned());
+                return Err(format!(
+                    "{label} took more than 20 minutes and was stopped."
+                ));
             }
             std::thread::sleep(Duration::from_millis(500));
         }
         let stdout = stdout.join().unwrap_or_default();
         let stderr = stderr.join().unwrap_or_default();
-        report(&stdout, &stderr)
+        match agent {
+            Agent::Claude => report(&stdout, &stderr),
+            Agent::Codex => std::fs::read_to_string(&last)
+                .ok()
+                .map(|text| text.trim().to_owned())
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| no_report(label, &format!("{stdout}\n{stderr}"))),
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -245,19 +417,23 @@ mod tests {
 
     #[test]
     fn runs_the_skill_with_only_lores_tools() {
-        let prompt = prompt();
-        assert!(
-            prompt.starts_with("---\nname: lore-lessons"),
-            "{}",
-            &prompt[..40]
-        );
-        assert!(prompt.ends_with("End with the report."));
+        for agent in Agent::ALL {
+            let prompt = agent.prompt();
+            assert!(
+                prompt.starts_with("---\nname: lore-lessons"),
+                "{}",
+                &prompt[..40]
+            );
+            assert!(prompt.ends_with("End with the report."));
+        }
+        let (lorectl, archive, scratch) =
+            (Path::new("/b/lorectl"), Path::new("/a"), Path::new("/s"));
         assert_eq!(
-            arguments(Path::new("/tmp/c.json")),
+            Agent::Claude.arguments(lorectl, archive, scratch),
             [
                 "-p",
                 "--mcp-config",
-                "/tmp/c.json",
+                "/s/find-lessons.mcp.json",
                 "--strict-mcp-config",
                 "--allowedTools",
                 "mcp__lore__recall_memory",
@@ -268,12 +444,46 @@ mod tests {
             ]
         );
         assert_eq!(
+            Agent::Codex.arguments(lorectl, archive, scratch),
+            [
+                "exec",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "-s",
+                "read-only",
+                "-c",
+                "approval_policy=\"never\"",
+                "-c",
+                "mcp_servers.lore.default_tools_approval_mode=\"approve\"",
+                "-c",
+                "mcp_servers.lore.command=\"/b/lorectl\"",
+                "-c",
+                "mcp_servers.lore.args=[\"mcp\",\"--archive\",\"/a\"]",
+                "-c",
+                "mcp_servers.lore.env={LORE_AGENT=\"codex\"}",
+                "-o",
+                "/s/find-lessons.last.txt",
+                "-",
+            ]
+        );
+        assert_eq!(
             mcp_config(Path::new("/bin/lorectl"), Path::new("/a")),
             serde_json::json!({ "mcpServers": { "lore": {
                 "command": "/bin/lorectl", "args": ["mcp", "--archive", "/a"],
                 "env": { "LORE_AGENT": "claude-code" },
             }}})
         );
+    }
+
+    #[test]
+    fn tells_whether_each_agent_is_signed_in() {
+        assert!(Agent::Claude.signed_in(true, r#"{"loggedIn": true, "authMethod": "claude.ai"}"#));
+        assert!(!Agent::Claude.signed_in(true, r#"{"loggedIn": false}"#));
+        assert!(!Agent::Claude.signed_in(true, "not json"));
+        assert!(Agent::Codex.signed_in(true, "Logged in using ChatGPT"));
+        assert!(!Agent::Codex.signed_in(false, "Not logged in"));
+        assert_eq!(Agent::parse("codex"), Some(Agent::Codex));
+        assert_eq!(Agent::parse("cursor"), None);
     }
 
     #[test]
