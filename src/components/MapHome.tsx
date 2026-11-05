@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { agentLabel } from "../format";
-import { acceptLesson, accountName, listLessons, listNotes, retireNote, type LessonDto, type NoteDto } from "../ipc";
+import { acceptProposal, accountName, listNotes, listProposals, rejectProposal, retireNote, type NoteDto, type ProposalDto } from "../ipc";
 import { areasOf, CENTRE, layout, type Dot, type Item } from "../map/layout";
+import { receipts, why } from "../map/proposal";
 import { MapCanvas } from "./MapCanvas";
 
 /** The rings of the logo (assets/brand/lore-mark.svg), drawn in the current color. */
@@ -67,23 +67,9 @@ function RailButton({ icon, label, selected, onClick, className }: { icon: keyof
 type Data =
   | { status: "loading" }
   | { status: "failed"; error: string }
-  | { status: "ready"; lessons: LessonDto[]; notes: NoteDto[]; person: string };
+  | { status: "ready"; lessons: ProposalDto[]; notes: NoteDto[]; person: string };
 
 type Page = "today" | "notes";
-
-/** "Oct 16", as the prototype dates a quote. */
-const day = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-
-const lessonTitle = (lesson: LessonDto) => lesson.suggested_rule || lesson.text;
-
-/** Where a lesson was said: the repository most of its receipts name, else the centre. */
-function lessonScope(lesson: LessonDto, person: string): string {
-  const repos = lesson.receipts.map((r) => r.repo).filter((r): r is string => !!r);
-  if (!repos.length) return person;
-  const counts = new Map<string, number>();
-  for (const r of repos) counts.set(r, (counts.get(r) ?? 0) + 1);
-  return [...counts].sort((a, b) => b[1] - a[1])[0][0];
-}
 
 function LessonDetail({
   lesson,
@@ -91,38 +77,38 @@ function LessonDetail({
   busy,
   onAccept,
   onSkip,
+  onReject,
 }: {
-  lesson: LessonDto;
+  lesson: ProposalDto;
   scope: string;
   busy: boolean;
   onAccept: (title?: string) => void;
   onSkip: () => void;
+  onReject: () => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(lessonTitle(lesson));
+  const [title, setTitle] = useState(lesson.title);
   useEffect(() => {
     setEditing(false);
-    setTitle(lessonTitle(lesson));
+    setTitle(lesson.title);
   }, [lesson]);
+  const reason = why(lesson.body);
   return (
     <>
       <div className="mist-kind">{scope}</div>
       {editing ? (
         <textarea className="mist-h2 mist-ed" aria-label="Rule" value={title} rows={2} onChange={(e) => setTitle(e.target.value)} />
       ) : (
-        <h2 className="mist-h2">{lessonTitle(lesson)}</h2>
+        <h2 className="mist-h2">{lesson.title}</h2>
       )}
+      {reason && <p className="mist-why">{reason}</p>}
       <ul className="mist-rc">
-        {lesson.receipts.map((r) => (
-          <li key={`${r.session_id}:${r.at_ms ?? ""}`}>
+        {receipts(lesson.body).map((r, k) => (
+          <li key={k}>
             <span className="mist-dot" />
             <div>
-              <p>“{r.text}”</p>
-              <div className="mist-mt">
-                {agentLabel(r.agent_id)}
-                {r.at_ms != null && `, ${day(r.at_ms)}`}
-                {r.repo && r.repo !== scope && `, ${r.repo}`}
-              </div>
+              <p>“{r.said}”</p>
+              {r.where && <div className="mist-mt">{r.where}</div>}
             </div>
           </li>
         ))}
@@ -147,6 +133,9 @@ function LessonDetail({
             </button>
             <button type="button" className="mist-btn" onClick={onSkip}>
               Ask again if it recurs
+            </button>
+            <button type="button" className="mist-btn" disabled={busy} onClick={onReject}>
+              Reject
             </button>
           </>
         )}
@@ -186,7 +175,7 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
 
   const load = useCallback(async () => {
     try {
-      const [lessons, notes, name] = await Promise.all([listLessons(), listNotes(), accountName().catch(() => null)]);
+      const [lessons, notes, name] = await Promise.all([listProposals(), listNotes(), accountName().catch(() => null)]);
       setData({ status: "ready", lessons, notes, person: name?.split(" ")[0] || "Everywhere" });
     } catch (e) {
       setData({ status: "failed", error: String(e) });
@@ -205,7 +194,8 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
   // Today is the next lesson to review, unless something on the map is open.
   const shown: Item | null = open ?? (page === "today" && waiting[0] ? { kind: "lesson", lesson: waiting[0] } : null);
 
-  const noteScope = (note: NoteDto) => (note.scope === CENTRE ? person : (note.repo_name ?? "Unlinked repository"));
+  const scopeName = (item: { scope: string; repo_name: string | null }) =>
+    item.scope === CENTRE ? person : (item.repo_name ?? "Unlinked repository");
 
   const go = (next: Page) => {
     if (cardShown && page === next && !open) {
@@ -301,9 +291,10 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
             {shown?.kind === "lesson" && (
               <LessonDetail
                 lesson={shown.lesson}
-                scope={lessonScope(shown.lesson, person)}
+                scope={scopeName(shown.lesson)}
                 busy={busy}
-                onAccept={(title) => void act(() => acceptLesson(shown.lesson.id, title), "Accepted. Agents get it from their next session.")}
+                onAccept={(title) => void act(() => acceptProposal(shown.lesson.id, title), "Accepted. Agents get it from their next session.")}
+                onReject={() => void act(() => rejectProposal(shown.lesson.id, "Rejected in the Lore app").then(() => ""), "Rejected.")}
                 onSkip={() => {
                   setSkipped((s) => new Set(s).add(shown.lesson.id));
                   setOpen(null);
@@ -314,7 +305,7 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
             {shown?.kind === "note" && (
               <NoteDetail
                 note={shown.note}
-                scope={noteScope(shown.note)}
+                scope={scopeName(shown.note)}
                 busy={busy}
                 onRetire={() => void act(() => retireNote(shown.note.id, "Retired in the Lore app"), "Retired. Agents stop getting it.")}
               />
@@ -323,7 +314,7 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
               <>
                 <div className="mist-kind">You're caught up</div>
                 <h2 className="mist-h2">
-                  {notes.length} {notes.length === 1 ? "note" : "notes"} agents read <span className="mist-hw">at the start of every session.</span>
+                  Run /lore-lessons <span className="mist-hw">in Claude Code or Codex to find more.</span>
                 </h2>
               </>
             )}
@@ -337,7 +328,7 @@ export function MapHome({ onSessions, onSettings }: { onSessions: () => void; on
                         <span className="mist-dot" />
                         <span className="mist-tx">
                           <span>{note.title}</span>
-                          <span className="mist-mt">{noteScope(note)}</span>
+                          <span className="mist-mt">{scopeName(note)}</span>
                         </span>
                       </button>
                     </li>

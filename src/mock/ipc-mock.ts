@@ -516,6 +516,21 @@ export function createMockHandlers(
     retire_note: () => "global/never-push-to-main.md",
     edit_note: () => "global/never-push-to-main.md",
     account_name: () => "Sample User",
+    list_proposals: () => [
+      {
+        id: "01JD0000000000000000000021",
+        title: "Use pnpm, not npm",
+        body: 'The agent ran npm install, and the person wanted pnpm.\n\nReceipts:\n- "no, use pnpm not npm" (claude-code, session s1, 2026-10-12)\n',
+        scope: "global",
+        note_type: "convention",
+        agent_id: "claude-code",
+        session_id: "s1",
+        repo_name: null,
+        proposed_ms: 1_785_751_203_000,
+      },
+    ],
+    accept_proposal: () => "global/use-pnpm-not-npm.md",
+    reject_proposal: () => undefined,
     skill_usage: () => [
       { skill: "code-review", uses: 22, sessions: 15, last_ms: 1_785_751_203_000, reprompts: [{ session_id: "s1", agent_id: "claude-code", repo: "lore", at_ms: 1_785_751_203_000, text: "no, you missed the tests, look again", preceding: "Reviewed it, looks fine." }] },
       { skill: "taste-skill", uses: 0, sessions: 0, last_ms: null, reprompts: [] },

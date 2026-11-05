@@ -1,13 +1,14 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { LessonDto, NoteDto } from "../ipc";
+import type { NoteDto, ProposalDto } from "../ipc";
 
 vi.mock("../ipc", () => ({
-  listLessons: vi.fn(),
+  listProposals: vi.fn(),
   listNotes: vi.fn(),
   accountName: vi.fn(),
-  acceptLesson: vi.fn(),
+  acceptProposal: vi.fn(),
+  rejectProposal: vi.fn(),
   retireNote: vi.fn(),
 }));
 
@@ -16,18 +17,18 @@ import { MapHome } from "./MapHome";
 
 const m = vi.mocked(ipc);
 
-const pnpm: LessonDto = {
-  id: "L1",
-  text: "no, use pnpm not npm",
-  suggested_rule: "Use pnpm, not npm",
-  conversations: 3,
-  latest_ms: 1_785_751_203_000,
-  receipts: [
-    { session_id: "s1", agent_id: "claude-code", repo: "lore", at_ms: 1_785_751_203_000, text: "no, use pnpm not npm", preceding: null },
-    { session_id: "s2", agent_id: "codex", repo: "lore", at_ms: 1_785_651_203_000, text: "pnpm, again", preceding: null },
-  ],
+const pnpm: ProposalDto = {
+  id: "P1",
+  title: "Use pnpm, not npm",
+  body: 'The agent ran npm install, and the person wanted pnpm.\n\nReceipts:\n- "no, use pnpm not npm" (claude-code, session s1, 2026-10-12)\n- "pnpm, again" (codex, session s2, 2026-10-20)\n',
+  scope: "repo:016fc9809d74377f",
+  note_type: "convention",
+  agent_id: "claude-code",
+  session_id: "s1",
+  repo_name: "lore",
+  proposed_ms: 1_785_751_203_000,
 };
-const tests: LessonDto = { ...pnpm, id: "L2", suggested_rule: "Run the tests before saying done", conversations: 1, receipts: [pnpm.receipts[0]] };
+const tests: ProposalDto = { ...pnpm, id: "P2", title: "Run the tests before saying done", body: "The agent said it was done before testing.\n" };
 const push: NoteDto = {
   id: "N1",
   path: "global/never-push-to-main.md",
@@ -40,10 +41,11 @@ const push: NoteDto = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  m.listLessons.mockResolvedValue([pnpm, tests]);
+  m.listProposals.mockResolvedValue([pnpm, tests]);
   m.listNotes.mockResolvedValue([push]);
   m.accountName.mockResolvedValue("Henry Su");
-  m.acceptLesson.mockResolvedValue("global/use-pnpm-not-npm.md");
+  m.acceptProposal.mockResolvedValue("repos/016fc9809d74377f/use-pnpm-not-npm.md");
+  m.rejectProposal.mockResolvedValue(undefined);
   m.retireNote.mockResolvedValue("global/never-push-to-main.md");
 });
 
@@ -53,7 +55,9 @@ describe("MapHome", () => {
     const card = await screen.findByRole("region", { name: "Opened item" });
     expect(within(card).getByRole("heading", { name: "Use pnpm, not npm" })).toBeTruthy();
     expect(within(card).getByText("lore")).toBeTruthy();
+    expect(within(card).getByText("The agent ran npm install, and the person wanted pnpm.")).toBeTruthy();
     expect(within(card).getByText("“pnpm, again”")).toBeTruthy();
+    expect(within(card).getByText("codex, session s2, 2026-10-20")).toBeTruthy();
     expect(screen.getByRole("button", { name: "2 lessons waiting" })).toBeTruthy();
     expect(screen.getByRole("img", { name: "Map of 3 lessons and notes in 2 areas" })).toBeTruthy();
   });
@@ -61,9 +65,9 @@ describe("MapHome", () => {
   it("accepts the lesson and moves on to the next", async () => {
     render(<MapHome onSessions={() => {}} onSettings={() => {}} />);
     const card = await screen.findByRole("region", { name: "Opened item" });
-    m.listLessons.mockResolvedValue([tests]);
+    m.listProposals.mockResolvedValue([tests]);
     fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
-    await waitFor(() => expect(m.acceptLesson).toHaveBeenCalledWith("L1", undefined));
+    await waitFor(() => expect(m.acceptProposal).toHaveBeenCalledWith("P1", undefined));
     expect(await screen.findByRole("heading", { name: "Run the tests before saying done" })).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("Accepted. Agents get it from their next session.");
   });
@@ -74,7 +78,7 @@ describe("MapHome", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
     fireEvent.change(within(card).getByRole("textbox", { name: "Rule" }), { target: { value: "Use pnpm everywhere" } });
     fireEvent.click(within(card).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(m.acceptLesson).toHaveBeenCalledWith("L1", "Use pnpm everywhere"));
+    await waitFor(() => expect(m.acceptProposal).toHaveBeenCalledWith("P1", "Use pnpm everywhere"));
   });
 
   it("asks again later: the lesson leaves the queue for now", async () => {
@@ -83,7 +87,24 @@ describe("MapHome", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Ask again if it recurs" }));
     expect(screen.getByRole("heading", { name: "Run the tests before saying done" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "1 lesson waiting" })).toBeTruthy();
-    expect(m.acceptLesson).not.toHaveBeenCalled();
+    expect(m.acceptProposal).not.toHaveBeenCalled();
+  });
+
+  it("rejects a lesson that is not a rule", async () => {
+    render(<MapHome onSessions={() => {}} onSettings={() => {}} />);
+    const card = await screen.findByRole("region", { name: "Opened item" });
+    m.listProposals.mockResolvedValue([tests]);
+    fireEvent.click(within(card).getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(m.rejectProposal).toHaveBeenCalledWith("P1", "Rejected in the Lore app"));
+    expect(await screen.findByRole("heading", { name: "Run the tests before saying done" })).toBeTruthy();
+  });
+
+  it("points at /lore-lessons when no lesson waits", async () => {
+    m.listProposals.mockResolvedValue([]);
+    render(<MapHome onSessions={() => {}} onSettings={() => {}} />);
+    expect(await screen.findByText("You're caught up")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Run \/lore-lessons/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /lessons? waiting/ })).toBeNull();
   });
 
   it("lists notes, and retires one", async () => {
@@ -123,7 +144,7 @@ describe("MapHome", () => {
   });
 
   it("says when the lessons cannot be read, and tries again", async () => {
-    m.listLessons.mockRejectedValueOnce("archive is locked");
+    m.listProposals.mockRejectedValueOnce("archive is locked");
     render(<MapHome onSessions={() => {}} onSettings={() => {}} />);
     expect(await screen.findByText("archive is locked")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));

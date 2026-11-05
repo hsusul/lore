@@ -56,3 +56,5 @@ updater = []
 [dev-dependencies]
 # Temporary archive directories for the writer-lock tests.
 tempfile = "3"
+# A proposal's timestamp in the review tests; lore-memory already uses it.
+time = "0.3"

@@ -285,6 +285,19 @@ describe("ipc contract", () => {
     expect(invoke).toHaveBeenCalledWith("skill_usage");
   });
 
+  it("listProposals, acceptProposal, and rejectProposal invoke their commands", async () => {
+    const { acceptProposal, listProposals, rejectProposal } = await import("./ipc");
+    invoke.mockResolvedValueOnce([]);
+    expect(await listProposals()).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("list_proposals");
+    invoke.mockResolvedValueOnce("global/x.md");
+    expect(await acceptProposal("P1")).toBe("global/x.md");
+    expect(invoke).toHaveBeenCalledWith("accept_proposal", { id: "P1", title: null });
+    invoke.mockResolvedValueOnce(undefined);
+    await rejectProposal("P1", "not a rule");
+    expect(invoke).toHaveBeenCalledWith("reject_proposal", { id: "P1", reason: "not a rule" });
+  });
+
   it("accountName invokes account_name", async () => {
     const { accountName } = await import("./ipc");
     invoke.mockResolvedValueOnce("Henry Su");
