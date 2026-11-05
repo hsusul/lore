@@ -374,9 +374,9 @@ fn session_start_lists_the_notes_for_the_repo_named_on_stdin() {
     assert_eq!(
         stdout(&out),
         "Lore memory for this repo:\n\
-         - [unanchored] Migrations are global (01JD0000000000000000000003)\n\
          - [unanchored] Pin the toolchain (01JD0000000000000000000002)\n\
-         - [fresh] Retry the migration (01JD0000000000000000000001)\n"
+         - [fresh] Retry the migration (01JD0000000000000000000001)\n\
+         - [unanchored] Migrations are global (01JD0000000000000000000003)\n"
     );
 }
 
