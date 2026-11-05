@@ -63,6 +63,11 @@ fn capture_detects_a_dirty_worktree() {
 
     let facts = capture(dir.path()).unwrap();
     assert_eq!(facts.is_dirty, Some(true));
+    assert_eq!(facts.changed_files, Some(vec!["README.md".to_string()]));
+
+    git(dir.path(), &["add", "README.md"]);
+    let facts_staged = capture(dir.path()).unwrap();
+    assert_eq!(facts_staged.is_dirty, Some(true));
 }
 
 #[test]
@@ -277,4 +282,55 @@ fn capture_identity_matches_capture_identity_evidence() {
     assert!(capture_identity(Path::new("relative/path")).is_none());
     let non_git = tempfile::tempdir().unwrap();
     assert!(capture_identity(non_git.path()).is_none());
+}
+
+#[test]
+#[ignore = "benchmark: measure capture latency on clean and dirty repositories"]
+fn bench_capture_latency() {
+    let make_repo = |num_files: usize, num_modified: usize| -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        for i in 0..num_files {
+            let file_path = dir.path().join(format!("file_{i:04}.txt"));
+            std::fs::write(&file_path, format!("content {i}\n")).unwrap();
+        }
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "initial"]);
+        for i in 0..num_modified {
+            let file_path = dir.path().join(format!("file_{i:04}.txt"));
+            std::fs::write(&file_path, format!("modified content {i}\n")).unwrap();
+        }
+        dir
+    };
+
+    let measure = |label: &str, dir: &Path| {
+        // 2 warmups
+        for _ in 0..2 {
+            let facts = capture(dir).unwrap();
+            std::hint::black_box(facts);
+        }
+        // 7 runs
+        let mut times = Vec::new();
+        for _ in 0..7 {
+            let start = std::time::Instant::now();
+            let facts = capture(dir).unwrap();
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            times.push(elapsed);
+            std::hint::black_box(facts);
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = times[3];
+        println!(
+            "{label}: median = {:.2} ms, range = [{:.2} ms .. {:.2} ms]",
+            median, times[0], times[6]
+        );
+    };
+
+    println!("Creating 2000 files clean repo...");
+    let clean = make_repo(2000, 0);
+    measure("capture clean (2000 files)", clean.path());
+
+    println!("Creating 2000 files dirty repo (100 modified)...");
+    let dirty = make_repo(2000, 100);
+    measure("capture dirty (2000 files, 100 modified)", dirty.path());
 }

@@ -302,14 +302,13 @@ fn capture_gix(path: &Path) -> Option<CapturedRepo> {
         .map(|name| name.shorten().to_string())
         .filter(|_| !detached);
     let head_commit = repo.head_id().ok().map(|id| id.to_hex().to_string());
-    let is_dirty = repo.is_dirty().ok();
+    let (is_dirty, changed_files) = collect_status(&repo);
     let commit_subject = repo.head_commit().ok().and_then(|commit| {
         commit
             .message()
             .ok()
             .map(|m| m.title.to_string().trim_end().to_string())
     });
-    let changed_files = collect_changed_files(&repo);
     let (ahead, behind) = collect_ahead_behind(&repo);
     let remotes = collect_remotes(&repo);
     let (root_commits, history_truncated) = collect_root_commits(&repo);
@@ -397,14 +396,55 @@ fn collect_remotes(repo: &gix::Repository) -> Vec<String> {
     out
 }
 
-/// Repository-relative paths of uncommitted working-tree changes, capped at
-/// [`CHANGED_FILES_CAP`]. Reads the index-vs-worktree status via `gix` only —
-/// never the hardened system-`git` fallback, which deliberately excludes
-/// `status`/`diff` so hostile `.gitattributes` filters cannot execute (F9).
-fn collect_changed_files(repo: &gix::Repository) -> Option<Vec<String>> {
-    let platform = repo.status(gix::progress::Discard).ok()?;
-    let iter = platform.into_index_worktree_iter(Vec::new()).ok()?;
+/// Collect working-tree dirty status and repository-relative paths of uncommitted
+/// changes (capped at [`CHANGED_FILES_CAP`]) in a single status walk.
+///
+/// Separately checking `repo.is_dirty()` and then `collect_changed_files()` would
+/// walk the working tree and index twice. This checks staged changes in memory via
+/// `tree_index_status` and traverses the index-worktree status platform once.
+fn collect_status(repo: &gix::Repository) -> (Option<bool>, Option<Vec<String>>) {
+    let index_is_dirty = (|| -> Option<bool> {
+        let head_tree_id = repo.head_tree_id_or_empty().ok()?;
+        let index = repo.index_or_empty().ok()?;
+        let mut dirty = false;
+        repo.tree_index_status(
+            &head_tree_id,
+            &index,
+            None,
+            gix::status::tree_index::TrackRenames::Disabled,
+            |_, _, _| {
+                dirty = true;
+                Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Break(()))
+            },
+        )
+        .ok()?;
+        Some(dirty)
+    })();
+
+    let platform = match repo.status(gix::progress::Discard) {
+        Ok(p) => p,
+        Err(_) => {
+            let is_dirty = match index_is_dirty {
+                Some(true) => Some(true),
+                _ => None,
+            };
+            return (is_dirty, None);
+        }
+    };
+
+    let iter = match platform.into_index_worktree_iter(Vec::new()) {
+        Ok(i) => i,
+        Err(_) => {
+            let is_dirty = match index_is_dirty {
+                Some(true) => Some(true),
+                _ => None,
+            };
+            return (is_dirty, None);
+        }
+    };
+
     let mut out = Vec::new();
+    let mut worktree_is_dirty = false;
     for item in iter {
         let Ok(item) = item else { break };
         // `summary() == None` means "no real change" (a stat refresh or a
@@ -412,12 +452,25 @@ fn collect_changed_files(repo: &gix::Repository) -> Option<Vec<String>> {
         if item.summary().is_none() {
             continue;
         }
-        out.push(item.rela_path().to_string());
-        if out.len() >= CHANGED_FILES_CAP {
-            break;
+        worktree_is_dirty = true;
+        if out.len() < CHANGED_FILES_CAP {
+            out.push(item.rela_path().to_string());
         }
     }
-    Some(out)
+
+    let is_dirty = match index_is_dirty {
+        Some(true) => Some(true),
+        Some(false) => Some(worktree_is_dirty),
+        None => {
+            if worktree_is_dirty {
+                Some(true)
+            } else {
+                None
+            }
+        }
+    };
+
+    (is_dirty, Some(out))
 }
 
 /// Ahead/behind commit counts relative to the branch's tracking branch, bounded
@@ -450,6 +503,9 @@ fn collect_ahead_behind(repo: &gix::Repository) -> (Option<i64>, Option<i64>) {
 /// Number of commits reachable from `from` before reaching `stop` (exclusive),
 /// or `None` if the walk errors or exceeds [`AHEAD_BEHIND_LIMIT`].
 fn count_until(repo: &gix::Repository, from: gix::ObjectId, stop: &gix::ObjectId) -> Option<i64> {
+    if from == *stop {
+        return Some(0);
+    }
     let walk = repo.rev_walk(Some(from)).all().ok()?;
     let mut count = 0i64;
     for item in walk {
