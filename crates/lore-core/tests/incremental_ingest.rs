@@ -337,7 +337,7 @@ fn claude_summary() -> Summary {
         Some(107),
         Some(23),
         Some(50),
-        Some("2 parser note(s); first: unhandled event type: file-history-snapshot".to_string()),
+        Some("1 parser note(s); first: tool_result without matching tool_use".to_string()),
     )
 }
 

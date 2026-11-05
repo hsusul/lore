@@ -117,7 +117,24 @@ fn parse_from(
                 continue;
             }
             // Internal bookkeeping events carry no conversation content.
-            "queue-operation" | "last-prompt" => continue,
+            // `api-request-blob` holds copies of request messages, system
+            // prompt included, that the transcript already records.
+            "queue-operation"
+            | "last-prompt"
+            | "agent-name"
+            | "api-request"
+            | "api-request-blob"
+            | "api-request-shape"
+            | "artifact-autoreact-ledger"
+            | "artifact-comment-monitor"
+            | "atis-latch"
+            | "cost-state"
+            | "dev-mods"
+            | "file-history-delta"
+            | "file-history-snapshot"
+            | "frame-link"
+            | "relocated"
+            | "worktree-state" => continue,
             "user" | "assistant" | "system" | "attachment" | "summary" | "mode" | "pr-link" => {}
             other => {
                 session.note_partial(format!("unhandled event type: {}", bounded(other)));
@@ -1347,6 +1364,20 @@ mod tests {
             "{\"type\":\"user\",\"sessionId\":\"s_ignore\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n"
         );
         let session = adapter.parse_str(jsonl, "s_ignore");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert_eq!(session.messages.len(), 1);
+    }
+
+    #[test]
+    fn bookkeeping_events_leave_a_session_fully_parsed() {
+        let jsonl = concat!(
+            "{\"type\":\"api-request-shape\",\"sessionId\":\"s_b\",\"shape\":{}}\n",
+            "{\"type\":\"api-request-blob\",\"sessionId\":\"s_b\",\"message\":{\"role\":\"system\",\"content\":[{\"type\":\"text\",\"text\":\"system prompt\"}]}}\n",
+            "{\"type\":\"atis-latch\",\"atis\":\"\",\"sessionId\":\"s_b\"}\n",
+            "{\"type\":\"file-history-snapshot\",\"messageId\":\"m\",\"snapshot\":{}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_b\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "s_b");
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
         assert_eq!(session.messages.len(), 1);
     }
