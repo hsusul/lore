@@ -109,6 +109,24 @@ fn mem_show_prints_the_file_with_unknown_keys() {
 }
 
 #[test]
+fn mem_show_accepts_dot_slash_and_absolute_paths() {
+    let (dir, vault) = init();
+    let file = note_file(dir.path(), "n.md", NOTE);
+    lorectl(&vault, &["add", &file]);
+    let relative = lorectl(
+        &vault,
+        &["show", "./repos/3f9a1c0b5e2d7a46/worktrees-share-refs.md"],
+    );
+    assert_eq!(code(&relative), 0, "{}", stderr(&relative));
+    assert!(stdout(&relative).contains("\nmood: calm\n"));
+
+    let full_path = vault.join("repos/3f9a1c0b5e2d7a46/worktrees-share-refs.md");
+    let absolute = lorectl(&vault, &["show", full_path.to_str().unwrap()]);
+    assert_eq!(code(&absolute), 0, "{}", stderr(&absolute));
+    assert!(stdout(&absolute).contains("\nmood: calm\n"));
+}
+
+#[test]
 fn mem_search_prints_slug_scope_and_excerpt() {
     let (dir, vault) = init();
     lorectl(&vault, &["add", &note_file(dir.path(), "n.md", NOTE)]);
