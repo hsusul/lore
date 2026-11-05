@@ -189,8 +189,8 @@ redirected the task at hand. may_conflict_with lists later turns in the same rep
 the same command. Judge each one: if a later turn overrides the candidate, leave it out or say \
 it was overridden; a turn about something else is no conflict. Candidates that read as one-off \
 orders are left out and counted in left_out; pass all: true to see them. Each receipt names \
-its repository as repo, a name and the scope a note for it takes, or null; pass cwd to get the \
-current directory's as cwd_repo. Replies are paged: while next_cursor is not null, call again \
+its repository as repo, a name and the scope a note for it takes, or null, and the repository's \
+folder as repo_path; pass cwd to get the current directory's as cwd_repo. Replies are paged: while next_cursor is not null, call again \
 with it, and read every page before you group anything.",
         input_schema: mine_schema,
         call: mine_candidates,
@@ -916,6 +916,7 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
                 "session": r.session, "agent": r.agent,
                 "date": r.at_ms.and_then(crate::receipt::date),
                 "repo": session_repo(&conn, &r.session, r.repo.clone()),
+                "repo_path": r.repo_path,
                 "correction": redact(&r.text)?,
                 "before": r.preceding.as_deref().map(redact).transpose()?,
                 "after": r.following.as_deref().map(redact).transpose()?,

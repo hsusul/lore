@@ -215,7 +215,7 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
             "may_conflict_with": [],
             "receipts": [{
                 "session": session(home, 2), "agent": "codex", "date": "2026-08-02",
-                "repo": null,
+                "repo": null, "repo_path": null,
                 "correction": "Stop asking me for permission", "before": "Shall I run it?",
                 "after": "Understood.",
             }],

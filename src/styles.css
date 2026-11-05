@@ -1717,3 +1717,9 @@ textarea.mist-ed:focus {
   padding: 20px 32px 1px;
   background: var(--mist-surf);
 }
+
+.mist-finding {
+  width: 32px;
+  margin-bottom: 16px;
+  color: var(--mist-t1);
+}

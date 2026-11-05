@@ -406,6 +406,11 @@ export function rejectProposal(id: string, reason: string): Promise<void> {
   return invoke<void>("reject_proposal", { id, reason });
 }
 
+/** Run the person's Claude Code on the lore-lessons skill; resolves with its report once it finishes. */
+export function findLessons(): Promise<string> {
+  return invoke<string>("find_lessons");
+}
+
 /** The person's name for the map's centre: the Mac account's full name, else the user name. */
 export function accountName(): Promise<string | null> {
   return invoke<string | null>("account_name");
