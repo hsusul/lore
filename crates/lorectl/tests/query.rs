@@ -386,3 +386,42 @@ fn a_search_lists_each_session_once_with_its_match_count() {
         "each session once, with its own hit count"
     );
 }
+
+#[test]
+fn search_with_path_filter_normalizes_leading_and_windows_separators() {
+    let archive = tempfile::tempdir().unwrap();
+    let homes = tempfile::tempdir().unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../lore-core/fixtures/codex/patch_apply.jsonl");
+    let day = homes.path().join("codex/sessions/2026/08/11");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::copy(fixture, day.join("rollout-000000000003.jsonl")).unwrap();
+    assert_eq!(code(&lorectl(archive.path(), homes.path(), &["scan"])), 0);
+
+    for filter in [
+        "path:src/",
+        "path:/src/",
+        "path:\\src\\",
+        "path:src\\edit.ts",
+        "path:/src/edit.ts",
+        "path:./src/edit.ts",
+    ] {
+        let out = lorectl(archive.path(), homes.path(), &["--json", "search", filter]);
+        assert_eq!(
+            code(&out),
+            0,
+            "{filter}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let hits: Vec<String> = stdout(&out)
+            .lines()
+            .map(|l| {
+                serde_json::from_str::<serde_json::Value>(l).unwrap()["session_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(hits, vec![a_session_id(archive.path())], "{filter}");
+    }
+}

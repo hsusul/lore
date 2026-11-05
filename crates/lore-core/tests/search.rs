@@ -170,7 +170,48 @@ fn path_filter_matches_touched_files() {
     persist_claude(&conn, &blobs, &jsonl, "p1");
 
     assert_eq!(search(&conn, "fix path:auth/", 20).unwrap().len(), 1);
+    assert_eq!(search(&conn, "fix path:/auth/", 20).unwrap().len(), 1);
+    assert_eq!(
+        search(&conn, "fix path:auth\\login.ts", 20).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        search(&conn, "fix path:\\auth\\login.ts", 20)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(search(&conn, "fix path:./auth/", 20).unwrap().len(), 1);
     assert!(search(&conn, "fix path:billing/", 20).unwrap().is_empty());
+}
+
+#[test]
+fn path_filter_normalizes_separators_and_handles_non_ascii() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let jsonl = format!(
+        "{}{}",
+        user_message("j1", "/p", "here is the fix"),
+        "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"j1\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Edit\",\"input\":{\"file_path\":\"開発/機能.ts\"}}]}}\n"
+    );
+    persist_claude(&conn, &blobs, &jsonl, "j1");
+
+    assert_eq!(search(&conn, "fix path:開発/", 20).unwrap().len(), 1);
+    assert_eq!(search(&conn, "fix path:/開発/", 20).unwrap().len(), 1);
+    assert_eq!(search(&conn, "fix path:\\開発\\", 20).unwrap().len(), 1);
+    assert_eq!(
+        search(&conn, "fix path:開発\\機能.ts", 20).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        search(&conn, "fix path:/開発/機能.ts", 20).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        search(&conn, "fix path:./開発/機能.ts", 20).unwrap().len(),
+        1
+    );
+    assert!(search(&conn, "fix path:他の開発/", 20).unwrap().is_empty());
 }
 
 #[test]
@@ -1339,7 +1380,17 @@ fn repo_by_id_and_by_name_return_the_same_sessions() {
     let (conn, _bd, [_a1, _a2, b1, _g1]) = repo_fixture();
 
     // Id, display name, and the last component of the root all name repo_beta.
-    for q in ["repo:repo_beta", "repo:other-name", "repo:Beta"] {
+    for q in [
+        "repo:repo_beta",
+        "repo:other-name",
+        "repo:Beta",
+        "repo:Beta.git",
+        "repo:beta.git",
+        "repo:other-name.git",
+        "repo:Beta/",
+        "repo:/home/me/Beta",
+        "repo:me/Beta",
+    ] {
         let hits = search(&conn, q, 20).unwrap();
         assert_eq!(session_ids(&hits), vec![b1.clone()], "{q}");
     }
@@ -1441,6 +1492,31 @@ fn repo_name_combines_with_other_filters() {
     assert!(search(&conn, "repo:lore agent:codex", 20)
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn repo_filter_handles_non_ascii_and_git_suffix() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let j1 = persist_claude(
+        &conn,
+        &blobs,
+        &user_message("j1", "/p", "日本語コミット"),
+        "j1",
+    );
+    link_repo(&conn, "repo_jp", "日本", Some("/srv/git/日本"), &[&j1]);
+
+    for q in [
+        "repo:日本",
+        "repo:日本.git",
+        "repo:日本.GIT",
+        "repo:日本/",
+        "repo:/srv/git/日本",
+    ] {
+        let hits = search(&conn, q, 20).unwrap();
+        assert_eq!(hits.len(), 1, "{q}");
+        assert_eq!(hits[0].session_id, j1);
+    }
 }
 
 #[test]
