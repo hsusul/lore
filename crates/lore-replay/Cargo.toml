@@ -1,0 +1,43 @@
+[package]
+name = "lore-replay"
+description = "Replay a coding-agent session from a correction point, to measure whether lessons prevent repeat mistakes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "lore-replay"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# Unlike the archive crates, this one starts Claude Code, which talks to a model
+# provider. It holds no networking code itself and depends on no networking
+# crate; it is kept out of the network-incapable list in
+# scripts/egress-check.sh because the process it launches is not.
+[dependencies]
+# The archive, read only: where each session lives and HEAD at a past moment.
+lore-core = { path = "../lore-core" }
+# The mined corrections, the same candidates `lorectl mem mine --all` lists.
+lore-memory = { path = "../lore-memory" }
+# Argument parsing, as in lorectl: a zero-dependency pull parser.
+lexopt = "0.3"
+thiserror = "1"
+# `lore_core::storage` hands back a `rusqlite::Connection`; the native session
+# id is one read-only SELECT on it. Same version as lore-core, features theirs.
+rusqlite = "0.32"
+# cases.jsonl and run.json, field for field the prototype's shape.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Claude Code's RFC 3339 timestamps. Already in the graph with this feature.
+time = { version = "0.3", features = ["parsing"] }
+# A fresh session id for each prefix. Already in the graph.
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
