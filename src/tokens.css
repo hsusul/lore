@@ -48,6 +48,25 @@
   --token-key: rgba(0, 0, 0, 0.6);
   --scrim: rgba(0, 0, 0, 0.1);
 
+  /* Mist, the map home's palette, from the logo (assets/brand) and docs/design/lore-redesign/variant-q.html. */
+  --mist-bg: #f4f1ea;
+  --mist-surf: #fcfbf8;
+  --mist-tint: #f8f6f1;
+  --mist-well: #efebe3;
+  --mist-line: rgba(33, 31, 28, 0.09);
+  --mist-hov: rgba(33, 31, 28, 0.04);
+  --mist-nsel: rgba(33, 31, 28, 0.07);
+  --mist-t1: #211f1c;
+  --mist-t2: #756d61;
+  --mist-ac: #2b2723;
+  --mist-acs: rgba(43, 39, 35, 0.07);
+  --mist-acs2: rgba(43, 39, 35, 0.13);
+  --mist-dot: #d7d0c3;
+  --mist-dotm: #b0a897;
+  --mist-sh: 0 1px 2px rgba(33, 31, 28, 0.04), 0 8px 24px rgba(33, 31, 28, 0.05);
+  --mist-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --mist-sans: "Figtree", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
   /* Section 5: type */
   --font-sans: -apple-system, BlinkMacSystemFont, system-ui, "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -177,6 +196,21 @@
     --seg-ring: rgba(255, 255, 255, 0.45);
     --token-key: rgba(255, 255, 255, 0.847);
     --scrim: rgba(0, 0, 0, 0.3);
+    --mist-bg: #171412;
+    --mist-surf: #1f1c19;
+    --mist-tint: #1b1815;
+    --mist-well: #2b2723;
+    --mist-line: rgba(244, 241, 234, 0.08);
+    --mist-hov: rgba(244, 241, 234, 0.04);
+    --mist-nsel: rgba(244, 241, 234, 0.07);
+    --mist-t1: #f4f1ea;
+    --mist-t2: #a39b8c;
+    --mist-ac: #f4f1ea;
+    --mist-acs: rgba(244, 241, 234, 0.09);
+    --mist-acs2: rgba(244, 241, 234, 0.15);
+    --mist-dot: #423c35;
+    --mist-dotm: #8a8172;
+    --mist-sh: 0 0 0 1px rgba(244, 241, 234, 0.03);
   }
 }
 
@@ -217,6 +251,21 @@
   --seg-ring: rgba(255, 255, 255, 0.45);
   --token-key: rgba(255, 255, 255, 0.847);
   --scrim: rgba(0, 0, 0, 0.3);
+  --mist-bg: #171412;
+  --mist-surf: #1f1c19;
+  --mist-tint: #1b1815;
+  --mist-well: #2b2723;
+  --mist-line: rgba(244, 241, 234, 0.08);
+  --mist-hov: rgba(244, 241, 234, 0.04);
+  --mist-nsel: rgba(244, 241, 234, 0.07);
+  --mist-t1: #f4f1ea;
+  --mist-t2: #a39b8c;
+  --mist-ac: #f4f1ea;
+  --mist-acs: rgba(244, 241, 234, 0.09);
+  --mist-acs2: rgba(244, 241, 234, 0.15);
+  --mist-dot: #423c35;
+  --mist-dotm: #8a8172;
+  --mist-sh: 0 0 0 1px rgba(244, 241, 234, 0.03);
 }
 
 :root[data-theme="light"] {

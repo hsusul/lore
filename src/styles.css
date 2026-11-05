@@ -1179,3 +1179,415 @@ mark {
 
 /* Last, so a utility class beats a legacy rule of the same specificity. */
 @tailwind utilities;
+
+/*
+ * The map home, ported from docs/design/lore-redesign/variant-q.html with its
+ * measurements, on the --mist-* tokens.
+ */
+.mist {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  background: var(--mist-bg);
+  color: var(--mist-t1);
+  font-family: var(--mist-sans);
+  font-size: 14px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mist button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+  padding: 0;
+}
+
+.mist-t2 {
+  color: var(--mist-t2);
+}
+
+.map__field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.map__canvas {
+  display: block;
+  font-family: var(--mist-sans);
+  cursor: grab;
+  touch-action: none;
+}
+
+.map__canvas:active {
+  cursor: grabbing;
+}
+
+.map__canvas:focus-visible {
+  outline: none;
+}
+
+.mist-status {
+  position: absolute;
+  top: 45%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: var(--mist-t2);
+}
+
+.mist-status p {
+  margin: 16px 0 0;
+}
+
+.mist-status .mist-spin {
+  width: 44px;
+  margin: 0 auto;
+  color: var(--mist-t1);
+}
+
+/* The logo's rings turn while Lore reads, as on the prototype's first run. */
+.mist-spin .r1,
+.mist-spin .r2 {
+  animation: mist-spin 6s linear infinite;
+}
+
+.mist-spin .r1 {
+  transform-origin: 64px 48px;
+}
+
+.mist-spin .r2 {
+  transform-origin: 90px 48px;
+  animation-duration: 9s;
+  animation-direction: reverse;
+}
+
+@keyframes mist-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mist-spin .r1,
+  .mist-spin .r2 {
+    animation: none;
+  }
+}
+
+.mist-side {
+  position: absolute;
+  left: 16px;
+  top: 56px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  width: 52px;
+  padding: 8px 6px;
+  border-radius: 16px;
+  background: var(--mist-surf);
+  box-shadow: var(--mist-sh), 0 0 0 1px var(--mist-line);
+}
+
+.mist .mist-home {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  color: var(--mist-t1);
+  transition: background-color 0.15s;
+}
+
+.mist .mist-home:hover {
+  background: var(--mist-hov);
+}
+
+.mist-mark {
+  display: block;
+  width: 24px;
+  height: auto;
+  overflow: visible;
+}
+
+.mist .mist-ni {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 40px;
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--mist-t1) 72%, transparent);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.mist .mist-ni:hover {
+  background: var(--mist-hov);
+}
+
+.mist .mist-ni.sel {
+  background: var(--mist-nsel);
+  color: var(--mist-t1);
+}
+
+.mist .mist-ni.find {
+  margin-bottom: 6px;
+}
+
+.mist .mist-ni.set {
+  margin-top: 10px;
+  border-top: 1px solid var(--mist-line);
+  border-radius: 0 0 8px 8px;
+}
+
+.mist-ni svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mist-ni[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 48px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--mist-surf);
+  box-shadow: var(--mist-sh), 0 0 0 1px var(--mist-line);
+  color: var(--mist-t1);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mist-main {
+  position: absolute;
+  right: 20px;
+  top: 52px;
+  bottom: 20px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: 500px;
+  overflow: hidden;
+  border-radius: 18px;
+  background: var(--mist-surf);
+  box-shadow: var(--mist-sh), 0 0 0 1px var(--mist-line), 0 24px 60px rgba(20, 28, 36, 0.12);
+}
+
+.mist-main.mdet,
+.mist-main:not(.mdet) {
+  bottom: auto;
+  max-height: calc(100% - 72px);
+}
+
+.mist .mist-shut {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--mist-t2);
+}
+
+.mist .mist-shut:hover {
+  background: var(--mist-hov);
+  color: var(--mist-t1);
+}
+
+.mist-det {
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 32px 40px;
+}
+
+.mist-kind {
+  font-size: 12px;
+  color: var(--mist-t2);
+}
+
+.mist-h2 {
+  margin: 8px 0 0;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 400;
+}
+
+.mist-hw {
+  display: block;
+  color: var(--mist-t2);
+}
+
+.mist-why {
+  margin: 8px 0 0;
+  font-size: 18px;
+  line-height: 28px;
+  color: var(--mist-t2);
+}
+
+textarea.mist-ed {
+  display: block;
+  width: calc(100% + 16px);
+  margin-left: -8px;
+  margin-right: -8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  outline: none;
+  resize: none;
+  background: var(--mist-well);
+  box-shadow: inset 0 0 0 1px var(--mist-line);
+  color: var(--mist-t1);
+  font-family: inherit;
+}
+
+textarea.mist-ed:focus {
+  box-shadow: inset 0 0 0 1px var(--mist-acs2);
+}
+
+.mist-rc {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 36px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mist-rc li {
+  display: flex;
+  gap: 12px;
+}
+
+.mist-rc p {
+  margin: 0;
+}
+
+.mist-mt {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--mist-t2);
+}
+
+.mist-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--mist-dot);
+}
+
+.mist-dot.les {
+  margin: 0;
+  background: var(--mist-ac);
+}
+
+.mist-acts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 40px;
+}
+
+.mist .mist-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  color: var(--mist-t2);
+  font-weight: 500;
+  transition: background-color 0.15s, color 0.15s, transform 0.1s;
+}
+
+.mist .mist-btn:hover:not(:disabled) {
+  background: var(--mist-hov);
+  color: var(--mist-t1);
+}
+
+.mist .mist-btn:active {
+  transform: scale(0.98);
+}
+
+.mist .mist-btn.pri {
+  background: var(--mist-acs);
+  color: var(--mist-ac);
+}
+
+.mist .mist-btn.pri:hover:not(:disabled) {
+  background: var(--mist-acs2);
+  color: var(--mist-ac);
+}
+
+.mist .mist-btn:disabled {
+  opacity: 0.5;
+}
+
+.mist-notice {
+  margin: 0 0 16px;
+  font-size: 12px;
+  color: var(--mist-t2);
+}
+
+.mist-list {
+  margin: 12px -10px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mist .mist-it {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.mist .mist-it:hover {
+  background: var(--mist-hov);
+}
+
+.mist-tx {
+  display: flex;
+  flex-direction: column;
+}
+
+.mist .mist-waiting {
+  position: absolute;
+  left: 92px;
+  bottom: 24px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 18px;
+  background: var(--mist-surf);
+  box-shadow: var(--mist-sh), 0 0 0 1px var(--mist-line);
+  color: var(--mist-t1);
+  line-height: 1;
+}
+
+.mist .mist-waiting:hover {
+  background: var(--mist-tint);
+}
