@@ -56,7 +56,7 @@ fn parse(invocation: &Invocation) -> Result<Option<Args>, CliError> {
         since: (invocation.since.clone()).unwrap_or_else(|| DEFAULT_SINCE.into()),
         limit: DEFAULT_LIMIT,
         scan_seconds: DEFAULT_SCAN_SECONDS,
-        vault: None,
+        vault: invocation.vault.clone(),
         archive: invocation.archive.clone(),
         review: None,
     };

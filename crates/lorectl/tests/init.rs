@@ -800,3 +800,37 @@ fn init_stops_scanning_at_its_time_budget_and_says_what_is_left() {
         "{second}"
     );
 }
+
+#[test]
+fn init_accepts_vault_flag_before_the_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let custom_vault = home.join("custom-日本語-vault");
+    let out = masked(&lorectl(
+        home,
+        &[
+            "--vault",
+            custom_vault.to_str().unwrap(),
+            "init",
+            "--no-review",
+        ],
+    ));
+    assert!(
+        out.contains(&format!("Vault      created {}", custom_vault.display())),
+        "{out}"
+    );
+    assert!(custom_vault.exists());
+}
+
+#[test]
+fn vault_flag_is_refused_for_commands_that_do_not_take_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let o = lorectl(home, &["--vault", "/tmp/v", "status"]);
+    assert_eq!(o.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("--vault works only with `lorectl init` and `lorectl mem`"),
+        "{err}"
+    );
+}

@@ -166,6 +166,8 @@ pub struct Invocation {
     /// database path is `lore_core::paths`' job, and duplicating that join here
     /// is precisely how two surfaces end up opening different files.
     pub archive: Option<PathBuf>,
+    /// `--vault <DIR>`, as given. Only `init` and `mem` take it.
+    pub vault: Option<PathBuf>,
     /// `--json`. Machine-readable output where the command supports it.
     pub json: bool,
     /// `--patch`. Only meaningful for `inspect`.
@@ -203,6 +205,7 @@ where
 {
     let mut parser = lexopt::Parser::from_args(args);
     let mut archive = None;
+    let mut vault = None;
     let mut json = false;
     let mut patch = false;
     let mut since = None;
@@ -242,6 +245,7 @@ where
                 );
             }
             Long("archive") => archive = Some(PathBuf::from(parser.value().map_err(usage)?)),
+            Long("vault") => vault = Some(PathBuf::from(parser.value().map_err(usage)?)),
             Value(value) if command.is_none() => {
                 let name = value.to_string_lossy();
                 command = Some(
@@ -304,6 +308,11 @@ where
                         "--since works only with `lorectl scan` and `lorectl init`".into(),
                     ));
                 }
+                if vault.is_some() && !matches!(command, Command::Init | Command::Mem) {
+                    return Err(CliError::Usage(
+                        "--vault works only with `lorectl init` and `lorectl mem`".into(),
+                    ));
+                }
                 Action::Run(command)
             }
             None => Action::NoCommand,
@@ -312,6 +321,7 @@ where
 
     Ok(Invocation {
         archive,
+        vault,
         json,
         patch,
         since,
@@ -473,6 +483,41 @@ mod tests {
         assert_eq!(before, after);
         assert!(before.json);
         assert_eq!(before.action, Action::Run(Command::Scan));
+    }
+
+    #[test]
+    fn vault_flag_works_before_and_after_command() {
+        let before_init = parsed(&["--vault", "/tmp/日本語_vault", "init"]);
+        assert_eq!(
+            before_init.vault.as_deref(),
+            Some(Path::new("/tmp/日本語_vault"))
+        );
+        assert_eq!(before_init.action, Action::Run(Command::Init));
+
+        let before_mem = parsed(&["--vault", "/tmp/日本語_vault", "mem", "search", "query"]);
+        assert_eq!(
+            before_mem.vault.as_deref(),
+            Some(Path::new("/tmp/日本語_vault"))
+        );
+        assert_eq!(before_mem.operand.as_deref(), Some("search"));
+        assert_eq!(before_mem.rest, ["query"]);
+        assert_eq!(before_mem.action, Action::Run(Command::Mem));
+
+        let between_mem = parsed(&["mem", "--vault", "/tmp/日本語_vault", "search", "query"]);
+        assert_eq!(
+            between_mem.vault.as_deref(),
+            Some(Path::new("/tmp/日本語_vault"))
+        );
+        assert_eq!(between_mem.operand.as_deref(), Some("search"));
+        assert_eq!(between_mem.rest, ["query"]);
+        assert_eq!(between_mem.action, Action::Run(Command::Mem));
+
+        let err = parse(["--vault", "/tmp/v", "status"]).unwrap_err();
+        assert_eq!(exit::exit_code(&err), USAGE);
+        assert_eq!(
+            err.to_string(),
+            "--vault works only with `lorectl init` and `lorectl mem`"
+        );
     }
 
     #[test]
