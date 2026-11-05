@@ -186,17 +186,21 @@ fn group(found: Vec<Found>) -> Vec<SkillRecord> {
     }
     let mut records: Vec<SkillRecord> = by_key.into_values().collect();
     for record in &mut records {
-        record
-            .installs
-            .sort_by_key(|i| (crate::locations::order(i.location), i.path.clone()));
+        record.installs.sort_by(|a, b| {
+            (crate::locations::order(a.location), &a.path)
+                .cmp(&(crate::locations::order(b.location), &b.path))
+        });
     }
     records.sort_by(|a, b| {
-        let first = |r: &SkillRecord| {
-            r.installs
-                .first()
-                .map(|i| (crate::locations::order(i.location), i.path.clone()))
-        };
-        a.name.cmp(&b.name).then_with(|| first(a).cmp(&first(b)))
+        let first_a = a
+            .installs
+            .first()
+            .map(|i| (crate::locations::order(i.location), &i.path));
+        let first_b = b
+            .installs
+            .first()
+            .map(|i| (crate::locations::order(i.location), &i.path));
+        a.name.cmp(&b.name).then_with(|| first_a.cmp(&first_b))
     });
     records
 }
@@ -273,7 +277,15 @@ fn skill_folders(dir: &Path) -> Vec<(SkillName, PathBuf, Option<fs::FileType>)> 
     children(dir)
         .unwrap_or_default()
         .into_iter()
-        .filter(|(_, path, _)| path.join("SKILL.md").is_file())
+        .filter(|(_, path, ft)| {
+            if ft
+                .as_ref()
+                .is_some_and(|ft| !ft.is_dir() && !ft.is_symlink())
+            {
+                return false;
+            }
+            path.join("SKILL.md").is_file()
+        })
         .collect()
 }
 
@@ -393,15 +405,11 @@ fn collect_files(
         if file_type.as_ref().is_some_and(|ft| ft.is_file()) {
             out.push((relative, Entry::File));
         } else if file_type.as_ref().is_some_and(|ft| ft.is_dir()) {
-            match fs::canonicalize(&path) {
-                Ok(real) if walked.insert(real.clone()) => {
-                    collect_files(root, &path, &relative, walked, out);
-                }
-                Ok(real) => {
-                    let inner = real.strip_prefix(root).unwrap_or(&real).to_path_buf();
-                    out.push((relative, Entry::Walked(inner)));
-                }
-                Err(_) => out.push((relative, Entry::Unlistable)),
+            if walked.insert(path.clone()) {
+                collect_files(root, &path, &relative, walked, out);
+            } else {
+                let inner = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+                out.push((relative, Entry::Walked(inner)));
             }
         } else {
             // Symlink or unqueried file type: fall back to fs::metadata
