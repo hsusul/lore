@@ -191,3 +191,118 @@ fn sh(word: &str) -> String {
 fn json(text: &str) -> String {
     Value::from(text).to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn runs_lorectl_matches_subcommands_and_boundaries() {
+        assert!(runs_lorectl("lorectl mcp", &["mcp"]));
+        assert!(runs_lorectl("/usr/bin/lorectl mcp", &["mcp"]));
+        assert!(runs_lorectl("'/path/to/lorectl' mcp", &["mcp"]));
+        assert!(runs_lorectl(
+            "lorectl hook session-start",
+            &["hook", "session-start"]
+        ));
+        assert!(runs_lorectl(
+            "/bin/lorectl --flag hook session-start",
+            &["hook", "session-start"]
+        ));
+
+        // Negative cases
+        assert!(!runs_lorectl("lorectl", &["mcp"]));
+        assert!(!runs_lorectl("lorectl query", &["mcp"]));
+        assert!(!runs_lorectl("not_lorectl mcp", &["mcp"]));
+        assert!(!runs_lorectl("lorectl.bak mcp", &["mcp"]));
+    }
+
+    #[test]
+    fn sh_quotes_only_when_necessary() {
+        assert_eq!(sh("/usr/local/bin/lorectl"), "/usr/local/bin/lorectl");
+        assert_eq!(
+            sh("foo-bar_1.0+v1:test@dir,sub"),
+            "foo-bar_1.0+v1:test@dir,sub"
+        );
+        assert_eq!(sh(""), "''");
+        assert_eq!(sh("path with space"), "'path with space'");
+        assert_eq!(sh("can't"), r"'can'\''t'");
+        assert_eq!(sh("$(cmd)"), "'$(cmd)'");
+    }
+
+    #[test]
+    fn json_string_escaping() {
+        assert_eq!(json("lorectl"), "\"lorectl\"");
+        assert_eq!(json("a \"quoted\" word"), "\"a \\\"quoted\\\" word\"");
+    }
+
+    #[test]
+    fn claude_mcp_finds_top_level_and_project_entries() {
+        let top = json!({
+            "mcpServers": {
+                "lore": { "command": "lorectl", "args": ["mcp"] }
+            }
+        });
+        assert_eq!(claude_mcp(&top), Some("mcpServers.lore".into()));
+
+        let project = json!({
+            "projects": {
+                "/workspace/repo": {
+                    "mcpServers": {
+                        "lore": { "command": "/usr/local/bin/lorectl", "args": ["mcp"] }
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            claude_mcp(&project),
+            Some("projects[\"/workspace/repo\"].mcpServers.lore".into())
+        );
+
+        let none = json!({ "mcpServers": { "other": { "command": "other", "args": [] } } });
+        assert_eq!(claude_mcp(&none), None);
+    }
+
+    #[test]
+    fn codex_mcp_finds_mcp_servers_entry() {
+        let root = json!({
+            "mcp_servers": {
+                "lore": { "command": "lorectl", "args": ["mcp"] }
+            }
+        });
+        assert_eq!(codex_mcp(&root), Some("mcp_servers.lore".into()));
+
+        let missing = json!({ "mcp_servers": {} });
+        assert_eq!(codex_mcp(&missing), None);
+    }
+
+    #[test]
+    fn session_hook_finds_hook_command() {
+        let root = json!({
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            { "type": "command", "command": "lorectl hook session-start" }
+                        ]
+                    }
+                ]
+            }
+        });
+        assert_eq!(session_hook(&root), Some("hooks.SessionStart".into()));
+
+        let unrelated = json!({
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            { "type": "command", "command": "echo hello" }
+                        ]
+                    }
+                ]
+            }
+        });
+        assert_eq!(session_hook(&unrelated), None);
+    }
+}
