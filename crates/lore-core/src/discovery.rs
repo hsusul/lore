@@ -4,7 +4,7 @@
 //! automated tests never inspect a developer's real agent history. Results are
 //! deduplicated and sorted to make first scans deterministic.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::adapters::{
@@ -74,8 +74,7 @@ pub fn discover(registry: &AdapterRegistry, config: &DiscoveryConfig) -> Discove
             .cmp(right.agent.0)
             .then_with(|| left.path.cmp(&right.path))
     });
-    let mut seen = BTreeSet::new();
-    sessions.retain(|session| seen.insert((session.agent.0, session.path.clone())));
+    sessions.dedup_by(|a, b| a.agent.0 == b.agent.0 && a.path == b.path);
 
     DiscoveryReport { agents, sessions }
 }
@@ -192,6 +191,37 @@ mod tests {
             .path
             .file_name()
             .is_some_and(|name| name == "rollout-test.jsonl"));
+    }
+
+    #[test]
+    fn discovery_deduplicates_overlapping_roots_with_non_ascii_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_root = dir.path().join("claude-projects");
+        let claude_project = claude_root.join("encoded-repo");
+        fs::create_dir_all(&claude_project).unwrap();
+
+        let fixture_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+        fs::copy(
+            fixture_root.join("claude_code/basic_text.jsonl"),
+            claude_project.join("セッション-日本語.jsonl"),
+        )
+        .unwrap();
+
+        let mut config = DiscoveryConfig::new();
+        config.set_roots(
+            "claude-code",
+            DiscoveryRoots::new(vec![claude_root.clone(), claude_root.clone(), claude_root]),
+        );
+        let codex_empty = dir.path().join("empty-codex");
+        fs::create_dir_all(&codex_empty).unwrap();
+        config.set_roots("codex", DiscoveryRoots::new(vec![codex_empty]));
+
+        let report = discover(&AdapterRegistry::v0(), &config);
+        assert_eq!(report.sessions.len(), 1);
+        assert!(report.sessions[0]
+            .path
+            .file_name()
+            .is_some_and(|name| name == "セッション-日本語.jsonl"));
     }
 
     #[test]

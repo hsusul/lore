@@ -655,18 +655,29 @@ fn collect_jsonl(dir: &std::path::Path, out: &mut Vec<SessionRef>) {
         return;
     };
     for entry in entries.flatten() {
-        let path = entry.path();
-        if entry.file_type().is_ok_and(|t| t.is_dir()) {
-            collect_jsonl(&path, out);
-        } else if path.extension().is_some_and(|e| e == "jsonl") {
-            let meta = entry.metadata().ok();
-            out.push(SessionRef {
-                agent: AGENT_ID,
-                native_id: path.file_stem().map(|s| s.to_string_lossy().into_owned()),
-                size: meta.as_ref().map_or(0, std::fs::Metadata::len),
-                mtime: meta.and_then(|m| m.modified().ok()),
-                path,
-            });
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_jsonl(&entry.path(), out);
+        } else {
+            let file_name = entry.file_name();
+            if std::path::Path::new(&file_name)
+                .extension()
+                .is_some_and(|e| e == "jsonl")
+            {
+                let meta = entry.metadata().ok();
+                let native_id = std::path::Path::new(&file_name)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned());
+                out.push(SessionRef {
+                    agent: AGENT_ID,
+                    native_id,
+                    size: meta.as_ref().map_or(0, std::fs::Metadata::len),
+                    mtime: meta.and_then(|m| m.modified().ok()),
+                    path: entry.path(),
+                });
+            }
         }
     }
 }

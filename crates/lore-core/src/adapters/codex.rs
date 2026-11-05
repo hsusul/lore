@@ -900,24 +900,26 @@ fn collect_rollouts(dir: &Path, depth: usize, out: &mut Vec<SessionRef>) {
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
-        let path = entry.path();
         if file_type.is_dir() {
             if depth > 0 {
-                collect_rollouts(&path, depth - 1, out);
+                collect_rollouts(&entry.path(), depth - 1, out);
             }
         } else if file_type.is_file() {
-            let is_rollout = path
-                .file_name()
-                .and_then(|n| n.to_str())
+            let name = entry.file_name();
+            let is_rollout = name
+                .to_str()
                 .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"));
             if is_rollout {
                 let meta = entry.metadata().ok();
+                let native_id = Path::new(&name)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned());
                 out.push(SessionRef {
                     agent: AGENT_ID,
-                    native_id: path.file_stem().map(|s| s.to_string_lossy().into_owned()),
+                    native_id,
                     size: meta.as_ref().map_or(0, std::fs::Metadata::len),
                     mtime: meta.and_then(|m| m.modified().ok()),
-                    path,
+                    path: entry.path(),
                 });
             }
         }
