@@ -41,8 +41,17 @@ pub fn normalize_remote_url(raw: &str) -> Option<String> {
     let (authority, path) = if let Some(scheme_end) = raw.find("://") {
         // scheme://[userinfo@]host[:port]/path
         split_authority_path(&raw[scheme_end + 3..])
-    } else if let Some(colon) = raw.find(':') {
-        // scp-like: [userinfo@]host:path (no scheme, path after the first colon)
+    } else if let Some(colon) = {
+        let after_at = raw.rfind('@').map_or(0, |at| at + 1);
+        raw.get(after_at..).and_then(|tail| {
+            tail.find(':').and_then(|rel| {
+                let host_candidate = tail.get(..rel)?;
+                (!host_candidate.is_empty() && !host_candidate.contains('/'))
+                    .then_some(after_at + rel)
+            })
+        })
+    } {
+        // scp-like: [userinfo@]host:path (no scheme, path after the host colon)
         (&raw[..colon], trim_slashes(&raw[colon + 1..]))
     } else {
         // bare host/path
@@ -762,5 +771,18 @@ mod tests {
             Some("github.com")
         );
         assert_eq!(normalize_remote_url("  \t\n "), None);
+    }
+
+    #[test]
+    fn normalize_remote_url_scp_with_credentials_and_non_ascii() {
+        assert_eq!(
+            normalize_remote_url("custom_user:secret_token@gitlab.example.com:org/repo.git")
+                .as_deref(),
+            Some("gitlab.example.com/org/repo")
+        );
+        assert_eq!(
+            normalize_remote_url("ユーザー:パスワード@github.com:org/日本.git").as_deref(),
+            Some("github.com/org/日本")
+        );
     }
 }
