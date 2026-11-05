@@ -97,7 +97,8 @@ fn owned(expected: &[(&str, &'static str)]) -> Vec<(String, &'static str)> {
 fn an_empty_query_recalls_every_active_note_in_scope() {
     let dir = tempfile::tempdir().unwrap();
     let (app, vault) = setup(dir.path());
-    let expected = owned(&[(GLOBAL, "unanchored"), (BETA, "fresh"), (ALPHA, "changed")]);
+    // The repo's own notes before the global one; ALPHA's anchor changed.
+    let expected = owned(&[(BETA, "fresh"), (GLOBAL, "unanchored"), (ALPHA, "changed")]);
     assert_eq!(ids(&vault, "", &app.join("src"), 10), expected);
     assert_eq!(ids(&vault, "  ?! ", &app, 10), expected);
 }
@@ -118,12 +119,12 @@ fn an_empty_query_outside_a_repo_recalls_global_notes_only() {
 fn an_empty_query_fills_the_limit_with_fresher_notes_first() {
     let dir = tempfile::tempdir().unwrap();
     let (app, vault) = setup(dir.path());
-    // ALPHA sorts before BETA by path, but its anchor changed.
+    // ALPHA is a repo note and sorts before BETA by path, but its anchor changed.
     assert_eq!(
         ids(&vault, "", &app, 2),
-        owned(&[(GLOBAL, "unanchored"), (BETA, "fresh")])
+        owned(&[(BETA, "fresh"), (GLOBAL, "unanchored")])
     );
-    assert_eq!(ids(&vault, "", &app, 1), owned(&[(GLOBAL, "unanchored")]));
+    assert_eq!(ids(&vault, "", &app, 1), owned(&[(BETA, "fresh")]));
 }
 
 #[test]
@@ -160,4 +161,24 @@ fn an_empty_query_reports_a_note_it_cannot_parse() {
             "not a note: the frontmatter has no closing `---` line".to_string()
         )]
     );
+}
+
+#[test]
+fn an_empty_query_puts_the_repos_own_notes_first_however_many_global_notes_there_are() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, vault) = setup(dir.path());
+    for k in 0..60 {
+        let id = format!("01J00000000000000000001{k:03}");
+        let text = note(
+            &id,
+            &format!("Aardvark rule {k:02}"),
+            "global",
+            "active",
+            None,
+        );
+        vault.add(&text).unwrap();
+    }
+    let found = ids(&vault, "", &app, 10);
+    assert_eq!(found.len(), 10);
+    assert_eq!(found[0], (BETA.to_string(), "fresh"), "{found:?}");
 }

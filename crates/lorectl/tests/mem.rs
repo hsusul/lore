@@ -402,9 +402,9 @@ fn mem_recall_without_a_query_prints_every_note_that_applies() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "unanchored  logs-rotate            global                 one two three four five six seven eight nine ten eleven twelve...\n\
-         unanchored  migrations-are-global  global                 Every migration is logged.\n\
-         fresh       retry-the-migration    repo:81444c90f1ff44ac  Retry a failed migration once.\n"
+        "fresh       retry-the-migration    repo:81444c90f1ff44ac  Retry a failed migration once.\n\
+         unanchored  logs-rotate            global                 one two three four five six seven eight nine ten eleven twelve...\n\
+         unanchored  migrations-are-global  global                 Every migration is logged.\n"
     );
     assert_eq!(stderr(&out), "");
 
@@ -412,7 +412,7 @@ fn mem_recall_without_a_query_prints_every_note_that_applies() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "unanchored  logs-rotate  global  one two three four five six seven eight nine ten eleven twelve...\n"
+        "fresh       retry-the-migration  repo:81444c90f1ff44ac  Retry a failed migration once.\n"
     );
     assert_eq!(status(&vault), "");
 }
