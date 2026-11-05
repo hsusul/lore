@@ -390,6 +390,58 @@ fn vault_reindex_skips_dot_directories_and_the_inbox() {
 }
 
 #[test]
+fn vault_find_normalizes_relative_dot_prefixes_and_absolute_paths() {
+    let (dir, vault) = new_vault();
+    vault.add(NOTE).unwrap();
+    let jp_note = "---\ntype: fact\ntitle: 日本語のノート\nscope: global\n---\n内容\n";
+    let (jp, _) = vault.add(jp_note).unwrap();
+
+    assert_eq!(
+        vault.find("prune-worktrees").unwrap(),
+        "global/prune-worktrees.md"
+    );
+    assert_eq!(
+        vault.find("./global/prune-worktrees.md").unwrap(),
+        "global/prune-worktrees.md"
+    );
+    assert_eq!(
+        vault.find("./global/prune-worktrees").unwrap(),
+        "global/prune-worktrees.md"
+    );
+    assert_eq!(
+        vault.find("./prune-worktrees.md").unwrap(),
+        "global/prune-worktrees.md"
+    );
+    assert_eq!(
+        vault.find("./prune-worktrees").unwrap(),
+        "global/prune-worktrees.md"
+    );
+    let full = dir.path().join("global/prune-worktrees.md");
+    assert_eq!(
+        vault.find(full.to_str().unwrap()).unwrap(),
+        "global/prune-worktrees.md"
+    );
+
+    assert_eq!(
+        vault.find("./global/日本語のノート.md").unwrap(),
+        jp.rel_path()
+    );
+    assert_eq!(
+        vault.find("./global/日本語のノート").unwrap(),
+        jp.rel_path()
+    );
+    let full_jp = dir.path().join(jp.rel_path());
+    assert_eq!(
+        vault.find(full_jp.to_str().unwrap()).unwrap(),
+        jp.rel_path()
+    );
+
+    assert!(vault.find("../outside.md").is_err());
+    assert!(vault.find("./../outside.md").is_err());
+    assert!(vault.find("/etc/passwd").is_err());
+}
+
+#[test]
 fn vault_add_with_writes_what_prepare_changed_and_nothing_when_it_fails() {
     let (dir, vault) = new_vault();
     let refused = vault.add_with(NOTE, |_| Err(VaultError::NotFound("prepare".into())));

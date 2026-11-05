@@ -469,9 +469,54 @@ impl Vault {
     /// The vault-relative path of the note named by `key`: a path, an id, or a
     /// slug that only one note has.
     pub fn find(&self, key: &str) -> Result<String, VaultError> {
-        if key.contains('/') {
-            let rel =
-                RelPath::parse(key).map_err(|e| VaultError::BadPath(key.into(), e.to_string()))?;
+        let trimmed = key.trim();
+        if trimmed.is_empty() {
+            return Err(VaultError::NotFound(key.into()));
+        }
+
+        let stripped_key: std::borrow::Cow<'_, str> = if Path::new(trimmed).is_absolute() {
+            if let Ok(rel) = Path::new(trimmed).strip_prefix(&self.root) {
+                rel.to_str().map(Into::into)
+            } else if let (Ok(canon_root), Ok(canon_path)) =
+                (fs::canonicalize(&self.root), fs::canonicalize(trimmed))
+            {
+                canon_path
+                    .strip_prefix(&canon_root)
+                    .ok()
+                    .and_then(|p| p.to_str().map(|s| s.to_string().into()))
+            } else {
+                None
+            }
+            .ok_or_else(|| {
+                VaultError::BadPath(
+                    key.into(),
+                    format!("absolute paths outside the vault are not allowed, got `{key}`"),
+                )
+            })?
+        } else {
+            trimmed.into()
+        };
+
+        let normalized = stripped_key.replace('\\', "/");
+        let segments: Vec<&str> = normalized
+            .split('/')
+            .filter(|s| !s.is_empty() && *s != ".")
+            .collect();
+
+        if segments.is_empty() {
+            return Err(VaultError::NotFound(key.into()));
+        }
+        if segments.contains(&"..") {
+            return Err(VaultError::BadPath(
+                key.into(),
+                format!("`..` is not allowed, got `{key}`"),
+            ));
+        }
+
+        if segments.len() > 1 {
+            let path = segments.join("/");
+            let rel = RelPath::parse(&path)
+                .map_err(|e| VaultError::BadPath(key.into(), e.to_string()))?;
             if self.root.join(rel.as_str()).is_file() {
                 return Ok(rel.as_str().to_string());
             }
@@ -481,15 +526,21 @@ impl Vault {
             }
             return Err(VaultError::NotFound(key.into()));
         }
-        let slug = key.strip_suffix(".md").unwrap_or(key);
+
+        let single = segments[0];
+        let slug = single.strip_suffix(".md").unwrap_or(single);
         let mut paths = self.index()?.lookup(slug)?;
-        if paths.is_empty() && slug != key {
-            paths = self.index()?.lookup(key)?;
+        if paths.is_empty() && slug != single {
+            paths = self.index()?.lookup(single)?;
         }
         if paths.is_empty() {
-            if let Ok(rel) = RelPath::parse(key) {
+            if let Ok(rel) = RelPath::parse(single) {
                 if self.root.join(rel.as_str()).is_file() {
                     return Ok(rel.as_str().to_string());
+                }
+                let with_md = format!("{}.md", rel.as_str());
+                if self.root.join(&with_md).is_file() {
+                    return Ok(with_md);
                 }
             }
         }
