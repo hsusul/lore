@@ -587,3 +587,32 @@ fn a_relative_home_is_a_usage_error() {
     let output = lorectl(Path::new("relative/home"), &["skills", "doctor"]);
     assert_eq!(output.status.code(), Some(1));
 }
+
+#[test]
+fn doctor_flags_broken_refs_in_brackets_and_cjk_punctuation() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    write(
+        &home.join(".claude/skills/bracket-target/SKILL.md"),
+        "---\nname: bracket-target\ndescription: Claude only bracket target\n---\nBody\n",
+    );
+    write(
+        &home.join(".claude/skills/cjk-target/SKILL.md"),
+        "---\nname: cjk-target\ndescription: Claude only CJK target\n---\nBody\n",
+    );
+    write(
+        &home.join(".codex/skills/referrer/SKILL.md"),
+        "---\nname: referrer\ndescription: Codex referrer\n---\n\
+         See [/bracket-target] or 「/cjk-target」.\n",
+    );
+    let output = lorectl(home, &["skills", "doctor", "--json"]);
+    assert_eq!(output.status.code(), Some(0));
+    let findings = json(&output);
+    let mut broken: Vec<_> = findings
+        .iter()
+        .filter(|f| f["kind"] == "broken-ref")
+        .map(|f| f["missing"].as_str().unwrap().to_string())
+        .collect();
+    broken.sort();
+    assert_eq!(broken, ["bracket-target", "cjk-target"]);
+}
