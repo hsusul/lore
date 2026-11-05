@@ -515,6 +515,23 @@ impl GradeLine {
     }
 }
 
+/// A `screen.jsonl` line, written by `sweep`. Either a screening verdict (did
+/// the `none` arm's trial 0 repeat the mistake; a case that did not is not
+/// run further), or a note that an arm's context is empty for the case, so
+/// the arm was skipped as the same as `none`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScreenLine {
+    pub case: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arm: Option<ArmName>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub same_as_none: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+
 /// A `shown.jsonl` line: does an arm's context for a case hold a lesson that
 /// addresses the case's mistake.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -34,6 +34,22 @@ USAGE:
       This starts Claude Code, which sends the session to the model provider.
       Set LORE_REPLAY_CLAUDE to use a claude other than the one on PATH.
 
+  lore-replay sweep --cases FILE (--case ID [--case ID ...] | --case-list FILE)
+                    --arms FILE --out DIR [--trials 3] [--jobs 4] [--model sonnet]
+                    [--max-turns 6] [--max-cost USD] [--judge-model sonnet]
+      Replay many cases under every arm. --cases is a labeled file (label's
+      output); --case-list names one case id per line. Cases run JOBS at a time,
+      the runs of a case one after another, so they share the prompt cache.
+      Each case is screened first: none trial 0 runs and is graded (the label's
+      deterministic grader, else the judge). A case that does not repeat the
+      mistake stops there, recorded in DIR/screen.jsonl; one that does runs none,
+      own, file, lore, and oracle trials 1..TRIALS. file or lore with no text is
+      skipped as same as none; a missing oracle text is an error before any run.
+      Runs that already succeeded are kept, so rerunning resumes. Stops the
+      whole sweep, with exit code 3, when a run hits the usage limit, and with
+      exit code 4 when this sweep's runs cost more than --max-cost.
+      This starts Claude Code and the judge, which talk to the model provider.
+
   lore-replay label --cases FILE --out FILE [--model sonnet] [--batch 8]
       Ask a model judge, BATCH cases at a time, whether each corrected turn made
       a mistake, what it was, the lesson, and how to grade a repeat. Appends one
@@ -62,6 +78,8 @@ USAGE:
 enum Failure {
     Usage(String),
     Run(Error),
+    /// A sweep stopped on purpose: the message and the exit code.
+    Stopped(String, u8),
 }
 
 impl From<lexopt::Error> for Failure {
@@ -87,6 +105,10 @@ fn main() -> ExitCode {
             eprintln!("lore-replay: {error}");
             ExitCode::FAILURE
         }
+        Err(Failure::Stopped(message, code)) => {
+            eprintln!("lore-replay: {message}");
+            ExitCode::from(code)
+        }
     }
 }
 
@@ -95,6 +117,7 @@ fn dispatch() -> Result<(), Failure> {
     match parser.next()? {
         Some(Value(cmd)) if cmd == "cases" => cases_cmd(&mut parser),
         Some(Value(cmd)) if cmd == "run" => run_cmd(&mut parser),
+        Some(Value(cmd)) if cmd == "sweep" => sweep_cmd(&mut parser),
         Some(Value(cmd)) if cmd == "label" => label_cmd(&mut parser),
         Some(Value(cmd)) if cmd == "grade" => grade_cmd(&mut parser),
         Some(Value(cmd)) if cmd == "report" => report_cmd(&mut parser),
@@ -207,6 +230,82 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let record = lore_replay::run::run(&case, &arm, &opts)?;
     println!("{}", lore_replay::run::progress(&record));
     Ok(())
+}
+
+fn sweep_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
+    let (mut cases_file, mut case_list, mut arms, mut out, mut max_cost) =
+        (None, None, None, None, None);
+    let mut case_ids = Vec::new();
+    let (mut trials, mut jobs, mut max_turns) =
+        (3_u32, 4_usize, lore_replay::run::DEFAULT_MAX_TURNS);
+    let (mut model, mut judge_model) = ("sonnet".to_owned(), "sonnet".to_owned());
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Long("cases") => cases_file = Some(path(parser)?),
+            Long("case") => case_ids.push(text(parser)?),
+            Long("case-list") => case_list = Some(path(parser)?),
+            Long("arms") => arms = Some(path(parser)?),
+            Long("out") => out = Some(path(parser)?),
+            Long("trials") => trials = parser.value()?.parse::<u32>()?,
+            Long("jobs") => jobs = parser.value()?.parse::<usize>()?,
+            Long("model") => model = text(parser)?,
+            Long("max-turns") => max_turns = parser.value()?.parse::<u32>()?,
+            Long("max-cost") => max_cost = Some(parser.value()?.parse::<f64>()?),
+            Long("judge-model") => judge_model = text(parser)?,
+            Short('h') | Long("help") => {
+                print!("{USAGE}");
+                return Ok(());
+            }
+            other => return Err(Failure::Usage(other.unexpected().to_string())),
+        }
+    }
+    let need = |flag: &str| Failure::Usage(format!("{flag} is required"));
+    match (&case_list, case_ids.is_empty()) {
+        (Some(list), true) => {
+            let text = std::fs::read_to_string(list).map_err(|e| Error::io("read", list, e))?;
+            case_ids.extend(
+                text.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(str::to_owned),
+            );
+        }
+        (Some(_), false) => {
+            return Err(Failure::Usage(
+                "pass --case or --case-list, not both".into(),
+            ))
+        }
+        (None, true) => return Err(need("--case or --case-list")),
+        (None, false) => {}
+    }
+    if trials == 0 || jobs == 0 {
+        return Err(Failure::Usage(
+            "--trials and --jobs must be at least 1".into(),
+        ));
+    }
+    if max_cost.is_some_and(|c: f64| !c.is_finite() || c < 0.0) {
+        return Err(Failure::Usage(
+            "--max-cost must be a non-negative number".into(),
+        ));
+    }
+    let opts = lore_replay::sweep::SweepOptions {
+        cases: cases_file.ok_or_else(|| need("--cases"))?,
+        case_ids,
+        arms: arms.ok_or_else(|| need("--arms"))?,
+        out: out.ok_or_else(|| need("--out"))?,
+        trials,
+        jobs,
+        model,
+        max_turns,
+        max_cost,
+        judge_model,
+    };
+    let summary = lore_replay::sweep::sweep(&opts)?;
+    println!("{}", summary.summary());
+    match &summary.stop {
+        Some(stop) => Err(Failure::Stopped(stop.to_string(), stop.exit_code())),
+        None => Ok(()),
+    }
 }
 
 fn label_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
