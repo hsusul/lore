@@ -374,6 +374,33 @@ fn find_close_tag(haystack: &str, name: &str) -> Option<usize> {
 /// in the session is invoked again. The harness wrote it, not the person.
 const REINVOKED: &str = "(Re-invocation of /";
 
+/// The name of a skill invoked with `[$name](path)` at the start of `text`.
+fn skill_link_name(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix("[$")?;
+    let (name, after_bracket) = rest.split_once(']')?;
+    if name.is_empty() || name.contains('\n') {
+        return None;
+    }
+    let after_paren = after_bracket.strip_prefix('(')?;
+    let (path, _) = after_paren.split_once(')')?;
+    if path.is_empty() || path.contains('\n') {
+        return None;
+    }
+    Some(name)
+}
+
+/// The name of a slash command, `/name`, at the start of `text`. A path such as
+/// `/home/me/x` is not a command.
+fn slash_command_name(text: &str) -> Option<&str> {
+    let first = text.split_whitespace().next()?;
+    let name = first.strip_prefix('/')?;
+    if !name.is_empty() && !name.contains('/') {
+        Some(name)
+    } else {
+        None
+    }
+}
+
 /// The skill or command a raw user turn invokes: the `<command-name>` Claude
 /// Code writes for a slash command, or a leading `/name` or `[$name](path)`.
 fn invoked_name(raw: &str) -> Option<String> {
@@ -385,30 +412,25 @@ fn invoked_name(raw: &str) -> Option<String> {
             .map(str::to_owned)
             .filter(|n| !n.is_empty());
     }
-    if let Some(rest) = text
-        .find("<command-name>")
-        .map(|i| &text[i + "<command-name>".len()..])
-    {
-        let name = rest.split("</command-name>").next()?.trim();
-        return Some(name.trim_start_matches('/').to_owned()).filter(|n| !n.is_empty());
+    if let Some((_, after_tag)) = text.split_once("<command-name>") {
+        if let Some((name_raw, _)) = after_tag.split_once("</command-name>") {
+            let name = name_raw.trim().trim_start_matches('/');
+            if !name.is_empty() {
+                return Some(name.to_owned());
+            }
+        }
     }
-    if let Some(rest) = text.strip_prefix("[$") {
-        return rest
-            .split(']')
-            .next()
-            .map(str::to_owned)
-            .filter(|n| !n.is_empty());
+    if let Some(name) = skill_link_name(text) {
+        return Some(name.to_owned());
     }
-    let first = text.split_whitespace().next()?;
-    (is_invocation(first)).then(|| first[1..].to_owned())
+    slash_command_name(text).map(str::to_owned)
 }
 
 /// Whether `text` starts by invoking a skill, `[$name](path) ...`, or a slash
 /// command, `/name ...`. A path such as `/home/me/x` is not a command.
 fn is_invocation(text: &str) -> bool {
-    let first = text.split_whitespace().next().unwrap_or_default();
-    text.starts_with("[$")
-        || (first.len() > 1 && first.starts_with('/') && !first[1..].contains('/'))
+    let text = text.trim_start();
+    skill_link_name(text).is_some() || slash_command_name(text).is_some()
 }
 
 /// Whether `text` asks something: it ends with a question mark, or opens the
@@ -1018,4 +1040,72 @@ fn contract(word: &str) -> String {
 
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_skill_links_and_slash_commands() {
+        assert_eq!(
+            skill_link_name("[$code-review](plugins/cr/SKILL.md) please check"),
+            Some("code-review")
+        );
+        assert_eq!(
+            skill_link_name("[$日本語](plugins/ja/SKILL.md)"),
+            Some("日本語")
+        );
+        assert_eq!(skill_link_name("[$50 budget] no, use pnpm"), None);
+        assert_eq!(skill_link_name("[$50 budget"), None);
+        assert_eq!(skill_link_name("[$]()"), None);
+        assert_eq!(skill_link_name("[$foo]()"), None);
+        assert_eq!(skill_link_name("[$foo\nbar](path)"), None);
+        assert_eq!(skill_link_name("[$foo](path\n)"), None);
+
+        assert_eq!(slash_command_name("/review please check"), Some("review"));
+        assert_eq!(slash_command_name("/日本語"), Some("日本語"));
+        assert_eq!(slash_command_name("/home/me/foo"), None);
+        assert_eq!(slash_command_name("/"), None);
+        assert_eq!(slash_command_name("review"), None);
+        assert_eq!(slash_command_name(""), None);
+
+        assert_eq!(
+            invoked_name("<command-name>/review</command-name>"),
+            Some("review".to_owned())
+        );
+        assert_eq!(
+            invoked_name("<command-name>review</command-name>"),
+            Some("review".to_owned())
+        );
+        assert_eq!(
+            invoked_name("<command-name>/日本語</command-name>"),
+            Some("日本語".to_owned())
+        );
+        assert_eq!(
+            invoked_name("do not use <command-name> tags in responses"),
+            None
+        );
+        assert_eq!(
+            invoked_name("(Re-invocation of /review — arg)"),
+            Some("review".to_owned())
+        );
+        assert_eq!(
+            invoked_name("(Re-invocation of /日本語 arg)"),
+            Some("日本語".to_owned())
+        );
+        assert_eq!(
+            invoked_name("[$skill](path) prompt"),
+            Some("skill".to_owned())
+        );
+        assert_eq!(invoked_name("[$50 budget] prompt"), None);
+
+        assert!(is_invocation("[$skill](path) prompt"));
+        assert!(is_invocation("[$日本語](path) prompt"));
+        assert!(is_invocation("/cmd prompt"));
+        assert!(is_invocation("/日本語 prompt"));
+        assert!(!is_invocation("[$50 budget] prompt"));
+        assert!(!is_invocation("/home/me/path prompt"));
+        assert!(!is_invocation("hello world"));
+    }
 }
