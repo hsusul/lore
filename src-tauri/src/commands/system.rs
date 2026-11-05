@@ -15,6 +15,28 @@ pub fn core_version() -> String {
     lore_core::version().to_string()
 }
 
+/// The person's name for the centre of the map: the Mac account's full name,
+/// else the short user name. Read locally; nothing leaves the machine.
+#[tauri::command]
+pub async fn account_name() -> Option<String> {
+    let full = std::process::Command::new("id")
+        .arg("-F")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    pick_name(full.as_deref(), std::env::var("USER").ok().as_deref())
+}
+
+fn pick_name(full: Option<&str>, user: Option<&str>) -> Option<String> {
+    [full, user]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
 /// List every supported adapter using a cheap live root probe plus its
 /// ingested-session count. This remains useful before the first scan.
 #[tauri::command]
@@ -236,4 +258,20 @@ pub fn reverify(state: State<'_, AppState>) -> Result<(), String> {
         .ok_or_else(|| "background ingestion worker unavailable".to_string())?;
     handle.trigger_reverify();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_full_name_wins_and_the_user_name_stands_in() {
+        assert_eq!(
+            super::pick_name(Some("Henry Su\n"), Some("henry")),
+            Some("Henry Su".to_owned())
+        );
+        assert_eq!(
+            super::pick_name(Some("  \n"), Some("henry")),
+            Some("henry".to_owned())
+        );
+        assert_eq!(super::pick_name(None, None), None);
+    }
 }
