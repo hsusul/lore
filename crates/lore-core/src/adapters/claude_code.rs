@@ -604,7 +604,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 
     /// The file stem, qualified by the session directory for a subagent
-    /// transcript (`<sessionId>/subagents/agent-<agentId>.jsonl` gives
+    /// transcript (`<sessionId>/subagents/**/agent-<agentId>.jsonl` gives
     /// `<sessionId>/agent-<agentId>`), whose stem alone repeats across sessions.
     fn session_key(&self, path: &Path) -> String {
         let name = |p: &Path| p.file_name().map(|s| s.to_string_lossy().into_owned());
@@ -612,9 +612,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
-        let parent = path.parent();
-        let session_dir = parent
-            .filter(|p| name(p).as_deref() == Some("subagents"))
+        let session_dir = path
+            .ancestors()
+            .skip(1)
+            .find(|p| p.file_name().and_then(|n| n.to_str()) == Some("subagents"))
             .and_then(Path::parent)
             .and_then(name);
         match session_dir {
@@ -953,6 +954,23 @@ mod tests {
                 "agent-1.jsonl",
                 "agent-2.jsonl",
             ]
+        );
+
+        let adapter = ClaudeCodeAdapter::new();
+        assert_eq!(
+            adapter.session_key(&subagents.join("agent-1.jsonl")),
+            "aaaaaaaa-0000-4000-8000-000000000001/agent-1"
+        );
+        assert_eq!(
+            adapter.session_key(&workflow.join("agent-2.jsonl")),
+            "aaaaaaaa-0000-4000-8000-000000000001/agent-2"
+        );
+        let non_ascii_path = project
+            .join("セッション-日本語-42")
+            .join("subagents/workflows/ワークフロー/agent-日本語.jsonl");
+        assert_eq!(
+            adapter.session_key(&non_ascii_path),
+            "セッション-日本語-42/agent-日本語"
         );
     }
 
