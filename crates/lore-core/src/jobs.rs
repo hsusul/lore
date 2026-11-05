@@ -84,6 +84,11 @@ pub fn enqueue(conn: &Connection, job: &NewJob<'_>, capacity: usize) -> Result<E
         return Ok(EnqueueOutcome::Duplicate);
     }
 
+    insert_pending_job(conn, job, capacity)?;
+    Ok(EnqueueOutcome::Enqueued)
+}
+
+fn insert_pending_job(conn: &Connection, job: &NewJob<'_>, capacity: usize) -> Result<()> {
     let active: i64 = conn.query_row(
         "SELECT count(*) FROM job WHERE state IN ('pending','running')",
         [],
@@ -99,7 +104,7 @@ pub fn enqueue(conn: &Connection, job: &NewJob<'_>, capacity: usize) -> Result<E
          VALUES (?1,?2,?3,'pending',0,?4,unixepoch('now')*1000,unixepoch('now')*1000)",
         params![job.id, job.kind, job.priority, job.payload_json],
     )?;
-    Ok(EnqueueOutcome::Enqueued)
+    Ok(())
 }
 
 /// Outcome of scheduling a source-ingest task whose id coalesces repeated
@@ -154,7 +159,7 @@ pub fn schedule_source(
         .optional()?;
     match existing.as_ref().map(|(state, ..)| state.as_str()) {
         None => {
-            enqueue(conn, job, capacity)?;
+            insert_pending_job(conn, job, capacity)?;
             Ok(SourceSchedule::Enqueued)
         }
         Some("pending") => {
@@ -212,6 +217,14 @@ pub fn schedule_source(
 /// Complete a claimed task, honoring a `redo` flag set while it ran: if the
 /// source changed mid-run the task returns to `pending` instead of `done`.
 pub fn finish(conn: &Connection, id: &str) -> Result<FinishOutcome> {
+    let changed = conn.execute(
+        "UPDATE job SET state = 'done', updated_at = unixepoch('now')*1000
+         WHERE id = ?1 AND state = 'running' AND redo = 0",
+        [id],
+    )?;
+    if changed == 1 {
+        return Ok(FinishOutcome::Done);
+    }
     let redo: Option<i64> = conn
         .query_row(
             "SELECT redo FROM job WHERE id = ?1 AND state = 'running'",
@@ -243,32 +256,59 @@ pub fn finish(conn: &Connection, id: &str) -> Result<FinishOutcome> {
 /// Atomically claim the highest-priority oldest pending task.
 pub fn claim_next(conn: &Connection) -> Result<Option<Job>> {
     let tx = conn.unchecked_transaction()?;
-    let id: Option<String> = tx
+    let candidate = tx
         .query_row(
-            "SELECT id FROM job WHERE state = 'pending'
+            "SELECT id, kind, priority, attempts, payload_json, error, error_kind,
+                    created_at, updated_at
+             FROM job WHERE state = 'pending'
              ORDER BY priority DESC, created_at ASC, id ASC LIMIT 1",
             [],
-            |row| row.get(0),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            },
         )
         .optional()?;
-    let Some(id) = id else {
+    let Some((id, kind, priority, attempts, payload_json, error, error_kind, created_at, _)) =
+        candidate
+    else {
         tx.commit()?;
         return Ok(None);
     };
 
+    let now = crate::now_ms();
     let changed = tx.execute(
         "UPDATE job SET state = 'running', attempts = attempts + 1,
                         error = NULL, error_kind = NULL,
-                        updated_at = unixepoch('now')*1000
+                        updated_at = ?2
          WHERE id = ?1 AND state = 'pending'",
-        [&id],
+        params![id, now],
     )?;
     if changed != 1 {
         return Ok(None);
     }
-    let job = load_job(&tx, &id)?.ok_or(JobQueueError::InvalidState)?;
     tx.commit()?;
-    Ok(Some(job))
+    Ok(Some(Job {
+        id,
+        kind,
+        priority,
+        state: JobState::Running,
+        attempts: attempts + 1,
+        payload_json,
+        error,
+        error_kind,
+        created_at,
+        updated_at: now,
+    }))
 }
 
 /// Mark a claimed task complete.

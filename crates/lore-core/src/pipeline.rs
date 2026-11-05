@@ -10,7 +10,7 @@
 //! content-free — an adapter id, an outcome, and counts — so they can be relayed
 //! straight to Tauri IPC without leaking session content or paths.
 
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, ErrorCode, OptionalExtension};
@@ -150,19 +150,26 @@ impl<'a> Pipeline<'a> {
         let report = discover(self.registry, self.config);
         let discovered = report.sessions.len();
         let mut enqueued = 0;
+        let tx = self.conn.unchecked_transaction()?;
         for source in &report.sessions {
+            let metadata = std::fs::metadata(&source.path).ok();
             let recent = since.is_none_or(|since| {
-                std::fs::metadata(&source.path)
-                    .and_then(|meta| meta.modified())
-                    .is_ok_and(|mtime| mtime >= since)
+                metadata
+                    .as_ref()
+                    .and_then(|meta| meta.modified().ok())
+                    .is_some_and(|mtime| mtime >= since)
             });
-            if recent && self.schedule(source.agent.0, &source.path)? == SourceSchedule::Enqueued {
+            if recent
+                && self.schedule(&tx, source.agent.0, &source.path, metadata.as_ref())?
+                    == SourceSchedule::Enqueued
+            {
                 enqueued += 1;
             }
         }
         if since.is_none() {
-            self.reconcile_source_presence(&report.sessions)?;
+            self.reconcile_source_presence(&tx, &report.sessions)?;
         }
+        tx.commit()?;
         sink.emit(ProgressEvent::ScanEnqueued {
             discovered,
             enqueued,
@@ -181,10 +188,24 @@ impl<'a> Pipeline<'a> {
     /// watcher), resolving its owning adapter. Returns `None` when no adapter
     /// owns the path.
     pub fn enqueue_path(&self, path: &Path) -> jobs::Result<Option<SourceSchedule>> {
+        self.enqueue_path_conn(self.conn, path)
+    }
+
+    pub fn enqueue_path_conn(
+        &self,
+        conn: &Connection,
+        path: &Path,
+    ) -> jobs::Result<Option<SourceSchedule>> {
         let Some(agent) = owner_of(self.registry, self.config, path) else {
             return Ok(None);
         };
-        Ok(Some(self.schedule(agent.0, path)?))
+        let metadata = std::fs::metadata(path).ok();
+        Ok(Some(self.schedule(
+            conn,
+            agent.0,
+            path,
+            metadata.as_ref(),
+        )?))
     }
 
     /// Schedule one low-priority re-verification job per distinct recorded
@@ -204,6 +225,7 @@ impl<'a> Pipeline<'a> {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut enqueued = 0usize;
+        let tx = self.conn.unchecked_transaction()?;
         for (worktree_id, commit_sha) in pairs {
             let id = reverify_job_id(&worktree_id, &commit_sha);
             let payload = serde_json::json!({
@@ -211,14 +233,13 @@ impl<'a> Pipeline<'a> {
                 "commit_sha": commit_sha,
             })
             .to_string();
-            let state: Option<String> = self
-                .conn
+            let state: Option<String> = tx
                 .query_row("SELECT state FROM job WHERE id = ?1", [&id], |r| r.get(0))
                 .optional()?;
             match state.as_deref() {
                 None => {
                     jobs::enqueue(
-                        self.conn,
+                        &tx,
                         &NewJob {
                             id: &id,
                             kind: JOB_KIND_REVERIFY,
@@ -231,7 +252,7 @@ impl<'a> Pipeline<'a> {
                 }
                 Some("pending") | Some("running") => { /* coalesce onto existing work */ }
                 Some("done" | "failed") => {
-                    self.conn.execute(
+                    tx.execute(
                         "UPDATE job SET state = 'pending', redo = 0, error = NULL,
                                 error_kind = NULL, attempts = 0, priority = ?2,
                                 payload_json = ?3, updated_at = unixepoch('now')*1000
@@ -243,32 +264,36 @@ impl<'a> Pipeline<'a> {
                 Some(_) => {}
             }
         }
+        tx.commit()?;
         Ok(enqueued)
     }
 
-    fn schedule(&self, agent_id: &str, path: &Path) -> jobs::Result<SourceSchedule> {
+    fn schedule(
+        &self,
+        conn: &Connection,
+        agent_id: &str,
+        path: &Path,
+        metadata: Option<&std::fs::Metadata>,
+    ) -> jobs::Result<SourceSchedule> {
         let id = job_id(agent_id, path);
-        let metadata = std::fs::metadata(path).ok();
         // Prefer recent sessions during a large first scan so the archive
         // becomes useful immediately instead of waiting behind months-old,
         // potentially multi-megabyte histories. The path remains the stable
         // coalescing identity; mtime only controls claim order.
         let priority = metadata
-            .as_ref()
             .and_then(|meta| meta.modified().ok())
             .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
             .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
             .unwrap_or(0);
-        let size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
+        let size = metadata.map_or(0, std::fs::Metadata::len);
         let mtime_ns = metadata
-            .as_ref()
             .and_then(|meta| meta.modified().ok())
             .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|elapsed| elapsed.as_nanos().to_string())
             .unwrap_or_default();
         let payload = encode_payload(agent_id, path, size, &mtime_ns);
         jobs::schedule_source(
-            self.conn,
+            conn,
             &NewJob {
                 id: &id,
                 kind: JOB_KIND,
@@ -286,7 +311,11 @@ impl<'a> Pipeline<'a> {
     /// skipped entirely, so a transient failure (unmounted volume, lost
     /// permission, removed custom root) never mass-marks its artifacts missing
     /// (N7a). Returns the number of rows whose state changed.
-    fn reconcile_source_presence(&self, discovered: &[SessionRef]) -> rusqlite::Result<usize> {
+    fn reconcile_source_presence(
+        &self,
+        conn: &Connection,
+        discovered: &[SessionRef],
+    ) -> rusqlite::Result<usize> {
         let mut changed = 0usize;
 
         for adapter in self.registry.iter() {
@@ -295,41 +324,45 @@ impl<'a> Pipeline<'a> {
             roots.sort();
             roots.dedup();
 
-            let present: BTreeSet<&Path> = discovered
+            let valid_roots: Vec<PathBuf> = roots
+                .into_iter()
+                .filter(|root| root_readable_and_nonempty(root))
+                .collect();
+            if valid_roots.is_empty() {
+                continue;
+            }
+
+            let present: HashSet<&Path> = discovered
                 .iter()
                 .filter(|s| s.agent.0 == agent_id)
                 .map(|s| s.path.as_path())
                 .collect();
 
-            for root in roots {
-                if !root_readable_and_nonempty(&root) {
+            let mut stmt = conn.prepare(
+                "SELECT id, current_path, state FROM source_artifact WHERE agent_id = ?1",
+            )?;
+            let rows: Vec<(String, String, String)> = stmt
+                .query_map([agent_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut update_stmt = conn.prepare(
+                "UPDATE source_artifact
+                 SET state = ?2, last_seen_at = ?3 WHERE id = ?1",
+            )?;
+            let now = crate::now_ms();
+            for (id, current_path, state) in rows {
+                let cp = Path::new(&current_path);
+                if !valid_roots.iter().any(|root| cp.starts_with(root)) {
+                    // Under a root we no longer manage; not ours to judge.
                     continue;
                 }
-                let mut stmt = self.conn.prepare(
-                    "SELECT id, current_path, state FROM source_artifact WHERE agent_id = ?1",
-                )?;
-                let rows: Vec<(String, String, String)> = stmt
-                    .query_map([agent_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                for (id, current_path, state) in rows {
-                    let cp = Path::new(&current_path);
-                    if !cp.starts_with(&root) {
-                        // Under a root we no longer manage; not ours to judge.
-                        continue;
-                    }
-                    let next = if present.contains(cp) {
-                        "active"
-                    } else {
-                        "missing"
-                    };
-                    if next != state {
-                        self.conn.execute(
-                            "UPDATE source_artifact
-                             SET state = ?2, last_seen_at = ?3 WHERE id = ?1",
-                            params![id, next, crate::now_ms()],
-                        )?;
-                        changed += 1;
-                    }
+                let next = if present.contains(cp) {
+                    "active"
+                } else {
+                    "missing"
+                };
+                if next != state {
+                    update_stmt.execute(params![id, next, now])?;
+                    changed += 1;
                 }
             }
         }

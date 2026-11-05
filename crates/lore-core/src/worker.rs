@@ -204,11 +204,13 @@ impl Worker {
     pub fn enqueue_paths(&self, paths: &[PathBuf]) -> jobs::Result<usize> {
         let pipeline = self.pipeline();
         let mut enqueued = 0;
+        let tx = self.conn.unchecked_transaction()?;
         for path in paths {
-            if let Some(SourceSchedule::Enqueued) = pipeline.enqueue_path(path)? {
+            if let Some(SourceSchedule::Enqueued) = pipeline.enqueue_path_conn(&tx, path)? {
                 enqueued += 1;
             }
         }
+        tx.commit()?;
         Ok(enqueued)
     }
 
