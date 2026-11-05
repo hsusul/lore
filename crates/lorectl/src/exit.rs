@@ -114,6 +114,12 @@ impl CliError {
                 "run `lorectl init` to set Lore up, or `lorectl scan` to build the archive alone",
             ),
             CliError::Usage(_) | CliError::NotImplemented(_) => Some("run `lorectl --help`"),
+            CliError::Path(PathError::RelativeOverride) => {
+                Some("give an absolute path starting with `/`")
+            }
+            CliError::Path(PathError::RelativeEnvOverride) => {
+                Some("set LORE_ARCHIVE_DIR to an absolute path starting with `/`")
+            }
             CliError::Lock(LockError::Held) => {
                 Some("wait for the other process to finish, then run it again")
             }
@@ -124,6 +130,13 @@ impl CliError {
             }
             CliError::Review(ReviewError::Vault(VaultError::Conflict(_))) => {
                 Some("accept it under another name with `--as <slug>`")
+            }
+            CliError::Review(ReviewError::NoProposal(_))
+            | CliError::Review(ReviewError::Decided(..)) => {
+                Some("run `lorectl mem inbox` to see what is waiting")
+            }
+            CliError::Review(ReviewError::BadSlug(_)) => {
+                Some("give a slug of lowercase letters, digits, and single `-`")
             }
             CliError::Review(ReviewError::Vault(error))
             | CliError::Review(ReviewError::Inbox(InboxError::Vault(error))) => vault_advice(error),
@@ -141,6 +154,10 @@ fn vault_advice(error: &VaultError) -> Option<&'static str> {
         }
         VaultError::DuplicateId { .. } => {
             Some("leave out `id:` to get a new one, or edit the note that has it")
+        }
+        VaultError::NotFound(_) => Some("run `lorectl mem search <QUERY>` to find notes"),
+        VaultError::Ambiguous(..) => {
+            Some("give the note's id or its full path in the vault")
         }
         VaultError::Git(..) => Some(
             "git failed in the vault; run `git status` there to see why (Lore skips hooks and signing)",
@@ -501,6 +518,62 @@ mod tests {
         assert_eq!(
             missing.advice(),
             Some("run `lorectl init` to set Lore up, or `lorectl scan` to build the archive alone")
+        );
+    }
+
+    #[test]
+    fn relative_path_errors_give_clear_advice() {
+        let override_err = CliError::Path(PathError::RelativeOverride);
+        assert_eq!(
+            override_err.advice(),
+            Some("give an absolute path starting with `/`")
+        );
+
+        let env_err = CliError::Path(PathError::RelativeEnvOverride);
+        assert_eq!(
+            env_err.advice(),
+            Some("set LORE_ARCHIVE_DIR to an absolute path starting with `/`")
+        );
+    }
+
+    #[test]
+    fn vault_not_found_and_ambiguous_give_actionable_advice() {
+        let not_found = CliError::Memory(VaultError::NotFound("test-note".into()));
+        assert_eq!(
+            not_found.advice(),
+            Some("run `lorectl mem search <QUERY>` to find notes")
+        );
+
+        let ambiguous =
+            CliError::Memory(VaultError::Ambiguous("prefix".into(), "a.md, b.md".into()));
+        assert_eq!(
+            ambiguous.advice(),
+            Some("give the note's id or its full path in the vault")
+        );
+    }
+
+    #[test]
+    fn review_errors_give_inbox_and_slug_advice() {
+        let no_prop =
+            CliError::Review(ReviewError::NoProposal("01JC0000000000000000000000".into()));
+        assert_eq!(
+            no_prop.advice(),
+            Some("run `lorectl mem inbox` to see what is waiting")
+        );
+
+        let decided = CliError::Review(ReviewError::Decided(
+            "01JC0000000000000000000000".into(),
+            "accepted",
+        ));
+        assert_eq!(
+            decided.advice(),
+            Some("run `lorectl mem inbox` to see what is waiting")
+        );
+
+        let bad_slug = CliError::Review(ReviewError::BadSlug("Bad/Slug".into()));
+        assert_eq!(
+            bad_slug.advice(),
+            Some("give a slug of lowercase letters, digits, and single `-`")
         );
     }
 }
