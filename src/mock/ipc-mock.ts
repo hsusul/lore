@@ -537,9 +537,16 @@ export function createMockHandlers(
       { id: "codex", label: "Codex", installed: true, signed_in: false, sign_in: "codex login" },
     ],
     skill_usage: () => [
-      { skill: "code-review", uses: 22, sessions: 15, last_ms: 1_785_751_203_000, reprompts: [{ session_id: "s1", agent_id: "claude-code", repo: "lore", at_ms: 1_785_751_203_000, text: "no, you missed the tests, look again", preceding: "Reviewed it, looks fine." }] },
-      { skill: "taste-skill", uses: 0, sessions: 0, last_ms: null, reprompts: [] },
+      { skill: "code-review", uses: 22, sessions: 15, last_ms: 1_785_751_203_000, reprompts: [{ session_id: "s1", agent_id: "claude-code", repo: "lore", at_ms: 1_785_751_203_000, text: "no, you missed the tests, look again", preceding: "Reviewed it, looks fine." }], editable_path: "/Users/you/.claude/skills/code-review/SKILL.md" },
+      { skill: "taste-skill", uses: 0, sessions: 0, last_ms: null, reprompts: [], editable_path: null },
     ],
+    draft_skill_edit: () => ({
+      path: "/Users/you/.claude/skills/code-review/SKILL.md",
+      summary: "Read the tests before approving a change.",
+      before: "---\nname: code-review\n---\nReview the diff.\n",
+      after: "---\nname: code-review\n---\nReview the diff and its tests.\n",
+    }),
+    apply_skill_edit: () => "/Users/you/Library/Application Support/dev.lore.app/skill-backups/code-review-1.SKILL.md",
 
     skills_report: () => ({
       skills: 64,

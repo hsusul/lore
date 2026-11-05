@@ -73,7 +73,9 @@ pub fn run() {
             accept_proposal,
             reject_proposal,
             find_lessons,
-            lesson_agents
+            lesson_agents,
+            draft_skill_edit,
+            apply_skill_edit
         ])
         .build(tauri::generate_context!());
     let app = match app {

@@ -22,17 +22,10 @@ function remember(id: string): void {
 }
 
 /**
- * The caught-up card: which of the person's agents writes lessons, and the
- * button that starts it. An agent must be installed and signed in; when none
- * is, the card says how to sign one in.
+ * The person's agents that can write, and the one they chose: remembered on
+ * this Mac, else the first that is installed and signed in.
  */
-export function FindLessons({
-  finding,
-  onFind,
-}: {
-  finding: string | null;
-  onFind: (agent: LessonAgentDto) => void;
-}) {
+export function useAgent() {
   const [agents, setAgents] = useState<LessonAgentDto[] | null>(null);
   const [chosen, setChosen] = useState<string | null>(remembered);
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +43,29 @@ export function FindLessons({
     void check();
   }, [check]);
 
+  const ready = (agents ?? []).filter((a) => a.installed && a.signed_in);
+  const agent = ready.find((a) => a.id === chosen) ?? ready[0] ?? null;
+  const choose = (id: string) => {
+    setChosen(id);
+    remember(id);
+  };
+  return { agents, ready, agent, choose, check, error };
+}
+
+/**
+ * The caught-up card: which of the person's agents writes lessons, and the
+ * button that starts it. An agent must be installed and signed in; when none
+ * is, the card says how to sign one in.
+ */
+export function FindLessons({
+  finding,
+  onFind,
+}: {
+  finding: string | null;
+  onFind: (agent: LessonAgentDto) => void;
+}) {
+  const { agents, ready, agent, choose, check, error } = useAgent();
+
   if (finding) {
     return (
       <div role="status">
@@ -63,9 +79,6 @@ export function FindLessons({
       </div>
     );
   }
-
-  const ready = (agents ?? []).filter((a) => a.installed && a.signed_in);
-  const agent = ready.find((a) => a.id === chosen) ?? ready[0] ?? null;
 
   if (agents && !agent) {
     return (
@@ -136,10 +149,7 @@ export function FindLessons({
               role="radio"
               aria-checked={a.id === agent.id}
               className={a.id === agent.id ? "sel" : ""}
-              onClick={() => {
-                setChosen(a.id);
-                remember(a.id);
-              }}
+              onClick={() => choose(a.id)}
             >
               {a.label}
             </button>

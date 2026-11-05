@@ -39,7 +39,7 @@ const LIMIT: Duration = Duration::from_secs(20 * 60);
 
 /// The agents that can write lessons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Agent {
+pub(crate) enum Agent {
     Claude,
     Codex,
 }
@@ -47,7 +47,7 @@ enum Agent {
 impl Agent {
     const ALL: [Agent; 2] = [Agent::Claude, Agent::Codex];
 
-    fn parse(id: &str) -> Option<Self> {
+    pub(crate) fn parse(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|a| a.id() == id)
     }
 
@@ -59,7 +59,7 @@ impl Agent {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Agent::Claude => "Claude Code",
             Agent::Codex => "Codex",
@@ -106,6 +106,35 @@ impl Agent {
             Agent::Codex => CODEX_SKILL,
         };
         format!("{skill}{FROM_THE_APP}")
+    }
+
+    /// The arguments for a run that only writes text: no tools and no MCP
+    /// servers. Codex writes its last message to `last`.
+    pub(crate) fn text_only_arguments(self, last: &Path) -> Vec<String> {
+        let owned = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        match self {
+            Agent::Claude => owned(&[
+                "-p",
+                "--strict-mcp-config",
+                "--tools",
+                "",
+                "--output-format",
+                "json",
+            ]),
+            Agent::Codex => {
+                let mut args = owned(&[
+                    "exec",
+                    "--skip-git-repo-check",
+                    "--ephemeral",
+                    "-s",
+                    "read-only",
+                    "-o",
+                ]);
+                args.push(last.display().to_string());
+                args.push("-".to_owned());
+                args
+            }
+        }
     }
 
     /// The arguments for one headless run with only Lore's MCP server, given
@@ -296,10 +325,9 @@ pub async fn lesson_agents() -> Result<Vec<LessonAgentDto>, String> {
 #[tauri::command]
 pub async fn find_lessons(state: State<'_, AppState>, agent: String) -> Result<String, String> {
     let agent = Agent::parse(&agent).ok_or("unknown agent")?;
-    let Found { home, dirs } = found()?;
+    let (binary, home, joined) = locate(agent)?;
+    let Found { dirs, .. } = found()?;
     let label = agent.label();
-    let binary = find(agent.binary(), &dirs)
-        .ok_or_else(|| format!("{label} is not installed. Install it, sign in, then try again."))?;
     let own = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(Path::to_path_buf));
@@ -307,7 +335,6 @@ pub async fn find_lessons(state: State<'_, AppState>, agent: String) -> Result<S
         .ok_or_else(|| format!("lorectl is missing, so {label} cannot reach Lore's tools."))?;
     let scratch = state.archive_dir.clone();
     let last = scratch.join("find-lessons.last.txt");
-    let _ = std::fs::remove_file(&last);
     if agent == Agent::Claude {
         std::fs::write(
             scratch.join("find-lessons.mcp.json"),
@@ -316,52 +343,79 @@ pub async fn find_lessons(state: State<'_, AppState>, agent: String) -> Result<S
         .map_err(|e| e.to_string())?;
     }
     let args = agent.arguments(&lorectl, &state.archive_dir, &scratch);
-    let joined = std::env::join_paths(&dirs).map_err(|e| e.to_string())?;
 
+    let prompt = agent.prompt();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut child = Command::new(&binary)
-            .args(&args)
-            .current_dir(&home)
-            .env("PATH", joined)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("could not start {label}: {e}"))?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(agent.prompt().as_bytes())
-                .map_err(|e| e.to_string())?;
-        }
-        // Read both pipes while it runs, so a long report cannot fill one and stall it.
-        let stdout = drain(child.stdout.take());
-        let stderr = drain(child.stderr.take());
-        let started = Instant::now();
-        loop {
-            if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-                break;
-            }
-            if started.elapsed() > LIMIT {
-                let _ = child.kill();
-                return Err(format!(
-                    "{label} took more than 20 minutes and was stopped."
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(500));
-        }
-        let stdout = stdout.join().unwrap_or_default();
-        let stderr = stderr.join().unwrap_or_default();
-        match agent {
-            Agent::Claude => report(&stdout, &stderr),
-            Agent::Codex => std::fs::read_to_string(&last)
-                .ok()
-                .map(|text| text.trim().to_owned())
-                .filter(|text| !text.is_empty())
-                .ok_or_else(|| no_report(label, &format!("{stdout}\n{stderr}"))),
-        }
+        run(agent, &binary, &args, &prompt, &home, &joined, &last)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Run `binary` headless with `args`, `prompt` on stdin, and return the
+/// agent's closing message: Claude Code's JSON `result`, or the file Codex
+/// writes it to (`last`). Blocks; stopped after [`LIMIT`].
+pub(crate) fn run(
+    agent: Agent,
+    binary: &Path,
+    args: &[String],
+    prompt: &str,
+    home: &Path,
+    path: &std::ffi::OsStr,
+    last: &Path,
+) -> Result<String, String> {
+    let label = agent.label();
+    let _ = std::fs::remove_file(last);
+    let mut child = Command::new(binary)
+        .args(args)
+        .current_dir(home)
+        .env("PATH", path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not start {label}: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(prompt.as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+    // Read both pipes while it runs, so a long report cannot fill one and stall it.
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let started = Instant::now();
+    loop {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            break;
+        }
+        if started.elapsed() > LIMIT {
+            let _ = child.kill();
+            return Err(format!(
+                "{label} took more than 20 minutes and was stopped."
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    match agent {
+        Agent::Claude => report(&stdout, &stderr),
+        Agent::Codex => std::fs::read_to_string(last)
+            .ok()
+            .map(|text| text.trim().to_owned())
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| no_report(label, &format!("{stdout}\n{stderr}"))),
+    }
+}
+
+/// What a run needs to start `agent`: the binary, home, and PATH.
+pub(crate) fn locate(agent: Agent) -> Result<(PathBuf, PathBuf, std::ffi::OsString), String> {
+    let Found { home, dirs } = found()?;
+    let label = agent.label();
+    let binary = find(agent.binary(), &dirs)
+        .ok_or_else(|| format!("{label} is not installed. Install it, sign in, then try again."))?;
+    let path = std::env::join_paths(&dirs).map_err(|e| e.to_string())?;
+    Ok((binary, home, path))
 }
 
 #[cfg(test)]
@@ -472,6 +526,34 @@ mod tests {
                 "command": "/bin/lorectl", "args": ["mcp", "--archive", "/a"],
                 "env": { "LORE_AGENT": "claude-code" },
             }}})
+        );
+    }
+
+    #[test]
+    fn a_text_only_run_gets_no_tools() {
+        assert_eq!(
+            Agent::Claude.text_only_arguments(Path::new("/s/last.txt")),
+            [
+                "-p",
+                "--strict-mcp-config",
+                "--tools",
+                "",
+                "--output-format",
+                "json"
+            ]
+        );
+        assert_eq!(
+            Agent::Codex.text_only_arguments(Path::new("/s/last.txt")),
+            [
+                "exec",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "-s",
+                "read-only",
+                "-o",
+                "/s/last.txt",
+                "-"
+            ]
         );
     }
 

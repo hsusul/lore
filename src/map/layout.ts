@@ -1,22 +1,28 @@
-import type { NoteDto, ProposalDto } from "../ipc";
+import type { NoteDto, ProposalDto, SkillUsageDto } from "../ipc";
 import { receipts } from "./proposal";
 
 /**
  * The map: what holds in every repository sits in the centre, named for the
  * person, and each repository is a cluster around it. Every dot is a real
- * lesson an agent filed for review, or an accepted note. Coordinates are map units;
- * the view scales them to the window.
+ * lesson an agent filed for review, an accepted note, or one installed skill
+ * in the Skills cluster. Coordinates are map units; the view scales them to
+ * the window.
  */
 
 export const CENTRE = "global";
+export const SKILLS = "skills";
 
-export type Item = { kind: "lesson"; lesson: ProposalDto } | { kind: "note"; note: NoteDto };
+export type Item =
+  | { kind: "lesson"; lesson: ProposalDto }
+  | { kind: "note"; note: NoteDto }
+  | { kind: "skill"; skill: SkillUsageDto };
 
 export interface Area {
   key: string;
   name: string;
   lessons: ProposalDto[];
   notes: NoteDto[];
+  skills: SkillUsageDto[];
 }
 
 export interface Dot {
@@ -37,6 +43,7 @@ export interface Cluster {
   y: number;
   /** Radius of the dots, without the room left for the name below. */
   r: number;
+  /** The count under its name: lessons waiting, or skills that need a look. */
   lessons: number;
 }
 
@@ -62,14 +69,20 @@ function areaOf(item: { scope: string; repo_name: string | null }): string {
   return item.repo_name ?? item.scope;
 }
 
-/** Group lessons and notes into areas: the centre first, then repositories by size, then name. */
-export function areasOf(lessons: ProposalDto[], notes: NoteDto[], person: string): Area[] {
+/** A skill the person re-prompted after: it needs a look. */
+export const needsALook = (skill: SkillUsageDto) => skill.reprompts.length > 0;
+
+/**
+ * Group lessons and notes into areas, plus the installed skills as one more:
+ * the centre first, then areas by size, then name.
+ */
+export function areasOf(lessons: ProposalDto[], notes: NoteDto[], person: string, skills: SkillUsageDto[] = []): Area[] {
   const byKey = new Map<string, Area>();
   const area = (key: string): Area => {
     let found = byKey.get(key);
     if (!found) {
       const name = key === CENTRE ? person : key.startsWith("repo:") ? "Unlinked repository" : key;
-      found = { key, name, lessons: [], notes: [] };
+      found = { key, name, lessons: [], notes: [], skills: [] };
       byKey.set(key, found);
     }
     return found;
@@ -77,13 +90,22 @@ export function areasOf(lessons: ProposalDto[], notes: NoteDto[], person: string
   area(CENTRE);
   for (const lesson of lessons) area(areaOf(lesson)).lessons.push(lesson);
   for (const note of notes) area(areaOf(note)).notes.push(note);
-  const size = (a: Area) => a.lessons.length + a.notes.length;
+  if (skills.length) {
+    const skillArea = { key: SKILLS, name: "Skills", lessons: [], notes: [], skills };
+    byKey.set(SKILLS, skillArea);
+  }
+  const size = (a: Area) => a.lessons.length + a.notes.length + a.skills.length;
   return [...byKey.values()].sort(
     (a, b) => Number(b.key === CENTRE) - Number(a.key === CENTRE) || size(b) - size(a) || a.name.localeCompare(b.name),
   );
 }
 
-export const clusterRadius = (n: number) => SPACE * Math.sqrt(n);
+/** Skills are many and small, so they pack tighter than lessons and notes. */
+const SKILL_SPACE = 4;
+
+export const clusterRadius = (n: number, space = SPACE) => space * Math.sqrt(n);
+
+const spaceOf = (a: Area) => (a.key === SKILLS ? SKILL_SPACE : SPACE);
 
 /**
  * Pack the clusters: the centre at the origin, then each repository, biggest
@@ -94,7 +116,7 @@ function pack(areas: Area[]): { key: string; x: number; y: number }[] {
   const out: { key: string; x: number; y: number }[] = [];
   const free = (x: number, y: number, r: number) => placed.every((q) => Math.hypot(q.x - x, q.y - y) >= q.r + r + GAP - 0.01);
   areas.forEach((a, i) => {
-    const r = clusterRadius(a.lessons.length + a.notes.length) + PAD;
+    const r = clusterRadius(a.lessons.length + a.notes.length + a.skills.length, spaceOf(a)) + PAD;
     if (i === 0) {
       placed.push({ x: 0, y: LIFT, r });
       out.push({ key: a.key, x: 0, y: 0 });
@@ -141,6 +163,8 @@ function pack(areas: Area[]): { key: string; x: number; y: number }[] {
 /** A lesson backed by more receipts is drawn larger. */
 const lessonRadius = (lesson: ProposalDto) => 2.6 + Math.min(3, Math.max(0, receipts(lesson.body).length - 1)) * 0.6;
 const NOTE_RADIUS = 2.2;
+/** A skill that runs more is drawn larger. */
+const skillRadius = (skill: SkillUsageDto) => 1.2 + Math.min(2.4, Math.sqrt(skill.uses) * 0.25);
 
 /** Lay out every area: clusters packed, and each cluster's dots in a sunflower, lessons in the middle. */
 export function layout(areas: Area[]): MapModel {
@@ -165,10 +189,20 @@ export function layout(areas: Area[]): MapModel {
         item: { kind: "note", note } as Item,
         r: NOTE_RADIUS,
       })),
+      // Skills that need a look sit in the middle, the rest by use.
+      ...[...a.skills]
+        .sort((p, q) => Number(needsALook(q)) - Number(needsALook(p)) || q.uses - p.uses)
+        .map((skill) => ({
+          id: `skill:${skill.skill}`,
+          area: a.key,
+          label: skill.skill,
+          item: { kind: "skill", skill } as Item,
+          r: skillRadius(skill),
+        })),
     ];
     items.forEach((d, k) => {
       const angle = k * GOLDEN;
-      const rr = SPACE * Math.sqrt(k + 0.5);
+      const rr = spaceOf(a) * Math.sqrt(k + 0.5);
       dots.push({ ...d, x: spot.x + rr * Math.cos(angle), y: spot.y + rr * Math.sin(angle) });
     });
     clusters.push({
@@ -176,8 +210,8 @@ export function layout(areas: Area[]): MapModel {
       name: a.name,
       x: spot.x,
       y: spot.y,
-      r: clusterRadius(items.length),
-      lessons: a.lessons.length,
+      r: clusterRadius(items.length, spaceOf(a)),
+      lessons: a.key === SKILLS ? a.skills.filter(needsALook).length : a.lessons.length,
     });
   }
   const bounds = clusters.reduce<[number, number, number, number]>(

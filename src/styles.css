@@ -1751,3 +1751,38 @@ textarea.mist-ed:focus {
   color: var(--mist-t1);
   box-shadow: var(--mist-sh), 0 0 0 1px var(--mist-line);
 }
+
+.mist-finding-row {
+  margin-top: 24px;
+}
+
+.mist-finding-row p {
+  margin: 2px 0 12px;
+}
+
+.mist-diff {
+  max-height: 360px;
+  margin: 24px 0 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--mist-well);
+  color: var(--mist-t2);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mist-diff .add {
+  color: var(--mist-t1);
+  font-weight: 600;
+}
+
+.mist-diff .del {
+  text-decoration: line-through;
+}
+
+.mist-diff .gap {
+  color: var(--mist-dotm);
+}
