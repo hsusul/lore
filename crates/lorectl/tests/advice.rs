@@ -100,3 +100,59 @@ fn proposal_not_found_and_bad_slug_advice() {
         "stderr was: {stderr}"
     );
 }
+
+#[test]
+fn relative_vault_override_advice() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["--vault", "relative/vault", "mem", "show", "test"])
+        .env("HOME", dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("lorectl: the vault location must be an absolute path, got `relative/vault`\n  give an absolute path starting with `/`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn relative_vault_env_advice() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["mem", "show", "test"])
+        .env("HOME", dir.path())
+        .env("LORE_VAULT_DIR", "relative/vault")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("lorectl: the vault location must be an absolute path, got `relative/vault`\n  give an absolute path starting with `/`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn bad_note_path_advice_ascii_and_non_ascii() {
+    let dir = tempfile::tempdir().unwrap();
+    let init = lorectl(dir.path(), &["mem", "init"]);
+    assert_eq!(init.status.code(), Some(0));
+
+    let dotdot = lorectl(dir.path(), &["mem", "show", "../note"]);
+    assert_eq!(dotdot.status.code(), Some(7));
+    let stderr = String::from_utf8_lossy(&dotdot.stderr);
+    assert!(
+        stderr.contains("lorectl: `../note` is not a valid note path: `..` is not allowed, got `../note`\n  give a note path inside the vault, like `global/<slug>.md`"),
+        "stderr was: {stderr}"
+    );
+
+    let non_ascii_abs = lorectl(dir.path(), &["mem", "show", "/etc/日本語"]);
+    assert_eq!(non_ascii_abs.status.code(), Some(7));
+    let stderr = String::from_utf8_lossy(&non_ascii_abs.stderr);
+    assert!(
+        stderr.contains("lorectl: `/etc/日本語` is not a valid note path: absolute paths outside the vault are not allowed, got `/etc/日本語`\n  give a note path inside the vault, like `global/<slug>.md`"),
+        "stderr was: {stderr}"
+    );
+}

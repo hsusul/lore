@@ -132,7 +132,8 @@ impl CliError {
                 Some("accept it under another name with `--as <slug>`")
             }
             CliError::Review(ReviewError::NoProposal(_))
-            | CliError::Review(ReviewError::Decided(..)) => {
+            | CliError::Review(ReviewError::Decided(..))
+            | CliError::Review(ReviewError::DuplicateProposal(_)) => {
                 Some("run `lorectl mem inbox` to see what is waiting")
             }
             CliError::Review(ReviewError::BadSlug(_)) => {
@@ -149,6 +150,13 @@ fn vault_advice(error: &VaultError) -> Option<&'static str> {
     match error {
         VaultError::Missing(_) => Some("run `lorectl mem init` to create one"),
         VaultError::Busy(_) => Some("wait for the other process to finish, then run it again"),
+        VaultError::RelativeDir(_) => Some("give an absolute path starting with `/`"),
+        VaultError::NoHome => {
+            Some("set LORE_VAULT_DIR to an absolute path starting with `/`")
+        }
+        VaultError::BadPath(..) => {
+            Some("give a note path inside the vault, like `global/<slug>.md`")
+        }
         VaultError::Conflict(_) => {
             Some("edit that file by hand, or give the new note another title")
         }
@@ -534,6 +542,48 @@ mod tests {
             env_err.advice(),
             Some("set LORE_ARCHIVE_DIR to an absolute path starting with `/`")
         );
+
+        let vault_rel = CliError::Memory(VaultError::RelativeDir("rel".into()));
+        assert_eq!(
+            vault_rel.advice(),
+            Some("give an absolute path starting with `/`")
+        );
+
+        let no_home = CliError::Memory(VaultError::NoHome);
+        assert_eq!(
+            no_home.advice(),
+            Some("set LORE_VAULT_DIR to an absolute path starting with `/`")
+        );
+    }
+
+    #[test]
+    fn bad_note_path_gives_actionable_advice() {
+        let dotdot = CliError::Memory(VaultError::BadPath(
+            "../note".into(),
+            "`..` is not allowed".into(),
+        ));
+        assert_eq!(
+            dotdot.advice(),
+            Some("give a note path inside the vault, like `global/<slug>.md`")
+        );
+
+        let non_ascii_abs = CliError::Memory(VaultError::BadPath(
+            "/etc/日本語".into(),
+            "absolute paths outside the vault are not allowed".into(),
+        ));
+        assert_eq!(
+            non_ascii_abs.advice(),
+            Some("give a note path inside the vault, like `global/<slug>.md`")
+        );
+
+        let not_md = CliError::Memory(VaultError::BadPath(
+            "global/note.txt".into(),
+            "expected a `.md` file".into(),
+        ));
+        assert_eq!(
+            not_md.advice(),
+            Some("give a note path inside the vault, like `global/<slug>.md`")
+        );
     }
 
     #[test]
@@ -567,6 +617,14 @@ mod tests {
         ));
         assert_eq!(
             decided.advice(),
+            Some("run `lorectl mem inbox` to see what is waiting")
+        );
+
+        let dup = CliError::Review(ReviewError::DuplicateProposal(
+            "01JC0000000000000000000000".into(),
+        ));
+        assert_eq!(
+            dup.advice(),
             Some("run `lorectl mem inbox` to see what is waiting")
         );
 
