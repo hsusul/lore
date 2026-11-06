@@ -1057,6 +1057,30 @@ fn link_repo(
     }
 }
 
+fn link_worktree(
+    conn: &Connection,
+    wt_id: &str,
+    repo_id: &str,
+    path: &str,
+    branch_hint: Option<&str>,
+    sessions: &[&str],
+) {
+    conn.execute(
+        "INSERT INTO worktree (id, repository_id, path, git_common_dir_hash, branch_hint, is_primary, is_missing)
+         VALUES (?1, ?2, ?3, 'gcd_1', ?4, 0, 0)",
+        rusqlite::params![wt_id, repo_id, path, branch_hint],
+    )
+    .unwrap();
+    for sid in sessions {
+        conn.execute(
+            "UPDATE session_segment SET repository_id = ?1, worktree_id = ?2 WHERE session_id = ?3",
+            rusqlite::params![repo_id, wt_id, sid],
+        )
+        .unwrap();
+        lore_core::search::reproject_for_test(conn, sid).unwrap();
+    }
+}
+
 fn sorted(mut ids: Vec<String>) -> Vec<String> {
     ids.sort();
     ids
@@ -1512,6 +1536,65 @@ fn repo_filter_handles_non_ascii_and_git_suffix() {
         "repo:日本.GIT",
         "repo:日本/",
         "repo:/srv/git/日本",
+    ] {
+        let hits = search(&conn, q, 20).unwrap();
+        assert_eq!(hits.len(), 1, "{q}");
+        assert_eq!(hits[0].session_id, j1);
+    }
+}
+
+#[test]
+fn worktree_by_id_and_by_name_and_path_return_the_same_sessions() {
+    let (conn, _bd, [a1, _a2, _b1, _g1]) = repo_fixture();
+    link_worktree(
+        &conn,
+        "wt_alpha_feat",
+        "repo_alpha",
+        "/work/Lore-Core-wt/feat",
+        Some("feat"),
+        &[&a1],
+    );
+
+    for q in [
+        "worktree:wt_alpha_feat",
+        "worktree:feat",
+        "worktree:feat/",
+        "worktree:/work/Lore-Core-wt/feat",
+        "worktree:Lore-Core-wt/feat",
+        "worktree:\\work\\Lore-Core-wt\\feat",
+    ] {
+        let hits = search(&conn, q, 20).unwrap();
+        assert_eq!(session_ids(&hits), vec![a1.clone()], "{q}");
+    }
+    assert!(search(&conn, "beta worktree:feat", 20).unwrap().is_empty());
+}
+
+#[test]
+fn worktree_filter_handles_non_ascii_and_git_suffix() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let j1 = persist_claude(
+        &conn,
+        &blobs,
+        &user_message("j1", "/p", "日本語コミット"),
+        "j1",
+    );
+    link_repo(&conn, "repo_jp", "日本", Some("/srv/git/日本"), &[&j1]);
+    link_worktree(
+        &conn,
+        "wt_jp",
+        "repo_jp",
+        "/srv/git/日本/作業木",
+        Some("作業木"),
+        &[&j1],
+    );
+
+    for q in [
+        "worktree:wt_jp",
+        "worktree:作業木",
+        "worktree:作業木.git",
+        "worktree:作業木/",
+        "worktree:/srv/git/日本/作業木",
     ] {
         let hits = search(&conn, q, 20).unwrap();
         assert_eq!(hits.len(), 1, "{q}");
