@@ -15,12 +15,13 @@
 //!
 //! The miner ([`mine`]) reads the archive for user turns that correct the
 //! agent, the raw material of a lesson; [`filing`] files a lesson into the
-//! inbox.
+//! inbox, and [`considered`] records which corrections a lessons run read.
 //!
 //! This crate has no network capability (`tests/no_network_in_memory.rs`,
 //! `scripts/egress-check.sh`). It spawns the `git` binary and nothing else.
 
 pub mod anchor;
+pub mod considered;
 pub mod eval;
 pub mod filing;
 pub mod inbox;
