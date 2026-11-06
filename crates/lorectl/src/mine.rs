@@ -7,6 +7,10 @@
 //! A lesson is proposed as the agent of its newest receipt, under that
 //! receipt's archive session id, marked verified: the miner read that session
 //! from the archive, and it is where the person said it. It accepts nothing.
+//!
+//! `--new` lists only lessons with a correction no finished lessons run has
+//! read, per the vault's considered ledger; `--json` marks each receipt
+//! `new` either way. It records nothing in the ledger.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -14,6 +18,7 @@ use std::path::{Path, PathBuf};
 use lexopt::prelude::*;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::storage;
+use lore_memory::considered::{self, Marked};
 use lore_memory::filing;
 use lore_memory::inbox;
 use lore_memory::mine::{self, Candidate, Lesson, Signal};
@@ -36,7 +41,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let (mut limit, mut json) = (DEFAULT_LIMIT, invocation.json);
     let (mut propose, mut ids, mut vault_dir) = (false, Vec::new(), invocation.vault.clone());
     let mut limits = mine::Limits::default();
-    let mut all = false;
+    let (mut all, mut new_only) = (false, false);
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
             Short('h') | Long("help") => {
@@ -53,6 +58,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
             }
             Long("json") => json = true,
             Long("all") => all = true,
+            Long("new") => new_only = true,
             Long("propose") => propose = true,
             Long("vault") => {
                 let value = parser.value().map_err(|e| usage(e.to_string()))?;
@@ -76,6 +82,14 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
         lessons.retain(|l| l.score >= 0);
     }
     let left_out = before - lessons.len();
+    // No vault, or none yet, means no ledger: every correction is new.
+    let seen = vault::resolve_dir(vault_dir.as_deref())
+        .ok()
+        .and_then(|dir| Vault::open(&dir).ok())
+        .map(|vault| considered::considered(&vault))
+        .transpose()?
+        .unwrap_or_default();
+    let mut lessons = considered::mark(lessons, |id| !seen.contains(id), !new_only);
     lessons.truncate(limit);
     let text = if json {
         format!(
@@ -121,7 +135,7 @@ fn day(candidate: &Candidate) -> String {
 
 /// The lessons as text; `left_out` lessons scored as one-off orders were
 /// not listed.
-fn lessons_text(lessons: &[Lesson], total: usize, left_out: usize) -> String {
+fn lessons_text(lessons: &[Marked], total: usize, left_out: usize) -> String {
     let plural = if lessons.len() == 1 { "" } else { "s" };
     let more = if left_out == 0 {
         String::new()
@@ -132,7 +146,7 @@ fn lessons_text(lessons: &[Lesson], total: usize, left_out: usize) -> String {
         "{} lesson{plural} from {total} corrections{more}. A dry run: nothing was written.\n",
         lessons.len()
     );
-    for lesson in lessons {
+    for lesson in lessons.iter().map(Marked::lesson) {
         let newest = &lesson.receipts[0];
         out.push_str(&format!(
             "{}  {} conversation{}, latest {}",
@@ -178,10 +192,12 @@ fn lessons_text(lessons: &[Lesson], total: usize, left_out: usize) -> String {
     out
 }
 
-fn lesson_json(lesson: &Lesson) -> Value {
-    let receipts: Vec<Value> = (lesson.receipts.iter())
-        .map(|r| {
+fn lesson_json(marked: &Marked) -> Value {
+    let lesson = marked.lesson();
+    let receipts: Vec<Value> = (marked.receipts())
+        .map(|(r, id, new)| {
             json!({
+                "correction_id": id.as_str(), "new": new,
                 "session": r.session, "agent": r.agent, "date": r.at_ms.and_then(date),
                 "text": r.text, "after": r.preceding, "repo": r.repo,
                 "signal": match r.signal { Signal::Correction => "correction", Signal::Repeat => "repeat", Signal::Rule => "rule" },

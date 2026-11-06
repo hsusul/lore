@@ -133,9 +133,12 @@ fn mine_prints_each_lesson_with_its_receipts_and_writes_nothing() {
     assert_eq!(json[0]["id"], first.as_str());
     assert_eq!(json[0]["conversations"], 3);
     assert_eq!(json[0]["text"], "I told you, pnpm not npm");
+    let id = json[0]["receipts"][0]["correction_id"].clone();
+    assert!(id.as_str().unwrap().starts_with("cr-"), "{id}");
     assert_eq!(
         json[0]["receipts"][0],
         serde_json::json!({
+            "correction_id": id, "new": true,
             "session": s(5), "agent": "codex", "date": "2026-08-05",
             "text": "I told you, pnpm not npm", "after": "npm install dayjs done.",
             "signal": "correction", "repo": null,
@@ -394,5 +397,45 @@ fn mine_leaves_out_lessons_that_read_as_one_off_orders_unless_asked() {
             "1 lesson from 2 corrections, 1 more scored as one-off orders (--all shows them)."
         ),
         "{out}"
+    );
+}
+
+#[test]
+fn mine_new_lists_only_lessons_with_a_correction_no_run_has_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            ("Running npm install.", "no, use pnpm not npm"),
+            ("Editing src/gen.rs.", "don't edit the generated files"),
+        ],
+    );
+    let listed = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_str(&ok(&lorectl(home, args))).unwrap()
+    };
+    // Before any ledger exists, --new lists what the default listing does.
+    let all = listed(&["mem", "mine", "--json"]);
+    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert_eq!(listed(&["mem", "mine", "--json", "--new"]), all);
+
+    let (vault, _) = lore_memory::vault::Vault::init(&home.join("vault")).unwrap();
+    let read = all[0]["receipts"][0]["correction_id"].as_str().unwrap();
+    let read = lore_memory::considered::CorrectionId::parse(read).unwrap();
+    lore_memory::considered::record(&vault, [&read], "run-1").unwrap();
+    let ledger = std::fs::read(home.join("vault/_inbox/considered.jsonl")).unwrap();
+
+    let new = listed(&["mem", "mine", "--json", "--new"]);
+    assert_eq!(new.as_array().unwrap().len(), 1);
+    assert_eq!(new[0]["text"], all[1]["text"]);
+    let every = listed(&["mem", "mine", "--json"]);
+    assert_eq!(every[0]["receipts"][0]["new"], false);
+    assert_eq!(every[1]["receipts"][0]["new"], true);
+    let out = ok(&lorectl(home, &["mem", "mine", "--new"]));
+    assert!(out.starts_with("1 lesson from 2 corrections."), "{out}");
+    // Listing records nothing.
+    assert_eq!(
+        std::fs::read(home.join("vault/_inbox/considered.jsonl")).unwrap(),
+        ledger
     );
 }
