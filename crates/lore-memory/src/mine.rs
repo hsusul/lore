@@ -70,6 +70,7 @@ const PHRASES: &[&str] = &[
     "that's not",
     "thats not",
     "you should have",
+    "are you sure",
     "stop ",
 ];
 
@@ -485,11 +486,13 @@ const NEGATIONS: &[&str] = &["don't", "dont", "didn't", "didnt", "shouldn't", "s
 
 /// Whether `text` insists on something even when it is phrased as a
 /// question: it says don't, do not, didn't, or shouldn't, or always or
-/// never ("never mind" is not one). "why do you always skip the tests?"
+/// never ("never mind" is not one), or doubts the agent with "are you
+/// sure". "why do you always skip the tests?"
 /// corrects; "can you check the logs instead" asks.
 fn insists(text: &str) -> bool {
     let lower = text.to_lowercase().replace("never mind", "");
     lower.contains("do not ")
+        || lower.contains("are you sure")
         || tokens(&lower)
             .iter()
             .any(|t| NEGATIONS.contains(t) || matches!(*t, "always" | "never"))

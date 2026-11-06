@@ -43,6 +43,7 @@ fn a_question_that_insists_is_a_correction() {
         "why do you always skip the slow tests?",
         "can you not add comments, i dont want them",
         "never mind, what does the flag do?",
+        "are you sure you ran the migration tests?",
     ]
     .iter()
     .flat_map(|user| [("assistant", "Ran the build."), ("user", *user)])
@@ -60,6 +61,7 @@ fn a_question_that_insists_is_a_correction() {
         [
             "why do you always skip the slow tests?",
             "can you not add comments, i dont want them",
+            "are you sure you ran the migration tests?",
         ]
     );
 }
