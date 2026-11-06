@@ -53,6 +53,8 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
                       --max-chars N (default 300): longer turns are skipped
                       --all: also list lessons scored below zero, which
                       read as one-off orders
+                      --new: only lessons with a correction no Find
+                      lessons run has read yet
     eval              Score a policy for accepting proposals without you
                       against your own accepts and rejects; writes nothing
                       [--policy never|starting-bar, default never] [--json]

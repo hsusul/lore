@@ -30,6 +30,7 @@
 //! archive that appears later is picked up on the next call, because each call
 //! opens the database afresh.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -38,6 +39,7 @@ use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::search::{self, SortOrder, HIGHLIGHT_END, HIGHLIGHT_START};
 use lore_core::{query, storage};
 use lore_memory::anchor::WorkTree;
+use lore_memory::considered::{self, CorrectionId};
 use lore_memory::inbox::{InboxError, Proposal};
 use lore_memory::note::{
     AgentKind, Anchor, InvalidValue, LineRange, Note, NoteId, NoteType, RelPath, Relation, Scope,
@@ -78,6 +80,9 @@ const MINE_MAX_LIMIT: u64 = 50;
 const MINE_RECEIPTS: usize = 5;
 /// Characters of serialized `mine_candidates` reply.
 const MINE_REPLY_CHARS: usize = 16_000;
+/// A file of correction ids, one per line, that pins `mine_candidates` to
+/// them: the Lore app sets it for a Find lessons run.
+const CANDIDATES_FILE_ENV: &str = "LORE_CANDIDATES_FILE";
 
 const PROPOSE_TITLE_CHARS: usize = 120;
 const PROPOSE_BODY_CHARS: usize = 4_000;
@@ -190,8 +195,14 @@ the same command. Judge each one: if a later turn overrides the candidate, leave
 it was overridden; a turn about something else is no conflict. Candidates that read as one-off \
 orders are left out and counted in left_out; pass all: true to see them. Each receipt names \
 its repository as repo, a name and the scope a note for it takes, or null, and the repository's \
-folder as repo_path; pass cwd to get the current directory's as cwd_repo. Replies are paged: while next_cursor is not null, call again \
-with it, and read every page before you group anything.",
+folder as repo_path; pass cwd to get the current directory's as cwd_repo. Only candidates with \
+a receipt no earlier run read are returned, and each receipt has a correction_id and new: only \
+new receipts need a rule; older ones are context for grouping, and a rule that sharpens an \
+accepted note passes updates. already_considered counts candidates left out because every \
+receipt was read before; pass all_seen: true to see them. In a run the Lore app started, only \
+that run's corrections are returned and not_in_this_run counts the rest, which may still be \
+unread. Replies are paged: while next_cursor \
+is not null, call again with it, and read every page before you group anything.",
         input_schema: mine_schema,
         call: mine_candidates,
     },
@@ -265,6 +276,11 @@ fn mine_schema() -> Value {
                 "type": "boolean",
                 "default": false,
                 "description": "Also return candidates that read as one-off orders."
+            },
+            "all_seen": {
+                "type": "boolean",
+                "default": false,
+                "description": "Also return candidates whose receipts an earlier run already read."
             }
         }
     })
@@ -866,6 +882,11 @@ fn vague_title(title: &str) -> Option<String> {
 /// before it would pass [`MINE_REPLY_CHARS`], and `next_cursor` says where
 /// the next one starts. Read only; every text is redacted again on the way
 /// out.
+///
+/// Only lessons with a receipt no finished lessons run has read are listed,
+/// unless `all_seen`; each receipt says whether it is `new`. With
+/// [`CANDIDATES_FILE_ENV`] set, the ledger is ignored and exactly the
+/// corrections that file lists are new.
 fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let limit = match arguments.get("limit") {
         None => MINE_DEFAULT_LIMIT,
@@ -891,28 +912,61 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         }
         Some(_) => return Err(invalid_argument("cwd", "must be an absolute path")),
     };
+    let flag = |name: &str| arguments.get(name).and_then(Value::as_bool);
+    let all_seen = flag("all_seen").unwrap_or(false);
     let conn = open(&ctx.archive_dir)?;
     let turns = mine::read_turns(&conn).map_err(|e| e.to_string())?;
     let found = mine::corrections_in(&turns, &mine::Limits::default());
     let mut lessons = mine::lessons(found);
     mine::find_conflicts(&turns, &mut lessons);
     let before = lessons.len();
-    if !arguments
-        .get("all")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    if !flag("all").unwrap_or(false) {
         lessons.retain(|l| l.score >= 0);
     }
     let left_out = before - lessons.len();
+    let listed = lessons.len();
+    let (lessons, pinned_run) =
+        match std::env::var_os(CANDIDATES_FILE_ENV).filter(|p| !p.is_empty()) {
+            // A pinned run serves exactly its corrections, whatever it asks.
+            Some(path) => {
+                let pinned = considered::read_ids(Path::new(&path))
+                    .map_err(|e| tool_error("internal", e, INTERNAL_FIX))?;
+                (
+                    considered::mark(lessons, |id| pinned.contains(id), false),
+                    true,
+                )
+            }
+            None => {
+                let seen = considered_ids()?;
+                (
+                    considered::mark(lessons, |id| !seen.contains(id), all_seen),
+                    false,
+                )
+            }
+        };
+    // Outside a pin, a hidden lesson was read by an earlier run. Inside one it
+    // may never have been read; it is only not part of this run.
+    let hidden = listed - lessons.len();
     let total = lessons.len();
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut candidates = Vec::new();
     let mut next = start;
-    for lesson in lessons.iter().skip(start).take(limit) {
+    for marked in lessons.iter().skip(start).take(limit) {
+        let lesson = marked.lesson();
         let mut receipts = Vec::new();
-        for r in lesson.receipts.iter().take(MINE_RECEIPTS) {
+        // Every new receipt is shown: a successful run records each one as
+        // read, so one left out here would be recorded without being seen.
+        // Only older receipts, which are context, are capped.
+        let mut context_shown = 0;
+        for (r, id, new) in marked.receipts() {
+            if !new {
+                if context_shown == MINE_RECEIPTS {
+                    continue;
+                }
+                context_shown += 1;
+            }
             receipts.push(json!({
+                "correction_id": id.as_str(), "new": new,
                 "session": r.session, "agent": r.agent,
                 "date": r.at_ms.and_then(crate::receipt::date),
                 "repo": session_repo(&conn, &r.session, r.repo.clone()),
@@ -948,6 +1002,11 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }
     let mut reply = page(&candidates, (next < total).then_some(next), total);
     reply["left_out"] = json!(left_out);
+    if pinned_run {
+        reply["not_in_this_run"] = json!(hidden);
+    } else {
+        reply["already_considered"] = json!(hidden);
+    }
     reply["cwd_repo"] = cwd_repo;
     Ok(reply)
 }
@@ -974,6 +1033,18 @@ fn session_repo(conn: &Connection, session: &str, name: Option<String>) -> Value
     url.as_deref()
         .and_then(lore_memory::repo::repo_key)
         .map_or(Value::Null, |key| repo_json(name, &key))
+}
+
+/// The corrections earlier lessons runs read, from the vault's ledger. With
+/// no vault there is no ledger, so every correction is new.
+fn considered_ids() -> Result<BTreeSet<CorrectionId>, Value> {
+    let Some(vault) = vault::resolve_dir(None)
+        .ok()
+        .and_then(|dir| Vault::open(&dir).ok())
+    else {
+        return Ok(BTreeSet::new());
+    };
+    considered::considered(&vault).map_err(|e| vault_error(&e))
 }
 
 /// One page of `mine_candidates`: the candidates, where the next page starts,

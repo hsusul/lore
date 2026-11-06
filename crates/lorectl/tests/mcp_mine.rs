@@ -125,12 +125,25 @@ fn mine_candidates_pages_through_every_candidate() {
 }
 
 /// One `mine_candidates` call over stdio, and the `tools/list` entry for it.
+/// The vault is `vault` beside the archive, which need not exist.
 fn mine(archive: &Path, arguments: Value) -> (Value, Value) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+    mine_pinned(archive, arguments, None)
+}
+
+/// [`mine`], pinned to the ids in `pinned` by `LORE_CANDIDATES_FILE`.
+fn mine_pinned(archive: &Path, arguments: Value, pinned: Option<&Path>) -> (Value, Value) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lorectl"));
+    command
         .arg("mcp")
         .arg("--archive")
         .arg(archive)
         .env_remove("LORE_ARCHIVE_DIR")
+        .env_remove("LORE_CANDIDATES_FILE")
+        .env("LORE_VAULT_DIR", archive.parent().unwrap().join("vault"));
+    if let Some(pinned) = pinned {
+        command.env("LORE_CANDIDATES_FILE", pinned);
+    }
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -206,6 +219,8 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
             (1, vec![session(home, 2)])
         ]
     );
+    let id = candidates[1]["receipts"][0]["correction_id"].clone();
+    assert!(id.as_str().unwrap().starts_with("cr-"), "{id}");
     assert_eq!(
         candidates[1],
         json!({
@@ -214,6 +229,7 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
             "conversations": 1,
             "may_conflict_with": [],
             "receipts": [{
+                "correction_id": id, "new": true,
                 "session": session(home, 2), "agent": "codex", "date": "2026-08-02",
                 "repo": null, "repo_path": null,
                 "correction": "Stop asking me for permission", "before": "Shall I run it?",
@@ -416,4 +432,142 @@ fn mine_candidates_names_each_receipts_repository_and_the_cwd_repository() {
     );
     let (_, anywhere) = mine(&home.join("archive"), json!({}));
     assert_eq!(anywhere["structuredContent"]["cwd_repo"], Value::Null);
+}
+
+/// `(correction_id, new)` of each receipt of each candidate in a reply.
+fn marks(result: &Value) -> Vec<Vec<(String, bool)>> {
+    result["structuredContent"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            c["receipts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    let id = r["correction_id"].as_str().unwrap().to_owned();
+                    (id, r["new"].as_bool().unwrap())
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn pnpm_and_permission(home: &Path) {
+    scanned(
+        home,
+        &[
+            ("Running npm install.", "no, use pnpm not npm"),
+            ("Shall I run it?", "Stop asking me for permission"),
+            ("Running npm install lodash.", "I told you, pnpm not npm"),
+        ],
+    );
+}
+
+fn ids(texts: &[&String]) -> Vec<lore_memory::considered::CorrectionId> {
+    texts
+        .iter()
+        .map(|t| lore_memory::considered::CorrectionId::parse(t).unwrap())
+        .collect()
+}
+
+#[test]
+fn mine_candidates_lists_only_lessons_with_a_receipt_no_run_has_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    pnpm_and_permission(home);
+    let archive = home.join("archive");
+    let (tool, first) = mine(&archive, json!({}));
+    assert!(
+        tool["description"].as_str().unwrap().contains("all_seen"),
+        "{tool}"
+    );
+    assert!(tool["inputSchema"]["properties"]["all_seen"].is_object());
+    let before = marks(&first);
+    let (pnpm, permission) = (&before[0], &before[1]);
+    assert!(before.iter().flatten().all(|(_, new)| *new));
+    assert_eq!(first["structuredContent"]["already_considered"], 0);
+
+    // A run read the older pnpm receipt only: the lesson stays, marked.
+    let (vault, _) = lore_memory::vault::Vault::init(&home.join("vault")).unwrap();
+    let older = ids(&[&pnpm[1].0]);
+    lore_memory::considered::record(&vault, &older, "run-1").unwrap();
+    let (_, partly) = mine(&archive, json!({}));
+    assert_eq!(
+        marks(&partly),
+        [
+            vec![(pnpm[0].0.clone(), true), (pnpm[1].0.clone(), false)],
+            permission.clone()
+        ]
+    );
+
+    // Every pnpm receipt read: only the permission lesson is new.
+    lore_memory::considered::record(&vault, &ids(&[&pnpm[0].0]), "run-2").unwrap();
+    let (_, after) = mine(&archive, json!({}));
+    assert_eq!(marks(&after), std::slice::from_ref(permission));
+    assert_eq!(after["structuredContent"]["total"], 1);
+    assert_eq!(after["structuredContent"]["already_considered"], 1);
+    let (_, everything) = mine(&archive, json!({ "all_seen": true }));
+    assert_eq!(
+        marks(&everything),
+        [
+            vec![(pnpm[0].0.clone(), false), (pnpm[1].0.clone(), false)],
+            permission.clone()
+        ]
+    );
+}
+
+#[test]
+fn mine_candidates_shows_every_new_receipt_and_caps_only_read_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let same = vec![("Running npm install.", "no, use pnpm not npm"); 8];
+    scanned(home, &same);
+    let archive = home.join("archive");
+    let (_, first) = mine(&archive, json!({}));
+    let all = &marks(&first)[0];
+    assert_eq!(
+        all.len(),
+        8,
+        "every new receipt is shown, past the cap of 5"
+    );
+
+    // Seven read: the new one plus five of the read ones, as context.
+    let (vault, _) = lore_memory::vault::Vault::init(&home.join("vault")).unwrap();
+    let read: Vec<&String> = all[1..].iter().map(|(id, _)| id).collect();
+    lore_memory::considered::record(&vault, &ids(&read), "run-1").unwrap();
+    let (_, later) = mine(&archive, json!({}));
+    let shown = &marks(&later)[0];
+    assert_eq!(shown.iter().filter(|(_, new)| *new).count(), 1);
+    assert_eq!(shown.iter().filter(|(_, new)| !*new).count(), 5);
+}
+
+#[test]
+fn mine_candidates_serves_exactly_the_pinned_corrections() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    pnpm_and_permission(home);
+    let archive = home.join("archive");
+    let (_, first) = mine(&archive, json!({}));
+    let before = marks(&first);
+    // The ledger says the pnpm lesson was read; the pin ignores it.
+    let (vault, _) = lore_memory::vault::Vault::init(&home.join("vault")).unwrap();
+    let pnpm_ids = ids(&[&before[0][0].0, &before[0][1].0]);
+    lore_memory::considered::record(&vault, &pnpm_ids, "run-1").unwrap();
+    let pin = home.join("pinned.txt");
+    std::fs::write(&pin, format!("{}\n", before[0][1].0)).unwrap();
+    let (_, pinned) = mine_pinned(&archive, json!({ "all_seen": true }), Some(&pin));
+    assert_eq!(
+        marks(&pinned),
+        [vec![
+            (before[0][0].0.clone(), false),
+            (before[0][1].0.clone(), true)
+        ]]
+    );
+    assert_eq!(pinned["structuredContent"]["not_in_this_run"], 1);
+    assert!(pinned["structuredContent"]["already_considered"].is_null());
+    std::fs::write(&pin, "").unwrap();
+    let (_, none) = mine_pinned(&archive, json!({}), Some(&pin));
+    assert_eq!(none["structuredContent"]["total"], 0);
 }
