@@ -87,6 +87,9 @@ const EXCESS: &[&str] = &[
     " to many ",
     " to much ",
 ];
+/// Phrases that state what the person wants instead: a correction and a rule
+/// at once.
+const PREFERENCES: &[&str] = &["i only want", "i prefer", "i'd rather", " id rather"];
 
 /// Phrases that state a standing rule wherever they appear.
 const RULE_PHRASES: &[&str] = &[
@@ -516,14 +519,14 @@ fn corrects(text: &str) -> bool {
         return true;
     }
     let padded = format!(" {lower} ");
-    PHRASES.iter().chain(EXCESS).any(|p| padded.contains(p))
+    PHRASES.iter().any(|p| padded.contains(p)) || says_preference(&lower)
 }
 
 /// Whether `text` says the agent's output is too long, too short, too much, or
-/// too many.
-fn says_excess(text: &str) -> bool {
+/// too many, or says what the person only wants, prefers, or would rather.
+fn says_preference(text: &str) -> bool {
     let padded = format!(" {} ", text.to_lowercase());
-    EXCESS.iter().any(|p| padded.contains(p))
+    EXCESS.iter().chain(PREFERENCES).any(|p| padded.contains(p))
 }
 
 /// Lowercase words, keeping apostrophes, so "don't" stays one word.
@@ -544,7 +547,8 @@ fn use_x_not_y(tokens: &[&str]) -> bool {
 /// Whether `text` states a rule that would apply to later work, not only to
 /// the task at hand: it names a tool, command, flag, file, or path, says
 /// always, never, don't, do not, or stop, speaks of a convention or style,
-/// says the output is too long or too many, or says use X not Y. A redirect
+/// says the output is too long or too many, says what the person prefers or
+/// only wants, or says use X not Y. A redirect
 /// like "give me the short one instead"
 /// does none of these.
 #[must_use]
@@ -564,7 +568,7 @@ pub fn states_rule(text: &str) -> bool {
     });
     names_a_thing
         || has_rule_phrase(&lower)
-        || says_excess(&lower)
+        || says_preference(&lower)
         || lower.contains("do not ")
         || use_x_not_y(&words)
         || words

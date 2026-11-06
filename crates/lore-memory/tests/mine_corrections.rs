@@ -132,6 +132,10 @@ fn saying_the_output_is_too_long_is_a_correction_that_states_a_rule() {
         ]
     );
     assert!(states_rule("thats way to long"));
+    assert!(states_rule("i prefer short commit messages"));
+    assert!(states_rule(
+        "i only want you to touch the files you changed"
+    ));
     assert!(!states_rule("give me the short one instead"));
 }
 
