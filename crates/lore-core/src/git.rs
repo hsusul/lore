@@ -449,10 +449,13 @@ fn collect_status(repo: &gix::Repository) -> (Option<bool>, Option<Vec<String>>)
         let Ok(item) = item else { break };
         // `summary() == None` means "no real change" (a stat refresh or a
         // non-untracked directory walk entry) — not a changed file.
-        if item.summary().is_none() {
+        let Some(summary) = item.summary() else {
             continue;
+        };
+        // Untracked files are listed but, as in `is_dirty`, leave the tree clean.
+        if summary != gix::status::index_worktree::iter::Summary::Added {
+            worktree_is_dirty = true;
         }
-        worktree_is_dirty = true;
         if out.len() < CHANGED_FILES_CAP {
             out.push(item.rela_path().to_string());
         }

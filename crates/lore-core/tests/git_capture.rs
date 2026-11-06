@@ -71,6 +71,48 @@ fn capture_detects_a_dirty_worktree() {
 }
 
 #[test]
+fn capture_lists_untracked_files_without_marking_dirty() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    std::fs::write(dir.path().join("new.txt"), "new\n").unwrap();
+
+    let facts = capture(dir.path()).unwrap();
+    assert_eq!(facts.is_dirty, Some(false));
+    assert_eq!(facts.changed_files, Some(vec!["new.txt".to_string()]));
+
+    std::fs::write(dir.path().join("README.md"), "changed\n").unwrap();
+    let facts = capture(dir.path()).unwrap();
+    assert_eq!(facts.is_dirty, Some(true));
+}
+
+#[test]
+fn capture_detects_changes_inside_a_submodule() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub_src = dir.path().join("sub-src");
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&sub_src).unwrap();
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&sub_src);
+    init_repo(&repo);
+    git(
+        &repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            sub_src.to_str().unwrap(),
+            "sub",
+        ],
+    );
+    git(&repo, &["commit", "-m", "add submodule"]);
+    assert_eq!(capture(&repo).unwrap().is_dirty, Some(false));
+
+    std::fs::write(repo.join("sub/README.md"), "changed\n").unwrap();
+    assert_eq!(capture(&repo).unwrap().is_dirty, Some(true));
+}
+
+#[test]
 fn capture_reports_detached_head_with_null_branch() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
