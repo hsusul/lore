@@ -71,6 +71,33 @@ fn a_user_turn_that_corrects_the_previous_assistant_turn_is_a_candidate() {
 }
 
 #[test]
+fn a_negation_mid_turn_without_its_apostrophe_is_a_correction() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = archive::codex_archive(
+        dir.path(),
+        &[&[
+            ("user", "write the release notes"),
+            ("assistant", "Here are the notes as a numbered list."),
+            ("user", "ok but i dont want numbered lists in notes"),
+            ("assistant", "Rewrote them as prose."),
+            ("user", "thanks, it shouldnt mention the old api either"),
+            ("assistant", "Removed it."),
+            ("user", "good, you never need to ask before formatting"),
+        ]],
+    );
+    let found = corrections(&conn).unwrap();
+    let got: Vec<(&str, Signal)> = found.iter().map(|c| (c.text.as_str(), c.signal)).collect();
+    assert_eq!(
+        got,
+        [
+            ("ok but i dont want numbered lists in notes", Signal::Correction),
+            ("thanks, it shouldnt mention the old api either", Signal::Correction),
+            ("good, you never need to ask before formatting", Signal::Correction),
+        ]
+    );
+}
+
+#[test]
 fn a_user_turn_that_repeats_an_earlier_instruction_is_a_candidate() {
     let dir = tempfile::tempdir().unwrap();
     let conn = archive::codex_archive(

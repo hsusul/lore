@@ -54,7 +54,13 @@ const QUESTION_OPENERS: &[&str] = &[
 /// Phrases that mark a correction anywhere in a short turn.
 const PHRASES: &[&str] = &[
     "don't ",
+    "dont ",
     "do not ",
+    "didn't ",
+    "didnt ",
+    "shouldn't ",
+    "shouldnt ",
+    " never ",
     " instead",
     "wrong",
     "i told you",
