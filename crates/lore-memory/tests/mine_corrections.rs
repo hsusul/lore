@@ -5,7 +5,7 @@
 #[path = "common/archive.rs"]
 mod archive;
 
-use lore_memory::mine::{corrections, Signal};
+use lore_memory::mine::{corrections, states_rule, Signal};
 
 /// What a test checks of a candidate.
 type Seen = (
@@ -104,6 +104,35 @@ fn a_negation_mid_turn_without_its_apostrophe_is_a_correction() {
             ),
         ]
     );
+}
+
+#[test]
+fn saying_the_output_is_too_long_is_a_correction_that_states_a_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = archive::codex_archive(
+        dir.path(),
+        &[&[
+            ("user", "summarize the design doc"),
+            ("assistant", "Here is a summary in twelve bullets."),
+            ("user", "thats way to long"),
+            ("assistant", "Here it is in five bullets."),
+            ("user", "still too many bullets, keep it to three"),
+        ]],
+    );
+    let found = corrections(&conn).unwrap();
+    let got: Vec<(&str, Signal)> = found.iter().map(|c| (c.text.as_str(), c.signal)).collect();
+    assert_eq!(
+        got,
+        [
+            ("thats way to long", Signal::Correction),
+            (
+                "still too many bullets, keep it to three",
+                Signal::Correction
+            ),
+        ]
+    );
+    assert!(states_rule("thats way to long"));
+    assert!(!states_rule("give me the short one instead"));
 }
 
 #[test]
