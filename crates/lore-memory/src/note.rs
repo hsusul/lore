@@ -383,6 +383,14 @@ impl Scope {
         }
     }
 
+    #[must_use]
+    pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Scope::Global => std::borrow::Cow::Borrowed("global"),
+            Scope::Repo(key) => std::borrow::Cow::Owned(format!("repo:{}", key.as_str())),
+        }
+    }
+
     /// The vault directory for this scope when the repository has no name.
     /// [`Note::dir`] is where a note goes.
     #[must_use]

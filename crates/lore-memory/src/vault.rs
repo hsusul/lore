@@ -353,7 +353,7 @@ impl Vault {
     }
 
     fn build_locked(&self, stamps: Vec<FileStamp>) -> Result<Reindexed, VaultError> {
-        let mut notes = Vec::new();
+        let mut notes = Vec::with_capacity(stamps.len());
         let mut skipped = Vec::new();
         for stamp in &stamps {
             match self.parse_indexed(&stamp.path)? {
@@ -361,18 +361,20 @@ impl Vault {
                 Err(error) => skipped.push((stamp.path.clone(), error)),
             }
         }
-        let mut by_id: std::collections::BTreeMap<&NoteId, Vec<String>> = Default::default();
+        let mut by_id: std::collections::HashMap<&NoteId, Vec<&str>> =
+            std::collections::HashMap::with_capacity(notes.len());
         for (rel, note) in &notes {
-            by_id.entry(&note.id).or_default().push((*rel).to_string());
+            by_id.entry(&note.id).or_default().push(*rel);
         }
-        let duplicates = by_id
+        let mut duplicates: Vec<DuplicateId> = by_id
             .into_iter()
             .filter(|(_, paths)| paths.len() > 1)
             .map(|(id, paths)| DuplicateId {
                 id: id.clone(),
-                paths,
+                paths: paths.into_iter().map(str::to_string).collect(),
             })
             .collect();
+        duplicates.sort_by(|a, b| a.id.cmp(&b.id));
         let indexed = Index::build(
             &self.lore_dir(),
             notes.iter().map(|(rel, note)| (*rel, note)),

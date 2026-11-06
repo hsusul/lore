@@ -115,6 +115,11 @@ impl Index {
             _ => {}
         }
         let mut conn = Connection::open(&temp)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode = OFF;
+             PRAGMA temp_store = MEMORY;
+             PRAGMA cache_size = -65536;",
+        )?;
         conn.execute_batch(SCHEMA)?;
         let tx = conn.transaction()?;
         let mut count = 0;
@@ -372,7 +377,7 @@ fn row<'a>(rel: &'a str, note: &'a Note) -> impl rusqlite::Params + 'a {
         rel,
         note.id.as_str(),
         slug,
-        note.scope.to_string(),
+        note.scope.as_str(),
         note.note_type.as_str(),
         note.status.as_str(),
         note.title.as_str(),

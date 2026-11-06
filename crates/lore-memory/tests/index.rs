@@ -273,3 +273,64 @@ fn index_count_active_matches_list_active_len() {
         assert_eq!(index.count_active(scope).unwrap(), expected);
     }
 }
+
+#[test]
+#[ignore = "benchmark: measure reindex latency"]
+fn bench_reindex_latency() {
+    let make_vault = |num_notes: usize| -> (tempfile::TempDir, Vault) {
+        let dir = tempfile::tempdir().unwrap();
+        let (vault, _) = Vault::init(dir.path()).unwrap();
+        let base_note = "\
+---
+id: {id}
+type: fact
+title: Note {i} about performance and indexing
+scope: global
+status: active
+created: 2026-11-05
+---
+Here is the body of note {i}. It discusses database performance, fts5 indexing, and storage.
+";
+        for i in 0..num_notes {
+            let id = format!("01J8{:022X}", i);
+            let content = base_note
+                .replace("{id}", &id)
+                .replace("{i}", &i.to_string());
+            let path = dir.path().join(format!("global/note-{i:04}.md"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+        }
+        (dir, vault)
+    };
+
+    let measure = |label: &str, vault: &Vault| {
+        // 2 warmups
+        for _ in 0..2 {
+            let rep = vault.reindex().unwrap();
+            std::hint::black_box(rep);
+        }
+        // 7 runs
+        let mut times = Vec::new();
+        for _ in 0..7 {
+            let start = std::time::Instant::now();
+            let rep = vault.reindex().unwrap();
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            times.push(elapsed);
+            std::hint::black_box(rep);
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = times[3];
+        println!(
+            "{label}: median = {:.2} ms, range = [{:.2} ms .. {:.2} ms]",
+            median, times[0], times[6]
+        );
+    };
+
+    println!("Creating 1000 notes vault...");
+    let (_d1, v1) = make_vault(1000);
+    measure("reindex (1000 notes)", &v1);
+
+    println!("Creating 2000 notes vault...");
+    let (_d2, v2) = make_vault(2000);
+    measure("reindex (2000 notes)", &v2);
+}
