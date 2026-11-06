@@ -423,7 +423,7 @@ fn mine_new_lists_only_lessons_with_a_correction_no_run_has_read() {
     let read = all[0]["receipts"][0]["correction_id"].as_str().unwrap();
     let read = lore_memory::considered::CorrectionId::parse(read).unwrap();
     lore_memory::considered::record(&vault, [&read], "run-1").unwrap();
-    let ledger = std::fs::read(home.join("vault/_inbox/considered.jsonl")).unwrap();
+    let ledger = std::fs::read(home.join("vault/.lore/considered.jsonl")).unwrap();
 
     let new = listed(&["mem", "mine", "--json", "--new"]);
     assert_eq!(new.as_array().unwrap().len(), 1);
@@ -435,7 +435,7 @@ fn mine_new_lists_only_lessons_with_a_correction_no_run_has_read() {
     assert!(out.starts_with("1 lesson from 2 corrections."), "{out}");
     // Listing records nothing.
     assert_eq!(
-        std::fs::read(home.join("vault/_inbox/considered.jsonl")).unwrap(),
+        std::fs::read(home.join("vault/.lore/considered.jsonl")).unwrap(),
         ledger
     );
 }

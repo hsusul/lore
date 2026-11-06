@@ -390,11 +390,7 @@ pub fn proposals(vault: &Vault) -> Result<(Vec<Proposal>, Vec<Skipped>), InboxEr
             .file_name()
             .to_string_lossy()
             .into_owned();
-        // The ledger of corrections lessons runs read shares the folder.
-        if name.ends_with(".jsonl")
-            && !name.starts_with('.')
-            && name != crate::considered::CONSIDERED_FILE
-        {
+        if name.ends_with(".jsonl") && !name.starts_with('.') {
             names.push(name);
         }
     }

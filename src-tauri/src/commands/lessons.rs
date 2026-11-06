@@ -672,7 +672,7 @@ mod tests {
         );
         assert_eq!(considered::considered(&vault).unwrap(), pending);
         let ledger =
-            std::fs::read_to_string(dir.path().join("vault/_inbox/considered.jsonl")).unwrap();
+            std::fs::read_to_string(dir.path().join("vault/.lore/considered.jsonl")).unwrap();
         assert!(
             ledger.lines().all(|l| l.contains(r#""run":"run-7""#)),
             "{ledger}"

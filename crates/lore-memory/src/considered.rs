@@ -6,12 +6,16 @@
 //! however [`mine::lessons`] groups it. Lesson ids depend on grouping and are
 //! never used here.
 //!
-//! The ledger is `<vault>/_inbox/considered.jsonl`, gitignored with the rest
-//! of the inbox: one JSON line `{id, considered_at, run}` per correction a
+//! The ledger is `<vault>/.lore/considered.jsonl`, gitignored with the rest
+//! of `.lore/`: one JSON line `{id, considered_at, run}` per correction a
 //! run read, appended with one `O_APPEND` write per line, like proposals. It
 //! is a set: reading dedupes and ignores a line torn by a crash, so recording
 //! an id twice is harmless. Only a run that finished records anything, so a
 //! failed run's corrections are read again by the next.
+//!
+//! It sits in `.lore/`, not `_inbox/`, because older Lore reads every
+//! `_inbox/*.jsonl` as proposals. Losing it is safe: the next run reads
+//! every correction again.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -23,11 +27,10 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::inbox::INBOX_DIR;
 use crate::mine::{self, Candidate, Lesson};
-use crate::vault::{Vault, VaultError};
+use crate::vault::{Vault, VaultError, LORE_DIR};
 
-/// The ledger's file name inside [`INBOX_DIR`].
+/// The ledger's file name inside the vault's [`LORE_DIR`].
 pub const CONSIDERED_FILE: &str = "considered.jsonl";
 /// What every [`CorrectionId`] starts with.
 const PREFIX: &str = "cr-";
@@ -98,8 +101,8 @@ pub fn read_ids(path: &Path) -> io::Result<BTreeSet<CorrectionId>> {
 
 /// Every correction a finished run has read, from the vault's ledger.
 pub fn considered(vault: &Vault) -> Result<BTreeSet<CorrectionId>, VaultError> {
-    let path = vault.root().join(INBOX_DIR).join(CONSIDERED_FILE);
-    read_ids(&path).map_err(|e| VaultError::Io(format!("read {INBOX_DIR}/{CONSIDERED_FILE}"), e))
+    let path = vault.lore_dir().join(CONSIDERED_FILE);
+    read_ids(&path).map_err(|e| VaultError::Io(format!("read {LORE_DIR}/{CONSIDERED_FILE}"), e))
 }
 
 /// Record that run `run` read `ids`: one appended line each. Recording an id
@@ -110,11 +113,11 @@ pub fn record<'a>(
     run: &str,
 ) -> Result<(), VaultError> {
     let io = |what: &str| {
-        let what = format!("{what} {INBOX_DIR}/{CONSIDERED_FILE}");
+        let what = format!("{what} {LORE_DIR}/{CONSIDERED_FILE}");
         move |e| VaultError::Io(what, e)
     };
-    let dir = vault.root().join(INBOX_DIR);
-    fs::create_dir_all(&dir).map_err(|e| VaultError::Io(format!("create {INBOX_DIR}"), e))?;
+    let dir = vault.lore_dir();
+    fs::create_dir_all(&dir).map_err(|e| VaultError::Io(format!("create {LORE_DIR}"), e))?;
     let mut file = OpenOptions::new()
         .create(true)
         .read(true)

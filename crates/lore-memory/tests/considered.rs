@@ -80,7 +80,7 @@ fn the_ledger_is_a_set_that_survives_a_torn_line() {
         BTreeSet::from([a.clone(), b.clone()])
     );
 
-    let path = dir.path().join("_inbox").join(CONSIDERED_FILE);
+    let path = dir.path().join(".lore").join(CONSIDERED_FILE);
     let text = std::fs::read_to_string(&path).unwrap();
     let first: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
     assert_eq!(first["id"], a.as_str());
