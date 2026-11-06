@@ -308,6 +308,17 @@ describe("ipc contract", () => {
     expect(invoke).toHaveBeenCalledWith("lesson_agents");
   });
 
+  it("getAutoLessons and setAutoLessons invoke their commands", async () => {
+    const { getAutoLessons, setAutoLessons } = await import("./ipc");
+    const off = { enabled: false, running: false, last_run_ms: null, last_check_ms: null, last_outcome: null };
+    invoke.mockResolvedValueOnce({ ...off, enabled: true });
+    expect((await getAutoLessons()).enabled).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("get_auto_lessons");
+    invoke.mockResolvedValueOnce(off);
+    expect(await setAutoLessons(false)).toEqual(off);
+    expect(invoke).toHaveBeenCalledWith("set_auto_lessons", { enabled: false });
+  });
+
   it("accountName invokes account_name", async () => {
     const { accountName } = await import("./ipc");
     invoke.mockResolvedValueOnce("Henry Su");

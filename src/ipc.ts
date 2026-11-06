@@ -27,6 +27,7 @@ import type { SessionPage } from "../crates/lore-ipc/bindings/SessionPage";
 import type { SessionSummary } from "../crates/lore-ipc/bindings/SessionSummary";
 import type { TokenTotalsDto } from "../crates/lore-ipc/bindings/TokenTotalsDto";
 import type { LessonAgentDto } from "../crates/lore-ipc/bindings/LessonAgentDto";
+import type { AutoLessonsDto } from "../crates/lore-ipc/bindings/AutoLessonsDto";
 import type { LessonDto } from "../crates/lore-ipc/bindings/LessonDto";
 import type { ReceiptDto } from "../crates/lore-ipc/bindings/ReceiptDto";
 import type { NoteDto } from "../crates/lore-ipc/bindings/NoteDto";
@@ -110,6 +111,7 @@ export type {
   SessionSummary,
   TokenTotalsDto,
   LessonAgentDto,
+  AutoLessonsDto,
   LessonDto,
   ReceiptDto,
   NoteDto,
@@ -422,6 +424,21 @@ export function findLessons(agent: string): Promise<string> {
 /** Which agents can write lessons: Claude Code and Codex, each installed or not and signed in or not. */
 export function lessonAgents(): Promise<LessonAgentDto[]> {
   return invoke<LessonAgentDto[]>("lesson_agents");
+}
+
+/** Whether Lore finds lessons on its own, and what its last automatic run did. */
+export function getAutoLessons(): Promise<AutoLessonsDto> {
+  return invoke<AutoLessonsDto>("get_auto_lessons");
+}
+
+/** Turn the automatic Find lessons run on or off; resolves with the new state. */
+export function setAutoLessons(enabled: boolean): Promise<AutoLessonsDto> {
+  return invoke<AutoLessonsDto>("set_auto_lessons", { enabled });
+}
+
+/** Subscribe to the automatic run starting and ending. */
+export function onAutoLessons(handler: (state: AutoLessonsDto) => void): Promise<UnlistenFn> {
+  return listen<AutoLessonsDto>("auto_lessons", (event) => handler(event.payload));
 }
 
 /** Ask `agent` to rewrite skill `name` from the corrections made after it ran. Writes nothing. */

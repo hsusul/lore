@@ -15,6 +15,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import {
   HIGHLIGHT_END,
   HIGHLIGHT_START,
+  type AutoLessonsDto,
   type DetectedAgent,
   type FolderSummary,
   type MessagePage,
@@ -243,6 +244,13 @@ export function createMockHandlers(
   let assignments = new Map(Object.entries(SAMPLE_FOLDER_ASSIGNMENTS));
   let settings = new Map(Object.entries(SAMPLE_SETTINGS));
   let backup = { ...SAMPLE_BACKUP_SCHEDULE };
+  let autoLessons: AutoLessonsDto = {
+    enabled: true,
+    running: false,
+    last_run_ms: 1_785_751_203_000,
+    last_check_ms: 1_785_751_203_000,
+    last_outcome: "Claude Code read 3 new corrections and filed 1 lesson.",
+  };
   let nextFolder = 1;
   const customRoots = new Map<string, string[]>();
 
@@ -536,6 +544,11 @@ export function createMockHandlers(
       { id: "claude-code", label: "Claude Code", installed: true, signed_in: true, sign_in: "claude auth login" },
       { id: "codex", label: "Codex", installed: true, signed_in: false, sign_in: "codex login" },
     ],
+    get_auto_lessons: () => ({ ...autoLessons }),
+    set_auto_lessons: (a) => {
+      autoLessons = { ...autoLessons, enabled: Boolean(a.enabled) };
+      return { ...autoLessons };
+    },
     skill_usage: () => [
       { skill: "code-review", uses: 22, sessions: 15, last_ms: 1_785_751_203_000, reprompts: [{ session_id: "s1", agent_id: "claude-code", repo: "lore", at_ms: 1_785_751_203_000, text: "no, you missed the tests, look again", preceding: "Reviewed it, looks fine." }], editable_path: "/Users/you/.claude/skills/code-review/SKILL.md" },
       { skill: "taste-skill", uses: 0, sessions: 0, last_ms: null, reprompts: [], editable_path: null },

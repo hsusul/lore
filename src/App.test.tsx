@@ -38,6 +38,9 @@ vi.mock("./ipc", () => ({
   forgetSession: vi.fn(),
   forgetEverything: vi.fn(),
   getBackupSchedule: vi.fn(),
+  getAutoLessons: vi.fn(),
+  setAutoLessons: vi.fn(),
+  onAutoLessons: vi.fn(async () => () => {}),
   setBackupSchedule: vi.fn(),
   backupNow: vi.fn(),
   getSetting: vi.fn(),
@@ -151,6 +154,13 @@ beforeEach(() => {
   m.setSessionFolder.mockResolvedValue(undefined);
   m.forgetSession.mockResolvedValue({ blobs_removed: 2, source_paths: [] });
   m.getBackupSchedule.mockResolvedValue({ interval: "off", keep: 7 });
+  m.getAutoLessons.mockResolvedValue({
+    enabled: true,
+    running: false,
+    last_run_ms: null,
+    last_check_ms: null,
+    last_outcome: null,
+  });
   m.getJsonSetting.mockResolvedValue(null);
   m.setSetting.mockResolvedValue(undefined);
 });
