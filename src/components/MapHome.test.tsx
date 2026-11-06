@@ -26,6 +26,27 @@ vi.mock("../ipc", () => ({
   retireNote: vi.fn(),
 }));
 
+// The canvas draws the highlight; this stand-in shows which dot it is given,
+// and a click on it is a click off every dot.
+vi.mock("./MapCanvas", () => ({
+  MapCanvas: ({
+    label,
+    selectedId,
+    onDeselect,
+  }: {
+    label: string;
+    selectedId: string | null;
+    onDeselect: () => void;
+  }) => (
+    <div
+      role="img"
+      aria-label={label}
+      data-selected={selectedId ?? ""}
+      onClick={onDeselect}
+    />
+  ),
+}));
+
 import * as ipc from "../ipc";
 import { MapHome } from "./MapHome";
 
@@ -403,6 +424,40 @@ describe("MapHome", () => {
     expect(
       screen.getByRole("button", { name: "Find lessons with Claude Code" }),
     ).toBeTruthy();
+  });
+
+  it("lets go of the highlighted dot when the card closes or the map is clicked off a dot", async () => {
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    await screen.findByRole("region", { name: "Opened item" });
+    const map = screen.getByRole("img", { name: /^Map of/ });
+    expect(map.dataset.selected).toBe("lesson:P1");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(map.dataset.selected).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Notes" }));
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Notes" })).getByRole(
+        "button",
+        { name: /Never push to main/ },
+      ),
+    );
+    expect(map.dataset.selected).toBe("note:N1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(map.dataset.selected).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Notes" }));
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Notes" })).getByRole(
+        "button",
+        { name: /Never push to main/ },
+      ),
+    );
+    fireEvent.click(map);
+    expect(map.dataset.selected).toBe("");
+    expect(
+      screen.queryByRole("heading", { name: "Never push to main" }),
+    ).toBeNull();
   });
 
   it("lists notes, and retires one", async () => {

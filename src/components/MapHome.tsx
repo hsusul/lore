@@ -417,7 +417,8 @@ export function MapHome({
       {model && (
         <MapCanvas
           model={model}
-          selectedId={shownId}
+          selectedId={cardShown ? shownId : null}
+          onDeselect={() => setOpen(null)}
           inset={cardShown ? 540 : 0}
           onSelect={select}
           label={`Map of ${model.dots.length} lessons and notes in ${model.clusters.length} areas`}
@@ -493,7 +494,10 @@ export function MapHome({
             type="button"
             className="mist-shut"
             aria-label="Close"
-            onClick={() => setCardShown(false)}
+            onClick={() => {
+              setCardShown(false);
+              setOpen(null);
+            }}
           >
             <svg
               viewBox="0 0 24 24"
