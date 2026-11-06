@@ -271,6 +271,13 @@ pub struct RunRecord {
     pub arm: ArmName,
     pub trial: u32,
     pub model: String,
+    /// `--max-turns`; `None` in records written before it was recorded.
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    /// `--trim`: the prefix kept this many user and assistant lines whole
+    /// and trimmed older tool output and images. 0, the default, is off.
+    #[serde(default)]
+    pub trim: u32,
     pub fidelity: Fidelity,
     /// Paths the corrected turn touched outside the repository. The sandbox
     /// hides them, so a replay that needs them cannot reproduce the turn.
@@ -500,6 +507,15 @@ pub struct GradeLine {
     /// The run's harness version (see [`HARNESS`]); `None` reads as 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<u32>,
+    /// The run's model, as passed to `--model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The run's `--trim`; `None` reads as 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trim: Option<u32>,
+    /// The run's `--max-turns`, when the run recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
 }
 
 impl GradeLine {

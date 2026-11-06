@@ -76,6 +76,12 @@ pub struct RunView {
     pub arm: ArmName,
     pub trial: u32,
     #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub trim: Option<u32>,
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    #[serde(default)]
     pub fidelity: Value,
     #[serde(default)]
     pub foreign_paths: Vec<String>,
@@ -394,6 +400,9 @@ pub fn grade_run(
         cost_usd: run.cost_usd,
         graded_by: Some(graded_by(det, judge_name.as_deref())),
         harness: Some(run.harness.unwrap_or(1)),
+        model: run.model.clone(),
+        trim: Some(run.trim.unwrap_or(0)),
+        max_turns: run.max_turns,
     })
 }
 

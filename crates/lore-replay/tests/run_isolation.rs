@@ -345,14 +345,18 @@ fn a_replay_is_isolated_and_recorded() {
             "foreign_paths",
             "harness",
             "is_error",
+            "max_turns",
             "model",
             "outward",
             "prefix_lines",
             "seconds",
             "stderr",
-            "trial"
+            "trial",
+            "trim"
         ]
     );
+    assert_eq!(record["trim"], 0);
+    assert_eq!(record["max_turns"], 6);
     assert_eq!(record["case"], "s_abc:4");
     assert_eq!(record["harness"], 2);
     assert_eq!(record["delivery"], "user-message");

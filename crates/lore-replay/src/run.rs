@@ -54,6 +54,9 @@ pub struct RunOptions {
     pub trial: u32,
     pub model: String,
     pub max_turns: u32,
+    /// Keep the last `trim` user and assistant lines of the prefix whole and
+    /// trim older tool output and images; 0 is off. See [`prefix::trim_line`].
+    pub trim: u32,
     /// Keep the scratch and `claude-project` after the run, for inspection.
     pub keep_scratch: bool,
 }
@@ -116,6 +119,7 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
             scratch: &wd,
             toplevel: source.toplevel(),
             home: home.as_deref(),
+            trim: opts.trim as usize,
         },
     );
     let prefix_path = project_real.join(format!("{session_id}.jsonl"));
@@ -186,6 +190,8 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
         arm: arm.name(),
         trial: opts.trial,
         model: opts.model.clone(),
+        max_turns: Some(opts.max_turns),
+        trim: opts.trim,
         fidelity: source.fidelity(),
         foreign_paths: isolation::foreign_paths(&case.actions, source.toplevel()),
         prefix_lines: case.prompt_line,

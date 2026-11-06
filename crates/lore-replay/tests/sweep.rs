@@ -9,9 +9,17 @@ use serde_json::{json, Value};
 
 /// Says `$FAKE_TEXT` (default: a turn that repeats the mistake) for 0.12, or
 /// the usage-limit error once more than `$LIMIT_AFTER` calls were made.
+/// Appends the prefix it resumes to `$PREFIXES`, when set.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 cat > /dev/null
 echo call >> "$CALLS"
+prev=
+for a in "$@"; do
+  if [ "$prev" = "--resume" ] && [ -n "$PREFIXES" ]; then
+    cat "$CLAUDE_CONFIG_DIR"/projects/*/"$a".jsonl >> "$PREFIXES"
+  fi
+  prev="$a"
+done
 n=$(wc -l < "$CALLS" | tr -d ' ')
 if [ -n "$LIMIT_AFTER" ] && [ "$n" -gt "$LIMIT_AFTER" ]; then
   echo '{"type":"result","is_error":true,"num_turns":0,"total_cost_usd":0,"result":"You'"'"'ve hit your 5-hour limit"}'
@@ -66,22 +74,35 @@ impl Fixture {
 }
 
 fn fixture(cases: &[&str], arms: &Value) -> Fixture {
+    fixture_with(
+        cases,
+        arms,
+        &[
+            json!({"type": "user", "sessionId": "native-1", "message": {"content": "start"}}),
+            json!({"type": "assistant", "sessionId": "native-1",
+                   "message": {"content": [{"type": "text", "text": "done"}]}}),
+        ],
+    )
+}
+
+/// Cases whose session is `history`, then the prompt.
+fn fixture_with(cases: &[&str], arms: &Value, history: &[Value]) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(tmp.path()).unwrap();
     let session = root.join("native-1.jsonl");
-    let lines = [
-        json!({"type": "user", "sessionId": "native-1", "message": {"content": "start"}}),
-        json!({"type": "assistant", "sessionId": "native-1",
-               "message": {"content": [{"type": "text", "text": "done"}]}}),
+    let mut lines = history.to_vec();
+    lines.push(
         json!({"type": "user", "sessionId": "native-1", "message": {"content": "now fix it"}}),
-    ];
+    );
+    let prompt_line = history.len();
     let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
     std::fs::write(&session, text).unwrap();
     let mut labeled = String::new();
     for id in cases {
         let line = json!({
             "id": id, "lesson": "l", "session": "s", "native": "native-1", "model": null,
-            "file": session, "prompt_line": 2, "correction_line": 4, "correction_ms": 2,
+            "file": session, "prompt_line": prompt_line, "correction_line": prompt_line + 2,
+            "correction_ms": 2,
             "cwd": null, "branch": null, "prompt_ms": 1, "prompt": "now fix it",
             "actions": [], "correction": "no", "repo": null, "signal": "correction",
             "label": {"mistake": true, "visible": true, "what": "repeats", "lesson": "don't",
@@ -121,6 +142,7 @@ fn sweep(f: &Fixture, cases: &[&str], extra: &[&str], env: &[(&str, &str)]) -> O
         .env("LORE_REPLAY_CLAUDE", f.root.join("fake-claude"))
         .env("CALLS", f.root.join("calls"))
         .env_remove("FAKE_TEXT")
+        .env_remove("PREFIXES")
         .env_remove("LIMIT_AFTER")
         .env_remove("CAPPED");
     for (k, v) in env {
@@ -193,6 +215,103 @@ fn a_reproducing_case_runs_every_arm_and_resumes() {
     assert_eq!(f.calls(), 9);
     assert!(stdout(&again).contains("sweep: 0 runs made, 9 already done"));
     assert_eq!(f.screen().len(), 2);
+}
+
+fn record(f: &Fixture, run: &str) -> Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(f.out().join("c_1").join(run).join("run.json")).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn trim_reaches_the_prefix_and_run_arms_picks_the_arms() {
+    let history = [
+        json!({"type": "user", "message": {"content": "start"}}),
+        json!({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]}}),
+        json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "OLD OUTPUT"}]}}),
+        json!({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "pwd"}}]}}),
+        json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t2", "content": "NEW OUTPUT"}]}}),
+    ];
+    let f = fixture_with(&["c:1"], &arms_for("c:1"), &history);
+    let prefixes = f.root.join("prefixes.jsonl");
+    let env = [("PREFIXES", prefixes.to_str().unwrap())];
+    let extra = ["--trials", "1", "--trim", "2", "--run-arms", "oracle,none"];
+    let out = sweep(&f, &["c:1"], &extra, &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(f.runs("c_1"), ["none-0", "none-1", "oracle-1"]);
+    assert_eq!(f.calls(), 3);
+    let screen = f.screen();
+    assert_eq!(screen.len(), 1, "file was not run, so it is not noted");
+
+    let seen = std::fs::read_to_string(&prefixes).unwrap();
+    let runs: Vec<&str> = seen.lines().collect();
+    assert_eq!(
+        runs.len(),
+        3 * history.len(),
+        "every run resumed the whole prefix"
+    );
+    let first: String = runs[..history.len()].join("\n");
+    assert!(first.contains("[tool output omitted in replay: 10 characters]"));
+    assert!(!first.contains("OLD OUTPUT"));
+    assert!(first.contains("NEW OUTPUT"), "the last 2 lines are kept");
+    assert!(first.contains(r#""tool_use_id":"t1""#));
+    for run in runs.chunks(history.len()) {
+        assert_eq!(run.join("\n"), first, "every arm shares the prefix");
+    }
+    let rec = record(&f, "oracle-1");
+    assert_eq!(rec["trim"], 2);
+    assert_eq!(rec["max_turns"], 6);
+    assert_eq!(rec["model"], "sonnet");
+
+    // Another trim does not resume these runs.
+    let again = sweep(&f, &["c:1"], &["--trials", "1", "--run-arms", "none"], &[]);
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert!(
+        stdout(&again).contains("2 runs made, 0 already done"),
+        "{}",
+        stdout(&again)
+    );
+    assert_eq!(record(&f, "none-1")["trim"], 0);
+
+    let bad = sweep(&f, &["c:1"], &["--run-arms", "none,lots"], &[]);
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(stderr(&bad).contains("unknown arm `lots`"));
+}
+
+#[test]
+fn run_takes_trim_too() {
+    let history = [
+        json!({"type": "user", "message": {"content": [
+            {"type": "image", "source": {"type": "base64", "data": "AAAA"}}]}}),
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}}),
+    ];
+    let f = fixture_with(&["c:1"], &arms_for("c:1"), &history);
+    let prefixes = f.root.join("prefixes.jsonl");
+    let out = Command::new(env!("CARGO_BIN_EXE_lore-replay"))
+        .args([
+            "run", "--case", "c:1", "--arm", "none", "--trial", "1", "--trim", "1",
+        ])
+        .arg("--cases")
+        .arg(f.root.join("labeled.jsonl"))
+        .arg("--out")
+        .arg(f.out())
+        .env("HOME", f.root.join("home"))
+        .env("CLAUDE_CONFIG_DIR", f.root.join("claude"))
+        .env("LORE_REPLAY_CLAUDE", f.root.join("fake-claude"))
+        .env("CALLS", f.root.join("calls"))
+        .env("PREFIXES", &prefixes)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let seen = std::fs::read_to_string(&prefixes).unwrap();
+    assert!(seen.contains("[image omitted in replay]"), "{seen}");
+    assert!(!seen.contains("AAAA"));
+    assert_eq!(record(&f, "none-1")["trim"], 1);
 }
 
 #[test]

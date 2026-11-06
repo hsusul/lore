@@ -23,7 +23,7 @@ USAGE:
       Reads the archive read only. Prints the case count and each skip reason.
 
   lore-replay run --cases FILE --case ID --arm ARM --trial N --out DIR
-                  [--arms FILE] [--model sonnet] [--max-turns 6] [--keep]
+                  [--arms FILE] [--model sonnet] [--max-turns 6] [--trim N] [--keep]
       Replay one case. Writes DIR/<case id, : as _>/<arm>-<trial>/run.json.
       ARM is none, own, file, lore, or oracle; file, lore, and oracle take their
       text from --arms (default: arms.json beside the cases file). Every arm
@@ -31,12 +31,19 @@ USAGE:
       share Claude Code's prompt cache; the arm's context goes in a
       <system-reminder> block before the prompt. Runs of one case wait for each
       other (a lock on DIR/<case>/scratch.lock).
+      --trim N keeps the last N user and assistant lines of the replayed
+      history whole and, in every earlier one, replaces each tool result's
+      output with \"[tool output omitted in replay: <length> characters]\" and
+      each image with \"[image omitted in replay]\". Tool call ids, assistant
+      text, and tool calls are kept. 0, the default, trims nothing. run.json
+      records model, trim, and max_turns.
       This starts Claude Code, which sends the session to the model provider.
       Set LORE_REPLAY_CLAUDE to use a claude other than the one on PATH.
 
   lore-replay sweep --cases FILE (--case ID [--case ID ...] | --case-list FILE)
                     --arms FILE --out DIR [--trials 3] [--jobs 4] [--model sonnet]
-                    [--max-turns 6] [--max-cost USD] [--judge-model sonnet]
+                    [--max-turns 6] [--trim N] [--run-arms LIST] [--max-cost USD]
+                    [--judge-model sonnet]
       Replay many cases under every arm. --cases is a labeled file (label's
       output); --case-list names one case id per line. Cases run JOBS at a time,
       the runs of a case one after another, so they share the prompt cache.
@@ -45,7 +52,11 @@ USAGE:
       mistake stops there, recorded in DIR/screen.jsonl; one that does runs none,
       own, file, lore, and oracle trials 1..TRIALS. file or lore with no text is
       skipped as same as none; a missing oracle text is an error before any run.
-      Runs that already succeeded are kept, so rerunning resumes. Stops the
+      --run-arms LIST (comma-separated: none, own, file, lore, oracle) runs only
+      those arms; none always runs, as the screen and the baseline, and the arms
+      run in the order above. --trim is as for run. Runs that already succeeded
+      under the same harness, model, trim, and turn cap are kept, so rerunning
+      resumes; give each setting its own DIR. Stops the
       whole sweep, with exit code 3, when a run hits the usage limit, and with
       exit code 4 when this sweep's runs cost more than --max-cost.
       This starts Claude Code and the judge, which talk to the model provider.
@@ -68,16 +79,20 @@ USAGE:
 
   lore-replay report --labels FILE --grades FILE --data real|synthetic
                      [--shown FILE] [--arms FILE] [--screen FILE] [--harness N]
-                     [--json] [--seed N]
+                     [--settings KEY=VALUE,...] [--json] [--seed N]
       The preregistered analysis: per-arm case-weighted repeat rates and paired
       differences against none, with 95% cluster-bootstrap intervals over cases,
       the stop rule, spread, grader agreement, oracle validity, and (with
       --shown) exists/shown/followed. --arms marks arms with empty context as
       same as none. Trial 0, sweep's screening run, is left out of every rate,
       so rates are conditional on cases that reproduced at screening; --screen
-      (sweep's screen.jsonl) reports how many cases did not. Grades from more
-      than one harness version are refused unless --harness picks one. Every
-      number is tagged with --data. Reads only.
+      (sweep's screen.jsonl) reports how many cases did not. Runs are grouped by
+      their settings (harness, model, trim, max_turns, which grade copies from
+      run.json), and grades from more than one group are refused unless
+      --settings picks one, e.g. --settings model=haiku,trim=20,max_turns=6
+      (keys harness, model, trim, max_turns; `unrecorded` matches a grade that
+      does not say). --harness N is --settings harness=N. The header names the
+      group reported. Every number is tagged with --data. Reads only.
 ";
 
 enum Failure {
@@ -190,10 +205,11 @@ fn cases_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
 fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let (mut cases_file, mut case, mut arm, mut trial, mut out, mut arms) =
         (None, None, None, None, None, None);
-    let (mut model, mut max_turns, mut keep_scratch) = (
+    let (mut model, mut max_turns, mut keep_scratch, mut trim) = (
         "sonnet".to_owned(),
         lore_replay::run::DEFAULT_MAX_TURNS,
         false,
+        0_u32,
     );
     while let Some(arg) = parser.next()? {
         match arg {
@@ -207,6 +223,7 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
             Long("arms") => arms = Some(path(parser)?),
             Long("model") => model = text(parser)?,
             Long("max-turns") => max_turns = parser.value()?.parse::<u32>()?,
+            Long("trim") => trim = parser.value()?.parse::<u32>()?,
             Long("keep") => keep_scratch = true,
             Short('h') | Long("help") => {
                 print!("{USAGE}");
@@ -230,6 +247,7 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
         trial,
         model,
         max_turns,
+        trim,
         keep_scratch,
     };
     let record = lore_replay::run::run(&case, &arm, &opts)?;
@@ -241,8 +259,9 @@ fn sweep_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let (mut cases_file, mut case_list, mut arms, mut out, mut max_cost) =
         (None, None, None, None, None);
     let mut case_ids = Vec::new();
-    let (mut trials, mut jobs, mut max_turns) =
-        (3_u32, 4_usize, lore_replay::run::DEFAULT_MAX_TURNS);
+    let (mut trials, mut jobs, mut max_turns, mut trim) =
+        (3_u32, 4_usize, lore_replay::run::DEFAULT_MAX_TURNS, 0_u32);
+    let mut arms_to_run = ArmName::ALL.to_vec();
     let (mut model, mut judge_model) = ("sonnet".to_owned(), "sonnet".to_owned());
     while let Some(arg) = parser.next()? {
         match arg {
@@ -255,6 +274,16 @@ fn sweep_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
             Long("jobs") => jobs = parser.value()?.parse::<usize>()?,
             Long("model") => model = text(parser)?,
             Long("max-turns") => max_turns = parser.value()?.parse::<u32>()?,
+            Long("trim") => trim = parser.value()?.parse::<u32>()?,
+            Long("run-arms") => {
+                arms_to_run = text(parser)?
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|a| !a.is_empty())
+                    .map(str::parse::<ArmName>)
+                    .collect::<Result<_, _>>()
+                    .map_err(Failure::Usage)?;
+            }
             Long("max-cost") => max_cost = Some(parser.value()?.parse::<f64>()?),
             Long("judge-model") => judge_model = text(parser)?,
             Short('h') | Long("help") => {
@@ -302,8 +331,10 @@ fn sweep_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
         jobs,
         model,
         max_turns,
+        trim,
         max_cost,
         judge_model,
+        arms_to_run,
     };
     let summary = lore_replay::sweep::sweep(&opts)?;
     println!("{}", summary.summary());
@@ -378,7 +409,8 @@ fn grade_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
 
 fn report_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let (mut labels, mut grades, mut shown, mut arms, mut data) = (None, None, None, None, None);
-    let (mut screen, mut harness) = (None, None);
+    let mut screen = None;
+    let mut settings = report::SettingsPick::default();
     let (mut json, mut seed) = (false, report::DEFAULT_SEED);
     while let Some(arg) = parser.next()? {
         match arg {
@@ -387,7 +419,16 @@ fn report_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
             Long("shown") => shown = Some(path(parser)?),
             Long("arms") => arms = Some(path(parser)?),
             Long("screen") => screen = Some(path(parser)?),
-            Long("harness") => harness = Some(parser.value()?.parse::<u32>()?),
+            Long("harness") => settings.harness = Some(parser.value()?.parse::<u32>()?),
+            Long("settings") => {
+                let pick = text(parser)?
+                    .parse::<report::SettingsPick>()
+                    .map_err(Failure::Usage)?;
+                settings = report::SettingsPick {
+                    harness: pick.harness.or(settings.harness),
+                    ..pick
+                };
+            }
             Long("data") => {
                 data = Some(text(parser)?.parse::<Data>().map_err(Failure::Usage)?);
             }
@@ -407,7 +448,7 @@ fn report_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
         shown,
         arms,
         screen,
-        harness,
+        settings,
         data: data.ok_or_else(|| need("--data"))?,
         seed,
     };

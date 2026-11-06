@@ -3,8 +3,10 @@
 //!
 //! The rules, in the order the report applies them:
 //!
-//! - Grades from one harness version only (see [`crate::types::HARNESS`]):
-//!   mixed versions are refused unless one is picked.
+//! - Grades from one group of settings only: harness version (see
+//!   [`crate::types::HARNESS`]), model, trim, and turn cap. Mixed groups are
+//!   refused unless a [`SettingsPick`] narrows them to one, and the group
+//!   reported is printed in the header.
 //! - Trial 0 is `sweep`'s screening run, which decides whether a case runs
 //!   at all, so it is left out of every rate: the rates are conditional on
 //!   the cases that reproduced at screening.
@@ -138,6 +140,115 @@ pub struct Input {
     /// From a screen file: cases that did not reproduce (`k`) of the cases
     /// screened (`n`).
     pub screened_out: Option<Count>,
+    /// The settings every grade shares; `None` without grades.
+    pub settings: Option<Settings>,
+}
+
+/// The settings a group of runs shares. Runs with different settings measure
+/// different things, so a report covers one group.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct Settings {
+    pub harness: u32,
+    /// `None` when the grade line does not say (graded before it was copied).
+    pub model: Option<String>,
+    pub trim: u32,
+    /// `None` when the run did not record it.
+    pub max_turns: Option<u32>,
+}
+
+const UNRECORDED: &str = "unrecorded";
+
+impl Settings {
+    #[must_use]
+    pub fn of(grade: &GradeLine) -> Self {
+        Self {
+            harness: grade.harness_version(),
+            model: grade.model.clone(),
+            trim: grade.trim.unwrap_or(0),
+            max_turns: grade.max_turns,
+        }
+    }
+
+    fn model_str(&self) -> String {
+        self.model.clone().unwrap_or_else(|| UNRECORDED.to_owned())
+    }
+
+    fn max_turns_str(&self) -> String {
+        self.max_turns
+            .map_or_else(|| UNRECORDED.to_owned(), |m| m.to_string())
+    }
+}
+
+impl std::fmt::Display for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "harness {}, model {}, trim {}, max turns {}",
+            self.harness,
+            self.model_str(),
+            self.trim,
+            self.max_turns_str()
+        )
+    }
+}
+
+/// `--settings KEY=VALUE,...`: keep the grades whose settings match every
+/// key given. Keys: `harness`, `model`, `trim`, `max_turns`. A value of
+/// `unrecorded` matches a model or turn cap the grade does not record.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SettingsPick {
+    pub harness: Option<u32>,
+    pub model: Option<String>,
+    pub trim: Option<u32>,
+    pub max_turns: Option<String>,
+}
+
+impl SettingsPick {
+    #[must_use]
+    pub fn matches(&self, s: &Settings) -> bool {
+        self.harness.is_none_or(|h| h == s.harness)
+            && self.model.as_ref().is_none_or(|m| *m == s.model_str())
+            && self.trim.is_none_or(|t| t == s.trim)
+            && self
+                .max_turns
+                .as_ref()
+                .is_none_or(|m| *m == s.max_turns_str())
+    }
+}
+
+impl FromStr for SettingsPick {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let mut pick = Self::default();
+        for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let (key, value) = part
+                .split_once('=')
+                .ok_or_else(|| format!("`{part}` is not KEY=VALUE"))?;
+            let (key, value) = (key.trim(), value.trim());
+            let number = |v: &str| {
+                v.parse::<u32>()
+                    .map_err(|_| format!("{key} must be a number, not `{v}`"))
+            };
+            match key {
+                "harness" => pick.harness = Some(number(value)?),
+                "model" => pick.model = Some(value.to_owned()),
+                "trim" => pick.trim = Some(number(value)?),
+                "max_turns" | "max-turns" => {
+                    if value != UNRECORDED {
+                        number(value)?;
+                    }
+                    pick.max_turns = Some(value.to_owned());
+                }
+                other => {
+                    return Err(format!(
+                        "unknown setting `{other}`; expected harness, model, trim, or max_turns"
+                    ))
+                }
+            }
+        }
+        Ok(pick)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -228,6 +339,8 @@ pub struct StopRule {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Report {
     pub data: Data,
+    /// The settings of every run reported; `None` without grades.
+    pub settings: Option<Settings>,
     pub seed: u64,
     pub resamples: usize,
     pub labeled_cases: usize,
@@ -450,6 +563,7 @@ pub fn analyze(input: &Input, data: Data, seed: u64) -> Report {
 
     let mut report = Report {
         data,
+        settings: input.settings.clone(),
         seed,
         resamples: RESAMPLES,
         labeled_cases: input.labeled,
@@ -520,9 +634,14 @@ impl Report {
             _ => format!("no rate (n={} cases, {} trials)", r.cases, r.trials),
         };
         let mut s = String::new();
+        let settings = self
+            .settings
+            .as_ref()
+            .map(|set| format!(" Settings: {set}."))
+            .unwrap_or_default();
         let _ = writeln!(
             s,
-            "lore-replay report. Every number below is measured on {tag}."
+            "lore-replay report.{settings} Every number below is measured on {tag}."
         );
         let stop = &self.stop;
         if go {
@@ -694,31 +813,48 @@ pub struct ReportOptions {
     pub arms: Option<PathBuf>,
     /// `sweep`'s `screen.jsonl`.
     pub screen: Option<PathBuf>,
-    /// Report only grades of this harness version.
-    pub harness: Option<u32>,
+    /// Report only grades whose settings match (`--settings`, `--harness`).
+    pub settings: SettingsPick,
     pub data: Data,
     pub seed: u64,
 }
 
-/// Keep the grades of one harness version: `pick` when given, else the only
-/// version present. Mixed versions without a pick are an error.
-pub fn one_harness(grades: Vec<GradeLine>, pick: Option<u32>) -> Result<Vec<GradeLine>> {
-    let versions: std::collections::BTreeSet<u32> =
-        grades.iter().map(GradeLine::harness_version).collect();
-    match pick {
-        Some(v) => Ok(grades
-            .into_iter()
-            .filter(|g| g.harness_version() == v)
-            .collect()),
-        None if versions.len() > 1 => Err(Error::MixedHarness(
-            versions
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(" and "),
-        )),
-        None => Ok(grades),
+/// Keep the grades whose settings `pick` matches, and the one settings group
+/// they share (`None` when none is left). More than one group left is an
+/// error naming what differs.
+pub fn one_group(
+    grades: Vec<GradeLine>,
+    pick: &SettingsPick,
+) -> Result<(Vec<GradeLine>, Option<Settings>)> {
+    let kept: Vec<GradeLine> = grades
+        .into_iter()
+        .filter(|g| pick.matches(&Settings::of(g)))
+        .collect();
+    let groups: std::collections::BTreeSet<Settings> = kept.iter().map(Settings::of).collect();
+    if groups.len() > 1 {
+        let mut parts = Vec::new();
+        let mut differ = |what: &str, values: Vec<String>| {
+            let mut values = values;
+            values.sort();
+            values.dedup();
+            if values.len() > 1 {
+                parts.push(format!("{what} {}", values.join(" and ")));
+            }
+        };
+        differ(
+            "harness versions",
+            groups.iter().map(|s| s.harness.to_string()).collect(),
+        );
+        differ("models", groups.iter().map(Settings::model_str).collect());
+        differ("trims", groups.iter().map(|s| s.trim.to_string()).collect());
+        differ(
+            "turn caps",
+            groups.iter().map(Settings::max_turns_str).collect(),
+        );
+        return Err(Error::MixedSettings(parts.join("; ")));
     }
+    let settings = groups.into_iter().next();
+    Ok((kept, settings))
 }
 
 /// Cases screened out (`k`) of cases screened (`n`), the last verdict per
@@ -779,13 +915,15 @@ pub fn load(opts: &ReportOptions) -> Result<Input> {
         }
         None => None,
     };
+    let (grades, settings) = one_group(read_lines(&opts.grades)?, &opts.settings)?;
     Ok(Input {
         labeled: labels.iter().filter(|c| c.label.is_some()).count(),
         cases,
-        grades: one_harness(read_lines(&opts.grades)?, opts.harness)?,
+        grades,
         shown,
         empty,
         screened_out,
+        settings,
     })
 }
 
@@ -811,6 +949,9 @@ mod tests {
             cost_usd: None,
             graded_by: None,
             harness: None,
+            model: None,
+            trim: None,
+            max_turns: None,
         }
     }
 

@@ -108,6 +108,8 @@ impl Fixture {
         // The none runs are harness 2; the rest are older records, without it.
         if arm == "none" {
             run["harness"] = json!(2);
+            run["trim"] = json!(20);
+            run["max_turns"] = json!(6);
         }
         std::fs::write(dir.join("run.json"), run.to_string()).unwrap();
     }
@@ -241,8 +243,13 @@ fn grade_writes_both_verdicts_skips_errors_and_resumes() {
     assert_eq!(none["graded_by"], "deterministic+judge: claude sonnet");
     assert_eq!(none["fidelity"], "commit-only:0123456789ab");
     assert_eq!(none["harness"], 2);
+    assert_eq!(none["model"], "sonnet");
+    assert_eq!(none["trim"], 20);
+    assert_eq!(none["max_turns"], 6);
     let lore = grades.iter().find(|g| g["arm"] == "lore").unwrap();
     assert_eq!(lore["harness"], 1, "a record without harness is harness 1");
+    assert_eq!(lore["trim"], 0, "a record without trim is untrimmed");
+    assert!(lore.get("max_turns").is_none());
     assert_eq!(lore["repeat_det"], false);
 
     // One shown verdict per arm; the empty file arm is NO without asking.

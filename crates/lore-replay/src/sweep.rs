@@ -9,12 +9,14 @@
 //! whose screening run does not repeat the mistake cannot show an arm
 //! preventing it, so it stops there, and `<out>/screen.jsonl` says why. A case
 //! that does repeat runs `none` trials 1..N, then `own`, `file`, `lore`, and
-//! `oracle` trials 1..N. `file` or `lore` with an empty or missing text is
-//! skipped and recorded as the same as `none`. Trial 0 is the screening run:
-//! the report leaves it out of every rate.
+//! `oracle` trials 1..N, or only those of them [`SweepOptions::arms_to_run`]
+//! names. `file` or `lore` with an empty or missing text is skipped and
+//! recorded as the same as `none`. Trial 0 is the screening run: the report
+//! leaves it out of every rate.
 //!
 //! A sweep resumes: a run whose `run.json` succeeded under the current
-//! harness is not run again, and a case already screened out stays out.
+//! harness, model, trim, and turn cap is not run again, and a case already
+//! screened out stays out.
 //!
 //! Before every run it checks two stop conditions, and either ends the whole
 //! sweep: a run hit the subscription's usage limit (one did, and the next 60
@@ -51,8 +53,13 @@ pub struct SweepOptions {
     pub jobs: usize,
     pub model: String,
     pub max_turns: u32,
+    /// See [`RunOptions::trim`].
+    pub trim: u32,
     pub max_cost: Option<f64>,
     pub judge_model: String,
+    /// The arms to run after screening, besides `none`, which always runs.
+    /// Run in the order of [`ArmName::ALL`] whatever order they are given in.
+    pub arms_to_run: Vec<ArmName>,
 }
 
 /// Why a sweep ended early.
@@ -239,19 +246,27 @@ fn plan(opts: &SweepOptions) -> Result<Vec<Plan>> {
             return Err(Error::Unlabeled(id.clone()));
         }
         let text = |arm: ArmName| arms.get(id).and_then(|a| a.get(arm.as_str())).cloned();
-        let oracle = text(ArmName::Oracle).ok_or_else(|| Error::ArmTextMissing {
-            case: id.clone(),
-            arm: ArmName::Oracle.to_string(),
-        })?;
-        let mut run_arms = vec![Arm::None, Arm::Own];
+        let wanted = |arm: ArmName| arm == ArmName::None || opts.arms_to_run.contains(&arm);
+        let mut run_arms = vec![Arm::None];
         let mut same_as_none = Vec::new();
-        for name in [ArmName::File, ArmName::Lore] {
-            match text(name).filter(|t| !t.trim().is_empty()) {
-                Some(t) => run_arms.extend(Arm::new(name, Some(t))),
-                None => same_as_none.push(name),
+        for name in ArmName::ALL.into_iter().skip(1).filter(|&a| wanted(a)) {
+            match name {
+                ArmName::Own => run_arms.push(Arm::Own),
+                ArmName::File | ArmName::Lore => {
+                    match text(name).filter(|t| !t.trim().is_empty()) {
+                        Some(t) => run_arms.extend(Arm::new(name, Some(t))),
+                        None => same_as_none.push(name),
+                    }
+                }
+                _ => {
+                    let oracle = text(name).ok_or_else(|| Error::ArmTextMissing {
+                        case: id.clone(),
+                        arm: name.to_string(),
+                    })?;
+                    run_arms.extend(Arm::new(name, Some(oracle)));
+                }
             }
         }
-        run_arms.push(Arm::Oracle(oracle));
         plans.push(Plan {
             case,
             labeled,
@@ -400,9 +415,13 @@ impl Shared<'_> {
             trial,
             model: self.opts.model.clone(),
             max_turns: self.opts.max_turns,
+            trim: self.opts.trim,
             keep_scratch: false,
         };
-        if let Some(kept) = kept(&run::run_dir(&plan.case, arm, &opts).join("run.json")) {
+        if let Some(kept) = kept(
+            &run::run_dir(&plan.case, arm, &opts).join("run.json"),
+            &opts,
+        ) {
             lock(&self.tally).runs_kept += 1;
             return Ok(Some((kept, false)));
         }
@@ -431,9 +450,16 @@ impl Shared<'_> {
     }
 }
 
-/// A finished run worth keeping: it succeeded, under the current harness.
-fn kept(path: &Path) -> Option<RunRecord> {
+/// A finished run worth keeping: it succeeded, under the current harness and
+/// the same model, trim, and turn cap. A record from before the turn cap was
+/// recorded matches any cap.
+fn kept(path: &Path, opts: &RunOptions) -> Option<RunRecord> {
     let text = std::fs::read_to_string(path).ok()?;
     let record: RunRecord = serde_json::from_str(&text).ok()?;
-    (record.is_error == Some(false) && record.harness == HARNESS).then_some(record)
+    (record.is_error == Some(false)
+        && record.harness == HARNESS
+        && record.model == opts.model
+        && record.trim == opts.trim
+        && record.max_turns.is_none_or(|m| m == opts.max_turns))
+    .then_some(record)
 }

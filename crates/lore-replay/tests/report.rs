@@ -143,6 +143,73 @@ fn mixed_harness_versions_are_refused_unless_one_is_picked() {
     assert!(v2.contains("none    n=1 cases, 1 trials; no rate (stop rule)"));
 }
 
+#[test]
+fn mixed_models_are_refused_unless_settings_pick_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    fixture(tmp.path());
+    let path = tmp.path().join("grades.jsonl");
+    // Every fixture grade becomes a sonnet run at trim 0, plus one haiku
+    // trim-20 group with only none trials.
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<Value> = text
+        .lines()
+        .map(|l| {
+            let mut v: Value = serde_json::from_str(l).unwrap();
+            v["harness"] = json!(2);
+            v["model"] = json!("sonnet");
+            v["trim"] = json!(0);
+            v["max_turns"] = json!(6);
+            v
+        })
+        .collect();
+    write_lines(&path, &lines);
+    let sonnet_only = report(tmp.path(), &[]);
+    assert!(sonnet_only
+        .lines()
+        .next()
+        .unwrap()
+        .contains("Settings: harness 2, model sonnet, trim 0, max turns 6."));
+    for t in 1..=3 {
+        lines.push(
+            json!({"case": "c:0", "arm": "none", "trial": t, "grader": "judge",
+                          "repeat_det": null, "judge": "YES", "graded_by": "j", "harness": 2,
+                          "model": "haiku", "trim": 20, "max_turns": 6}),
+        );
+    }
+    write_lines(&path, &lines);
+
+    let out = report_output(tmp.path(), &[]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("the grades mix models haiku and sonnet; trims 0 and 20; pass --harness N or --settings"),
+        "{err}"
+    );
+    // Picking only a key that does not separate the groups is still refused.
+    assert!(!report_output(tmp.path(), &["--settings", "max_turns=6"])
+        .status
+        .success());
+
+    assert_eq!(
+        report(tmp.path(), &["--settings", "model=sonnet"]),
+        sonnet_only
+    );
+    let haiku = report(
+        tmp.path(),
+        &["--settings", "model=haiku,trim=20,max_turns=6"],
+    );
+    assert!(haiku
+        .lines()
+        .next()
+        .unwrap()
+        .contains("Settings: harness 2, model haiku, trim 20, max turns 6."));
+    assert!(haiku.contains("(n=1 cases, 3 trials)"), "{haiku}");
+
+    let bad = report_output(tmp.path(), &["--settings", "colour=red"]);
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("unknown setting `colour`"));
+}
+
 fn report_output(dir: &Path, extra: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_lore-replay"))
         .current_dir(dir)
