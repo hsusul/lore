@@ -5,8 +5,9 @@
 //! words, never a model: a short user turn right after an assistant turn that
 //! opens with or contains a correction ("no", "don't", "instead", "use X not
 //! Y", "I told you"), or a user turn that repeats an instruction the person
-//! already gave earlier in the same session. A question is neither, and nor
-//! is a turn that starts by invoking a skill or a slash command. [`lessons`] groups candidates
+//! already gave earlier in the same session. A question is neither unless it
+//! insists ("why do you always ...", "... i dont want that?"), and nor is a
+//! turn that starts by invoking a skill or a slash command. [`lessons`] groups candidates
 //! that say the same thing across sessions. It writes nothing.
 
 use std::collections::BTreeSet;
@@ -54,7 +55,13 @@ const QUESTION_OPENERS: &[&str] = &[
 /// Phrases that mark a correction anywhere in a short turn.
 const PHRASES: &[&str] = &[
     "don't ",
+    "dont ",
     "do not ",
+    "didn't ",
+    "didnt ",
+    "shouldn't ",
+    "shouldnt ",
+    " never ",
     " instead",
     "wrong",
     "i told you",
@@ -63,11 +70,37 @@ const PHRASES: &[&str] = &[
     "that's not",
     "thats not",
     "you should have",
+    "are you sure",
     "stop ",
 ];
 
+/// Phrases that say the agent's output is too much of something: a correction
+/// and a rule of style at once. "to long" is how it is often typed.
+const EXCESS: &[&str] = &[
+    "too long",
+    "too short",
+    "too many",
+    "too much",
+    "too verbose",
+    "way too ",
+    " to long",
+    " to many ",
+    " to much ",
+];
+/// Phrases that state what the person wants instead: a correction and a rule
+/// at once.
+const PREFERENCES: &[&str] = &["i only want", "i prefer", "i'd rather", " id rather"];
+
 /// Phrases that state a standing rule wherever they appear.
-const RULE_PHRASES: &[&str] = &["make sure", "please always", "from now on", "going forward"];
+const RULE_PHRASES: &[&str] = &[
+    "make sure",
+    "please always",
+    "from now on",
+    "going forward",
+    "every time",
+    "each time",
+    "whenever",
+];
 
 /// Words that make a turn a rule for later work.
 const RULE_WORDS: &[&str] = &[
@@ -121,7 +154,7 @@ pub enum Signal {
     /// It repeats an instruction given earlier in the session.
     Repeat,
     /// It states a standing rule: "make sure", "please always", "from now on",
-    /// or "going forward".
+    /// "going forward", "every time", "each time", or "whenever".
     Rule,
 }
 
@@ -240,14 +273,15 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
         }
         let text = one_line(&turn.text);
         let words = content_words(&text);
+        let question = is_question(&text);
         let signal = if text.starts_with('<')
             || text.starts_with(REINVOKED)
             || text.chars().count() > limits.max_chars
-            || is_question(&text)
+            || (question && !insists(&text))
             || is_invocation(&text)
         {
             None
-        } else if before.is_some_and(|b| !b.user) && corrects(&text) {
+        } else if before.is_some_and(|b| !b.user) && (question || corrects(&text)) {
             Some(Signal::Correction)
         } else if has_rule_phrase(&text) {
             Some(Signal::Rule)
@@ -450,6 +484,23 @@ fn is_question(text: &str) -> bool {
     lower.ends_with('?') || QUESTION_OPENERS.iter().any(|q| lower.starts_with(q))
 }
 
+/// Negations that tell the agent what not to do.
+const NEGATIONS: &[&str] = &["don't", "dont", "didn't", "didnt", "shouldn't", "shouldnt"];
+
+/// Whether `text` insists on something even when it is phrased as a
+/// question: it says don't, do not, didn't, or shouldn't, or always or
+/// never ("never mind" is not one), or doubts the agent with "are you
+/// sure". "why do you always skip the tests?"
+/// corrects; "can you check the logs instead" asks.
+fn insists(text: &str) -> bool {
+    let lower = text.to_lowercase().replace("never mind", "");
+    lower.contains("do not ")
+        || lower.contains("are you sure")
+        || tokens(&lower)
+            .iter()
+            .any(|t| NEGATIONS.contains(t) || matches!(*t, "always" | "never"))
+}
+
 /// Whether `text` uses a phrase that states a standing rule.
 fn has_rule_phrase(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -468,7 +519,14 @@ fn corrects(text: &str) -> bool {
         return true;
     }
     let padded = format!(" {lower} ");
-    PHRASES.iter().any(|p| padded.contains(p))
+    PHRASES.iter().any(|p| padded.contains(p)) || says_preference(&lower)
+}
+
+/// Whether `text` says the agent's output is too long, too short, too much, or
+/// too many, or says what the person only wants, prefers, or would rather.
+fn says_preference(text: &str) -> bool {
+    let padded = format!(" {} ", text.to_lowercase());
+    EXCESS.iter().chain(PREFERENCES).any(|p| padded.contains(p))
 }
 
 /// Lowercase words, keeping apostrophes, so "don't" stays one word.
@@ -489,7 +547,9 @@ fn use_x_not_y(tokens: &[&str]) -> bool {
 /// Whether `text` states a rule that would apply to later work, not only to
 /// the task at hand: it names a tool, command, flag, file, or path, says
 /// always, never, don't, do not, or stop, speaks of a convention or style,
-/// or says use X not Y. A redirect like "give me the short one instead"
+/// says the output is too long or too many, says what the person prefers or
+/// only wants, or says use X not Y. A redirect
+/// like "give me the short one instead"
 /// does none of these.
 #[must_use]
 pub fn states_rule(text: &str) -> bool {
@@ -508,6 +568,7 @@ pub fn states_rule(text: &str) -> bool {
     });
     names_a_thing
         || has_rule_phrase(&lower)
+        || says_preference(&lower)
         || lower.contains("do not ")
         || use_x_not_y(&words)
         || words
@@ -574,7 +635,8 @@ const TASK_OPENERS: &[&str] = &[
 /// "always", "never", "going forward"; "never mind" is not one), or +2 for
 /// "make sure" alone, which earns only +1 when the turn also holds a task
 /// verb; -2 when it asks the agent something now (a question mark, "can you",
-/// "do you", "how do", ...); -1 when it runs past [`RULE_WORDS_MAX`] words;
+/// "do you", "how do", ...) without insisting ("why do you always ...?" is
+/// not an ask); -1 when it runs past [`RULE_WORDS_MAX`] words;
 /// +1 when it names no specific
 /// artifact; -3 for each PR or issue number (`#478`, `issue 12`), each
 /// branch-shaped token (a slash and no file extension), each URL, and each
@@ -635,7 +697,7 @@ pub fn rule_score(text: &str) -> i32 {
         score += if task_verb { 1 } else { 2 };
     }
     let padded = format!(" {} ", tokens.join(" "));
-    if lower.contains('?') || ASKS.iter().any(|p| padded.contains(p)) {
+    if (lower.contains('?') || ASKS.iter().any(|p| padded.contains(p))) && !insists(&lower) {
         score -= 2;
     }
     if tokens.len() > RULE_WORDS_MAX {
