@@ -405,11 +405,15 @@ fn collect_files(
         if file_type.as_ref().is_some_and(|ft| ft.is_file()) {
             out.push((relative, Entry::File));
         } else if file_type.as_ref().is_some_and(|ft| ft.is_dir()) {
-            if walked.insert(path.clone()) {
-                collect_files(root, &path, &relative, walked, out);
-            } else {
-                let inner = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-                out.push((relative, Entry::Walked(inner)));
+            match fs::canonicalize(&path) {
+                Ok(real) if walked.insert(real.clone()) => {
+                    collect_files(root, &path, &relative, walked, out);
+                }
+                Ok(real) => {
+                    let inner = real.strip_prefix(root).unwrap_or(&real).to_path_buf();
+                    out.push((relative, Entry::Walked(inner)));
+                }
+                Err(_) => out.push((relative, Entry::Unlistable)),
             }
         } else {
             // Symlink or unqueried file type: fall back to fs::metadata
