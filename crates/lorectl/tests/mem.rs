@@ -609,3 +609,30 @@ fn the_global_json_flag_reaches_recall_and_eval() {
         );
     }
 }
+
+#[test]
+fn mem_recall_empty_scope_and_json_stderr() {
+    let (dir, vault) = init();
+    let repo = lore_repo(dir.path());
+    let cwd = repo.to_str().unwrap();
+
+    let out = lorectl(&vault, &["recall", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert_eq!(stderr(&out), "lorectl: no notes in scope\n");
+
+    let out = lorectl(&vault, &["recall", "日本語クエリ", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert_eq!(stderr(&out), "lorectl: no notes match `日本語クエリ`\n");
+
+    let out = lorectl(&vault, &["recall", "--json", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    assert!(serde_json::from_str::<serde_json::Value>(&stdout(&out)).is_ok());
+
+    let out = lorectl(&vault, &["recall", "nonexistent", "--json", "--cwd", cwd]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    assert!(serde_json::from_str::<serde_json::Value>(&stdout(&out)).is_ok());
+}

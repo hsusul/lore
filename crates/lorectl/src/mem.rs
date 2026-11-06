@@ -250,8 +250,16 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             if hits.is_empty() {
                 eprintln!("lorectl: no notes match `{query}`");
             }
-            let width = hits.iter().map(|h| h.slug.len()).max().unwrap_or(0);
-            let scope_width = hits.iter().map(|h| h.scope.len()).max().unwrap_or(0);
+            let width = hits
+                .iter()
+                .map(|h| h.slug.chars().count())
+                .max()
+                .unwrap_or(0);
+            let scope_width = hits
+                .iter()
+                .map(|h| h.scope.chars().count())
+                .max()
+                .unwrap_or(0);
             for hit in hits {
                 let _ = writeln!(
                     out,
@@ -282,10 +290,15 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             for (rel, error) in &found.skipped {
                 eprintln!("lorectl: skipped {rel}: {error}");
             }
-            if found.notes.is_empty() {
-                eprintln!("lorectl: no notes match `{query}`");
+            let json = args.json || invocation.json;
+            if !json && found.notes.is_empty() {
+                if lore_memory::index::has_words(&query) {
+                    eprintln!("lorectl: no notes match `{query}`");
+                } else {
+                    eprintln!("lorectl: no notes in scope");
+                }
             }
-            if args.json || invocation.json {
+            if json {
                 let _ = writeln!(out, "{}", recall_json(&found));
             } else {
                 print_recall(&mut out, &found);
@@ -328,8 +341,8 @@ fn print_recall(out: &mut impl Write, found: &Recall) {
         .iter()
         .map(|r| r.note.scope.to_string())
         .collect();
-    let width = slugs.iter().map(|s| s.len()).max().unwrap_or(0);
-    let scope_width = scopes.iter().map(String::len).max().unwrap_or(0);
+    let width = slugs.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+    let scope_width = scopes.iter().map(|s| s.chars().count()).max().unwrap_or(0);
     for ((recalled, slug), scope) in found.notes.iter().zip(&slugs).zip(&scopes) {
         let _ = writeln!(
             out,
