@@ -117,7 +117,6 @@ impl Index {
         let mut conn = Connection::open(&temp)?;
         conn.execute_batch(
             "PRAGMA journal_mode = OFF;
-             PRAGMA synchronous = OFF;
              PRAGMA temp_store = MEMORY;
              PRAGMA cache_size = -65536;",
         )?;
