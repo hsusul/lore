@@ -430,6 +430,25 @@ pub struct LessonAgentDto {
     pub sign_in: String,
 }
 
+/// The automatic Find lessons run: whether it is on and what it last did.
+/// Payload of `get_auto_lessons`, `set_auto_lessons`, and the `auto_lessons`
+/// event, sent when an automatic run starts and when it ends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AutoLessonsDto {
+    pub enabled: bool,
+    /// An automatic run is going now.
+    pub running: bool,
+    /// Epoch milliseconds an automatic run last started an agent.
+    #[ts(type = "number | null")]
+    pub last_run_ms: Option<i64>,
+    /// Epoch milliseconds Lore last looked for new corrections on its own.
+    #[ts(type = "number | null")]
+    pub last_check_ms: Option<i64>,
+    /// What that look led to, in one short sentence.
+    pub last_outcome: Option<String>,
+}
+
 /// One note in the session-start section. Element of [`AgentsReadDto::notes`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

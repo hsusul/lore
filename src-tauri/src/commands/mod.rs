@@ -1,3 +1,4 @@
+pub mod auto_lessons;
 pub mod export;
 pub mod folders;
 pub mod lessons;
@@ -8,6 +9,7 @@ pub mod sessions;
 pub mod skills;
 pub mod system;
 
+pub use auto_lessons::{get_auto_lessons, set_auto_lessons, LessonsLock};
 pub use export::*;
 pub use folders::*;
 pub use lessons::*;

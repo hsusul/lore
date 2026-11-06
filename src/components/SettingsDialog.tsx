@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 
-import { clamp } from "../format";
+import { clamp, formatTime } from "../format";
 import {
   backupNow,
+  getAutoLessons,
   getBackupSchedule,
+  onAutoLessons,
+  setAutoLessons,
   setBackupSchedule,
+  type AutoLessonsDto,
   type BackupInterval,
   type DetectedAgent,
 } from "../ipc";
@@ -166,7 +170,74 @@ function Backups() {
   );
 }
 
-/** Sources, backups, the privacy boundary, and the archive-wide forget. */
+/** What the automatic Find lessons run last did, in one line. */
+function lastRun(state: AutoLessonsDto): string {
+  if (state.running) return "Finding lessons now…";
+  if (!state.last_outcome) return "No automatic run yet.";
+  const when = formatTime(state.last_check_ms ?? state.last_run_ms);
+  return when ? `Last automatic run, ${when}: ${state.last_outcome}` : `Last automatic run: ${state.last_outcome}`;
+}
+
+export function AutoLessons() {
+  const [state, setState] = useState<AutoLessonsDto | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getAutoLessons().then(
+      (next) => alive && setState(next),
+      (e: unknown) => alive && setError(`Could not read the setting: ${String(e)}`),
+    );
+    const off = onAutoLessons((next) => alive && setState(next));
+    return () => {
+      alive = false;
+      void off.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  async function toggle(enabled: boolean) {
+    setError(null);
+    try {
+      setState(await setAutoLessons(enabled));
+    } catch (e) {
+      setError(`Could not save the setting: ${String(e)}`);
+    }
+  }
+
+  return (
+    <section className="settings__section" aria-labelledby="lessons-heading">
+      <h3 id="lessons-heading" className="subhead">
+        Lessons
+      </h3>
+      <label className="settings__row">
+        <input
+          type="checkbox"
+          checked={state?.enabled ?? false}
+          disabled={!state}
+          aria-describedby="lessons-desc"
+          onChange={(event) => void toggle(event.target.checked)}
+        />
+        Find lessons automatically
+      </label>
+      <p className="quiet" id="lessons-desc">
+        At most once a day, when there are new corrections, your signed-in agent (Sonnet for Claude Code) reads them
+        and files lessons, using your agent's usage.
+      </p>
+      {state && (
+        <p className="quiet" role="status">
+          {lastRun(state)}
+        </p>
+      )}
+      {error && (
+        <p className="quiet" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Sources, backups, automatic lessons, the privacy boundary, and the archive-wide forget. */
 export default function SettingsDialog({
   agents,
   busyAgent,
@@ -195,6 +266,7 @@ export default function SettingsDialog({
       <div className="settings__body">
         <Sources agents={agents} busyAgent={busyAgent} onAddRoot={onAddRoot} onRemoveRoot={onRemoveRoot} />
         <Backups />
+        <AutoLessons />
         <section className="settings__section" aria-labelledby="privacy-heading">
           <h3 id="privacy-heading" className="subhead">
             Privacy

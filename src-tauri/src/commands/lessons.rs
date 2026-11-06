@@ -24,6 +24,7 @@ use lore_memory::mine;
 use lore_memory::vault::{self, Vault};
 use tauri::State;
 
+use super::auto_lessons::{self, Runner};
 use crate::state::AppState;
 
 /// The skill each plugin ships, so the app needs no plugin installed.
@@ -71,7 +72,7 @@ impl Agent {
     }
 
     /// As `LORE_AGENT` and the archive name it.
-    fn id(self) -> &'static str {
+    pub(crate) fn id(self) -> &'static str {
         match self {
             Agent::Claude => "claude-code",
             Agent::Codex => "codex",
@@ -246,9 +247,19 @@ fn mcp_config(lorectl: &Path, archive: &Path, pinned: &Path) -> serde_json::Valu
     }}})
 }
 
+/// The person's vault, if they have one.
+pub(crate) fn open_vault() -> Option<Vault> {
+    vault::resolve_dir(None)
+        .ok()
+        .and_then(|dir| Vault::open(&dir).ok())
+}
+
 /// The corrections a run would read: those in the default `mine_candidates`
 /// listing that no finished run has read, per `vault`'s ledger.
-fn pending(archive: &Path, vault: Option<&Vault>) -> Result<BTreeSet<CorrectionId>, String> {
+pub(crate) fn pending(
+    archive: &Path,
+    vault: Option<&Vault>,
+) -> Result<BTreeSet<CorrectionId>, String> {
     let conn = lore_core::storage::open_read_only(&archive.join(ARCHIVE_DB_FILENAME))
         .map_err(|e| e.to_string())?;
     let turns = mine::read_turns(&conn).map_err(|e| e.to_string())?;
@@ -346,6 +357,37 @@ fn found() -> Result<Found, String> {
     })
 }
 
+/// Where `agent` is installed in `dirs`, and whether its own status command
+/// says it is signed in.
+fn status(agent: Agent, dirs: &[PathBuf], path: &std::ffi::OsStr) -> (Option<PathBuf>, bool) {
+    let binary = find(agent.binary(), dirs);
+    let signed_in = binary.as_ref().is_some_and(|bin| {
+        Command::new(bin)
+            .args(agent.status_args())
+            .env("PATH", path)
+            .stdin(Stdio::null())
+            .output()
+            .is_ok_and(|o| agent.signed_in(o.status.success(), &String::from_utf8_lossy(&o.stdout)))
+    });
+    (binary, signed_in)
+}
+
+/// Whether `agent` is installed and signed in, so it can write lessons now.
+/// Blocks while the agent's status command runs.
+pub(crate) fn ready(agent: Agent) -> bool {
+    found().is_ok_and(|found| {
+        std::env::join_paths(&found.dirs).is_ok_and(|path| status(agent, &found.dirs, &path).1)
+    })
+}
+
+/// The agent an automatic run uses: the one the person last ran Find lessons
+/// with, else Claude Code, else Codex; each only when `ready`.
+pub(crate) fn pick(last: Option<Agent>, ready: impl Fn(Agent) -> bool) -> Option<Agent> {
+    last.into_iter()
+        .chain(Agent::ALL)
+        .find(|&agent| ready(agent))
+}
+
 /// Which agents can write lessons: installed, and signed in. Checked locally
 /// by each agent's own status command.
 #[tauri::command]
@@ -356,17 +398,7 @@ pub async fn lesson_agents() -> Result<Vec<LessonAgentDto>, String> {
         Ok(Agent::ALL
             .into_iter()
             .map(|agent| {
-                let binary = find(agent.binary(), &found.dirs);
-                let signed_in = binary.as_ref().is_some_and(|bin| {
-                    Command::new(bin)
-                        .args(agent.status_args())
-                        .env("PATH", &path)
-                        .stdin(Stdio::null())
-                        .output()
-                        .is_ok_and(|o| {
-                            agent.signed_in(o.status.success(), &String::from_utf8_lossy(&o.stdout))
-                        })
-                });
+                let (binary, signed_in) = status(agent, &found.dirs, &path);
                 LessonAgentDto {
                     id: agent.id().to_owned(),
                     label: agent.label().to_owned(),
@@ -381,47 +413,135 @@ pub async fn lesson_agents() -> Result<Vec<LessonAgentDto>, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Everything one run of an agent on the lore-lessons skill needs, worked out
+/// before it starts.
+pub(crate) struct Prepared {
+    agent: Agent,
+    binary: PathBuf,
+    home: PathBuf,
+    path: std::ffi::OsString,
+    args: Vec<String>,
+    prompt: String,
+    last: PathBuf,
+    pinned: PathBuf,
+}
+
+impl Prepared {
+    /// A run of `binary` as `agent`, with Lore's tools from `lorectl` over
+    /// `archive` and its files in `scratch`. `model` is passed to Claude Code
+    /// as `--model`; `None` keeps the person's default.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        agent: Agent,
+        binary: PathBuf,
+        home: PathBuf,
+        path: std::ffi::OsString,
+        lorectl: &Path,
+        archive: &Path,
+        scratch: &Path,
+        model: Option<&str>,
+    ) -> Result<Self, String> {
+        let pinned = scratch.join(PINNED_FILE);
+        let mut args = agent.arguments(lorectl, archive, scratch);
+        if agent == Agent::Claude {
+            std::fs::write(
+                scratch.join("find-lessons.mcp.json"),
+                mcp_config(lorectl, archive, &pinned).to_string(),
+            )
+            .map_err(|e| e.to_string())?;
+            if let Some(model) = model {
+                args.extend(["--model".to_owned(), model.to_owned()]);
+            }
+        }
+        Ok(Self {
+            agent,
+            binary,
+            home,
+            path,
+            args,
+            prompt: agent.prompt(),
+            last: scratch.join("find-lessons.last.txt"),
+            pinned,
+        })
+    }
+
+    /// A run of the installed `agent` over the archive in `archive_dir`, which
+    /// also holds its scratch files.
+    pub(crate) fn locate(
+        agent: Agent,
+        archive_dir: &Path,
+        model: Option<&str>,
+    ) -> Result<Self, String> {
+        let (binary, home, path) = locate(agent)?;
+        let Found { dirs, .. } = found()?;
+        let label = agent.label();
+        let own = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(Path::to_path_buf));
+        let lorectl = lorectl_in(own.as_deref(), &dirs)
+            .ok_or_else(|| format!("lorectl is missing, so {label} cannot reach Lore's tools."))?;
+        Self::new(
+            agent,
+            binary,
+            home,
+            path,
+            &lorectl,
+            archive_dir,
+            archive_dir,
+            model,
+        )
+    }
+
+    /// Run the agent pinned to `pending`, recording them in `vault`'s ledger
+    /// once it finishes; see [`run_pinned`]. Blocks.
+    pub(crate) fn run_on(
+        &self,
+        pending: &BTreeSet<CorrectionId>,
+        vault: Option<&Vault>,
+        run_id: &str,
+    ) -> Result<String, String> {
+        run_pinned(pending, &self.pinned, vault, run_id, || {
+            run(
+                self.agent,
+                &self.binary,
+                &self.args,
+                &self.prompt,
+                &self.home,
+                &self.path,
+                &self.last,
+            )
+        })
+    }
+}
+
+/// The ledger's name for a run of `agent` started at `now_ms`.
+pub(crate) fn run_id(agent: Agent, now_ms: i64) -> String {
+    format!("find-lessons-{}-{now_ms}", agent.id())
+}
+
+/// What the button says when a run, manual or automatic, is already going.
+pub(crate) const BUSY: &str = "Lore is already finding lessons. Try again when it finishes.";
+
 /// Run the person's `agent` on the lore-lessons skill and return its report.
 /// Proposals it files land in the vault's inbox for review.
 #[tauri::command]
 pub async fn find_lessons(state: State<'_, AppState>, agent: String) -> Result<String, String> {
     let agent = Agent::parse(&agent).ok_or("unknown agent")?;
-    let (binary, home, joined) = locate(agent)?;
-    let Found { dirs, .. } = found()?;
-    let label = agent.label();
-    let own = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(Path::to_path_buf));
-    let lorectl = lorectl_in(own.as_deref(), &dirs)
-        .ok_or_else(|| format!("lorectl is missing, so {label} cannot reach Lore's tools."))?;
-    let scratch = state.archive_dir.clone();
-    let archive = state.archive_dir.clone();
-    let last = scratch.join("find-lessons.last.txt");
-    let pinned = scratch.join(PINNED_FILE);
-    if agent == Agent::Claude {
-        std::fs::write(
-            scratch.join("find-lessons.mcp.json"),
-            mcp_config(&lorectl, &state.archive_dir, &pinned).to_string(),
-        )
-        .map_err(|e| e.to_string())?;
+    let guard = state.lessons.try_take(Runner::Manual).ok_or(BUSY)?;
+    let prepared = Prepared::locate(agent, &state.archive_dir, None)?;
+    // The automatic run uses the agent the person last chose here.
+    if let Err(e) = auto_lessons::remember_agent(&state.db, agent) {
+        eprintln!("warning: could not remember the Find lessons agent: {e}");
     }
-    let args = agent.arguments(&lorectl, &state.archive_dir, &scratch);
-
-    let prompt = agent.prompt();
-    let started_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis());
-    let run_id = format!("find-lessons-{}-{started_ms}", agent.id());
+    let archive = state.archive_dir.clone();
+    let run_id = run_id(agent, lore_core::now_ms());
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
         // No vault means no ledger: every correction is new, and none is
         // recorded, as the agent cannot file a proposal without one either.
-        let vault = vault::resolve_dir(None)
-            .ok()
-            .and_then(|dir| Vault::open(&dir).ok());
+        let vault = open_vault();
         let pending = pending(&archive, vault.as_ref())?;
-        run_pinned(&pending, &pinned, vault.as_ref(), &run_id, || {
-            run(agent, &binary, &args, &prompt, &home, &joined, &last)
-        })
+        prepared.run_on(&pending, vault.as_ref(), &run_id)
     })
     .await
     .map_err(|e| e.to_string())?

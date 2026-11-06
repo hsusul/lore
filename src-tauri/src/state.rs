@@ -13,6 +13,8 @@ use lore_ipc::ScanProgress;
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter};
 
+use crate::commands::LessonsLock;
+
 /// Quiet period a source path must be idle before the watcher hands it to the
 /// worker, coalescing partial writes and event storms.
 pub const WATCH_QUIET: Duration = Duration::from_millis(400);
@@ -45,6 +47,8 @@ pub struct AppState {
     /// was spawned and this instance never writes. Dropping the guard with the
     /// app releases the lock.
     pub _scan_lock: Option<ScanLock>,
+    /// Held by whichever Find lessons run is going, manual or automatic.
+    pub lessons: LessonsLock,
 }
 
 /// An owned, thread-safe progress sink for the background worker. Accumulates
@@ -67,6 +71,10 @@ impl WorkerSink {
 
 impl ProgressSink for WorkerSink {
     fn emit(&self, event: ProgressEvent) {
+        let ingested = matches!(
+            event,
+            ProgressEvent::Ingested { .. } | ProgressEvent::ScanFinished
+        );
         if let Ok(mut progress) = self.progress.lock() {
             match event {
                 ProgressEvent::ScanEnqueued { discovered, .. } => {
@@ -87,6 +95,11 @@ impl ProgressSink for WorkerSink {
                 ProgressEvent::Requeued { .. } => {}
             }
             let _ = self.app.emit("scan_progress", *progress);
+        }
+        // New sessions may hold new corrections. Reads one setting; any
+        // mining or agent run happens on a thread of its own.
+        if ingested {
+            crate::commands::auto_lessons::on_ingest(&self.app);
         }
     }
 }
@@ -228,5 +241,6 @@ pub fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error
         worker: Mutex::new(handle),
         archive_dir: data_dir,
         _scan_lock: scan_lock,
+        lessons: LessonsLock::default(),
     })
 }

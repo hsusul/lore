@@ -74,6 +74,8 @@ pub fn run() {
             reject_proposal,
             find_lessons,
             lesson_agents,
+            get_auto_lessons,
+            set_auto_lessons,
             draft_skill_edit,
             apply_skill_edit
         ])
@@ -145,8 +147,17 @@ mod tests {
         );
 
         drop(held);
+        // `flock` lives on the open file, and a child another test is
+        // spawning holds a copy of every descriptor until its `exec` closes
+        // it, so the release can trail the drop by that long.
+        let released = (0..200).any(|_| {
+            acquire_writer_lock(archive.path()).is_some() || {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                false
+            }
+        });
         assert!(
-            acquire_writer_lock(archive.path()).is_some(),
+            released,
             "the lock was not released when the holder went away"
         );
     }
