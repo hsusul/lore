@@ -74,7 +74,15 @@ const PHRASES: &[&str] = &[
 ];
 
 /// Phrases that state a standing rule wherever they appear.
-const RULE_PHRASES: &[&str] = &["make sure", "please always", "from now on", "going forward"];
+const RULE_PHRASES: &[&str] = &[
+    "make sure",
+    "please always",
+    "from now on",
+    "going forward",
+    "every time",
+    "each time",
+    "whenever",
+];
 
 /// Words that make a turn a rule for later work.
 const RULE_WORDS: &[&str] = &[
@@ -128,7 +136,7 @@ pub enum Signal {
     /// It repeats an instruction given earlier in the session.
     Repeat,
     /// It states a standing rule: "make sure", "please always", "from now on",
-    /// or "going forward".
+    /// "going forward", "every time", "each time", or "whenever".
     Rule,
 }
 

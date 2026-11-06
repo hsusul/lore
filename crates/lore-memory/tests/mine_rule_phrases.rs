@@ -1,5 +1,6 @@
-//! "make sure", "please always", "from now on", and "going forward" state a
-//! standing rule, typos and all, even when no agent turn comes before them.
+//! "make sure", "please always", "from now on", "going forward", "every
+//! time", "each time", and "whenever" state a standing rule, typos and all,
+//! even when no agent turn comes before them.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 #[path = "common/archive.rs"]
@@ -15,6 +16,9 @@ const RULES: &[&str] = &[
     "from now on keep the changelog short",
     "going forward squash before merging",
     "ok and make sure the readme stays short",
+    "run the linter every time you change a file",
+    "bump the version each time we release",
+    "whenever a test fails rerun it once first",
 ];
 
 #[test]
