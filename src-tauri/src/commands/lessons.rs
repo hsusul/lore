@@ -3,14 +3,25 @@
 //! correction with the turns around it and files the readable ones as
 //! proposals. Lore opens no connection itself; the agent does, signed in as
 //! the person signed it in, and only when they press the button.
+//!
+//! A run reads only corrections no earlier finished run read: Lore mines the
+//! archive first, pins the agent's MCP server to the new corrections with
+//! `LORE_CANDIDATES_FILE`, and records them in the vault's considered ledger
+//! once the agent finishes. With nothing new, no agent is started. A run that
+//! fails or times out records nothing, so the next one reads them again.
 
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_ipc::LessonAgentDto;
+use lore_memory::considered::{self, CorrectionId};
+use lore_memory::mine;
+use lore_memory::vault::{self, Vault};
 use tauri::State;
 
 use crate::state::AppState;
@@ -36,6 +47,14 @@ const TOOLS: [&str; 3] = [
 
 /// A run reads every candidate and may take a while; past this it is stopped.
 const LIMIT: Duration = Duration::from_secs(20 * 60);
+
+/// The scratch file that lists the corrections a run reads, one id a line.
+const PINNED_FILE: &str = "find-lessons.candidates.txt";
+/// The variable that pins Lore's MCP server to that file.
+const PINNED_ENV: &str = "LORE_CANDIDATES_FILE";
+
+/// What a run returns when no correction is new, without starting an agent.
+pub(crate) const NOTHING_NEW: &str = "No new corrections since the last Find lessons run.";
 
 /// The agents that can write lessons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,7 +188,10 @@ impl Agent {
                         "mcp_servers.lore.args=[\"mcp\",\"--archive\",{}]",
                         quoted(archive)
                     ),
-                    "mcp_servers.lore.env={LORE_AGENT=\"codex\"}".to_owned(),
+                    format!(
+                        "mcp_servers.lore.env={{LORE_AGENT=\"codex\",{PINNED_ENV}={}}}",
+                        quoted(&scratch.join(PINNED_FILE))
+                    ),
                 ] {
                     args.push("-c".to_owned());
                     args.push(config);
@@ -214,13 +236,52 @@ fn lorectl_in(own: Option<&Path>, dirs: &[PathBuf]) -> Option<PathBuf> {
         .or_else(|| find("lorectl", dirs))
 }
 
-/// The MCP config that gives a Claude Code run Lore's tools over `archive`.
-fn mcp_config(lorectl: &Path, archive: &Path) -> serde_json::Value {
+/// The MCP config that gives a Claude Code run Lore's tools over `archive`,
+/// pinned to the corrections listed in `pinned`.
+fn mcp_config(lorectl: &Path, archive: &Path, pinned: &Path) -> serde_json::Value {
     serde_json::json!({ "mcpServers": { "lore": {
         "command": lorectl,
         "args": ["mcp", "--archive", archive],
-        "env": { "LORE_AGENT": "claude-code" },
+        "env": { "LORE_AGENT": "claude-code", PINNED_ENV: pinned },
     }}})
+}
+
+/// The corrections a run would read: those in the default `mine_candidates`
+/// listing that no finished run has read, per `vault`'s ledger.
+fn pending(archive: &Path, vault: Option<&Vault>) -> Result<BTreeSet<CorrectionId>, String> {
+    let conn = lore_core::storage::open_read_only(&archive.join(ARCHIVE_DB_FILENAME))
+        .map_err(|e| e.to_string())?;
+    let turns = mine::read_turns(&conn).map_err(|e| e.to_string())?;
+    let seen = vault
+        .map(considered::considered)
+        .transpose()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    Ok(considered::unconsidered(&turns, &seen))
+}
+
+/// Run `start` on the `pending` corrections: list them in `pinned` for the
+/// agent's MCP server, and once `start` succeeds record them in `vault`'s
+/// ledger as read by `run_id`. With none pending, `start` is never called.
+pub(crate) fn run_pinned(
+    pending: &BTreeSet<CorrectionId>,
+    pinned: &Path,
+    vault: Option<&Vault>,
+    run_id: &str,
+    start: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    if pending.is_empty() {
+        return Ok(NOTHING_NEW.to_owned());
+    }
+    let listed: String = pending.iter().map(|id| format!("{id}\n")).collect();
+    std::fs::write(pinned, listed).map_err(|e| e.to_string())?;
+    let report = start()?;
+    if let Some(vault) = vault {
+        considered::record(vault, pending, run_id).map_err(|e| e.to_string())?;
+    }
+    let n = pending.len();
+    let plural = if n == 1 { "" } else { "s" };
+    Ok(format!("Read {n} new correction{plural}.\n\n{report}"))
 }
 
 /// Why a run left no report, from the end of what it printed.
@@ -334,19 +395,33 @@ pub async fn find_lessons(state: State<'_, AppState>, agent: String) -> Result<S
     let lorectl = lorectl_in(own.as_deref(), &dirs)
         .ok_or_else(|| format!("lorectl is missing, so {label} cannot reach Lore's tools."))?;
     let scratch = state.archive_dir.clone();
+    let archive = state.archive_dir.clone();
     let last = scratch.join("find-lessons.last.txt");
+    let pinned = scratch.join(PINNED_FILE);
     if agent == Agent::Claude {
         std::fs::write(
             scratch.join("find-lessons.mcp.json"),
-            mcp_config(&lorectl, &state.archive_dir).to_string(),
+            mcp_config(&lorectl, &state.archive_dir, &pinned).to_string(),
         )
         .map_err(|e| e.to_string())?;
     }
     let args = agent.arguments(&lorectl, &state.archive_dir, &scratch);
 
     let prompt = agent.prompt();
+    let started_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let run_id = format!("find-lessons-{}-{started_ms}", agent.id());
     tauri::async_runtime::spawn_blocking(move || {
-        run(agent, &binary, &args, &prompt, &home, &joined, &last)
+        // No vault means no ledger: every correction is new, and none is
+        // recorded, as the agent cannot file a proposal without one either.
+        let vault = vault::resolve_dir(None)
+            .ok()
+            .and_then(|dir| Vault::open(&dir).ok());
+        let pending = pending(&archive, vault.as_ref())?;
+        run_pinned(&pending, &pinned, vault.as_ref(), &run_id, || {
+            run(agent, &binary, &args, &prompt, &home, &joined, &last)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -514,19 +589,122 @@ mod tests {
                 "-c",
                 "mcp_servers.lore.args=[\"mcp\",\"--archive\",\"/a\"]",
                 "-c",
-                "mcp_servers.lore.env={LORE_AGENT=\"codex\"}",
+                "mcp_servers.lore.env={LORE_AGENT=\"codex\",LORE_CANDIDATES_FILE=\"/s/find-lessons.candidates.txt\"}",
                 "-o",
                 "/s/find-lessons.last.txt",
                 "-",
             ]
         );
         assert_eq!(
-            mcp_config(Path::new("/bin/lorectl"), Path::new("/a")),
+            mcp_config(
+                Path::new("/bin/lorectl"),
+                Path::new("/a"),
+                Path::new("/s/p.txt")
+            ),
             serde_json::json!({ "mcpServers": { "lore": {
                 "command": "/bin/lorectl", "args": ["mcp", "--archive", "/a"],
-                "env": { "LORE_AGENT": "claude-code" },
+                "env": { "LORE_AGENT": "claude-code", "LORE_CANDIDATES_FILE": "/s/p.txt" },
             }}})
         );
+    }
+
+    /// A fake `claude` that prints `stdout` and exits with `code`.
+    fn fake_claude(dir: &Path, stdout: &str, code: i32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("claude");
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{stdout}'\nexit {code}\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    fn ids(texts: &[&str]) -> BTreeSet<CorrectionId> {
+        texts
+            .iter()
+            .map(|t| CorrectionId::parse(t).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn with_nothing_new_no_agent_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let (vault, _) = Vault::init(&dir.path().join("vault")).unwrap();
+        let pinned = dir.path().join(PINNED_FILE);
+        let result = run_pinned(&BTreeSet::new(), &pinned, Some(&vault), "r", || {
+            panic!("the agent was started")
+        });
+        assert_eq!(result, Ok(NOTHING_NEW.to_owned()));
+        assert!(!pinned.exists());
+        assert!(considered::considered(&vault).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_finished_run_records_the_corrections_it_was_pinned_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let (vault, _) = Vault::init(&dir.path().join("vault")).unwrap();
+        let pinned = dir.path().join(PINNED_FILE);
+        let pending = ids(&["cr-0123456789abcdef", "cr-aaaaaaaaaaaaaaaa"]);
+        let bin = fake_claude(
+            dir.path(),
+            r#"{"result":"Filed: 1 rule","is_error":false}"#,
+            0,
+        );
+        let last = dir.path().join("last.txt");
+        let result = run_pinned(&pending, &pinned, Some(&vault), "run-7", || {
+            // The agent's MCP server reads exactly these while it runs.
+            assert_eq!(considered::read_ids(&pinned).unwrap(), pending);
+            run(
+                Agent::Claude,
+                &bin,
+                &[],
+                "skill",
+                dir.path(),
+                std::ffi::OsStr::new("/usr/bin:/bin"),
+                &last,
+            )
+        });
+        assert_eq!(
+            result,
+            Ok("Read 2 new corrections.\n\nFiled: 1 rule".to_owned())
+        );
+        assert_eq!(considered::considered(&vault).unwrap(), pending);
+        let ledger =
+            std::fs::read_to_string(dir.path().join("vault/_inbox/considered.jsonl")).unwrap();
+        assert!(
+            ledger.lines().all(|l| l.contains(r#""run":"run-7""#)),
+            "{ledger}"
+        );
+    }
+
+    #[test]
+    fn a_failed_run_records_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (vault, _) = Vault::init(&dir.path().join("vault")).unwrap();
+        let pinned = dir.path().join(PINNED_FILE);
+        let pending = ids(&["cr-0123456789abcdef"]);
+        let last = dir.path().join("last.txt");
+        for (stdout, code) in [
+            (r#"{"result":"Not logged in","is_error":true}"#, 1),
+            ("", 1),
+        ] {
+            let bin = fake_claude(dir.path(), stdout, code);
+            let result = run_pinned(&pending, &pinned, Some(&vault), "r", || {
+                run(
+                    Agent::Claude,
+                    &bin,
+                    &[],
+                    "skill",
+                    dir.path(),
+                    std::ffi::OsStr::new("/usr/bin:/bin"),
+                    &last,
+                )
+            });
+            assert!(result.is_err(), "{result:?}");
+        }
+        assert!(considered::considered(&vault).unwrap().is_empty());
     }
 
     #[test]
