@@ -5,8 +5,9 @@
 //! words, never a model: a short user turn right after an assistant turn that
 //! opens with or contains a correction ("no", "don't", "instead", "use X not
 //! Y", "I told you"), or a user turn that repeats an instruction the person
-//! already gave earlier in the same session. A question is neither, and nor
-//! is a turn that starts by invoking a skill or a slash command. [`lessons`] groups candidates
+//! already gave earlier in the same session. A question is neither unless it
+//! insists ("why do you always ...", "... i dont want that?"), and nor is a
+//! turn that starts by invoking a skill or a slash command. [`lessons`] groups candidates
 //! that say the same thing across sessions. It writes nothing.
 
 use std::collections::BTreeSet;
@@ -246,14 +247,15 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
         }
         let text = one_line(&turn.text);
         let words = content_words(&text);
+        let question = is_question(&text);
         let signal = if text.starts_with('<')
             || text.starts_with(REINVOKED)
             || text.chars().count() > limits.max_chars
-            || is_question(&text)
+            || (question && !insists(&text))
             || is_invocation(&text)
         {
             None
-        } else if before.is_some_and(|b| !b.user) && corrects(&text) {
+        } else if before.is_some_and(|b| !b.user) && (question || corrects(&text)) {
             Some(Signal::Correction)
         } else if has_rule_phrase(&text) {
             Some(Signal::Rule)
@@ -454,6 +456,21 @@ fn is_invocation(text: &str) -> bool {
 fn is_question(text: &str) -> bool {
     let lower = text.trim().to_lowercase();
     lower.ends_with('?') || QUESTION_OPENERS.iter().any(|q| lower.starts_with(q))
+}
+
+/// Negations that tell the agent what not to do.
+const NEGATIONS: &[&str] = &["don't", "dont", "didn't", "didnt", "shouldn't", "shouldnt"];
+
+/// Whether `text` insists on something even when it is phrased as a
+/// question: it says don't, do not, didn't, or shouldn't, or always or
+/// never ("never mind" is not one). "why do you always skip the tests?"
+/// corrects; "can you check the logs instead" asks.
+fn insists(text: &str) -> bool {
+    let lower = text.to_lowercase().replace("never mind", "");
+    lower.contains("do not ")
+        || tokens(&lower)
+            .iter()
+            .any(|t| NEGATIONS.contains(t) || matches!(*t, "always" | "never"))
 }
 
 /// Whether `text` uses a phrase that states a standing rule.

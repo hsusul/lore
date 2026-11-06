@@ -90,9 +90,18 @@ fn a_negation_mid_turn_without_its_apostrophe_is_a_correction() {
     assert_eq!(
         got,
         [
-            ("ok but i dont want numbered lists in notes", Signal::Correction),
-            ("thanks, it shouldnt mention the old api either", Signal::Correction),
-            ("good, you never need to ask before formatting", Signal::Correction),
+            (
+                "ok but i dont want numbered lists in notes",
+                Signal::Correction
+            ),
+            (
+                "thanks, it shouldnt mention the old api either",
+                Signal::Correction
+            ),
+            (
+                "good, you never need to ask before formatting",
+                Signal::Correction
+            ),
         ]
     );
 }
