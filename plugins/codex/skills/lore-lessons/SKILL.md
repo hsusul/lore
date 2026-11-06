@@ -17,6 +17,8 @@ Call `mine_candidates` with `cwd` set to the absolute path of the current direct
 
 Each candidate has the person's words, a suggested rule, receipts, and `may_conflict_with`. A receipt names the session, agent, date, and repository. It quotes the person's `correction`, what the agent had just done as `before`, and the agent's reply as `after`. The reply's `cwd_repo` is the repository at the current directory.
 
+Lore lists only candidates with a receipt no earlier run has read. Each receipt says whether it is `new`. Only `new` receipts need a rule. Older receipts are context: use them to group and to understand, but do not file a rule again for what they already said. If a new receipt sharpens a note you read in step 1, pass that note's id as `updates`.
+
 ## 3. Understand each candidate
 
 A correction alone is often unclear. "no, cause you never get to access it" means nothing without the turn it answers. For every receipt, read `before`, then `correction`, then `after`, and work out two things.
