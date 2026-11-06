@@ -612,10 +612,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
-        let session_dir = path
-            .ancestors()
-            .skip(1)
-            .find(|p| p.file_name().and_then(|n| n.to_str()) == Some("subagents"))
+        let session_dir = stem
+            .starts_with("agent-")
+            .then(|| {
+                path.ancestors()
+                    .skip(1)
+                    .find(|p| p.file_name().and_then(|n| n.to_str()) == Some("subagents"))
+            })
+            .flatten()
             .and_then(Path::parent)
             .and_then(name);
         match session_dir {
@@ -971,6 +975,16 @@ mod tests {
         assert_eq!(
             adapter.session_key(&non_ascii_path),
             "セッション-日本語-42/agent-日本語"
+        );
+    }
+
+    #[test]
+    fn top_level_session_under_a_subagents_folder_keeps_its_plain_id() {
+        let path = Path::new("/home/u/subagents/.claude/projects/p")
+            .join("aaaaaaaa-0000-4000-8000-000000000001.jsonl");
+        assert_eq!(
+            ClaudeCodeAdapter::new().session_key(&path),
+            "aaaaaaaa-0000-4000-8000-000000000001"
         );
     }
 
