@@ -279,6 +279,11 @@ pub struct RunRecord {
     pub seconds: f64,
     pub cost_usd: Option<f64>,
     pub is_error: Option<bool>,
+    /// The agent stopped at `--max-turns`. Claude Code reports that as an
+    /// error, but the turn it made is complete enough to grade, so the run is
+    /// recorded as finished and marked here.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capped: bool,
     /// The last characters of the agent's stderr.
     pub stderr: String,
     /// Each attempt to reach GitHub through `gh`, which the stub refuses.

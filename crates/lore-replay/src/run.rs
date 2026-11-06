@@ -175,6 +175,10 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     waited.map_err(|e| Error::io("wait for", Path::new(&program), e))?;
 
     let result = result_event(&events);
+    let capped = result
+        .and_then(|r| r.get("subtype"))
+        .and_then(Value::as_str)
+        == Some("error_max_turns");
     let record = RunRecord {
         harness: HARNESS,
         delivery: Some(DELIVERY.to_owned()),
@@ -191,7 +195,9 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
             .and_then(Value::as_f64),
         is_error: result
             .and_then(|r| r.get("is_error"))
-            .and_then(Value::as_bool),
+            .and_then(Value::as_bool)
+            .map(|e| e && !capped),
+        capped,
         stderr: tail(&stderr, STDERR_TAIL),
         outward: std::fs::read_to_string(&tools.outward_log)
             .map(|log| log.lines().map(str::to_owned).collect())

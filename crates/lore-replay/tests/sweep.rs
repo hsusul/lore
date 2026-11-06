@@ -19,6 +19,10 @@ if [ -n "$LIMIT_AFTER" ] && [ "$n" -gt "$LIMIT_AFTER" ]; then
 fi
 text="${FAKE_TEXT:-I will REPEAT it}"
 echo "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"$text\"}]}}"
+if [ -n "$CAPPED" ]; then
+  echo '{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":7,"total_cost_usd":0.12}'
+  exit 1
+fi
 echo '{"type":"result","is_error":false,"num_turns":1,"total_cost_usd":0.12}'
 "#;
 
@@ -117,7 +121,8 @@ fn sweep(f: &Fixture, cases: &[&str], extra: &[&str], env: &[(&str, &str)]) -> O
         .env("LORE_REPLAY_CLAUDE", f.root.join("fake-claude"))
         .env("CALLS", f.root.join("calls"))
         .env_remove("FAKE_TEXT")
-        .env_remove("LIMIT_AFTER");
+        .env_remove("LIMIT_AFTER")
+        .env_remove("CAPPED");
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -134,6 +139,27 @@ fn stderr(out: &Output) -> String {
 
 fn arms_for(case: &str) -> Value {
     json!({case: {"file": "", "lore": "LORE", "oracle": "ORACLE"}})
+}
+
+#[test]
+fn a_run_stopped_at_the_turn_cap_is_finished_and_graded() {
+    let f = fixture(&["c:1"], &arms_for("c:1"));
+    let out = sweep(&f, &["c:1"], &["--trials", "1"], &[("CAPPED", "1")]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        f.screen()[0]["verdict"],
+        "YES",
+        "the capped screening run was graded"
+    );
+    let record: Value = serde_json::from_str(
+        &std::fs::read_to_string(f.out().join("c_1/none-0/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["is_error"], false);
+    assert_eq!(record["capped"], true);
+
+    let again = sweep(&f, &["c:1"], &["--trials", "1"], &[("CAPPED", "1")]);
+    assert!(stdout(&again).contains("0 runs made"), "{}", stdout(&again));
 }
 
 #[test]
