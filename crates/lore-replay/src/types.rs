@@ -28,6 +28,7 @@ pub enum Signal {
     Correction,
     Repeat,
     Rule,
+    Reply,
 }
 
 impl From<lore_memory::mine::Signal> for Signal {
@@ -36,6 +37,7 @@ impl From<lore_memory::mine::Signal> for Signal {
             lore_memory::mine::Signal::Correction => Self::Correction,
             lore_memory::mine::Signal::Repeat => Self::Repeat,
             lore_memory::mine::Signal::Rule => Self::Rule,
+            lore_memory::mine::Signal::Reply => Self::Reply,
         }
     }
 }

@@ -229,7 +229,7 @@ fn mine_candidates_returns_receipts_newest_first_redacted() {
             "conversations": 1,
             "may_conflict_with": [],
             "receipts": [{
-                "correction_id": id, "new": true,
+                "correction_id": id, "new": true, "signal": "correction",
                 "session": session(home, 2), "agent": "codex", "date": "2026-08-02",
                 "repo": null, "repo_path": null,
                 "correction": "Stop asking me for permission", "before": "Shall I run it?",
@@ -570,4 +570,174 @@ fn mine_candidates_serves_exactly_the_pinned_corrections() {
     std::fs::write(&pin, "").unwrap();
     let (_, none) = mine_pinned(&archive, json!({}), Some(&pin));
     assert_eq!(none["structuredContent"]["total"], 0);
+}
+
+/// Every ordinary reply in the archive under `home`, by text, with its id.
+fn reply_ids(home: &Path) -> Vec<(String, String)> {
+    use lore_memory::mine;
+    let conn = lore_core::storage::open_read_only(&home.join("archive/lore.db")).unwrap();
+    let turns = mine::read_turns(&conn).unwrap();
+    mine::replies_in(&turns, &mine::Limits::default(), i64::MIN)
+        .iter()
+        .map(|c| {
+            let id = lore_memory::considered::CorrectionId::of(c);
+            (c.text.clone(), id.as_str().to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn a_pinned_run_serves_its_replies_alone_and_cut_short() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let long = "looks good to me ".repeat(45);
+    let long = long.trim();
+    scanned(
+        home,
+        &[
+            ("Running npm install.", "no, use pnpm not npm"),
+            ("Here is the plan.", long),
+            ("Added a test.", "keep the tests small please"),
+            ("Added another test.", "keep the tests small"),
+        ],
+    );
+    let archive = home.join("archive");
+    let replies = reply_ids(home);
+    assert_eq!(replies.len(), 3, "{replies:?}");
+    let pin = home.join("pinned.txt");
+    let listed: String = replies.iter().map(|(_, id)| format!("{id}\n")).collect();
+    std::fs::write(&pin, listed).unwrap();
+    // The replies are months old: a pinned run finds them all the same.
+    let (tool, result) = mine_pinned(&archive, json!({}), Some(&pin));
+    let description = tool["description"].as_str().unwrap();
+    assert!(description.contains("signal: \"reply\""), "{description}");
+    let reply = &result["structuredContent"];
+    assert_eq!(reply["total"], 3);
+    let candidates = reply["candidates"].as_array().unwrap();
+    // Never grouped, though two say the same thing.
+    let shape: Vec<(String, usize, Value)> = candidates
+        .iter()
+        .map(|c| {
+            let receipts = c["receipts"].as_array().unwrap();
+            (
+                receipts[0]["correction_id"].as_str().unwrap().to_owned(),
+                receipts.len(),
+                receipts[0]["signal"].clone(),
+            )
+        })
+        .collect();
+    assert!(
+        shape.iter().all(|(_, n, s)| *n == 1 && s == "reply"),
+        "{shape:?}"
+    );
+    let mut served: Vec<&str> = shape.iter().map(|(id, _, _)| id.as_str()).collect();
+    let mut wanted: Vec<&str> = replies.iter().map(|(_, id)| id.as_str()).collect();
+    served.sort_unstable();
+    wanted.sort_unstable();
+    assert_eq!(served, wanted);
+
+    let (_, long_id) = replies.iter().find(|(t, _)| t == long).unwrap();
+    let cut = candidates
+        .iter()
+        .find(|c| c["receipts"][0]["correction_id"] == long_id.as_str())
+        .unwrap();
+    let shown = format!(
+        "{} [... {} more characters]",
+        long.chars().take(600).collect::<String>(),
+        long.chars().count() - 600
+    );
+    assert_eq!(cut["receipts"][0]["correction"], shown.as_str());
+    assert_eq!(cut["text"], shown.as_str());
+    assert_eq!(cut["suggested_rule"], Value::Null);
+    assert_eq!(cut["receipts"][0]["before"], "Here is the plan.");
+    assert_eq!(cut["receipts"][0]["new"], true);
+}
+
+/// One Codex session an hour ago: the agent acts, the person says `user`.
+fn recent(home: &Path, user: &str) {
+    let then = time::OffsetDateTime::now_utc() - time::Duration::hours(1);
+    let (y, m, d) = (then.year(), u8::from(then.month()), then.day());
+    let day = home.join(format!("codex/sessions/{y}/{m:02}/{d:02}"));
+    std::fs::create_dir_all(&day).unwrap();
+    let ts = |s: u8| {
+        format!(
+            "{y}-{m:02}-{d:02}T{:02}:{:02}:{s:02}.000Z",
+            then.hour(),
+            then.minute()
+        )
+    };
+    let item = |s: u8, role: &str, kind: &str, text: &str| {
+        json!({"type": "response_item", "timestamp": ts(s), "payload": {
+            "type": "message", "role": role, "content": [{"type": kind, "text": text}]}})
+    };
+    let lines = [
+        json!({"type": "session_meta", "timestamp": ts(0), "payload": {
+            "id": "019e0000-0000-7000-8000-0000000000ff", "cwd": "/proj",
+            "cli_version": "0.133.0", "model_provider": "openai"}}),
+        item(1, "user", "input_text", "go ahead"),
+        item(2, "assistant", "output_text", "Wrote the release notes."),
+        item(3, "user", "input_text", user),
+        item(4, "assistant", "output_text", "Understood."),
+    ];
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(day.join("rollout-0000000000ff.jsonl"), body).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["scan", "--archive"])
+        .arg(home.join("archive"))
+        .env("CLAUDE_CONFIG_DIR", home.join("claude"))
+        .env("CODEX_HOME", home.join("codex"))
+        .env_remove("LORE_ARCHIVE_DIR")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn the_default_listing_offers_the_windows_replies_after_the_lessons() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            ("Running npm install.", "no, use pnpm not npm"),
+            ("Here is the plan.", "thanks, that works"),
+        ],
+    );
+    recent(home, "put the date on top of the notes");
+    let (_, result) = mine(&home.join("archive"), json!({}));
+    let candidates = result["structuredContent"]["candidates"]
+        .as_array()
+        .unwrap();
+    let listed: Vec<(&str, &str)> = candidates
+        .iter()
+        .map(|c| {
+            (
+                c["receipts"][0]["correction"].as_str().unwrap(),
+                c["receipts"][0]["signal"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    // The months-old reply is outside the window.
+    assert_eq!(
+        listed,
+        [
+            ("no, use pnpm not npm", "correction"),
+            ("put the date on top of the notes", "reply"),
+        ]
+    );
+
+    // Once a run read it, it is not offered again.
+    let (vault, _) = lore_memory::vault::Vault::init(&home.join("vault")).unwrap();
+    let id = candidates[1]["receipts"][0]["correction_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    lore_memory::considered::record(&vault, &ids(&[&id]), "run-1").unwrap();
+    let (_, after) = mine(&home.join("archive"), json!({}));
+    assert_eq!(after["structuredContent"]["total"], 1);
+    assert_eq!(after["structuredContent"]["already_considered"], 1);
 }

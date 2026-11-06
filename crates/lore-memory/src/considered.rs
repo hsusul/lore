@@ -204,14 +204,22 @@ pub fn mark(
 
 /// The corrections a lessons run would read: the new receipts of the lessons
 /// `mine_candidates` lists by default (default limits, one-off orders left
-/// out), given what earlier runs `considered`.
+/// out), and the ordinary replies at or after `replies_since_ms`
+/// ([`mine::replies_in`]), given what earlier runs `considered`.
 #[must_use]
 pub fn unconsidered(
     turns: &mine::Turns,
     considered: &BTreeSet<CorrectionId>,
+    replies_since_ms: i64,
 ) -> BTreeSet<CorrectionId> {
-    let mut lessons = mine::lessons(mine::corrections_in(turns, &mine::Limits::default()));
+    let limits = mine::Limits::default();
+    let mut lessons = mine::lessons(mine::corrections_in(turns, &limits));
     lessons.retain(|l| l.score >= 0);
+    lessons.extend(mine::reply_lessons(mine::replies_in(
+        turns,
+        &limits,
+        replies_since_ms,
+    )));
     mark(lessons, |id| !considered.contains(id), false)
         .iter()
         .flat_map(|m| m.new_ids().cloned().collect::<Vec<_>>())

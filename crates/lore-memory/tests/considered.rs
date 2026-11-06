@@ -106,7 +106,7 @@ fn only_lessons_with_an_unconsidered_receipt_are_new() {
     let dir = tempfile::tempdir().unwrap();
     let conn = pnpm_archive(dir.path());
     let turns = read_turns(&conn).unwrap();
-    let pending = unconsidered(&turns, &BTreeSet::new());
+    let pending = unconsidered(&turns, &BTreeSet::new(), 0);
     assert_eq!(pending.len(), 3);
 
     let found = lessons(corrections(&conn).unwrap());
@@ -117,14 +117,14 @@ fn only_lessons_with_an_unconsidered_receipt_are_new() {
     let flags: Vec<bool> = marked[0].receipts().map(|(_, _, new)| new).collect();
     assert_eq!(flags, [true, false, false]);
     assert_eq!(
-        unconsidered(&turns, &seen),
+        unconsidered(&turns, &seen, 0),
         BTreeSet::from([ids[0].clone()])
     );
 
     let all: BTreeSet<CorrectionId> = ids.iter().cloned().collect();
     assert!(mark(found.clone(), |id| !all.contains(id), false).is_empty());
     assert_eq!(mark(found, |id| !all.contains(id), true).len(), 1);
-    assert!(unconsidered(&turns, &all).is_empty());
+    assert!(unconsidered(&turns, &all, 0).is_empty());
 }
 
 #[test]

@@ -319,7 +319,7 @@ fn look(app: &AppHandle) -> Result<AutoLessons, String> {
     work(
         &state.db,
         lore_core::now_ms,
-        || lessons::pending(&archive, vault.as_ref()),
+        || lessons::pending(&archive, vault.as_ref(), lore_core::now_ms()),
         |last| lessons::pick(last, lessons::ready),
         |agent, pending| {
             let run_id = lessons::run_id(agent, lore_core::now_ms());

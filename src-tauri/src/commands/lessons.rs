@@ -254,21 +254,34 @@ pub(crate) fn open_vault() -> Option<Vault> {
         .and_then(|dir| Vault::open(&dir).ok())
 }
 
-/// The corrections a run would read: those in the default `mine_candidates`
-/// listing that no finished run has read, per `vault`'s ledger.
+/// The corrections a run at `now_ms` would read: those in the default
+/// `mine_candidates` listing, and the person's ordinary replies of the last
+/// [`mine::REPLY_WINDOW_MS`], that no finished run has read, per `vault`'s
+/// ledger.
 pub(crate) fn pending(
     archive: &Path,
     vault: Option<&Vault>,
+    now_ms: i64,
 ) -> Result<BTreeSet<CorrectionId>, String> {
     let conn = lore_core::storage::open_read_only(&archive.join(ARCHIVE_DB_FILENAME))
         .map_err(|e| e.to_string())?;
-    let turns = mine::read_turns(&conn).map_err(|e| e.to_string())?;
+    pending_in(&conn, vault, now_ms)
+}
+
+/// [`pending`] over an open archive.
+fn pending_in(
+    conn: &rusqlite::Connection,
+    vault: Option<&Vault>,
+    now_ms: i64,
+) -> Result<BTreeSet<CorrectionId>, String> {
+    let turns = mine::read_turns(conn).map_err(|e| e.to_string())?;
     let seen = vault
         .map(considered::considered)
         .transpose()
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    Ok(considered::unconsidered(&turns, &seen))
+    let since = now_ms.saturating_sub(mine::REPLY_WINDOW_MS);
+    Ok(considered::unconsidered(&turns, &seen, since))
 }
 
 /// Run `start` on the `pending` corrections: list them in `pinned` for the
@@ -540,7 +553,7 @@ pub async fn find_lessons(state: State<'_, AppState>, agent: String) -> Result<S
         // No vault means no ledger: every correction is new, and none is
         // recorded, as the agent cannot file a proposal without one either.
         let vault = open_vault();
-        let pending = pending(&archive, vault.as_ref())?;
+        let pending = pending(&archive, vault.as_ref(), lore_core::now_ms())?;
         prepared.run_on(&pending, vault.as_ref(), &run_id)
     })
     .await
@@ -759,6 +772,48 @@ mod tests {
         assert_eq!(result, Ok(NOTHING_NEW.to_owned()));
         assert!(!pinned.exists());
         assert!(considered::considered(&vault).unwrap().is_empty());
+    }
+
+    /// 2026-08-01T10:00:00Z, when the test archive's first session starts.
+    const AUG_1: i64 = 1_785_578_400_000;
+
+    #[test]
+    fn a_run_reads_new_corrections_and_the_windows_replies_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::commands::memory::tests::archive(
+            dir.path(),
+            &[&[
+                ("user", "add axios"),
+                ("assistant", "Running npm install axios."),
+                ("user", "no, use pnpm not npm"),
+                ("assistant", "Switched to pnpm."),
+                ("user", "put the changelog entry on top"),
+            ]],
+        );
+        let (vault, _) = Vault::init(&dir.path().join("vault")).unwrap();
+        let turns = mine::read_turns(&conn).unwrap();
+        let replies = mine::replies_in(&turns, &mine::Limits::default(), i64::MIN);
+        assert_eq!(replies.len(), 1);
+        let reply = CorrectionId::of(&replies[0]);
+
+        // An hour later the run reads the correction and the reply.
+        let pending = pending_in(&conn, Some(&vault), AUG_1 + 3_600_000).unwrap();
+        assert_eq!(pending.len(), 2, "{pending:?}");
+        assert!(pending.contains(&reply));
+        // Three days later the reply has left the window.
+        let later = pending_in(&conn, Some(&vault), AUG_1 + 3 * 86_400_000).unwrap();
+        assert_eq!(later.len(), 1);
+        assert!(!later.contains(&reply));
+
+        // Once a run read both, nothing is new and no agent starts.
+        considered::record(&vault, &pending, "run-1").unwrap();
+        let none = pending_in(&conn, Some(&vault), AUG_1 + 3_600_000).unwrap();
+        assert!(none.is_empty());
+        let pinned = dir.path().join(PINNED_FILE);
+        let result = run_pinned(&none, &pinned, Some(&vault), "run-2", || {
+            panic!("the agent was started")
+        });
+        assert_eq!(result, Ok(NOTHING_NEW.to_owned()));
     }
 
     #[test]
