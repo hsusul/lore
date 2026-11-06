@@ -124,6 +124,7 @@ pub struct WorkTree {
     canonical_root: OnceCell<Option<PathBuf>>,
     head: OnceCell<Option<CommitId>>,
     renames: RefCell<HashMap<String, HashMap<String, RelPath>>>,
+    files: RefCell<HashMap<RelPath, Option<PathBuf>>>,
 }
 
 impl WorkTree {
@@ -134,6 +135,7 @@ impl WorkTree {
             canonical_root: OnceCell::new(),
             head: OnceCell::new(),
             renames: RefCell::new(HashMap::new()),
+            files: RefCell::new(HashMap::new()),
         }
     }
 
@@ -250,13 +252,20 @@ impl WorkTree {
 
     /// The file at `path`, when it is a regular file inside the working tree.
     fn file(&self, path: &RelPath) -> Option<PathBuf> {
+        let mut cache = self.files.borrow_mut();
+        if let Some(cached) = cache.get(path) {
+            return cached.clone();
+        }
         let candidate = self.root.join(path.as_str());
-        let resolved = fs::canonicalize(&candidate).ok()?;
         let root = self
             .canonical_root
             .get_or_init(|| fs::canonicalize(&self.root).ok())
             .as_ref()?;
-        (resolved.starts_with(root) && resolved.is_file()).then_some(resolved)
+        let resolved = fs::canonicalize(&candidate)
+            .ok()
+            .filter(|p| p.starts_with(root) && p.is_file());
+        cache.insert(path.clone(), resolved.clone());
+        resolved
     }
 
     fn whole_file(&self, path: &RelPath) -> Option<LineRange> {
@@ -332,7 +341,7 @@ fn hash_matches(stored: &LineHash, digest: &str) -> bool {
 /// `None` when the file is shorter than the range.
 fn range_digest(file: &Path, lines: LineRange) -> io::Result<Option<String>> {
     let mut reader = BufReader::new(File::open(file)?);
-    let mut taken = Vec::new();
+    let mut hasher = blake3::Hasher::new();
     let mut line = Vec::new();
     for number in 1..=lines.end() {
         line.clear();
@@ -340,10 +349,12 @@ fn range_digest(file: &Path, lines: LineRange) -> io::Result<Option<String>> {
             return Ok(None);
         }
         if number >= lines.start() {
-            taken.push(line.strip_suffix(b"\n").unwrap_or(&line).to_vec());
+            let slice = line.strip_suffix(b"\n").unwrap_or(&line);
+            hasher.update(strip_cr(slice));
+            hasher.update(b"\n");
         }
     }
-    Ok(Some(hash_lines(taken.iter().map(Vec::as_slice))))
+    Ok(Some(hasher.finalize().to_hex().to_string()))
 }
 
 fn strip_cr(line: &[u8]) -> &[u8] {
