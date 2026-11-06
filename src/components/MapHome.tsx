@@ -8,7 +8,11 @@ import {
   listProposals,
   rejectProposal,
   retireNote,
+  skillsReport,
+  skillUsage,
   type LessonAgentDto,
+  type SkillFindingDto,
+  type SkillUsageDto,
   type NoteDto,
   type ProposalDto,
 } from "../ipc";
@@ -17,6 +21,7 @@ import { receipts, why } from "../map/proposal";
 import { FindLessons } from "./FindLessons";
 import { Mark } from "./Mark";
 import { MapCanvas } from "./MapCanvas";
+import { SkillCard } from "./SkillCard";
 import { SessionsList, SessionView } from "./MapSessions";
 
 /** The prototype's rail icons: 24-unit strokes in the current color. */
@@ -255,6 +260,25 @@ export function MapHome({
   const [focusSearch, setFocusSearch] = useState(0);
   const [finding, setFinding] = useState<string | null>(null);
 
+  const [skills, setSkills] = useState<{
+    usage: SkillUsageDto[];
+    findings: SkillFindingDto[];
+  } | null>(null);
+
+  // Skill usage reads every turn in the archive, so it arrives after the map.
+  const loadSkills = useCallback(async () => {
+    try {
+      const [usage, report] = await Promise.all([skillUsage(), skillsReport()]);
+      setSkills({ usage, findings: report.findings });
+    } catch {
+      setSkills(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSkills();
+  }, [loadSkills]);
+
   const load = useCallback(async () => {
     try {
       const [lessons, notes, name] = await Promise.all([
@@ -280,9 +304,9 @@ export function MapHome({
   const model = useMemo(
     () =>
       data.status === "ready"
-        ? layout(areasOf(data.lessons, data.notes, data.person))
+        ? layout(areasOf(data.lessons, data.notes, data.person, skills?.usage))
         : null,
-    [data],
+    [data, skills],
   );
   const person = data.status === "ready" ? data.person : "";
   const lessons = data.status === "ready" ? data.lessons : [];
@@ -364,7 +388,9 @@ export function MapHome({
   const shownId = shown
     ? shown.kind === "lesson"
       ? `lesson:${shown.lesson.id}`
-      : `note:${shown.note.id}`
+      : shown.kind === "note"
+        ? `note:${shown.note.id}`
+        : `skill:${shown.skill.skill}`
     : null;
 
   return (
@@ -532,6 +558,17 @@ export function MapHome({
                     "Retired. Agents stop getting it.",
                   )
                 }
+              />
+            )}
+            {shown?.kind === "skill" && (
+              <SkillCard
+                skill={shown.skill}
+                findings={skills?.findings ?? []}
+                onApplied={(message) => {
+                  setOpen(null);
+                  setNotice(message);
+                  void loadSkills();
+                }}
               />
             )}
             {!shown && (page === "today" || page === "find") && (

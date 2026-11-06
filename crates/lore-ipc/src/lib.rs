@@ -519,6 +519,23 @@ pub struct SkillUsageDto {
     pub last_ms: Option<i64>,
     /// Corrections the person made right after it ran, newest first.
     pub reprompts: Vec<ReceiptDto>,
+    /// The SKILL.md Lore may propose edits to: the person's own copy, with
+    /// symlinks resolved. `None` for a skill a plugin, git source or agent
+    /// manages, whose next update would undo an edit.
+    pub editable_path: Option<String>,
+}
+
+/// A rewrite of one SKILL.md the person's agent drafted from the corrections
+/// made after it ran. Nothing is written until the person applies it. Payload
+/// of `draft_skill_edit`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillDraftDto {
+    pub path: String,
+    /// One sentence on what changed and why.
+    pub summary: String,
+    pub before: String,
+    pub after: String,
 }
 
 /// Cumulative token usage and estimated cost across the entire archive.

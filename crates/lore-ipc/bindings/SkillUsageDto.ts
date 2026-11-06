@@ -21,4 +21,10 @@ last_ms: number | null,
 /**
  * Corrections the person made right after it ran, newest first.
  */
-reprompts: Array<ReceiptDto>, };
+reprompts: Array<ReceiptDto>, 
+/**
+ * The SKILL.md Lore may propose edits to: the person's own copy, with
+ * symlinks resolved. `None` for a skill a plugin, git source or agent
+ * manages, whose next update would undo an edit.
+ */
+editable_path: string | null, };

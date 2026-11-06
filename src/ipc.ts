@@ -34,6 +34,7 @@ import type { ProposalDto } from "../crates/lore-ipc/bindings/ProposalDto";
 import type { ReadNoteDto } from "../crates/lore-ipc/bindings/ReadNoteDto";
 import type { AgentsReadDto } from "../crates/lore-ipc/bindings/AgentsReadDto";
 import type { SkillsReportDto } from "../crates/lore-ipc/bindings/SkillsReportDto";
+import type { SkillDraftDto } from "../crates/lore-ipc/bindings/SkillDraftDto";
 import type { SkillUsageDto } from "../crates/lore-ipc/bindings/SkillUsageDto";
 import type { SkillFindingDto } from "../crates/lore-ipc/bindings/SkillFindingDto";
 import type { SkillFolderDto } from "../crates/lore-ipc/bindings/SkillFolderDto";
@@ -116,6 +117,7 @@ export type {
   ReadNoteDto,
   AgentsReadDto,
   SkillsReportDto,
+  SkillDraftDto,
   SkillUsageDto,
   SkillFindingDto,
   SkillFolderDto,
@@ -420,6 +422,16 @@ export function findLessons(agent: string): Promise<string> {
 /** Which agents can write lessons: Claude Code and Codex, each installed or not and signed in or not. */
 export function lessonAgents(): Promise<LessonAgentDto[]> {
   return invoke<LessonAgentDto[]>("lesson_agents");
+}
+
+/** Ask `agent` to rewrite skill `name` from the corrections made after it ran. Writes nothing. */
+export function draftSkillEdit(agent: string, name: string): Promise<SkillDraftDto> {
+  return invoke<SkillDraftDto>("draft_skill_edit", { agent, name });
+}
+
+/** Write an approved draft of skill `name`, if its SKILL.md still reads `before`. Resolves with the backup's path. */
+export function applySkillEdit(name: string, before: string, after: string): Promise<string> {
+  return invoke<string>("apply_skill_edit", { name, before, after });
 }
 
 /** The person's name for the map's centre: the Mac account's full name, else the user name. */

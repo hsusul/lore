@@ -114,8 +114,11 @@ export function draw(
       g.arc(x, y, r + 9, 0, 2 * Math.PI);
       g.fill();
     }
-    g.globalAlpha = dim;
-    g.fillStyle = d.item.kind === "lesson" ? palette.ink : palette.quiet;
+    // A skill is ink when the person re-prompted after it, faint when it never ran.
+    const ink = d.item.kind === "lesson" || (d.item.kind === "skill" && d.item.skill.reprompts.length > 0);
+    const faint = d.item.kind === "skill" && d.item.skill.uses === 0;
+    g.globalAlpha = dim * (faint ? 0.35 : 1);
+    g.fillStyle = ink ? palette.ink : palette.quiet;
     g.beginPath();
     g.arc(x, y, selected ? r + 1.5 : r, 0, 2 * Math.PI);
     g.fill();
