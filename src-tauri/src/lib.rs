@@ -74,6 +74,8 @@ pub fn run() {
             reject_proposal,
             find_lessons,
             lesson_agents,
+            get_auto_lessons,
+            set_auto_lessons,
             draft_skill_edit,
             apply_skill_edit
         ])
