@@ -144,7 +144,7 @@ fn bad_note_path_advice_ascii_and_non_ascii() {
     assert_eq!(dotdot.status.code(), Some(7));
     let stderr = String::from_utf8_lossy(&dotdot.stderr);
     assert!(
-        stderr.contains("lorectl: `../note` is not a valid note path: `..` is not allowed, got `../note`\n  give a relative path inside the vault without `..`"),
+        stderr.contains("lorectl: `../note` is not a valid note path: `..` is not allowed, got `../note`\n  give a note path inside the vault, like `global/<slug>.md`"),
         "stderr was: {stderr}"
     );
 
@@ -152,7 +152,7 @@ fn bad_note_path_advice_ascii_and_non_ascii() {
     assert_eq!(non_ascii_abs.status.code(), Some(7));
     let stderr = String::from_utf8_lossy(&non_ascii_abs.stderr);
     assert!(
-        stderr.contains("lorectl: `/etc/日本語` is not a valid note path: absolute paths outside the vault are not allowed, got `/etc/日本語`\n  give a relative path inside the vault without `..`"),
+        stderr.contains("lorectl: `/etc/日本語` is not a valid note path: absolute paths outside the vault are not allowed, got `/etc/日本語`\n  give a note path inside the vault, like `global/<slug>.md`"),
         "stderr was: {stderr}"
     );
 }

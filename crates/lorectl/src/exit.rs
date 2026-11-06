@@ -155,7 +155,7 @@ fn vault_advice(error: &VaultError) -> Option<&'static str> {
             Some("set LORE_VAULT_DIR to an absolute path starting with `/`")
         }
         VaultError::BadPath(..) => {
-            Some("give a relative path inside the vault without `..`")
+            Some("give a note path inside the vault, like `global/<slug>.md`")
         }
         VaultError::Conflict(_) => {
             Some("edit that file by hand, or give the new note another title")
@@ -564,7 +564,7 @@ mod tests {
         ));
         assert_eq!(
             dotdot.advice(),
-            Some("give a relative path inside the vault without `..`")
+            Some("give a note path inside the vault, like `global/<slug>.md`")
         );
 
         let non_ascii_abs = CliError::Memory(VaultError::BadPath(
@@ -573,7 +573,16 @@ mod tests {
         ));
         assert_eq!(
             non_ascii_abs.advice(),
-            Some("give a relative path inside the vault without `..`")
+            Some("give a note path inside the vault, like `global/<slug>.md`")
+        );
+
+        let not_md = CliError::Memory(VaultError::BadPath(
+            "global/note.txt".into(),
+            "expected a `.md` file".into(),
+        ));
+        assert_eq!(
+            not_md.advice(),
+            Some("give a note path inside the vault, like `global/<slug>.md`")
         );
     }
 
