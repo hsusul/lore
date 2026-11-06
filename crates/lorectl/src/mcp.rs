@@ -943,7 +943,17 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     for marked in lessons.iter().skip(start).take(limit) {
         let lesson = marked.lesson();
         let mut receipts = Vec::new();
-        for (r, id, new) in marked.receipts().take(MINE_RECEIPTS) {
+        // Every new receipt is shown: a successful run records each one as
+        // read, so one left out here would be recorded without being seen.
+        // Only older receipts, which are context, are capped.
+        let mut context_shown = 0;
+        for (r, id, new) in marked.receipts() {
+            if !new {
+                if context_shown == MINE_RECEIPTS {
+                    continue;
+                }
+                context_shown += 1;
+            }
             receipts.push(json!({
                 "correction_id": id.as_str(), "new": new,
                 "session": r.session, "agent": r.agent,

@@ -519,6 +519,31 @@ fn mine_candidates_lists_only_lessons_with_a_receipt_no_run_has_read() {
 }
 
 #[test]
+fn mine_candidates_shows_every_new_receipt_and_caps_only_read_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let same = vec![("Running npm install.", "no, use pnpm not npm"); 8];
+    scanned(home, &same);
+    let archive = home.join("archive");
+    let (_, first) = mine(&archive, json!({}));
+    let all = &marks(&first)[0];
+    assert_eq!(
+        all.len(),
+        8,
+        "every new receipt is shown, past the cap of 5"
+    );
+
+    // Seven read: the new one plus five of the read ones, as context.
+    let (vault, _) = lore_memory::vault::Vault::init(&home.join("vault")).unwrap();
+    let read: Vec<&String> = all[1..].iter().map(|(id, _)| id).collect();
+    lore_memory::considered::record(&vault, &ids(&read), "run-1").unwrap();
+    let (_, later) = mine(&archive, json!({}));
+    let shown = &marks(&later)[0];
+    assert_eq!(shown.iter().filter(|(_, new)| *new).count(), 1);
+    assert_eq!(shown.iter().filter(|(_, new)| !*new).count(), 5);
+}
+
+#[test]
 fn mine_candidates_serves_exactly_the_pinned_corrections() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
