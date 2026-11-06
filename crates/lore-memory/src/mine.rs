@@ -628,7 +628,8 @@ const TASK_OPENERS: &[&str] = &[
 /// "always", "never", "going forward"; "never mind" is not one), or +2 for
 /// "make sure" alone, which earns only +1 when the turn also holds a task
 /// verb; -2 when it asks the agent something now (a question mark, "can you",
-/// "do you", "how do", ...); -1 when it runs past [`RULE_WORDS_MAX`] words;
+/// "do you", "how do", ...) without insisting ("why do you always ...?" is
+/// not an ask); -1 when it runs past [`RULE_WORDS_MAX`] words;
 /// +1 when it names no specific
 /// artifact; -3 for each PR or issue number (`#478`, `issue 12`), each
 /// branch-shaped token (a slash and no file extension), each URL, and each
@@ -689,7 +690,7 @@ pub fn rule_score(text: &str) -> i32 {
         score += if task_verb { 1 } else { 2 };
     }
     let padded = format!(" {} ", tokens.join(" "));
-    if lower.contains('?') || ASKS.iter().any(|p| padded.contains(p)) {
+    if (lower.contains('?') || ASKS.iter().any(|p| padded.contains(p))) && !insists(&lower) {
         score -= 2;
     }
     if tokens.len() > RULE_WORDS_MAX {

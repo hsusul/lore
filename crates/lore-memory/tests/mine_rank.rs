@@ -116,6 +116,13 @@ fn the_rule_score_is_fixed_and_explainable() {
 }
 
 #[test]
+fn a_question_that_insists_is_not_scored_as_an_ask() {
+    assert_eq!(rule_score("why do you always skip the tests?"), 4);
+    assert_eq!(rule_score("i dont like the long intro, can you cut it?"), 1);
+    assert_eq!(rule_score("can you check the logs?"), -1);
+}
+
+#[test]
 fn a_task_with_a_rule_tacked_on_scores_below_zero() {
     let scores: Vec<(&str, i32)> = [
         "delete the ios sim runtimes and make it so that it builds them on my ssd from now on",
