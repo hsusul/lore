@@ -80,6 +80,8 @@ const MINE_MAX_LIMIT: u64 = 50;
 const MINE_RECEIPTS: usize = 5;
 /// Characters of serialized `mine_candidates` reply.
 const MINE_REPLY_CHARS: usize = 16_000;
+/// Characters of an ordinary reply's text shown in a receipt.
+const MINE_REPLY_TEXT_CHARS: usize = 600;
 /// A file of correction ids, one per line, that pins `mine_candidates` to
 /// them: the Lore app sets it for a Find lessons run.
 const CANDIDATES_FILE_ENV: &str = "LORE_CANDIDATES_FILE";
@@ -201,7 +203,9 @@ new receipts need a rule; older ones are context for grouping, and a rule that s
 accepted note passes updates. already_considered counts candidates left out because every \
 receipt was read before; pass all_seen: true to see them. In a run the Lore app started, only \
 that run's corrections are returned and not_in_this_run counts the rest, which may still be \
-unread. Replies are paged: while next_cursor \
+unread. After them come the person's recent ordinary replies that no rule flagged, each alone \
+with signal: \"reply\" and its text cut to 600 characters: most correct nothing, so file only \
+those that correct the agent or state a standing rule. Results are paged: while next_cursor \
 is not null, call again with it, and read every page before you group anything.",
         input_schema: mine_schema,
         call: mine_candidates,
@@ -916,7 +920,8 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let all_seen = flag("all_seen").unwrap_or(false);
     let conn = open(&ctx.archive_dir)?;
     let turns = mine::read_turns(&conn).map_err(|e| e.to_string())?;
-    let found = mine::corrections_in(&turns, &mine::Limits::default());
+    let limits = mine::Limits::default();
+    let found = mine::corrections_in(&turns, &limits);
     let mut lessons = mine::lessons(found);
     mine::find_conflicts(&turns, &mut lessons);
     let before = lessons.len();
@@ -924,26 +929,39 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         lessons.retain(|l| l.score >= 0);
     }
     let left_out = before - lessons.len();
+    let pinned = std::env::var_os(CANDIDATES_FILE_ENV)
+        .filter(|p| !p.is_empty())
+        .map(|path| considered::read_ids(Path::new(&path)))
+        .transpose()
+        .map_err(|e| tool_error("internal", e, INTERNAL_FIX))?;
+    // Ordinary replies follow the rule-mined lessons, each on its own. A
+    // pinned run looks through every reply for its own, since one the app
+    // pinned may have aged out of the window by the time the agent asks;
+    // finding replies is one pass over the turns, with no grouping.
+    let since = match pinned {
+        Some(_) => i64::MIN,
+        None => lore_core::now_ms().saturating_sub(mine::REPLY_WINDOW_MS),
+    };
+    let mut replies = mine::replies_in(&turns, &limits, since);
+    if let Some(pinned) = &pinned {
+        replies.retain(|r| pinned.contains(&CorrectionId::of(r)));
+    }
+    lessons.extend(mine::reply_lessons(replies));
     let listed = lessons.len();
-    let (lessons, pinned_run) =
-        match std::env::var_os(CANDIDATES_FILE_ENV).filter(|p| !p.is_empty()) {
-            // A pinned run serves exactly its corrections, whatever it asks.
-            Some(path) => {
-                let pinned = considered::read_ids(Path::new(&path))
-                    .map_err(|e| tool_error("internal", e, INTERNAL_FIX))?;
-                (
-                    considered::mark(lessons, |id| pinned.contains(id), false),
-                    true,
-                )
-            }
-            None => {
-                let seen = considered_ids()?;
-                (
-                    considered::mark(lessons, |id| !seen.contains(id), all_seen),
-                    false,
-                )
-            }
-        };
+    let (lessons, pinned_run) = match pinned {
+        // A pinned run serves exactly its corrections, whatever it asks.
+        Some(pinned) => (
+            considered::mark(lessons, |id| pinned.contains(id), false),
+            true,
+        ),
+        None => {
+            let seen = considered_ids()?;
+            (
+                considered::mark(lessons, |id| !seen.contains(id), all_seen),
+                false,
+            )
+        }
+    };
     // Outside a pin, a hidden lesson was read by an earlier run. Inside one it
     // may never have been read; it is only not part of this run.
     let hidden = listed - lessons.len();
@@ -966,12 +984,12 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
                 context_shown += 1;
             }
             receipts.push(json!({
-                "correction_id": id.as_str(), "new": new,
+                "correction_id": id.as_str(), "new": new, "signal": r.signal.as_str(),
                 "session": r.session, "agent": r.agent,
                 "date": r.at_ms.and_then(crate::receipt::date),
                 "repo": session_repo(&conn, &r.session, r.repo.clone()),
                 "repo_path": r.repo_path,
-                "correction": redact(&r.text)?,
+                "correction": shown(&redact(&r.text)?, r.signal),
                 "before": r.preceding.as_deref().map(redact).transpose()?,
                 "after": r.following.as_deref().map(redact).transpose()?,
             }));
@@ -983,9 +1001,15 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
                 "date": later.at_ms.and_then(crate::receipt::date), "said": redact(&later.text)?,
             }));
         }
+        let reply = (lesson.receipts.iter()).all(|r| r.signal == mine::Signal::Reply);
+        let suggested = if reply {
+            Value::Null
+        } else {
+            json!(redact(&mine::suggest_rule(&lesson.text))?)
+        };
         candidates.push(json!({
-            "text": redact(&lesson.text)?,
-            "suggested_rule": redact(&mine::suggest_rule(&lesson.text))?,
+            "text": if reply { cut(&redact(&lesson.text)?) } else { redact(&lesson.text)? },
+            "suggested_rule": suggested,
             "conversations": lesson.conversations,
             "receipts": receipts,
             "may_conflict_with": conflicts,
@@ -1009,6 +1033,26 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }
     reply["cwd_repo"] = cwd_repo;
     Ok(reply)
+}
+
+/// `text` as a receipt shows it: a reply cut short, anything else whole.
+fn shown(text: &str, signal: mine::Signal) -> String {
+    if signal == mine::Signal::Reply {
+        cut(text)
+    } else {
+        text.to_owned()
+    }
+}
+
+/// `text` cut to [`MINE_REPLY_TEXT_CHARS`], saying how much was cut: a
+/// reply can be a whole pasted file.
+fn cut(text: &str) -> String {
+    let n = text.chars().count();
+    if n <= MINE_REPLY_TEXT_CHARS {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(MINE_REPLY_TEXT_CHARS).collect();
+    format!("{kept} [... {} more characters]", n - MINE_REPLY_TEXT_CHARS)
 }
 
 /// `{"name", "scope"}` for a repository, where `scope` is the `repo:<key>`

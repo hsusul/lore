@@ -19,6 +19,8 @@ Each candidate has the person's words, a suggested rule, receipts, and `may_conf
 
 Lore lists only candidates with a receipt no earlier run has read. Each receipt says whether it is `new`. Only `new` receipts need a rule. Older receipts are context: use them to group and to understand, but do not file a rule again for what they already said. If a new receipt sharpens a note you read in step 1, pass that note's id as `updates`.
 
+Receipts with `signal: "reply"` are ordinary replies the rules did not flag, and most of them correct nothing. Apply the same steps to them, and drop each one that does not correct the agent or state a standing rule.
+
 ## 3. Understand each candidate
 
 A correction alone is often unclear. "no, cause you never get to access it" means nothing without the turn it answers. For every receipt, read `before`, then `correction`, then `after`, and work out two things.

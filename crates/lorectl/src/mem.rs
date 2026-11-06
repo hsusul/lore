@@ -55,6 +55,8 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
                       read as one-off orders
                       --new: only lessons with a correction no Find
                       lessons run has read yet
+                      --replies: also list ordinary replies from the
+                      last 48 hours that no rule flagged, one each
     eval              Score a policy for accepting proposals without you
                       against your own accepts and rejects; writes nothing
                       [--policy never|starting-bar, default never] [--json]

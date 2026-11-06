@@ -156,7 +156,30 @@ pub enum Signal {
     /// It states a standing rule: "make sure", "please always", "from now on",
     /// "going forward", "every time", "each time", or "whenever".
     Rule,
+    /// An ordinary reply to the agent that no rule flagged, offered for an
+    /// agent to judge. See [`replies_in`].
+    Reply,
 }
+
+impl Signal {
+    /// How `lorectl mem mine --json` and `mine_candidates` name it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Signal::Correction => "correction",
+            Signal::Repeat => "repeat",
+            Signal::Rule => "rule",
+            Signal::Reply => "reply",
+        }
+    }
+}
+
+/// How far back a lessons run offers ordinary replies: two days, so a run a
+/// day apart reads each reply once and a missed day is still caught.
+pub const REPLY_WINDOW_MS: i64 = 48 * 60 * 60 * 1000;
+
+/// How a continued Claude Code session opens: a summary the harness wrote.
+const CONTINUED: &str = "This session is being continued";
 
 /// A user turn that corrects the agent, with where it was said.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +340,99 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
         }
         earlier.push(words);
     }
+    found
+}
+
+/// The person's ordinary replies to the agent at or after `since_ms` that
+/// [`corrections_at`] did not pick, as [`Signal::Reply`] candidates, oldest
+/// first. A reply is a user turn right after an assistant turn in the same
+/// session that does not invoke a skill or slash command, is not a
+/// continued session's summary, and does not open with leftover markup.
+/// Its text is kept whole; whoever shows it cuts it short. A resume or fork
+/// copy of a reply is kept once, the earliest session's, as in [`lessons`].
+/// Most replies correct nothing: they are for an agent to judge, not rules.
+#[must_use]
+pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidate> {
+    let picked: BTreeSet<usize> = corrections_at(turns, limits)
+        .into_iter()
+        .map(|(i, _)| i)
+        .collect();
+    let invoked: BTreeSet<(&str, i64)> = (turns.1.iter())
+        .map(|i| (i.session.as_str(), i.seq))
+        .collect();
+    let turns = &turns.0;
+    let mut found: Vec<Candidate> = Vec::new();
+    for (i, turn) in turns.iter().enumerate() {
+        if !turn.user
+            || picked.contains(&i)
+            || turn.at_ms.unwrap_or(i64::MIN) < since_ms
+            || invoked.contains(&(turn.session.as_str(), turn.seq))
+        {
+            continue;
+        }
+        let Some(before) = i
+            .checked_sub(1)
+            .map(|j| &turns[j])
+            .filter(|b| b.session == turn.session && !b.user)
+        else {
+            continue;
+        };
+        let text = one_line(&turn.text);
+        if text.is_empty()
+            || text.starts_with('<')
+            || text.starts_with(REINVOKED)
+            || text.starts_with(CONTINUED)
+            || is_invocation(&text)
+        {
+            continue;
+        }
+        found.push(Candidate {
+            session: turn.session.clone(),
+            agent: turn.agent.clone(),
+            repo: turn.repo.clone(),
+            repo_path: turn.repo_path.clone(),
+            at_ms: turn.at_ms,
+            preceding: Some(
+                one_line(&before.text)
+                    .chars()
+                    .take(PRECEDING_CHARS)
+                    .collect(),
+            ),
+            following: turns
+                .get(i + 1)
+                .filter(|a| a.session == turn.session && !a.user)
+                .map(|a| one_line(&a.text).chars().take(FOLLOWING_CHARS).collect()),
+            text,
+            signal: Signal::Reply,
+        });
+    }
+    found.sort_by(|a, b| (a.at_ms, &a.session, &a.text).cmp(&(b.at_ms, &b.session, &b.text)));
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|c| c.at_ms.is_none() || seen.insert((c.at_ms, c.text.to_lowercase())));
+    found
+}
+
+/// Each reply as a lesson of its own, newest first: replies are never grouped
+/// with each other or with rule-mined lessons, and no [`rule_score`] hides
+/// them.
+#[must_use]
+pub fn reply_lessons(replies: Vec<Candidate>) -> Vec<Lesson> {
+    let mut found: Vec<Lesson> = replies
+        .into_iter()
+        .map(|reply| {
+            let hash = blake3::hash(format!("{}\n{}", reply.session, reply.text).as_bytes());
+            Lesson {
+                id: hash.to_hex()[..10].to_owned(),
+                text: reply.text.clone(),
+                conversations: 1,
+                score: 0,
+                latest_ms: reply.at_ms,
+                receipts: vec![reply],
+                conflicts: Vec::new(),
+            }
+        })
+        .collect();
+    found.reverse();
     found
 }
 

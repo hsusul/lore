@@ -11,6 +11,10 @@
 //! `--new` lists only lessons with a correction no finished lessons run has
 //! read, per the vault's considered ledger; `--json` marks each receipt
 //! `new` either way. It records nothing in the ledger.
+//!
+//! `--replies` also lists, after them, the ordinary replies of the last
+//! [`mine::REPLY_WINDOW_MS`] that no rule flagged, each on its own, as a
+//! Find lessons run offers them.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,7 +25,7 @@ use lore_core::storage;
 use lore_memory::considered::{self, Marked};
 use lore_memory::filing;
 use lore_memory::inbox;
-use lore_memory::mine::{self, Candidate, Lesson, Signal};
+use lore_memory::mine::{self, Candidate, Lesson};
 use lore_memory::review::ReviewError;
 use lore_memory::vault::{self, Vault};
 use serde_json::{json, Value};
@@ -41,7 +45,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let (mut limit, mut json) = (DEFAULT_LIMIT, invocation.json);
     let (mut propose, mut ids, mut vault_dir) = (false, Vec::new(), invocation.vault.clone());
     let mut limits = mine::Limits::default();
-    let (mut all, mut new_only) = (false, false);
+    let (mut all, mut new_only, mut replies) = (false, false, false);
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
             Short('h') | Long("help") => {
@@ -59,6 +63,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
             Long("json") => json = true,
             Long("all") => all = true,
             Long("new") => new_only = true,
+            Long("replies") => replies = true,
             Long("propose") => propose = true,
             Long("vault") => {
                 let value = parser.value().map_err(|e| usage(e.to_string()))?;
@@ -82,6 +87,12 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
         lessons.retain(|l| l.score >= 0);
     }
     let left_out = before - lessons.len();
+    if replies {
+        let since = lore_core::now_ms().saturating_sub(mine::REPLY_WINDOW_MS);
+        lessons.extend(mine::reply_lessons(mine::replies_in(
+            &turns, &limits, since,
+        )));
+    }
     // No vault, or none yet, means no ledger: every correction is new.
     let seen = vault::resolve_dir(vault_dir.as_deref())
         .ok()
@@ -200,7 +211,7 @@ fn lesson_json(marked: &Marked) -> Value {
                 "correction_id": id.as_str(), "new": new,
                 "session": r.session, "agent": r.agent, "date": r.at_ms.and_then(date),
                 "text": r.text, "after": r.preceding, "repo": r.repo,
-                "signal": match r.signal { Signal::Correction => "correction", Signal::Repeat => "repeat", Signal::Rule => "rule" },
+                "signal": r.signal.as_str(),
             })
         })
         .collect();
