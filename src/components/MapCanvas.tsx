@@ -1,9 +1,25 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
-import { clusterAt, dotAt, draw, fit, onto, zoomAbout, type Frame, type View } from "../map/draw";
+import {
+  clusterAt,
+  dotAt,
+  draw,
+  fit,
+  onto,
+  zoomAbout,
+  type Frame,
+  type View,
+} from "../map/draw";
 import type { Dot, MapModel } from "../map/layout";
 
-const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+const reducedMotion = () =>
+  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
 /**
  * The map, drawn on a canvas. Drag or two-finger scroll pans, pinch zooms
@@ -15,6 +31,7 @@ export function MapCanvas({
   selectedId,
   inset,
   onSelect,
+  onDeselect,
   label,
 }: {
   model: MapModel;
@@ -22,6 +39,8 @@ export function MapCanvas({
   /** Width the card covers on the right. */
   inset: number;
   onSelect: (dot: Dot) => void;
+  /** A click that lands on no dot lets go of the opened one. */
+  onDeselect: () => void;
   label: string;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
@@ -39,7 +58,10 @@ export function MapCanvas({
     const g = c?.getContext("2d");
     if (!c || !g) return;
     const dpr = window.devicePixelRatio || 1;
-    if (c.width !== Math.round(size.width * dpr) || c.height !== Math.round(size.height * dpr)) {
+    if (
+      c.width !== Math.round(size.width * dpr) ||
+      c.height !== Math.round(size.height * dpr)
+    ) {
       c.width = Math.round(size.width * dpr);
       c.height = Math.round(size.height * dpr);
     }
@@ -56,7 +78,14 @@ export function MapCanvas({
       view.current,
       { width: size.width, height: size.height, inset },
       home.current,
-      { ink: token("--mist-ac"), quiet: token("--mist-dotm"), name: token("--mist-t1"), count: token("--mist-t2"), ground: token("--mist-bg"), font: getComputedStyle(c).fontFamily },
+      {
+        ink: token("--mist-ac"),
+        quiet: token("--mist-dotm"),
+        name: token("--mist-t1"),
+        count: token("--mist-t2"),
+        ground: token("--mist-bg"),
+        font: getComputedStyle(c).fontFamily,
+      },
       selectedId,
       focus.current,
     );
@@ -71,7 +100,11 @@ export function MapCanvas({
       const step = (now: number) => {
         const k = duration === 0 ? 1 : Math.min(1, (now - t0) / duration);
         const e = 1 - Math.pow(1 - k, 3);
-        view.current = { s: from.s + (to.s - from.s) * e, tx: from.tx + (to.tx - from.tx) * e, ty: from.ty + (to.ty - from.ty) * e };
+        view.current = {
+          s: from.s + (to.s - from.s) * e,
+          tx: from.tx + (to.tx - from.tx) * e,
+          ty: from.ty + (to.ty - from.ty) * e,
+        };
         paint();
         if (k < 1) anim.current = requestAnimationFrame(step);
       };
@@ -83,7 +116,8 @@ export function MapCanvas({
   useLayoutEffect(() => {
     const el = wrap.current;
     if (!el) return;
-    const measure = () => setSize({ width: el.clientWidth, height: el.clientHeight });
+    const measure = () =>
+      setSize({ width: el.clientWidth, height: el.clientHeight });
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
@@ -93,7 +127,11 @@ export function MapCanvas({
 
   // A new layout or a resized window starts from the whole map.
   useEffect(() => {
-    home.current = fit(model, { width: size.width, height: size.height, inset });
+    home.current = fit(model, {
+      width: size.width,
+      height: size.height,
+      inset,
+    });
     if (!focus.current) glide(home.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refit only when the map or the space for it changes
   }, [model, size.width, size.height, inset]);
@@ -121,7 +159,11 @@ export function MapCanvas({
       const { x, y } = point(e);
       view.current = e.ctrlKey
         ? zoomAbout(view.current, Math.exp(-e.deltaY * 0.01), x, y)
-        : { ...view.current, tx: view.current.tx - e.deltaX, ty: view.current.ty - e.deltaY };
+        : {
+            ...view.current,
+            tx: view.current.tx - e.deltaX,
+            ty: view.current.ty - e.deltaY,
+          };
       paint();
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -138,7 +180,10 @@ export function MapCanvas({
         tabIndex={0}
         style={{ width: size.width, height: size.height }}
         onKeyDown={(e) => {
-          if (e.key === "Escape") goHome();
+          if (e.key === "Escape") {
+            onDeselect();
+            goHome();
+          }
         }}
         onPointerDown={(e) => {
           drag.current = { ...point(e), moved: false };
@@ -148,14 +193,20 @@ export function MapCanvas({
           const d = drag.current;
           if (!d) {
             const { x, y } = point(e);
-            e.currentTarget.style.cursor = dotAt(model, view.current, x, y) ? "pointer" : "grab";
+            e.currentTarget.style.cursor = dotAt(model, view.current, x, y)
+              ? "pointer"
+              : "grab";
             return;
           }
           const { x, y } = point(e);
           if (!d.moved && Math.hypot(x - d.x, y - d.y) < 3) return;
           d.moved = true;
           cancelAnimationFrame(anim.current);
-          view.current = { ...view.current, tx: view.current.tx + x - d.x, ty: view.current.ty + y - d.y };
+          view.current = {
+            ...view.current,
+            tx: view.current.tx + x - d.x,
+            ty: view.current.ty + y - d.y,
+          };
           d.x = x;
           d.y = y;
           paint();
@@ -170,6 +221,7 @@ export function MapCanvas({
             onSelect(dot);
             return;
           }
+          onDeselect();
           const cluster = clusterAt(model, view.current, x, y);
           if (cluster && cluster.key !== focus.current) {
             focus.current = cluster.key;
