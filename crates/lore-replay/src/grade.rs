@@ -69,9 +69,18 @@ fn asks() -> Option<&'static Regex> {
 /// partial record still grades.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunView {
+    /// Absent in harness 1 records.
+    #[serde(default)]
+    pub harness: Option<u32>,
     pub case: String,
     pub arm: ArmName,
     pub trial: u32,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub trim: Option<u32>,
+    #[serde(default)]
+    pub max_turns: Option<u32>,
     #[serde(default)]
     pub fidelity: Value,
     #[serde(default)]
@@ -309,7 +318,6 @@ pub fn grade(opts: &GradeOptions) -> Result<GradeSummary> {
         .filter(|g| !opts.judge || g.judge.is_some())
         .map(|g| (g.case, g.arm, g.trial))
         .collect();
-    let judge_name = opts.judge.then(|| claude::judge_name(&opts.model));
     let mut summary = GradeSummary::default();
     let mut out = append(&opts.out)?;
     let mut cases_seen = BTreeSet::new();
@@ -337,31 +345,8 @@ pub fn grade(opts: &GradeOptions) -> Result<GradeSummary> {
             summary.already += 1;
             continue;
         }
-        let grader = case.label.as_ref().and_then(|l| l.grader.as_ref());
-        let det = grader.and_then(|g| deterministic(g, &run));
-        let (judge, judge_reason) = match &judge_name {
-            Some(_) => {
-                let (v, r) = parse_verdict(&claude::ask(&opts.model, &judge_prompt(case, &run))?);
-                (Some(v), Some(r))
-            }
-            None => (None, None),
-        };
-        let line = GradeLine {
-            case: run.case.clone(),
-            arm: run.arm,
-            trial: run.trial,
-            grader: grader.map(|g| g.kind().to_owned()),
-            repeat_det: det,
-            judge,
-            judge_reason,
-            fidelity: match &run.fidelity {
-                Value::String(s) => Some(s.clone()),
-                _ => None,
-            },
-            foreign_paths: run.foreign_paths.clone(),
-            cost_usd: run.cost_usd,
-            graded_by: Some(graded_by(det, judge_name.as_deref())),
-        };
+        let model = opts.judge.then_some(opts.model.as_str());
+        let line = grade_run(case, &run, model, Judging::Always)?;
         write_line(&mut out, &opts.out, &line)?;
         summary.graded += 1;
     }
@@ -371,7 +356,61 @@ pub fn grade(opts: &GradeOptions) -> Result<GradeSummary> {
     Ok(summary)
 }
 
-fn write_line<T: serde::Serialize>(out: &mut std::fs::File, path: &Path, line: &T) -> Result<()> {
+/// When [`grade_run`] asks the model judge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Judging {
+    /// On every run, beside any deterministic verdict (`grade`).
+    Always,
+    /// Only when the label names no deterministic grader (screening).
+    WithoutDeterministic,
+}
+
+/// Grade one run of `case`. `judge_model` is the judge to ask, `None` to ask
+/// none; `judging` says whether to ask it when a deterministic verdict exists.
+pub fn grade_run(
+    case: &LabeledCase,
+    run: &RunView,
+    judge_model: Option<&str>,
+    judging: Judging,
+) -> Result<GradeLine> {
+    let grader = case.label.as_ref().and_then(|l| l.grader.as_ref());
+    let det = grader.and_then(|g| deterministic(g, run));
+    let model = judge_model.filter(|_| judging == Judging::Always || det.is_none());
+    let (judge, judge_reason) = match model {
+        Some(model) => {
+            let (v, r) = parse_verdict(&claude::ask(model, &judge_prompt(case, run))?);
+            (Some(v), Some(r))
+        }
+        None => (None, None),
+    };
+    let judge_name = model.map(claude::judge_name);
+    Ok(GradeLine {
+        case: run.case.clone(),
+        arm: run.arm,
+        trial: run.trial,
+        grader: grader.map(|g| g.kind().to_owned()),
+        repeat_det: det,
+        judge,
+        judge_reason,
+        fidelity: match &run.fidelity {
+            Value::String(s) => Some(s.clone()),
+            _ => None,
+        },
+        foreign_paths: run.foreign_paths.clone(),
+        cost_usd: run.cost_usd,
+        graded_by: Some(graded_by(det, judge_name.as_deref())),
+        harness: Some(run.harness.unwrap_or(1)),
+        model: run.model.clone(),
+        trim: Some(run.trim.unwrap_or(0)),
+        max_turns: run.max_turns,
+    })
+}
+
+pub(crate) fn write_line<T: serde::Serialize>(
+    out: &mut std::fs::File,
+    path: &Path,
+    line: &T,
+) -> Result<()> {
     let json = serde_json::to_string(line).map_err(|source| Error::Json {
         path: path.to_owned(),
         source,

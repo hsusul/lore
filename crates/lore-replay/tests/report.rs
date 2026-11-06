@@ -60,7 +60,158 @@ fn fixture(dir: &Path) {
 }
 
 fn report(dir: &Path, extra: &[&str]) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_lore-replay"))
+    let out = report_output(dir, extra);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+fn append_lines(path: &Path, lines: &[Value]) {
+    let mut text = std::fs::read_to_string(path).unwrap();
+    for l in lines {
+        text.push_str(&format!("{l}\n"));
+    }
+    std::fs::write(path, text).unwrap();
+}
+
+#[test]
+fn screening_runs_are_left_out_and_screened_cases_counted() {
+    let tmp = tempfile::tempdir().unwrap();
+    fixture(tmp.path());
+    let plain = report(tmp.path(), &[]);
+    // A trial 0 that would move every rate if it counted.
+    let zero = |case: &str, arm: &str, v: &str| {
+        json!({"case": case, "arm": arm, "trial": 0, "grader": "judge",
+               "repeat_det": null, "judge": v, "graded_by": "j"})
+    };
+    append_lines(
+        &tmp.path().join("grades.jsonl"),
+        &["c:0", "c:1", "c:2", "c:3"]
+            .iter()
+            .flat_map(|c| [zero(c, "none", "NO"), zero(c, "oracle", "YES")])
+            .collect::<Vec<_>>(),
+    );
+    let text = report(tmp.path(), &[]);
+    assert!(text.contains("none    100% [100%, 100%] (n=4 cases, 12 trials)"));
+    assert!(text.contains("oracle  0% [0%, 0%] (n=4 cases, 12 trials)"));
+    assert!(text.contains("the 8 screening runs (trial 0) are left out of every rate"));
+    assert!(!plain.contains("screening"));
+
+    write_lines(
+        &tmp.path().join("screen.jsonl"),
+        &[
+            json!({"case": "c:0", "verdict": "YES", "reason": "r"}),
+            json!({"case": "c:0", "arm": "file", "same_as_none": true, "reason": "r"}),
+            json!({"case": "c:8", "verdict": "NO", "reason": "r"}),
+            json!({"case": "c:9", "verdict": "UNKNOWN", "reason": "r"}),
+        ],
+    );
+    let text = report(tmp.path(), &["--screen", "screen.jsonl"]);
+    assert!(text.contains(
+        "screened out: 2 of 3 cases did not reproduce in the screening run (synthetic data)."
+    ));
+    assert!(text.contains("Rates are conditional on cases that reproduced at screening"));
+    for line in text
+        .lines()
+        .filter(|l| l.chars().any(|c| c.is_ascii_digit()))
+    {
+        assert!(line.contains("synthetic data"), "untagged: {line}");
+    }
+}
+
+#[test]
+fn mixed_harness_versions_are_refused_unless_one_is_picked() {
+    let tmp = tempfile::tempdir().unwrap();
+    fixture(tmp.path());
+    let v1 = report(tmp.path(), &[]);
+    append_lines(
+        &tmp.path().join("grades.jsonl"),
+        &[
+            json!({"case": "c:0", "arm": "none", "trial": 9, "grader": "judge",
+                 "repeat_det": null, "judge": "NO", "graded_by": "j", "harness": 2}),
+        ],
+    );
+    let out = report_output(tmp.path(), &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr)
+        .contains("the grades mix harness versions 1 and 2; pass --harness N"));
+    assert_eq!(report(tmp.path(), &["--harness", "1"]), v1);
+    let v2 = report(tmp.path(), &["--harness", "2"]);
+    assert!(v2.contains("none    n=1 cases, 1 trials; no rate (stop rule)"));
+}
+
+#[test]
+fn mixed_models_are_refused_unless_settings_pick_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    fixture(tmp.path());
+    let path = tmp.path().join("grades.jsonl");
+    // Every fixture grade becomes a sonnet run at trim 0, plus one haiku
+    // trim-20 group with only none trials.
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<Value> = text
+        .lines()
+        .map(|l| {
+            let mut v: Value = serde_json::from_str(l).unwrap();
+            v["harness"] = json!(2);
+            v["model"] = json!("sonnet");
+            v["trim"] = json!(0);
+            v["max_turns"] = json!(6);
+            v
+        })
+        .collect();
+    write_lines(&path, &lines);
+    let sonnet_only = report(tmp.path(), &[]);
+    assert!(sonnet_only
+        .lines()
+        .next()
+        .unwrap()
+        .contains("Settings: harness 2, model sonnet, trim 0, max turns 6."));
+    for t in 1..=3 {
+        lines.push(
+            json!({"case": "c:0", "arm": "none", "trial": t, "grader": "judge",
+                          "repeat_det": null, "judge": "YES", "graded_by": "j", "harness": 2,
+                          "model": "haiku", "trim": 20, "max_turns": 6}),
+        );
+    }
+    write_lines(&path, &lines);
+
+    let out = report_output(tmp.path(), &[]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("the grades mix models haiku and sonnet; trims 0 and 20; pass --harness N or --settings"),
+        "{err}"
+    );
+    // Picking only a key that does not separate the groups is still refused.
+    assert!(!report_output(tmp.path(), &["--settings", "max_turns=6"])
+        .status
+        .success());
+
+    assert_eq!(
+        report(tmp.path(), &["--settings", "model=sonnet"]),
+        sonnet_only
+    );
+    let haiku = report(
+        tmp.path(),
+        &["--settings", "model=haiku,trim=20,max_turns=6"],
+    );
+    assert!(haiku
+        .lines()
+        .next()
+        .unwrap()
+        .contains("Settings: harness 2, model haiku, trim 20, max turns 6."));
+    assert!(haiku.contains("(n=1 cases, 3 trials)"), "{haiku}");
+
+    let bad = report_output(tmp.path(), &["--settings", "colour=red"]);
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("unknown setting `colour`"));
+}
+
+fn report_output(dir: &Path, extra: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_lore-replay"))
         .current_dir(dir)
         .args([
             "report",
@@ -77,13 +228,7 @@ fn report(dir: &Path, extra: &[&str]) -> String {
         ])
         .args(extra)
         .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap()
+        .unwrap()
 }
 
 #[test]

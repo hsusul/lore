@@ -3,6 +3,13 @@
 //!
 //! The rules, in the order the report applies them:
 //!
+//! - Grades from one group of settings only: harness version (see
+//!   [`crate::types::HARNESS`]), model, trim, and turn cap. Mixed groups are
+//!   refused unless a [`SettingsPick`] narrows them to one, and the group
+//!   reported is printed in the header.
+//! - Trial 0 is `sweep`'s screening run, which decides whether a case runs
+//!   at all, so it is left out of every rate: the rates are conditional on
+//!   the cases that reproduced at screening.
 //! - A case counts only when its label says `mistake` and `visible`.
 //! - A run's verdict is the deterministic one when it exists, else the
 //!   judge's. UNKNOWN and unjudged runs are excluded and counted.
@@ -31,7 +38,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::label::{read_labels, read_lines};
-use crate::types::{ArmName, ArmsFile, GradeLine, ShownLine, Verdict};
+use crate::types::{ArmName, ArmsFile, GradeLine, ScreenLine, ShownLine, Verdict};
 
 /// The bootstrap's seed unless `--seed` says otherwise: the preregistration
 /// date, so a rerun prints the same intervals.
@@ -130,6 +137,118 @@ pub struct Input {
     pub shown: Vec<ShownLine>,
     /// (case, arm) pairs whose context is empty.
     pub empty: HashSet<(String, ArmName)>,
+    /// From a screen file: cases that did not reproduce (`k`) of the cases
+    /// screened (`n`).
+    pub screened_out: Option<Count>,
+    /// The settings every grade shares; `None` without grades.
+    pub settings: Option<Settings>,
+}
+
+/// The settings a group of runs shares. Runs with different settings measure
+/// different things, so a report covers one group.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct Settings {
+    pub harness: u32,
+    /// `None` when the grade line does not say (graded before it was copied).
+    pub model: Option<String>,
+    pub trim: u32,
+    /// `None` when the run did not record it.
+    pub max_turns: Option<u32>,
+}
+
+const UNRECORDED: &str = "unrecorded";
+
+impl Settings {
+    #[must_use]
+    pub fn of(grade: &GradeLine) -> Self {
+        Self {
+            harness: grade.harness_version(),
+            model: grade.model.clone(),
+            trim: grade.trim.unwrap_or(0),
+            max_turns: grade.max_turns,
+        }
+    }
+
+    fn model_str(&self) -> String {
+        self.model.clone().unwrap_or_else(|| UNRECORDED.to_owned())
+    }
+
+    fn max_turns_str(&self) -> String {
+        self.max_turns
+            .map_or_else(|| UNRECORDED.to_owned(), |m| m.to_string())
+    }
+}
+
+impl std::fmt::Display for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "harness {}, model {}, trim {}, max turns {}",
+            self.harness,
+            self.model_str(),
+            self.trim,
+            self.max_turns_str()
+        )
+    }
+}
+
+/// `--settings KEY=VALUE,...`: keep the grades whose settings match every
+/// key given. Keys: `harness`, `model`, `trim`, `max_turns`. A value of
+/// `unrecorded` matches a model or turn cap the grade does not record.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SettingsPick {
+    pub harness: Option<u32>,
+    pub model: Option<String>,
+    pub trim: Option<u32>,
+    pub max_turns: Option<String>,
+}
+
+impl SettingsPick {
+    #[must_use]
+    pub fn matches(&self, s: &Settings) -> bool {
+        self.harness.is_none_or(|h| h == s.harness)
+            && self.model.as_ref().is_none_or(|m| *m == s.model_str())
+            && self.trim.is_none_or(|t| t == s.trim)
+            && self
+                .max_turns
+                .as_ref()
+                .is_none_or(|m| *m == s.max_turns_str())
+    }
+}
+
+impl FromStr for SettingsPick {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let mut pick = Self::default();
+        for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let (key, value) = part
+                .split_once('=')
+                .ok_or_else(|| format!("`{part}` is not KEY=VALUE"))?;
+            let (key, value) = (key.trim(), value.trim());
+            let number = |v: &str| {
+                v.parse::<u32>()
+                    .map_err(|_| format!("{key} must be a number, not `{v}`"))
+            };
+            match key {
+                "harness" => pick.harness = Some(number(value)?),
+                "model" => pick.model = Some(value.to_owned()),
+                "trim" => pick.trim = Some(number(value)?),
+                "max_turns" | "max-turns" => {
+                    if value != UNRECORDED {
+                        number(value)?;
+                    }
+                    pick.max_turns = Some(value.to_owned());
+                }
+                other => {
+                    return Err(format!(
+                        "unknown setting `{other}`; expected harness, model, trim, or max_turns"
+                    ))
+                }
+            }
+        }
+        Ok(pick)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -220,6 +339,8 @@ pub struct StopRule {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Report {
     pub data: Data,
+    /// The settings of every run reported; `None` without grades.
+    pub settings: Option<Settings>,
     pub seed: u64,
     pub resamples: usize,
     pub labeled_cases: usize,
@@ -229,6 +350,10 @@ pub struct Report {
     pub runs_excluded_unknown: usize,
     /// Runs of cases the label excludes.
     pub runs_on_excluded_cases: usize,
+    /// Trial 0 runs (screening), left out of every rate.
+    pub screening_runs_excluded: usize,
+    /// Cases that did not reproduce at screening, of the cases screened.
+    pub screened_out: Option<Count>,
     pub stop: StopRule,
     pub arms: Vec<ArmSummary>,
     pub per_case: Vec<CaseRow>,
@@ -268,6 +393,9 @@ pub fn analyze(input: &Input, data: Data, seed: u64) -> Report {
     for g in &input.grades {
         runs.insert((g.case.as_str(), g.arm, g.trial), g);
     }
+    let before = runs.len();
+    runs.retain(|(_, _, trial), _| *trial != 0);
+    let screening_runs_excluded = before - runs.len();
     let mut raw: HashMap<(&str, ArmName), (usize, usize)> = HashMap::new();
     let (mut with_verdict, mut unknown, mut outside) = (0, 0, 0);
     let mut agreement = Count::default();
@@ -435,6 +563,7 @@ pub fn analyze(input: &Input, data: Data, seed: u64) -> Report {
 
     let mut report = Report {
         data,
+        settings: input.settings.clone(),
         seed,
         resamples: RESAMPLES,
         labeled_cases: input.labeled,
@@ -442,6 +571,8 @@ pub fn analyze(input: &Input, data: Data, seed: u64) -> Report {
         runs_with_verdict: with_verdict,
         runs_excluded_unknown: unknown,
         runs_on_excluded_cases: outside,
+        screening_runs_excluded,
+        screened_out: input.screened_out,
         stop,
         arms: arm_summaries,
         per_case,
@@ -503,9 +634,14 @@ impl Report {
             _ => format!("no rate (n={} cases, {} trials)", r.cases, r.trials),
         };
         let mut s = String::new();
+        let settings = self
+            .settings
+            .as_ref()
+            .map(|set| format!(" Settings: {set}."))
+            .unwrap_or_default();
         let _ = writeln!(
             s,
-            "lore-replay report. Every number below is measured on {tag}."
+            "lore-replay report.{settings} Every number below is measured on {tag}."
         );
         let stop = &self.stop;
         if go {
@@ -528,6 +664,20 @@ impl Report {
                 s,
                 "Intervals: 95%, cluster bootstrap over cases, {} resamples, seed {} ({tag}).",
                 self.resamples, self.seed
+            );
+        }
+        if let Some(c) = self.screened_out {
+            let _ = writeln!(
+                s,
+                "screened out: {} of {} cases did not reproduce in the screening run ({tag}).",
+                c.k, c.n
+            );
+        }
+        if self.screened_out.is_some() || self.screening_runs_excluded > 0 {
+            let _ = writeln!(
+                s,
+                "Rates are conditional on cases that reproduced at screening; the {} screening runs (trial 0) are left out of every rate ({tag}).",
+                self.screening_runs_excluded
             );
         }
         let _ = writeln!(
@@ -661,8 +811,66 @@ pub struct ReportOptions {
     pub grades: PathBuf,
     pub shown: Option<PathBuf>,
     pub arms: Option<PathBuf>,
+    /// `sweep`'s `screen.jsonl`.
+    pub screen: Option<PathBuf>,
+    /// Report only grades whose settings match (`--settings`, `--harness`).
+    pub settings: SettingsPick,
     pub data: Data,
     pub seed: u64,
+}
+
+/// Keep the grades whose settings `pick` matches, and the one settings group
+/// they share (`None` when none is left). More than one group left is an
+/// error naming what differs.
+pub fn one_group(
+    grades: Vec<GradeLine>,
+    pick: &SettingsPick,
+) -> Result<(Vec<GradeLine>, Option<Settings>)> {
+    let kept: Vec<GradeLine> = grades
+        .into_iter()
+        .filter(|g| pick.matches(&Settings::of(g)))
+        .collect();
+    let groups: std::collections::BTreeSet<Settings> = kept.iter().map(Settings::of).collect();
+    if groups.len() > 1 {
+        let mut parts = Vec::new();
+        let mut differ = |what: &str, values: Vec<String>| {
+            let mut values = values;
+            values.sort();
+            values.dedup();
+            if values.len() > 1 {
+                parts.push(format!("{what} {}", values.join(" and ")));
+            }
+        };
+        differ(
+            "harness versions",
+            groups.iter().map(|s| s.harness.to_string()).collect(),
+        );
+        differ("models", groups.iter().map(Settings::model_str).collect());
+        differ("trims", groups.iter().map(|s| s.trim.to_string()).collect());
+        differ(
+            "turn caps",
+            groups.iter().map(Settings::max_turns_str).collect(),
+        );
+        return Err(Error::MixedSettings(parts.join("; ")));
+    }
+    let settings = groups.into_iter().next();
+    Ok((kept, settings))
+}
+
+/// Cases screened out (`k`) of cases screened (`n`), the last verdict per
+/// case winning.
+#[must_use]
+pub fn screen_count(lines: &[ScreenLine]) -> Count {
+    let mut last: HashMap<&str, Verdict> = HashMap::new();
+    for line in lines {
+        if let Some(v) = line.verdict {
+            last.insert(line.case.as_str(), v);
+        }
+    }
+    Count {
+        k: last.values().filter(|v| **v != Verdict::Yes).count(),
+        n: last.len(),
+    }
 }
 
 /// Read the files the report needs.
@@ -700,12 +908,22 @@ pub fn load(opts: &ReportOptions) -> Result<Input> {
         }
         None => Vec::new(),
     };
+    let screened_out = match &opts.screen {
+        Some(path) => {
+            read_required(path)?;
+            Some(screen_count(&read_lines(path)?))
+        }
+        None => None,
+    };
+    let (grades, settings) = one_group(read_lines(&opts.grades)?, &opts.settings)?;
     Ok(Input {
         labeled: labels.iter().filter(|c| c.label.is_some()).count(),
         cases,
-        grades: read_lines(&opts.grades)?,
+        grades,
         shown,
         empty,
+        screened_out,
+        settings,
     })
 }
 
@@ -730,6 +948,10 @@ mod tests {
             foreign_paths: Vec::new(),
             cost_usd: None,
             graded_by: None,
+            harness: None,
+            model: None,
+            trim: None,
+            max_turns: None,
         }
     }
 
@@ -740,9 +962,9 @@ mod tests {
         let mut cases = Vec::new();
         for (i, &(n, a)) in per_case.iter().enumerate() {
             let id = format!("c:{i}");
-            for t in 0..3 {
-                grades.push(grade(&id, ArmName::None, t, Some(t < n as u32)));
-                grades.push(grade(&id, arm, t, Some(t < a as u32)));
+            for t in 1..=3 {
+                grades.push(grade(&id, ArmName::None, t, Some(t <= n as u32)));
+                grades.push(grade(&id, arm, t, Some(t <= a as u32)));
             }
             cases.push((id, "w".to_owned()));
         }
@@ -851,7 +1073,7 @@ mod tests {
         det_only.judge = None;
         inp.grades.push(det_only);
         // A later line for the same run replaces the earlier one.
-        inp.grades.push(grade("c:0", ArmName::None, 0, None));
+        inp.grades.push(grade("c:0", ArmName::None, 1, None));
         let r = analyze(&inp, Data::Synthetic, DEFAULT_SEED);
         assert_eq!(r.runs_excluded_unknown, 3);
         assert_eq!(r.runs_on_excluded_cases, 1);

@@ -31,6 +31,7 @@ pub mod report;
 pub mod run;
 pub mod scratch;
 pub mod session;
+pub mod sweep;
 pub mod types;
 
 use std::path::Path;
@@ -38,7 +39,7 @@ use std::path::Path;
 pub use error::{Error, Result};
 pub use types::{
     Action, Arm, ArmName, ArmsFile, Case, Fidelity, GradeLine, Grader, Label, LabeledCase,
-    RunRecord, ShownLine, Verdict,
+    RunRecord, ScreenLine, ShownLine, Verdict, DELIVERY, HARNESS,
 };
 
 /// The case `id` from a `cases.jsonl` file. Blank lines are allowed; any

@@ -44,6 +44,10 @@ pub enum Error {
     NoHome,
     #[error("the model judge gave no answer: {0}")]
     Judge(String),
+    #[error("case `{0}` has no label; sweep screens each case with its label's grader")]
+    Unlabeled(String),
+    #[error("the grades mix {0}; pass --harness N or --settings KEY=VALUE,... (harness, model, trim, max_turns) to report one group")]
+    MixedSettings(String),
 }
 
 impl Error {
