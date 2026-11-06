@@ -43,6 +43,15 @@ fn sessions(dir: &std::path::Path) -> rusqlite::Connection {
             "This session is being continued from a previous conversation that ran out of context.",
         ),
         ("assistant", "Resuming the work."),
+        ("user", "[Request interrupted by user for tool use]"),
+        ("assistant", "Stopped."),
+        ("user", "[Image #1]"),
+        ("assistant", "That is the login screen."),
+        (
+            "user",
+            "Base directory for this skill: /skills/review Review the diff.",
+        ),
+        ("assistant", "Reviewing."),
         ("user", "ok ship it"),
         ("assistant", "Shipped."),
     ]
@@ -83,8 +92,9 @@ fn picks_plain_replies_after_an_agent_turn_inside_the_window() {
     let turns = read_turns(&conn).unwrap();
     let found = replies_in(&turns, &Limits::default(), AUG_2);
     // Not the correction the rules picked, the slash command, the
-    // continuation summary, the user turn after a user turn, or the reply
-    // older than the window.
+    // continuation summary, the interrupt notice, the bare image, the loaded
+    // skill text, the user turn after a user turn, or the reply older than
+    // the window.
     assert_eq!(texts(&found), ["nice, now the docs", "ok ship it"]);
     assert!(found.iter().all(|c| c.signal == Signal::Reply));
     assert_eq!(found[0].preceding.as_deref(), Some("Done with part A."));

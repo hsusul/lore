@@ -181,6 +181,11 @@ pub const REPLY_WINDOW_MS: i64 = 48 * 60 * 60 * 1000;
 /// How a continued Claude Code session opens: a summary the harness wrote.
 const CONTINUED: &str = "This session is being continued";
 
+/// How user turns open that the harness wrote, not the person: an interrupt
+/// notice, an image with no words, and the text of a skill being loaded. A
+/// lessons run would read each one and drop it.
+const NOT_THE_PERSON: &[&str] = &["[Request interrupted", "Base directory for this skill"];
+
 /// A user turn that corrects the agent, with where it was said.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
@@ -343,11 +348,28 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
     found
 }
 
+/// A turn that is only image placeholders, such as `[Image #1] [Image #2]`.
+fn is_bare_image(text: &str) -> bool {
+    let mut rest = text.trim();
+    if rest.is_empty() {
+        return false;
+    }
+    while let Some(after) = rest.strip_prefix("[Image") {
+        let Some(end) = after.find(']') else {
+            return false;
+        };
+        rest = after[end + 1..].trim_start();
+    }
+    rest.is_empty()
+}
+
 /// The person's ordinary replies to the agent at or after `since_ms` that
 /// [`corrections_at`] did not pick, as [`Signal::Reply`] candidates, oldest
 /// first. A reply is a user turn right after an assistant turn in the same
 /// session that does not invoke a skill or slash command, is not a
-/// continued session's summary, and does not open with leftover markup.
+/// continued session's summary or other text the harness wrote (an
+/// interrupt notice, a bare image, a loaded skill), and does not open with
+/// leftover markup.
 /// Its text is kept whole; whoever shows it cuts it short. A resume or fork
 /// copy of a reply is kept once, the earliest session's, as in [`lessons`].
 /// Most replies correct nothing: they are for an agent to judge, not rules.
@@ -382,6 +404,8 @@ pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidat
             || text.starts_with('<')
             || text.starts_with(REINVOKED)
             || text.starts_with(CONTINUED)
+            || NOT_THE_PERSON.iter().any(|p| text.starts_with(p))
+            || is_bare_image(&text)
             || is_invocation(&text)
         {
             continue;
