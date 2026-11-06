@@ -199,7 +199,9 @@ folder as repo_path; pass cwd to get the current directory's as cwd_repo. Only c
 a receipt no earlier run read are returned, and each receipt has a correction_id and new: only \
 new receipts need a rule; older ones are context for grouping, and a rule that sharpens an \
 accepted note passes updates. already_considered counts candidates left out because every \
-receipt was read before; pass all_seen: true to see them. Replies are paged: while next_cursor \
+receipt was read before; pass all_seen: true to see them. In a run the Lore app started, only \
+that run's corrections are returned and not_in_this_run counts the rest, which may still be \
+unread. Replies are paged: while next_cursor \
 is not null, call again with it, and read every page before you group anything.",
         input_schema: mine_schema,
         call: mine_candidates,
@@ -923,19 +925,28 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }
     let left_out = before - lessons.len();
     let listed = lessons.len();
-    let lessons = match std::env::var_os(CANDIDATES_FILE_ENV).filter(|p| !p.is_empty()) {
-        // A pinned run serves exactly its corrections, whatever it asks.
-        Some(path) => {
-            let pinned = considered::read_ids(Path::new(&path))
-                .map_err(|e| tool_error("internal", e, INTERNAL_FIX))?;
-            considered::mark(lessons, |id| pinned.contains(id), false)
-        }
-        None => {
-            let seen = considered_ids()?;
-            considered::mark(lessons, |id| !seen.contains(id), all_seen)
-        }
-    };
-    let already_considered = listed - lessons.len();
+    let (lessons, pinned_run) =
+        match std::env::var_os(CANDIDATES_FILE_ENV).filter(|p| !p.is_empty()) {
+            // A pinned run serves exactly its corrections, whatever it asks.
+            Some(path) => {
+                let pinned = considered::read_ids(Path::new(&path))
+                    .map_err(|e| tool_error("internal", e, INTERNAL_FIX))?;
+                (
+                    considered::mark(lessons, |id| pinned.contains(id), false),
+                    true,
+                )
+            }
+            None => {
+                let seen = considered_ids()?;
+                (
+                    considered::mark(lessons, |id| !seen.contains(id), all_seen),
+                    false,
+                )
+            }
+        };
+    // Outside a pin, a hidden lesson was read by an earlier run. Inside one it
+    // may never have been read; it is only not part of this run.
+    let hidden = listed - lessons.len();
     let total = lessons.len();
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut candidates = Vec::new();
@@ -991,7 +1002,11 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }
     let mut reply = page(&candidates, (next < total).then_some(next), total);
     reply["left_out"] = json!(left_out);
-    reply["already_considered"] = json!(already_considered);
+    if pinned_run {
+        reply["not_in_this_run"] = json!(hidden);
+    } else {
+        reply["already_considered"] = json!(hidden);
+    }
     reply["cwd_repo"] = cwd_repo;
     Ok(reply)
 }

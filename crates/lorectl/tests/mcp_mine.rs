@@ -565,6 +565,8 @@ fn mine_candidates_serves_exactly_the_pinned_corrections() {
             (before[0][1].0.clone(), true)
         ]]
     );
+    assert_eq!(pinned["structuredContent"]["not_in_this_run"], 1);
+    assert!(pinned["structuredContent"]["already_considered"].is_null());
     std::fs::write(&pin, "").unwrap();
     let (_, none) = mine_pinned(&archive, json!({}), Some(&pin));
     assert_eq!(none["structuredContent"]["total"], 0);
