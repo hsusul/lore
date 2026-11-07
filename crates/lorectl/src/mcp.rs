@@ -558,12 +558,15 @@ fn read_session(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         None => (None, 0),
     };
     let conn = open(&ctx.archive_dir)?;
-    let summary = query::get_session(&conn, session_id)
+    let owner = query::find_session(&conn, session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no session `{session_id}` in the archive"))?;
+    let summary = query::get_session(&conn, &owner.archive_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no session `{session_id}` in the archive"))?
         .summary;
     let documents =
-        search::session_documents_page(&conn, session_id, after_id, READ_PAGE_DOCUMENTS)
+        search::session_documents_page(&conn, &owner.archive_id, after_id, READ_PAGE_DOCUMENTS)
             .map_err(|e| e.to_string())?;
 
     let full_page = documents.len() == usize::try_from(READ_PAGE_DOCUMENTS).unwrap_or(usize::MAX);

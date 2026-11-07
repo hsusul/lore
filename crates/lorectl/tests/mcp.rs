@@ -301,6 +301,25 @@ fn read_session_pages_until_the_cursor_runs_out() {
 }
 
 #[test]
+fn read_session_resolves_native_session_id() {
+    let (archive, _homes) = scanned_archive(1);
+    let replies = converse(
+        archive.path(),
+        &[call(
+            1,
+            "read_session",
+            json!({ "session_id": SESSION_UUID }),
+        )],
+    );
+    let read = structured(&replies[0]);
+    assert_eq!(read["session_id"], only_session_id(archive.path()));
+    let entries = read["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["label"], "user");
+    assert_eq!(entries[1]["label"], "assistant");
+}
+
+#[test]
 fn unknown_sessions_and_tools_are_reported() {
     let (archive, _homes) = scanned_archive(1);
     let replies = converse(
