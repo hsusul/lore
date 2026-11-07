@@ -90,6 +90,8 @@ fn parse(invocation: &Invocation) -> Result<Option<Args>, CliError> {
             Long("archive") => args.archive = Some(parser.value().map_err(usage)?.into()),
             Long("review") => args.review = Some(true),
             Long("no-review") => args.review = Some(false),
+            // Global option accepted before or after the command; init outputs plain text.
+            Long("json") => {}
             other => return Err(usage(other.unexpected())),
         }
     }
