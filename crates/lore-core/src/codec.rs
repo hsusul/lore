@@ -57,9 +57,29 @@ pub const HEADER_LEN: usize = 5;
 /// compresses at hundreds of MB/s with almost the ratio of much slower levels.
 pub const LEVEL: i32 = 3;
 
-/// Largest body a value may claim to decompress to: SQLite's default maximum
-/// string length. A corrupt header cannot make the decoder allocate more.
-pub const MAX_DECODED: usize = 1_000_000_000;
+/// Largest body a value may decompress to: the largest source file ingest
+/// reads ([`crate::ingest::MAX_SOURCE_BYTES`]), which holds every body taken
+/// from it.
+pub const MAX_DECODED: usize = 64 * 1024 * 1024;
+
+/// Most times larger than its frame a value may decompress to, above
+/// [`RATIO_FLOOR`]. zstd can claim far more of a run of one byte; such a value
+/// is stored plain instead ([`pack_checked`]).
+pub const MAX_RATIO: usize = 1024;
+
+/// Size every value may decompress to whatever its ratio.
+pub const RATIO_FLOOR: usize = 1024 * 1024;
+
+/// Most bytes a frame of `frame_len` bytes may decompress to. The decoder
+/// allocates the size a frame claims before it decodes it, so this bounds
+/// what a corrupt header can make it allocate; every value this build writes
+/// is within it.
+#[must_use]
+pub fn decoded_limit(frame_len: usize) -> usize {
+    frame_len
+        .saturating_mul(MAX_RATIO)
+        .clamp(RATIO_FLOOR, MAX_DECODED)
+}
 
 /// Values shorter than this many bytes are never compressed: the header and
 /// frame overhead would eat most of the gain.
@@ -285,7 +305,7 @@ fn decode_frame(
         .map_err(|_| DecodeError::Frame)?
         .ok_or(DecodeError::Size)?;
     let size = usize::try_from(size).map_err(|_| DecodeError::Size)?;
-    if size > MAX_DECODED {
+    if size > decoded_limit(frame.len()) {
         return Err(DecodeError::Size);
     }
     let bytes = match (id, dict) {
@@ -489,6 +509,10 @@ pub fn pack_checked(dict: &Dict, plain: &str) -> Packed {
     let Some(packed) = codec.encoder.encode(plain) else {
         return Packed::Plain;
     };
+    // A value the decoder would refuse as too large for its frame stays plain.
+    if plain.len() > decoded_limit(packed.len().saturating_sub(HEADER_LEN)) {
+        return Packed::Plain;
+    }
     let back = packed
         .get(HEADER_LEN..)
         .ok_or(DecodeError::Header)
@@ -609,6 +633,34 @@ mod tests {
         let plain = Encoder::new(0, None).unwrap().encode(&body).unwrap();
         assert_eq!(state.miss(&plain), None);
         assert_eq!(state.unpack(&plain, None).unwrap(), body);
+    }
+
+    #[test]
+    fn a_frame_claiming_a_huge_size_fails_before_allocating() {
+        // A frame header claiming 1 TiB, then an empty last raw block.
+        let mut value = vec![MAGIC, 0, 0, 0, 0, 0x28, 0xB5, 0x2F, 0xFD, 0xE0];
+        value.extend_from_slice(&(1_u64 << 40).to_le_bytes());
+        value.extend_from_slice(&[1, 0, 0]);
+        let started = std::time::Instant::now();
+        assert_eq!(decode_blob(&value, None), Err(DecodeError::Size));
+        // The size is refused from the header alone: no allocation, no work.
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+
+        // A real frame over the ratio limit is refused too, and so is never
+        // written: the writer stores such a value plain.
+        let run = "a".repeat(8 * 1024 * 1024);
+        let frame = zstd::bulk::compress(run.as_bytes(), LEVEL).unwrap();
+        assert!(run.len() > decoded_limit(frame.len()));
+        let mut value = vec![MAGIC, 0, 0, 0, 0];
+        value.extend_from_slice(&frame);
+        assert_eq!(decode_blob(&value, None), Err(DecodeError::Size));
+        let dict = Dict::new(1, dict_from("gamma"));
+        assert_eq!(pack_checked(&dict, &run), Packed::Plain);
+        let text = "{\"path\":\"/gamma/m3.rs\"}".repeat(4000);
+        let Packed::Value(v) = pack_checked(&dict, &text) else {
+            panic!("compressible text within the limit is compressed");
+        };
+        assert_eq!(decode_blob(&v, Some(&dict.bytes)).unwrap(), text);
     }
 
     #[test]
