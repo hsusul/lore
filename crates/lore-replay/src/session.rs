@@ -74,19 +74,15 @@ pub fn is_human(entry: &Value) -> bool {
     if str_field(entry, "type") != Some("user")
         || flag(entry, "isSidechain")
         || flag(entry, "isMeta")
+        || parts(entry).any(|p| part_is(p, "tool_result"))
     {
         return false;
     }
-    match content(entry) {
-        Some(Value::String(s)) => {
-            !s.starts_with("This session is being continued") && !s.starts_with('<')
-        }
-        Some(Value::Array(_)) => {
-            parts(entry).any(|p| part_is(p, "text"))
-                && !parts(entry).any(|p| part_is(p, "tool_result"))
-        }
-        _ => false,
-    }
+    let text = content_text(entry);
+    let text = text.trim_start();
+    !text.is_empty()
+        && !text.starts_with('<')
+        && !text.starts_with("This session is being continued")
 }
 
 /// What the main-thread assistant did across `entries`: non-blank prose and
@@ -162,6 +158,33 @@ mod tests {
         assert!(!is_human(&wrapper));
         assert!(!is_human(&result));
         assert!(!is_human(&meta));
+    }
+
+    #[test]
+    fn array_wrappers_continuations_and_empty_are_not_human_turns() {
+        let wrapper_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "<command-name>/review</command-name>"}]}});
+        let continued_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "This session is being continued from a previous conversation."}]}});
+        let continued_str = json!({"type": "user", "message": {"content":
+            "This session is being continued from a previous conversation."}});
+        let empty_str = json!({"type": "user", "message": {"content": ""}});
+        let blank_str = json!({"type": "user", "message": {"content": "   \n\t  "}});
+        let empty_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": ""}]}});
+        let blank_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "   "}]}});
+        let typed_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "fix the test"}]}});
+
+        assert!(!is_human(&wrapper_array));
+        assert!(!is_human(&continued_array));
+        assert!(!is_human(&continued_str));
+        assert!(!is_human(&empty_str));
+        assert!(!is_human(&blank_str));
+        assert!(!is_human(&empty_array));
+        assert!(!is_human(&blank_array));
+        assert!(is_human(&typed_array));
     }
 
     #[test]
