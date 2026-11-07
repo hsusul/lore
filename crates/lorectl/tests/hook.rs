@@ -813,3 +813,269 @@ fn pre_edit_reads_the_files_a_codex_patch_names() {
         assert_eq!((code(&out), stdout(&out)), (0, String::new()), "{patch}");
     }
 }
+
+// Made-up notes with `enforce` rules. The ids are their own, so a test can
+// tell which note a deny names.
+const NO_ATTRIBUTION: &str = r"---
+id: 01JD0000000000000000000011
+type: convention
+title: Never add an AI co-author line
+enforce:
+  - tool: bash
+    pattern: '(?i)co-authored-by:\s*(claude|codex)'
+    unless: 'LORE-TEST-EXEMPT'
+---
+Commit messages carry no AI co-author trailer.
+";
+const NO_TODO_MARKERS: &str = r"---
+id: 01JD0000000000000000000012
+type: convention
+title: Leave no XXX markers in code
+enforce:
+  - tool: write
+    pattern: 'XXX\('
+---
+File an issue instead of leaving a marker.
+";
+const NO_PLAN_FILES: &str = r"---
+id: 01JD0000000000000000000013
+type: convention
+title: Never write planning docs into the repo
+scope: repo:81444c90f1ff44ac
+enforce:
+  - tool: path
+    pattern: '(^|/)PLAN\.md$'
+---
+Planning docs live outside the repository.
+";
+
+/// Claude Code's PreToolUse hook JSON for `tool` with `input`.
+fn tool_json(cwd: &Path, tool: &str, input: serde_json::Value) -> String {
+    serde_json::json!({
+        "session_id": "s-1",
+        "cwd": cwd,
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": input,
+    })
+    .to_string()
+}
+
+/// The reason of a PreToolUse deny in `out`, or `None` when it printed none.
+fn deny_reason(out: &Output) -> Option<String> {
+    let reply: serde_json::Value = serde_json::from_str(stdout(out).trim()).ok()?;
+    let specific = &reply["hookSpecificOutput"];
+    assert_eq!(specific["hookEventName"], "PreToolUse");
+    (specific["permissionDecision"] == "deny").then(|| {
+        specific["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    })
+}
+
+#[test]
+fn pre_tool_denies_a_bash_command_a_note_rule_matches() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[NO_ATTRIBUTION]);
+    let bash = |command: &str| {
+        let stdin = tool_json(&repo, "Bash", serde_json::json!({ "command": command }));
+        hook("pre-tool", &repo, home.path(), &vault, &stdin)
+    };
+
+    let out = bash("git commit -m 'fix: x' -m 'Co-Authored-By: Claude <noreply@anthropic.com>'");
+    assert_eq!(code(&out), 0);
+    assert_eq!(
+        deny_reason(&out).as_deref(),
+        Some(
+            "Lore note 01JD0000000000000000000011: Never add an AI co-author line. \
+             The command matches `(?i)co-authored-by:\\s*(claude|codex)`: \
+             \"Co-Authored-By: Claude\". Follow the note instead."
+        )
+    );
+    // `unless` lets the same command through, and a clean one prints nothing.
+    let exempt = bash("git commit -m 'Co-Authored-By: Claude' # LORE-TEST-EXEMPT");
+    assert_eq!((code(&exempt), stdout(&exempt)), (0, String::new()));
+    let clean = bash("git commit -m 'fix: x'");
+    assert_eq!((code(&clean), stdout(&clean)), (0, String::new()));
+
+    // Codex sends its command as an argument list.
+    let stdin = tool_json(
+        &repo,
+        "Bash",
+        serde_json::json!({ "command": ["bash", "-lc", "git commit -m 'Co-authored-by: codex'"] }),
+    );
+    let out = hook("pre-tool", &repo, home.path(), &vault, &stdin);
+    assert!(deny_reason(&out)
+        .unwrap()
+        .contains("01JD0000000000000000000011"));
+}
+
+#[test]
+fn pre_tool_denies_what_a_patch_or_a_write_adds() {
+    let (home, vault, repo) = memory_home();
+    add_notes(
+        home.path(),
+        &vault,
+        &repo,
+        &[NO_TODO_MARKERS, NO_PLAN_FILES],
+    );
+    let patch = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-fn retry() {}\n+fn retry() { XXX(later) }\n*** End Patch\n";
+    let out = hook(
+        "pre-tool",
+        &repo,
+        home.path(),
+        &vault,
+        &patch_json(&repo, patch),
+    );
+    let reason = deny_reason(&out).unwrap();
+    assert!(
+        reason.starts_with("Lore note 01JD0000000000000000000012: "),
+        "{reason}"
+    );
+    assert!(reason.contains("The text written matches"), "{reason}");
+
+    // A removed line is not written, so it matches nothing.
+    let removing = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-XXX(old)\n+fn retry() {}\n*** End Patch\n";
+    let out = hook(
+        "pre-tool",
+        &repo,
+        home.path(),
+        &vault,
+        &patch_json(&repo, removing),
+    );
+    assert_eq!(deny_reason(&out), None);
+
+    let plan = repo.join("docs/PLAN.md");
+    let write = tool_json(
+        &repo,
+        "Write",
+        serde_json::json!({ "file_path": plan, "content": "step one" }),
+    );
+    let out = hook("pre-tool", &repo, home.path(), &vault, &write);
+    let reason = deny_reason(&out).unwrap();
+    assert!(
+        reason.starts_with("Lore note 01JD0000000000000000000013: "),
+        "{reason}"
+    );
+    assert!(reason.contains("The path written matches"), "{reason}");
+    let fine = tool_json(
+        &repo,
+        "Write",
+        serde_json::json!({ "file_path": repo.join("docs/PLANS.txt"), "content": "x" }),
+    );
+    let out = hook("pre-tool", &repo, home.path(), &vault, &fine);
+    assert_eq!((code(&out), stdout(&out)), (0, String::new()));
+}
+
+#[test]
+fn pre_tool_shows_anchored_notes_when_no_rule_matches() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[RETRY, NO_TODO_MARKERS]);
+    let file = repo.join("src/a.rs");
+    let out = hook(
+        "pre-tool",
+        &repo,
+        home.path(),
+        &vault,
+        &edit_json(&repo, file.to_str().unwrap()),
+    );
+    assert_eq!(
+        stdout(&out),
+        context_reply(
+            "Lore notes anchored to src/a.rs:\n\
+             - [fresh] Retry the migration (01JD0000000000000000000001)\n"
+        )
+    );
+}
+
+#[test]
+fn a_rule_blocks_nothing_when_retired_out_of_scope_or_invalid() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[NO_ATTRIBUTION, NO_PLAN_FILES]);
+    let attribution = |cwd: &Path| {
+        let stdin = tool_json(
+            cwd,
+            "Bash",
+            serde_json::json!({ "command": "git commit -m 'Co-Authored-By: Claude'" }),
+        );
+        hook("pre-tool", cwd, home.path(), &vault, &stdin)
+    };
+    assert!(deny_reason(&attribution(&repo)).is_some());
+
+    // A repository's rule does not follow the agent into another repository.
+    let other = home.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    git(&other, &["init", "-q", "-b", "main"]);
+    git(
+        &other,
+        &["remote", "add", "origin", "git@github.com:someone/else.git"],
+    );
+    let plan = |cwd: &Path| {
+        let stdin = tool_json(
+            cwd,
+            "Write",
+            serde_json::json!({ "file_path": cwd.join("PLAN.md"), "content": "x" }),
+        );
+        hook("pre-tool", cwd, home.path(), &vault, &stdin)
+    };
+    assert!(deny_reason(&plan(&repo)).is_some());
+    let out = plan(&other);
+    assert_eq!((code(&out), stdout(&out)), (0, String::new()));
+
+    // A retired note's rule no longer applies.
+    mem(
+        home.path(),
+        &vault,
+        &["retire", "01JD0000000000000000000011", "--reason", "test"],
+    );
+    let out = attribution(&repo);
+    assert_eq!((code(&out), stdout(&out)), (0, String::new()));
+
+    // A rule whose pattern does not compile is refused by `mem add`, and a
+    // file written by hand with one blocks nothing and is reported.
+    let broken = NO_ATTRIBUTION
+        .replace("0011", "0019")
+        .replace("(claude|codex)'", "(claude'");
+    let file = home.path().join("broken.md");
+    std::fs::write(&file, &broken).unwrap();
+    let added = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["mem", "add"])
+        .arg(&file)
+        .arg("--vault")
+        .arg(&vault)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(code(&added), 7);
+    let stderr = String::from_utf8_lossy(&added.stderr);
+    assert!(stderr.contains("enforce[0].pattern"), "{stderr}");
+    std::fs::write(vault.join("global/broken.md"), &broken).unwrap();
+    let out = attribution(&repo);
+    assert_eq!((code(&out), stdout(&out)), (0, String::new()));
+    let check = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .arg("--archive")
+        .arg(home.path().join("no-archive"))
+        .args(["mem", "enforce-check", "--vault"])
+        .arg(&vault)
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(code(&check), 7);
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        stderr.contains("global/broken.md blocks nothing: `enforce[0].pattern`"),
+        "{stderr}"
+    );
+    let listed = stdout(&check);
+    assert!(listed.contains("no archive to replay against"), "{listed}");
+    assert!(
+        listed.contains("01JD0000000000000000000013  Never write planning docs"),
+        "{listed}"
+    );
+    assert!(
+        !listed.contains("01JD0000000000000000000011"),
+        "retired: {listed}"
+    );
+}

@@ -83,6 +83,12 @@ Hooks (lorectl hook <EVENT> [--archive <DIR>]):
                       label, as PreToolUse `additionalContext` JSON. It
                       never allows or blocks the edit. Prints nothing when
                       no note is anchored there.
+    pre-tool          Before a shell command or file write, checks the
+                      `enforce` rules of the active notes in scope. The
+                      first rule the call matches prints a PreToolUse
+                      `deny` naming the note. Otherwise prints what
+                      pre-edit would. An unreadable vault or a note whose
+                      rule does not parse blocks nothing.
     Notes are for `cwd` in the hook JSON on stdin, else the current
     directory. LORE_VAULT_DIR names the vault; otherwise ~/Lore.
     Run by an agent, not a person. It never scans, and it writes nothing
@@ -95,8 +101,9 @@ Hooks (lorectl hook <EVENT> [--archive <DIR>]):
 const CONNECT_USAGE: &str = "\
 Connect (lorectl connect):
     Whether Claude Code and Codex run `lorectl mcp` and the `lorectl hook`
-    events session-start, prompt, and pre-edit, and the exact command or
-    config to add each one missing.
+    events session-start, prompt, and pre-tool, and the exact command or
+    config to add each one missing. A pre-edit hook is reported as
+    outdated, since it enforces no note.
     Reads .claude.json and settings.json, and Codex's config.toml and
     hooks.json. CLAUDE_CONFIG_DIR and CODEX_HOME set where it looks;
     otherwise ~/.claude and ~/.codex.

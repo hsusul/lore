@@ -51,7 +51,18 @@
 //! decision, so it cannot allow or block the edit. No note on those files
 //! prints nothing.
 //!
-//! All three record the note ids they print for the hook JSON's `session_id`
+//! `pre-tool` runs before any tool call the plugins route to it (shell
+//! commands and file writes). It first checks the `enforce` rules of the
+//! active notes in scope, global and the repository at `cwd`
+//! (`lore_memory::enforce`). The first rule the call matches makes it print a
+//! PreToolUse `deny` naming the note, and nothing else. When no rule matches,
+//! it prints what `pre-edit` would for the same input, so one hook carries
+//! both and an edit starts one process, not two. Reading the rules reads only
+//! note files that have an `enforce:` key; an unreadable vault, or a note
+//! whose rule does not parse, blocks nothing. `pre-edit` stays for configs
+//! written before `pre-tool` existed.
+//!
+//! All four record the note ids they print for the hook JSON's `session_id`
 //! (`lore_memory::shown`). `prompt` skips a note the session was already
 //! shown. `session-start` and `pre-edit` print theirs regardless: the first
 //! comes before anything else, and the second exists to repeat a note at the
@@ -70,6 +81,7 @@ use lore_core::enrich::{resolve_repository, RepoResolution};
 use lore_core::landing;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::{query, storage};
+use lore_memory::enforce::{self, Rules, ToolCall};
 use lore_memory::note::RelPath;
 use lore_memory::recall;
 use lore_memory::repo::RepoContext;
@@ -86,6 +98,7 @@ use crate::exit::{self, CliError};
 /// Lore that refused an unfamiliar one would break sessions on upgrade.
 const SESSION_START: &str = "session-start";
 const PRE_EDIT: &str = "pre-edit";
+const PRE_TOOL: &str = "pre-tool";
 const PROMPT: &str = "prompt";
 
 /// At most this many notes before an edit, in at most this many bytes.
@@ -129,6 +142,18 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         if let Some(text) = anchored_notes(&hook_input()) {
             reply("PreToolUse", &text);
         }
+    } else if event == PRE_TOOL {
+        let json = stdin_json().unwrap_or_default();
+        let input = read_input(&json);
+        if let Some(reason) = denial(&json, &input) {
+            let reply = serde_json::json!({ "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason } });
+            let _ = writeln!(std::io::stdout().lock(), "{reply}");
+        } else if let Some(text) = anchored_notes(&input) {
+            reply("PreToolUse", &text);
+        }
     } else if event == PROMPT {
         if let Some(text) = prompt_notes(&hook_input()) {
             reply("UserPromptSubmit", &text);
@@ -157,9 +182,32 @@ struct HookInput {
     prompt: Option<String>,
 }
 
+/// The reason the first `enforce` rule in scope that matches the tool call in
+/// `json` gives, or `None` when none does or the vault cannot be read.
+fn denial(json: &serde_json::Value, input: &HookInput) -> Option<String> {
+    let name = json.get("tool_name").and_then(serde_json::Value::as_str)?;
+    let tool_input = json.get("tool_input").cloned().unwrap_or_default();
+    let call = ToolCall::from_tool(name, &tool_input);
+    if call.is_empty() {
+        return None;
+    }
+    let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
+    let rules = Rules::load(&vault).ok()?;
+    if rules.rules.is_empty() {
+        return None;
+    }
+    let cwd = input.cwd.clone().or_else(|| std::env::current_dir().ok())?;
+    let (rule, found) = enforce::first_denial(&rules.in_scope(&cwd), &call)?;
+    Some(enforce::deny_reason(rule, found))
+}
+
 /// The hook JSON on stdin. Anything unreadable reads as empty.
 fn hook_input() -> HookInput {
-    let json = stdin_json().unwrap_or_default();
+    read_input(&stdin_json().unwrap_or_default())
+}
+
+/// What `json`, an agent's hook JSON, says.
+fn read_input(json: &serde_json::Value) -> HookInput {
     let text = |key: &str| json.get(key).and_then(serde_json::Value::as_str);
     HookInput {
         cwd: text("cwd")
@@ -171,7 +219,12 @@ fn hook_input() -> HookInput {
         file_paths: if text("tool_name") == Some("apply_patch") {
             json.pointer("/tool_input/command")
                 .and_then(serde_json::Value::as_str)
-                .map(patch_paths)
+                .map(|patch| {
+                    enforce::patch_paths(patch)
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .collect()
+                })
                 .unwrap_or_default()
         } else {
             ["/tool_input/file_path", "/tool_input/notebook_path"]
@@ -184,33 +237,6 @@ fn hook_input() -> HookInput {
         },
         prompt: text("prompt").map(str::to_owned),
     }
-}
-
-/// Every file a Codex `apply_patch` patch adds, updates, deletes, or moves to,
-/// once each, in order. A patch with no file header names none.
-fn patch_paths(patch: &str) -> Vec<PathBuf> {
-    const HEADERS: [&str; 4] = [
-        "*** Add File:",
-        "*** Update File:",
-        "*** Delete File:",
-        "*** Move to:",
-    ];
-    let mut paths: Vec<PathBuf> = Vec::new();
-    for line in patch.lines() {
-        let Some(path) = HEADERS
-            .iter()
-            .find_map(|header| line.strip_prefix(header))
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-        else {
-            continue;
-        };
-        if !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-    paths
 }
 
 /// Stdin parsed as JSON. A terminal is never read, so a person running the

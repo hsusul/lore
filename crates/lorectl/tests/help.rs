@@ -103,7 +103,12 @@ fn help_hook_prints_the_hook_page() {
     assert_topic_page(
         "hook",
         "Hooks (lorectl hook <EVENT> [--archive <DIR>]):",
-        &["    session-start ", "    prompt ", "    pre-edit "],
+        &[
+            "    session-start ",
+            "    prompt ",
+            "    pre-edit ",
+            "    pre-tool ",
+        ],
     );
 }
 
@@ -132,6 +137,12 @@ Hooks (lorectl hook <EVENT> [--archive <DIR>]):
                       label, as PreToolUse `additionalContext` JSON. It
                       never allows or blocks the edit. Prints nothing when
                       no note is anchored there.
+    pre-tool          Before a shell command or file write, checks the
+                      `enforce` rules of the active notes in scope. The
+                      first rule the call matches prints a PreToolUse
+                      `deny` naming the note. Otherwise prints what
+                      pre-edit would. An unreadable vault or a note whose
+                      rule does not parse blocks nothing.
     Notes are for `cwd` in the hook JSON on stdin, else the current
     directory. LORE_VAULT_DIR names the vault; otherwise ~/Lore.
     Run by an agent, not a person. It never scans, and it writes nothing

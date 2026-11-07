@@ -1,5 +1,5 @@
 {
-  "description": "Lore memory notes for the repository at session start, for each prompt, and before an edit.",
+  "description": "Lore memory notes for the repository at session start, for each prompt, and before an edit, and a deny for a tool call an accepted note's rule matches.",
   "hooks": {
     "SessionStart": [
       {
@@ -17,9 +17,9 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "apply_patch",
+        "matcher": "Bash|apply_patch",
         "hooks": [
-          { "type": "command", "command": "lorectl hook pre-edit", "timeout": 5 }
+          { "type": "command", "command": "lorectl hook pre-tool", "timeout": 5 }
         ]
       }
     ]
