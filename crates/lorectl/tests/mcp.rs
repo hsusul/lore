@@ -169,6 +169,23 @@ fn speaks_the_mcp_handshake() {
 }
 
 #[test]
+fn propose_memory_points_session_id_at_the_session_start_line() {
+    let archive = tempfile::tempdir().unwrap();
+    let replies = converse(archive.path(), &[request(1, "tools/list", json!({}))]);
+    let propose = replies[0]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "propose_memory")
+        .unwrap();
+    assert_eq!(
+        propose["inputSchema"]["properties"]["session_id"]["description"],
+        "The id after `Lore session:` in your session-start context, else \
+         your own session id, if known."
+    );
+}
+
+#[test]
 fn an_unknown_protocol_version_is_answered_with_the_newest() {
     let archive = tempfile::tempdir().unwrap();
     let replies = converse(

@@ -108,7 +108,7 @@ fn help_hook_prints_the_hook_page() {
 }
 
 #[test]
-fn help_hook_describes_the_memory_block_and_the_hook_json() {
+fn help_hook_describes_the_memory_block_the_session_and_the_hook_json() {
     assert_eq!(
         help_text(&["help", "hook"]),
         "\
@@ -117,7 +117,9 @@ Hooks (lorectl hook <EVENT> [--archive <DIR>]):
                       staged and not committed. Then up to 10 accepted
                       memory notes for the repository, each with its
                       freshness label, and how many more recall_memory
-                      lists. Prints nothing when there is neither.
+                      lists. Then `Lore session: <ID>` when the archive
+                      holds the hook JSON's `session_id`; pass that ID to
+                      propose_memory. Prints nothing when there is none.
     Notes are for `cwd` in the hook JSON on stdin, else the current
     directory. LORE_VAULT_DIR names the vault; otherwise ~/Lore.
     Run by an agent, not a person. It never scans, and it writes nothing
