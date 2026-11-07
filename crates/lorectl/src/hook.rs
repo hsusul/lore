@@ -109,6 +109,9 @@ const EDIT_CHAR_CAP: usize = 1_000;
 /// The relevance cut is the match itself, not a score: a note is a candidate
 /// only when it holds at least two of the prompt's content words, or the one
 /// word when the prompt has a single content word (`recall::related`).
+/// Content words are `index::related_words`: contractions such as "don't",
+/// single letters, and stopwords never count, so two texts do not match on
+/// the pieces of a contraction.
 /// BM25 scores are not comparable from one vault or prompt to the next, so a
 /// score threshold would be arbitrary, while a two-word overlap rules out
 /// notes that share one common word with a long prompt. The candidates are

@@ -456,9 +456,16 @@ const STOPWORDS: &[&str] = &[
 /// At most this many content words of a text are searched for.
 const RELATED_WORDS: usize = 12;
 
+/// Endings that make a word a contraction such as "don't" or "we'll". A
+/// contraction carries no topic, so it is not a content word.
+const CONTRACTION_ENDINGS: &[&str] = &["n't", "'re", "'ve", "'ll", "'d", "'m"];
+
 /// The content words of `text`, lowercased, each once, in order, at most
-/// [`RELATED_WORDS`]: every word that is not in [`STOPWORDS`], after
-/// dropping a leading slash command such as `/review`.
+/// [`RELATED_WORDS`], after dropping a leading slash command such as
+/// `/review`. Curly and straight apostrophes are the same. A contraction
+/// such as "don't" is dropped whole, a possessive such as "repo's" counts as
+/// "repo", and single letters and [`STOPWORDS`] are dropped. This is the one
+/// rule for which words two texts share.
 #[must_use]
 pub fn related_words(text: &str) -> Vec<String> {
     let text = text.trim_start();
@@ -466,15 +473,27 @@ pub fn related_words(text: &str) -> Vec<String> {
         Some(rest) => rest.trim_start_matches(|c: char| !c.is_whitespace()),
         None => text,
     };
+    let text = text
+        .to_lowercase()
+        .replace(['\u{2018}', '\u{2019}', '\u{02bc}'], "'");
     let mut words: Vec<String> = Vec::new();
-    for word in text.split(|c: char| !c.is_alphanumeric()) {
-        let word = word.to_lowercase();
-        if word.is_empty() || STOPWORDS.contains(&word.as_str()) || words.contains(&word) {
+    for token in text.split(|c: char| !(c.is_alphanumeric() || c == '\'')) {
+        let token = token.trim_matches('\'');
+        if CONTRACTION_ENDINGS.iter().any(|e| token.ends_with(e)) {
             continue;
         }
-        words.push(word);
-        if words.len() == RELATED_WORDS {
-            break;
+        let token = token.strip_suffix("'s").unwrap_or(token);
+        for word in token.split('\'') {
+            if word.chars().count() < 2
+                || STOPWORDS.contains(&word)
+                || words.iter().any(|w| w == word)
+            {
+                continue;
+            }
+            words.push(word.to_owned());
+            if words.len() == RELATED_WORDS {
+                return words;
+            }
         }
     }
     words
@@ -529,5 +548,26 @@ mod tests {
             fts_related("retry flaky test").unwrap(),
             "(\"retry\" AND \"flaky\") OR (\"retry\" AND \"test\") OR (\"flaky\" AND \"test\")"
         );
+    }
+
+    #[test]
+    fn related_words_drop_contractions_and_single_letters() {
+        assert_eq!(related_words("don't add a changelog"), ["add", "changelog"]);
+        assert_eq!(
+            related_words("don\u{2019}t add a changelog"),
+            ["add", "changelog"]
+        );
+        assert_eq!(
+            related_words("we'll ship it, can't wait, I'm sure you've seen it"),
+            ["ship", "wait", "seen"]
+        );
+        assert_eq!(related_words("it's the repo's config"), ["repo", "config"]);
+        assert_eq!(
+            related_words("the repo\u{2019}s config"),
+            related_words("the repo's config")
+        );
+        assert_eq!(related_words("x y z build"), ["build"]);
+        assert!(related_words("don't").is_empty());
+        assert!(fts_related("don't won't can't").is_none());
     }
 }
