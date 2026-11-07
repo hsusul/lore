@@ -71,9 +71,11 @@ fn files(dir: &Path) -> Vec<String> {
 
 /// Records argv, env, cwd, and stdin, copies the rollout `exec resume` would
 /// load, tries `gh`, and prints `exec --json` events. With `SLOW` set it
-/// pauses after the first tool call, so a turn cap has something to stop;
-/// with `ESCAPE` set too, it first starts a process that leaves the group and
-/// holds stdout and stderr open.
+/// starts a 600 s `sleep` in its group, writes its pid to `$REC/slow`, and
+/// waits for it after the first tool call, so a turn cap has something to
+/// stop; with `ESCAPE` set too, it first starts a process that leaves the
+/// group, holds stdout and stderr open, and writes its pid to
+/// `$REC/escaped` once it is out.
 const FAKE_CODEX: &str = r#"#!/bin/sh
 rec="$REC"
 mkdir -p "$rec"
@@ -104,9 +106,13 @@ if [ -n "$LIMITED" ]; then
   exit 1
 fi
 echo 'not json'
-if [ -n "$ESCAPE" ]; then perl -e 'setpgrp(0, 0); sleep 20' & sleep 1; fi
+if [ -n "$ESCAPE" ]; then
+  perl -e 'setpgrp(0, 0); open(my $f, ">", "$ENV{REC}/escaped.tmp") or die; print $f $$; close $f; rename("$ENV{REC}/escaped.tmp", "$ENV{REC}/escaped"); sleep 600' &
+  while [ ! -f "$rec/escaped" ]; do sleep 0.1; done
+fi
+if [ -n "$SLOW" ]; then sleep 600 & echo $! > "$rec/slow.tmp"; mv "$rec/slow.tmp" "$rec/slow"; fi
 echo '{"type":"item.completed","item":{"id":"i0","type":"command_execution","command":"git push origin feat","aggregated_output":"","exit_code":1,"status":"failed"}}'
-if [ -n "$SLOW" ]; then sleep 20; fi
+if [ -n "$SLOW" ]; then wait; fi
 echo "{\"type\":\"item.completed\",\"item\":{\"id\":\"i1\",\"type\":\"file_change\",\"changes\":[{\"path\":\"$(pwd -P)/PLAN.md\",\"kind\":\"add\"}],\"status\":\"completed\"}}"
 echo '{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"Pushed. Should I open a PR?"}}'
 echo '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5}}'
@@ -425,18 +431,12 @@ fn a_model_is_passed_and_recorded() {
     assert_eq!(read(&f.root.join("rec/stdin")), "now fix it");
 }
 
+#[cfg(unix)]
 #[test]
 fn the_turn_cap_stops_codex_after_that_many_tool_calls() {
     let f = fixture();
-    let started = std::time::Instant::now();
-    ok(&replay(&f, "none", &["--max-turns", "1"], true));
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(15),
-        "the agent was not stopped"
-    );
-    let record: Value =
-        serde_json::from_str(&read(&f.root.join("runs/s_cdx_9/none-1/run.json"))).unwrap();
-    assert_eq!(record["capped"], true);
+    let _reap = Reap(f.root.join("rec"));
+    let record = capped_run(&f, replay_cmd(&f, "none", &["--max-turns", "1"], true));
     assert_eq!(
         record["is_error"], false,
         "a capped turn is finished, not failed"
@@ -446,18 +446,77 @@ fn the_turn_cap_stops_codex_after_that_many_tool_calls() {
     assert_eq!(last["item"]["type"], "command_execution");
 }
 
-/// A capped replay that has to end within 15 s, when 20 s means the agent's
-/// `sleep 20` was waited for.
-fn capped_in_time(f: &Fixture, mut cmd: Command) {
-    let started = std::time::Instant::now();
-    ok(&cmd.output().unwrap());
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(15),
-        "the agent was not stopped"
-    );
+/// How long a capped replay may take. Only a backstop against a hang: the
+/// fake's slow step is a 600 s `sleep`, and what the tests assert is which
+/// processes are left, not how fast the run was.
+#[cfg(unix)]
+const HANG: std::time::Duration = std::time::Duration::from_secs(120);
+
+#[cfg(unix)]
+fn pid_file(path: &Path) -> rustix::process::Pid {
+    let pid: i32 = read(path).trim().parse().unwrap();
+    rustix::process::Pid::from_raw(pid).unwrap()
+}
+
+#[cfg(unix)]
+fn alive(pid: rustix::process::Pid) -> bool {
+    rustix::process::test_kill_process(pid).is_ok()
+}
+
+/// Kills what the fake left running when a test ends, however it ends:
+/// declared before the run, so it outlives every check.
+#[cfg(unix)]
+struct Reap(PathBuf);
+
+#[cfg(unix)]
+impl Drop for Reap {
+    fn drop(&mut self) {
+        for name in ["slow", "escaped"] {
+            if let Ok(pid) = std::fs::read_to_string(self.0.join(name)) {
+                if let Some(pid) = pid
+                    .trim()
+                    .parse()
+                    .ok()
+                    .and_then(rustix::process::Pid::from_raw)
+                {
+                    let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+                }
+            }
+        }
+    }
+}
+
+/// Run a capped replay and check what the cap promises: the run ends, says
+/// `capped`, and the agent's slow step, a process in its group, is stopped
+/// rather than waited for or left behind.
+#[cfg(unix)]
+fn capped_run(f: &Fixture, mut cmd: Command) -> Value {
+    let rec = f.root.join("rec");
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = cmd.spawn().unwrap();
+    let replay_pid = rustix::process::Pid::from_child(&child);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    let Ok(out) = rx.recv_timeout(HANG) else {
+        let _ = rustix::process::kill_process(replay_pid, rustix::process::Signal::KILL);
+        panic!("the run did not end within {HANG:?}: it waited for the agent or what it left");
+    };
+    ok(&out.unwrap());
     let record: Value =
         serde_json::from_str(&read(&f.root.join("runs/s_cdx_9/none-1/run.json"))).unwrap();
     assert_eq!(record["capped"], true);
+    // Killed, it lingers only until it is reaped; left running, it would
+    // sleep for 600 s.
+    let slow = pid_file(&rec.join("slow"));
+    let deadline = std::time::Instant::now() + HANG;
+    while alive(slow) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!alive(slow), "the agent's slow step outlived the cap");
+    record
 }
 
 #[cfg(unix)]
@@ -466,6 +525,7 @@ fn the_turn_cap_stops_the_group_without_a_kill_program() {
     use std::os::unix::fs::PermissionsExt;
     // A `kill` that fails, first on PATH: the group is still stopped.
     let f = fixture();
+    let _reap = Reap(f.root.join("rec"));
     let bin = f.root.join("failing-kill");
     std::fs::create_dir_all(&bin).unwrap();
     let kill = bin.join("kill");
@@ -476,16 +536,23 @@ fn the_turn_cap_stops_the_group_without_a_kill_program() {
     dirs.extend(std::env::split_paths(&path));
     let mut cmd = replay_cmd(&f, "none", &["--max-turns", "1"], true);
     cmd.env("PATH", std::env::join_paths(dirs).unwrap());
-    capped_in_time(&f, cmd);
+    capped_run(&f, cmd);
 }
 
 #[cfg(unix)]
 #[test]
 fn the_turn_cap_does_not_wait_for_a_process_that_left_the_group() {
     let f = fixture();
+    let _reap = Reap(f.root.join("rec"));
     let mut cmd = replay_cmd(&f, "none", &["--max-turns", "1"], true);
     cmd.env("ESCAPE", "1");
-    capped_in_time(&f, cmd);
+    capped_run(&f, cmd);
+    // The run returned while the process holding its stdout and stderr was
+    // still running: it was not waited for.
+    assert!(
+        alive(pid_file(&f.root.join("rec/escaped"))),
+        "the run waited for a process that left the group"
+    );
 }
 
 #[test]
