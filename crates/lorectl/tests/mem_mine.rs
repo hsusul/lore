@@ -481,3 +481,58 @@ fn mine_replies_adds_the_last_two_days_ordinary_replies() {
     assert_eq!(replies[0]["receipts"][0]["new"], true);
     assert!(!home.join("vault/.lore/considered.jsonl").exists());
 }
+
+#[test]
+fn mine_propose_files_a_reply_lesson_into_the_inbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let then = time::OffsetDateTime::now_utc() - time::Duration::hours(1);
+    let (y, m, d) = (then.year(), u8::from(then.month()), then.day());
+    let day = home.join(format!("codex/sessions/{y}/{m:02}/{d:02}"));
+    std::fs::create_dir_all(&day).unwrap();
+    let ts = |s: u8| format!("{y}-{m:02}-{d:02}T{:02}:00:{s:02}.000Z", then.hour());
+    let item = |s: u8, role: &str, kind: &str, text: &str| {
+        serde_json::json!({"type": "response_item", "timestamp": ts(s), "payload": {
+            "type": "message", "role": role, "content": [{"type": kind, "text": text}]}})
+    };
+    let lines = [
+        serde_json::json!({"type": "session_meta", "timestamp": ts(0), "payload": {
+            "id": "019e0000-0000-7000-8000-0000000000ff", "cwd": "/proj",
+            "cli_version": "0.133.0", "model_provider": "openai"}}),
+        item(1, "user", "input_text", "write the notes"),
+        item(2, "assistant", "output_text", "Wrote the release notes."),
+        item(3, "user", "input_text", "put the date on top"),
+        item(4, "assistant", "output_text", "Added the date."),
+        item(5, "user", "input_text", "use YYYY-MM-DD format"),
+    ];
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(day.join("rollout-0000000000ff.jsonl"), body).unwrap();
+    ok(&lorectl(home, &["scan"]));
+    ok(&lorectl(home, &["mem", "init"]));
+
+    let replies: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "mine", "--json", "--replies"]))).unwrap();
+    assert_eq!(replies.as_array().unwrap().len(), 2);
+    let r1 = replies[0]["id"].as_str().unwrap();
+    let r2 = replies[1]["id"].as_str().unwrap();
+
+    let out1 = ok(&lorectl(home, &["mem", "mine", "--propose", r1]));
+    let p1 = out1.split_whitespace().nth(1).unwrap().to_owned();
+    let out2 = ok(&lorectl(
+        home,
+        &["mem", "mine", "--replies", "--propose", r2],
+    ));
+    let p2 = out2.split_whitespace().nth(1).unwrap().to_owned();
+
+    let inbox: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "inbox", "--json"]))).unwrap();
+    assert_eq!(inbox.as_array().unwrap().len(), 2);
+    let ids: Vec<_> = inbox
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&p1.as_str()));
+    assert!(ids.contains(&p2.as_str()));
+}

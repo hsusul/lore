@@ -79,6 +79,12 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let total = candidates.len();
     let mut lessons = mine::lessons_within(candidates, &limits);
     mine::find_conflicts(&turns, &mut lessons);
+    if replies || propose {
+        let since = lore_core::now_ms().saturating_sub(mine::REPLY_WINDOW_MS);
+        lessons.extend(mine::reply_lessons(mine::replies_in(
+            &turns, &limits, since,
+        )));
+    }
     if propose {
         return propose_lessons(&lessons, &ids, vault_dir.as_deref());
     }
@@ -87,12 +93,6 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
         lessons.retain(|l| l.score >= 0);
     }
     let left_out = before - lessons.len();
-    if replies {
-        let since = lore_core::now_ms().saturating_sub(mine::REPLY_WINDOW_MS);
-        lessons.extend(mine::reply_lessons(mine::replies_in(
-            &turns, &limits, since,
-        )));
-    }
     // No vault, or none yet, means no ledger: every correction is new.
     let seen = vault::resolve_dir(vault_dir.as_deref())
         .ok()
