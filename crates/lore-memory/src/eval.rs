@@ -225,6 +225,7 @@ mod tests {
             body: "Body.\n".to_owned(),
             anchors: Vec::new(),
             relation: None,
+            enforce: Vec::new(),
             proposed_at: OffsetDateTime::from_unix_timestamp(1_800_000_000 + i64::from(n)).unwrap(),
         }
     }

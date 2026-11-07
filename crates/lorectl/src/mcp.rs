@@ -40,6 +40,7 @@ use lore_core::search::{self, SortOrder, HIGHLIGHT_END, HIGHLIGHT_START};
 use lore_core::{query, storage};
 use lore_memory::anchor::WorkTree;
 use lore_memory::considered::{self, CorrectionId};
+use lore_memory::enforce::Enforcement;
 use lore_memory::inbox::{InboxError, Proposal};
 use lore_memory::note::{
     AgentKind, Anchor, InvalidValue, LineRange, Note, NoteId, NoteType, RelPath, Relation, Scope,
@@ -216,7 +217,8 @@ is not null, call again with it, and read every page before you group anything."
         name: "propose_memory",
         description: "Call once you have verified something a future agent here should know. \
 A person reviews it before it becomes memory. Pass `updates` with a note id to supersede that \
-note. Retiring a note needs a person.",
+note. Retiring a note needs a person. Pass `enforce` only for a mechanical lesson whose \
+violation shows in one tool call: a hook then denies a call its narrow pattern matches.",
         input_schema: propose_schema,
         call: propose_memory,
     },
@@ -330,6 +332,21 @@ fn propose_schema() -> Value {
                 "required": ["path"]
             } },
             "updates": { "type": "string", "description": "Id of the note this supersedes." },
+            "enforce": { "type": "array", "maxItems": lore_memory::enforce::MAX_RULES, "items": {
+                "type": "object",
+                "properties": {
+                    "tool": { "type": "string", "enum": ["bash", "write", "path"],
+                        "description": "bash: a shell command. write: text written to a file. \
+    path: the path of a file written." },
+                    "pattern": { "type": "string", "maxLength": lore_memory::enforce::PATTERN_MAX_LEN,
+                        "description": "A Rust regex for the violation. Keep it narrow." },
+                    "unless": { "type": "string",
+                        "description": "A regex that exempts a call it also matches." }
+                },
+                "required": ["tool", "pattern"],
+                "additionalProperties": false
+            }, "description": "Rules a hook denies matching tool calls with, once a person \
+    accepts the note. An update with rules replaces the note's rules." },
             "session_id": { "type": "string", "description": "The id after `Lore session:` in \
     your session-start context, else your own session id, if known." }
         },
@@ -776,6 +793,7 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         _ => return Err(invalid_argument("scope", "must be global or repo")),
     };
     let mut anchors = proposed_anchors(arguments.get("anchors"))?;
+    let enforce = proposed_enforce(arguments.get("enforce"))?;
     let session = match arguments.get("session_id") {
         None => Some(ctx.session.as_str()),
         Some(id) => id.as_str(),
@@ -850,6 +868,7 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         body: string_arg(arguments, "body").unwrap_or_default().to_owned(),
         anchors,
         relation,
+        enforce,
         proposed_at: OffsetDateTime::now_utc(),
     };
     let written = inbox::propose(&vault, proposal).map_err(|e| match e {
@@ -1122,6 +1141,33 @@ fn page(candidates: &[Value], next: Option<usize>, total: usize) -> Value {
 fn archived_session(archive_dir: &Path, id: &str) -> Option<query::SessionOwner> {
     let conn = open(archive_dir).ok()?;
     query::find_session(&conn, id).ok().flatten()
+}
+
+/// `enforce` as `[{tool, pattern, unless?}]`, each pattern compiled.
+fn proposed_enforce(rules: Option<&Value>) -> Result<Vec<Enforcement>, Value> {
+    let items = match rules {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(invalid_argument("enforce", "must be a list")),
+    };
+    if items.len() > lore_memory::enforce::MAX_RULES {
+        let most = format!("must be at most {} rules", lore_memory::enforce::MAX_RULES);
+        return Err(invalid_argument("enforce", &most));
+    }
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            Enforcement::from_json(item).map_err(|(key, problem)| {
+                let at = if key.is_empty() {
+                    format!("enforce[{i}]")
+                } else {
+                    format!("enforce[{i}].{key}")
+                };
+                invalid_argument(&at, &problem)
+            })
+        })
+        .collect()
 }
 
 /// `anchors` as `[{path, lines?}]`, unpinned. The agent never sends a hash.

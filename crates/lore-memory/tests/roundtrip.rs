@@ -226,11 +226,46 @@ fn roundtrip_refuses_malformed_files_without_panicking() {
         (&with("sources:\n  - slack:abc"), "claude-code or codex"),
         (&with("just words"), "not `key: value`"),
         (&with("forget_after: soon"), "`forget_after`"),
+        (
+            &with("enforce:\n  - tool: bash\n    pattern: '(unclosed'"),
+            "`enforce[0].pattern`: `(unclosed` is not a valid regex",
+        ),
+        (
+            &with("enforce:\n  - tool: bash\n    pattern: 'a*'"),
+            "matches empty text",
+        ),
+        (
+            &with("enforce:\n  - tool: shell\n    pattern: x"),
+            "`enforce[0].tool`: expected bash, write, or path",
+        ),
+        (
+            &with("enforce:\n  - pattern: x"),
+            "`enforce[0]`: needs a `tool`",
+        ),
     ];
     for (text, expected) in cases {
         let error = parse_error(text).to_string();
         assert!(error.contains(expected), "{text:?} gave {error}");
     }
+}
+
+#[test]
+fn an_enforce_rule_round_trips_and_compiles_once() {
+    let text = with(
+        "enforce:\n  - tool: bash\n    pattern: '(?i)co-authored-by:\\s*claude'\n    unless: 'it''s ok'\n  - tool: path\n    pattern: '(^|/)PLAN\\.md$'",
+    );
+    let note = Note::parse(&text).unwrap();
+    assert_eq!(note.render(), text);
+    let rule = &note.enforce[0];
+    assert_eq!(rule.pattern.as_str(), r"(?i)co-authored-by:\s*claude");
+    assert_eq!(rule.unless.as_ref().unwrap().as_str(), "it's ok");
+    assert_eq!(
+        rule.pattern.find("x Co-Authored-By: Claude"),
+        Some("Co-Authored-By: Claude")
+    );
+    // A plain pattern parses too, and renders single-quoted.
+    let plain = Note::parse(&with("enforce:\n  - tool: write\n    pattern: XXX")).unwrap();
+    assert!(plain.render().contains("    pattern: 'XXX'\n"));
 }
 
 const BASE: &str = "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6D\ntype: fact\ntitle: T\nscope: global\nstatus: active\ncreated: 2026-11-01\n";

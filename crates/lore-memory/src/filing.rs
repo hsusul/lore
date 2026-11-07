@@ -98,6 +98,7 @@ pub fn proposal(lesson: &Lesson) -> Result<Proposal, InvalidValue> {
         body,
         anchors: Vec::new(),
         relation: None,
+        enforce: Vec::new(),
         proposed_at: OffsetDateTime::now_utc(),
     })
 }

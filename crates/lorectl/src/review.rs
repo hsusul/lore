@@ -183,6 +183,7 @@ fn build(args: Args, body: String) -> Result<Proposal, CliError> {
             .map(|a| parse_anchor(a))
             .collect::<Result<_, _>>()?,
         relation,
+        enforce: Vec::new(),
         proposed_at: OffsetDateTime::now_utc(),
     })
 }
@@ -274,6 +275,9 @@ pub fn run(
                         p.note_type.as_str(),
                         p.scope,
                     );
+                    for rule in &p.enforce {
+                        let _ = writeln!(out, "  enforce {}", rule.describe());
+                    }
                     let _ = writeln!(out, "{}", receipt(p).line());
                 }
             }

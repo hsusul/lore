@@ -206,6 +206,7 @@ fn eval_with_archive_verifies_sessions_by_native_id() {
             commit: None,
         }],
         relation: None,
+        enforce: Vec::new(),
         proposed_at: time::OffsetDateTime::from_unix_timestamp(1_800_000_001).unwrap(),
     };
     let p2 = lore_memory::inbox::Proposal {
@@ -226,6 +227,7 @@ fn eval_with_archive_verifies_sessions_by_native_id() {
             commit: None,
         }],
         relation: None,
+        enforce: Vec::new(),
         proposed_at: time::OffsetDateTime::from_unix_timestamp(1_800_000_002).unwrap(),
     };
 

@@ -2886,6 +2886,7 @@ dependencies = [
  "dirs",
  "gix",
  "lore-core",
+ "regex",
  "rusqlite",
  "serde_json",
  "tempfile",

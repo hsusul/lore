@@ -8,6 +8,8 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::enforce::{self, Enforcement};
+
 /// A note's stable id: a ULID, 26 characters of Crockford base32.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NoteId(String);
@@ -126,6 +128,8 @@ pub struct Note {
     pub sources: Vec<SourceRef>,
     pub created: NoteDate,
     pub forget_after: Option<NoteDate>,
+    /// Rules a hook denies matching tool calls with, written `enforce:`.
+    pub enforce: Vec<Enforcement>,
     pub body: String,
     pub extra: Frontmatter,
 }
@@ -169,6 +173,7 @@ enum Key {
     Sources,
     Created,
     ForgetAfter,
+    Enforce,
 }
 
 /// Why a file is not a valid note. Every variant names what to fix.
@@ -188,6 +193,13 @@ pub enum NoteError {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{0}")]
 pub struct InvalidValue(String);
+
+impl InvalidValue {
+    /// A value refused for `problem`, which says what was expected.
+    pub fn new(problem: impl Into<String>) -> Self {
+        Self(problem.into())
+    }
+}
 
 fn invalid(problem: impl Into<String>) -> InvalidValue {
     InvalidValue(problem.into())
@@ -680,7 +692,7 @@ impl fmt::Display for NoteDate {
 }
 
 impl Key {
-    const ALL: [Key; 11] = [
+    const ALL: [Key; 12] = [
         Key::Id,
         Key::Type,
         Key::Title,
@@ -692,6 +704,7 @@ impl Key {
         Key::Sources,
         Key::Created,
         Key::ForgetAfter,
+        Key::Enforce,
     ];
 
     fn name(self) -> &'static str {
@@ -707,6 +720,7 @@ impl Key {
             Key::Sources => "sources",
             Key::Created => "created",
             Key::ForgetAfter => "forget_after",
+            Key::Enforce => "enforce",
         }
     }
 
@@ -860,6 +874,7 @@ impl Note {
             Key::Anchors => !self.anchors.is_empty(),
             Key::Relations => !self.relations.is_empty(),
             Key::Sources => !self.sources.is_empty(),
+            Key::Enforce => !self.enforce.is_empty(),
             Key::ForgetAfter => self.forget_after.is_some(),
             Key::Repo => self.repo.is_some(),
             Key::Id | Key::Type | Key::Title | Key::Scope | Key::Status | Key::Created => true,
@@ -891,9 +906,10 @@ impl Note {
                     line(out, &date.to_string());
                 }
             }
-            Key::Anchors | Key::Relations | Key::Sources => {
+            Key::Anchors | Key::Relations | Key::Sources | Key::Enforce => {
                 let items: Vec<String> = match key {
                     Key::Anchors => self.anchors.iter().map(render_anchor).collect(),
+                    Key::Enforce => self.enforce.iter().map(render_enforcement).collect(),
                     Key::Relations => self
                         .relations
                         .iter()
@@ -915,6 +931,24 @@ impl Note {
             }
         }
     }
+}
+
+fn render_enforcement(rule: &Enforcement) -> String {
+    let mut text = format!(
+        "tool: {}\n    pattern: {}",
+        rule.tool.as_str(),
+        single_quoted(rule.pattern.as_str())
+    );
+    if let Some(unless) = &rule.unless {
+        text.push_str(&format!("\n    unless: {}", single_quoted(unless.as_str())));
+    }
+    text
+}
+
+/// A YAML single-quoted scalar: a regex reads the same in it as typed, with
+/// only `'` doubled. Patterns hold no control characters.
+fn single_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
 }
 
 fn render_anchor(anchor: &Anchor) -> String {
@@ -1167,6 +1201,7 @@ struct Fields {
     sources: Vec<SourceRef>,
     created: Option<NoteDate>,
     forget_after: Option<NoteDate>,
+    enforce: Vec<Enforcement>,
 }
 
 fn scalar_field(key: Key, block: &Block<'_>) -> Result<String, NoteError> {
@@ -1225,6 +1260,36 @@ fn read_anchor(index: usize, item: &Item<'_>) -> Result<Anchor, NoteError> {
     })
 }
 
+fn read_enforcement(index: usize, item: &Item<'_>) -> Result<Enforcement, NoteError> {
+    let field = format!("enforce[{index}]");
+    let (mut tool, mut pattern, mut unless) = (None, None, None);
+    for (key, value) in item_pairs(&field, item)? {
+        let named = |e: InvalidValue| field_error(format!("{field}.{key}"), e);
+        match key {
+            "tool" if tool.is_none() => {
+                tool = Some(enforce::EnforceTool::parse(&value).map_err(named)?);
+            }
+            "pattern" if pattern.is_none() => {
+                pattern = Some(enforce::Pattern::parse(&value).map_err(named)?);
+            }
+            "unless" if unless.is_none() => {
+                unless = Some(enforce::Pattern::parse(&value).map_err(named)?);
+            }
+            _ => {
+                return Err(field_error(
+                    &field,
+                    format!("unexpected or repeated key `{key}`"),
+                ))
+            }
+        }
+    }
+    Ok(Enforcement {
+        tool: tool.ok_or_else(|| field_error(&field, "needs a `tool`"))?,
+        pattern: pattern.ok_or_else(|| field_error(&field, "needs a `pattern`"))?,
+        unless,
+    })
+}
+
 fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), NoteError> {
     match key {
         Key::Id => fields.id = Some(typed(key, &scalar_field(key, block)?, NoteId::parse)?),
@@ -1261,6 +1326,16 @@ fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), No
         Key::Anchors => {
             for (index, item) in list_field(key, block)?.iter().enumerate() {
                 fields.anchors.push(read_anchor(index, item)?);
+            }
+        }
+        Key::Enforce => {
+            let items = list_field(key, block)?;
+            if items.len() > enforce::MAX_RULES {
+                let most = format!("at most {} rules", enforce::MAX_RULES);
+                return Err(field_error(key.name(), most));
+            }
+            for (index, item) in items.iter().enumerate() {
+                fields.enforce.push(read_enforcement(index, item)?);
             }
         }
         Key::Relations => {
@@ -1370,6 +1445,7 @@ fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
         sources: fields.sources,
         created: fields.created.ok_or(NoteError::Missing("created"))?,
         forget_after: fields.forget_after,
+        enforce: fields.enforce,
         body: body.to_string(),
         extra,
     };

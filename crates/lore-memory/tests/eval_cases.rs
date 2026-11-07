@@ -21,6 +21,7 @@ fn proposal(id: &str, title: &str, at: i64) -> Proposal {
         body: "Body.\n".into(),
         anchors: Vec::new(),
         relation: None,
+        enforce: Vec::new(),
         proposed_at: OffsetDateTime::from_unix_timestamp(at).unwrap(),
     }
 }

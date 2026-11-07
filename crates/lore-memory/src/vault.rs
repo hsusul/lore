@@ -456,7 +456,7 @@ impl Vault {
 
     /// A stamp for every `.md` file in the vault outside `.lore`, `.git`,
     /// other dot directories, and `_inbox`, sorted by path.
-    fn stamps(&self) -> Result<Vec<FileStamp>, VaultError> {
+    pub(crate) fn stamps(&self) -> Result<Vec<FileStamp>, VaultError> {
         let mut stamps = Vec::new();
         collect_markdown(&self.root, &self.root, &mut stamps)?;
         stamps.sort_by(|a, b| a.path.cmp(&b.path));
