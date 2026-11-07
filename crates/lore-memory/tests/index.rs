@@ -264,6 +264,22 @@ fn split_timeline_only_splits_on_exact_heading() {
 }
 
 #[test]
+fn without_receipts_keeps_the_lesson_above_the_receipts_line() {
+    use lore_memory::index::without_receipts;
+
+    let body = "Use pnpm.\n\nReceipts:\n- \"no, pnpm\" (codex, session s1, 2026-01-01)\n";
+    assert_eq!(without_receipts(body), "Use pnpm.\n\n");
+    assert_eq!(
+        without_receipts("Use pnpm.\n  receipts:  \n- x\n"),
+        "Use pnpm.\n"
+    );
+    // Only a line that is the heading alone counts.
+    let inline = "Keep the receipts: all of them.\n";
+    assert_eq!(without_receipts(inline), inline);
+    assert_eq!(without_receipts(""), "");
+}
+
+#[test]
 fn index_count_active_matches_list_active_len() {
     let (_dir, vault) = fixture_vault();
     let index = vault.index().unwrap();
