@@ -144,6 +144,37 @@ fn mixed_harness_versions_are_refused_unless_one_is_picked() {
 }
 
 #[test]
+fn claude_code_and_codex_runs_are_never_reported_together() {
+    let tmp = tempfile::tempdir().unwrap();
+    fixture(tmp.path());
+    let claude = report(tmp.path(), &[]);
+    append_lines(
+        &tmp.path().join("grades.jsonl"),
+        &[
+            json!({"case": "c:0", "agent": "codex", "arm": "none", "trial": 9,
+                   "grader": "judge", "repeat_det": null, "judge": "NO", "graded_by": "j"}),
+        ],
+    );
+    let out = report_output(tmp.path(), &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr)
+        .contains("the grades mix agents claude-code and codex"));
+    assert_eq!(
+        report(tmp.path(), &["--settings", "agent=claude-code"]),
+        claude
+    );
+    let codex = report(tmp.path(), &["--settings", "agent=codex"]);
+    assert!(codex
+        .lines()
+        .next()
+        .unwrap()
+        .contains("Settings: agent codex,"));
+    assert!(codex.contains("none    n=1 cases, 1 trials; no rate (stop rule)"));
+    let bad = report_output(tmp.path(), &["--settings", "agent=gemini"]);
+    assert!(!bad.status.success());
+}
+
+#[test]
 fn mixed_models_are_refused_unless_settings_pick_one() {
     let tmp = tempfile::tempdir().unwrap();
     fixture(tmp.path());
@@ -168,7 +199,7 @@ fn mixed_models_are_refused_unless_settings_pick_one() {
         .lines()
         .next()
         .unwrap()
-        .contains("Settings: harness 2, model sonnet, trim 0, max turns 6."));
+        .contains("Settings: agent claude-code, harness 2, model sonnet, trim 0, max turns 6."));
     for t in 1..=3 {
         lines.push(
             json!({"case": "c:0", "arm": "none", "trial": t, "grader": "judge",
@@ -202,7 +233,7 @@ fn mixed_models_are_refused_unless_settings_pick_one() {
         .lines()
         .next()
         .unwrap()
-        .contains("Settings: harness 2, model haiku, trim 20, max turns 6."));
+        .contains("Settings: agent claude-code, harness 2, model haiku, trim 20, max turns 6."));
     assert!(haiku.contains("(n=1 cases, 3 trials)"), "{haiku}");
 
     let bad = report_output(tmp.path(), &["--settings", "colour=red"]);

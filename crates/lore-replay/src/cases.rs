@@ -1,12 +1,13 @@
 //! Correction points, from the corrections Lore mines out of the archive.
 //!
 //! The archive says which session a correction came from and what it said;
-//! only the Claude Code session file holds the exact lines a replay needs, so
-//! each correction is located again in its file. A correction that cannot be
+//! only the agent's own session file (a Claude Code session or a Codex
+//! rollout) holds the exact lines a replay needs, so each correction is
+//! located again in its file. A correction that cannot be
 //! located is counted under its reason, never dropped silently: the skip
 //! counts are part of what a reader must see to trust the case set.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -14,9 +15,10 @@ use lore_memory::mine::{self, Candidate};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
+use crate::codex;
 use crate::error::Result;
 use crate::session;
-use crate::types::Case;
+use crate::types::{Action, Agent, Case};
 
 /// How many characters of the mined text must appear in the session line.
 /// The miner stores text redacted and cut short, so the head is what survives.
@@ -25,7 +27,7 @@ const MATCH_CHARS: usize = 60;
 /// Why a mined correction did not become a case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Skip {
-    NotClaudeCode,
+    UnsupportedAgent,
     NotInArchive,
     SessionFileGone,
     EmptyCorrection,
@@ -39,7 +41,7 @@ pub enum Skip {
 impl fmt::Display for Skip {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::NotClaudeCode => "not claude-code",
+            Self::UnsupportedAgent => "not claude-code or codex",
             Self::NotInArchive => "session not in archive",
             Self::SessionFileGone => "session file gone",
             Self::EmptyCorrection => "empty correction text",
@@ -52,24 +54,32 @@ impl fmt::Display for Skip {
     }
 }
 
-/// The cases found, and how many corrections each reason turned away.
+/// The cases found, and how many corrections each reason turned away, by
+/// agent (the archive's `agent_id` for one replay does not run).
 #[derive(Debug, Default)]
 pub struct Extraction {
     pub cases: Vec<Case>,
-    pub skipped: BTreeMap<Skip, usize>,
+    pub skipped: BTreeMap<(String, Skip), usize>,
 }
 
 impl Extraction {
-    /// `cases N; skipped reason: n, ...`, the line the command prints.
+    /// `cases N (claude-code a, codex b); skipped reason: n, ...`, the line
+    /// the command prints. Skips are counted per agent.
     #[must_use]
     pub fn summary(&self) -> String {
         let skipped: Vec<String> = self
             .skipped
             .iter()
-            .map(|(reason, n)| format!("{reason}: {n}"))
+            .map(|((agent, reason), n)| format!("{agent} {reason}: {n}"))
             .collect();
+        let per_agent = [Agent::ClaudeCode, Agent::Codex]
+            .map(|agent| {
+                let n = self.cases.iter().filter(|c| c.agent == agent).count();
+                format!("{agent} {n}")
+            })
+            .join(", ");
         format!(
-            "cases {}; skipped {}",
+            "cases {} ({per_agent}); skipped {}",
             self.cases.len(),
             if skipped.is_empty() {
                 "none".to_owned()
@@ -80,27 +90,74 @@ impl Extraction {
     }
 }
 
+/// Where the agents' session files are.
+#[derive(Debug, Clone, Default)]
+pub struct Roots {
+    /// Claude Code's `projects` folder.
+    pub claude_projects: Option<PathBuf>,
+    /// Codex's home folder (`$CODEX_HOME`), whose `sessions` and
+    /// `archived_sessions` hold the rollouts.
+    pub codex_home: Option<PathBuf>,
+}
+
 /// Every mined correction as a case, with session files looked up under
-/// `projects` (Claude Code's `projects` folder). `conn` is only read.
-pub fn extract(conn: &Connection, projects: &Path) -> Result<Extraction> {
+/// `roots`. `conn` and the session files are only read.
+pub fn extract(conn: &Connection, roots: &Roots) -> Result<Extraction> {
     let limits = mine::Limits::default();
     let turns = mine::read_turns(conn)?;
     let lessons = mine::lessons_within(mine::corrections_in(&turns, &limits), &limits);
     let mut out = Extraction::default();
     let mut seen = BTreeSet::new();
+    let rollouts = roots
+        .codex_home
+        .as_deref()
+        .map(codex::rollout_index)
+        .unwrap_or_default();
+    let files = Files {
+        projects: roots.claude_projects.as_deref(),
+        rollouts: &rollouts,
+    };
     for lesson in &lessons {
         for receipt in &lesson.receipts {
-            match case_for(conn, projects, &lesson.id, receipt)? {
-                Ok(case) if !seen.insert(case.id.clone()) => {
-                    *out.skipped.entry(Skip::Duplicate).or_default() += 1;
-                }
+            let mut skip = |skip| {
+                *out.skipped
+                    .entry((receipt.agent.clone(), skip))
+                    .or_default() += 1;
+            };
+            match case_for(conn, &files, &lesson.id, receipt)? {
+                Ok(case) if !seen.insert(case.id.clone()) => skip(Skip::Duplicate),
                 Ok(case) => out.cases.push(case),
-                Err(skip) => *out.skipped.entry(skip).or_default() += 1,
+                Err(reason) => skip(reason),
             }
         }
     }
     Ok(out)
 }
+
+struct Files<'a> {
+    projects: Option<&'a Path>,
+    rollouts: &'a HashMap<String, PathBuf>,
+}
+
+/// How one agent's session file reads: which lines a person typed, and the
+/// text, place, and actions around them.
+struct Format {
+    is_human: fn(&Value) -> bool,
+    text: fn(&Value) -> String,
+    actions: fn(&[Value]) -> Vec<Action>,
+}
+
+const CLAUDE: Format = Format {
+    is_human: session::is_human,
+    text: session::content_text,
+    actions: session::assistant_actions,
+};
+
+const CODEX: Format = Format {
+    is_human: codex::is_human,
+    text: codex::content_text,
+    actions: codex::assistant_actions,
+};
 
 /// Claude Code's session root: `$CLAUDE_CONFIG_DIR/projects`, or
 /// `~/.claude/projects`.
@@ -120,13 +177,13 @@ pub fn claude_config_dir() -> Option<PathBuf> {
 
 fn case_for(
     conn: &Connection,
-    projects: &Path,
+    files: &Files<'_>,
     lesson: &str,
     receipt: &Candidate,
 ) -> Result<std::result::Result<Case, Skip>> {
-    if receipt.agent != "claude-code" {
-        return Ok(Err(Skip::NotClaudeCode));
-    }
+    let Some(agent) = Agent::from_archive(&receipt.agent) else {
+        return Ok(Err(Skip::UnsupportedAgent));
+    };
     let row: Option<(Option<String>, Option<String>)> = conn
         .query_row(
             "SELECT native_session_id, primary_model FROM agent_session WHERE id = ?1",
@@ -137,14 +194,26 @@ fn case_for(
     let Some((Some(native), model)) = row else {
         return Ok(Err(Skip::NotInArchive));
     };
-    let Some(file) = session_file(projects, &native) else {
+    let (file, format) = match agent {
+        Agent::ClaudeCode => (
+            files.projects.and_then(|p| session_file(p, &native)),
+            &CLAUDE,
+        ),
+        Agent::Codex => (files.rollouts.get(&native).cloned(), &CODEX),
+    };
+    let Some(file) = file else {
         return Ok(Err(Skip::SessionFileGone));
     };
     let Ok(entries) = session::read_lines(&file) else {
         return Ok(Err(Skip::SessionFileGone));
     };
-    Ok(locate(&entries, receipt).map(|found| Case {
+    let codex_branch = match agent {
+        Agent::ClaudeCode => None,
+        Agent::Codex => codex::branch(&entries),
+    };
+    Ok(locate(&entries, receipt, format).map(|found| Case {
         id: format!("{}:{}", receipt.session, found.correction_line),
+        agent,
         lesson: lesson.to_owned(),
         session: receipt.session.clone(),
         native,
@@ -153,16 +222,22 @@ fn case_for(
         prompt_line: found.prompt_line,
         correction_line: found.correction_line,
         correction_ms: found.correction_ms,
-        cwd: session::cwd(found.prompt).map(PathBuf::from),
-        branch: session::branch(found.prompt).map(str::to_owned),
+        cwd: match agent {
+            Agent::ClaudeCode => session::cwd(found.prompt).map(PathBuf::from),
+            Agent::Codex => codex::cwd_at(&entries, found.prompt_line).map(PathBuf::from),
+        },
+        branch: match agent {
+            Agent::ClaudeCode => session::branch(found.prompt).map(str::to_owned),
+            Agent::Codex => codex_branch.clone(),
+        },
         prompt_ms: found.prompt_ms,
-        prompt: session::content_text(found.prompt),
-        actions: session::assistant_actions(
+        prompt: (format.text)(found.prompt),
+        actions: (format.actions)(
             entries
                 .get(found.prompt_line + 1..found.correction_line)
                 .unwrap_or_default(),
         ),
-        correction: session::content_text(found.correction),
+        correction: (format.text)(found.correction),
         repo: receipt.repo.clone(),
         signal: receipt.signal.into(),
     }))
@@ -194,14 +269,19 @@ struct Located<'a> {
 /// The correction's line and the human turn before it. When the text matches
 /// several human lines (a person repeating themselves), the one closest in
 /// time to the mined turn wins, then the earliest.
-fn locate<'a>(entries: &'a [Value], receipt: &Candidate) -> std::result::Result<Located<'a>, Skip> {
+fn locate<'a>(
+    entries: &'a [Value],
+    receipt: &Candidate,
+    format: &Format,
+) -> std::result::Result<Located<'a>, Skip> {
     let needle: String = squash(&receipt.text).chars().take(MATCH_CHARS).collect();
     if needle.is_empty() {
         return Err(Skip::EmptyCorrection);
     }
-    let hits = entries.iter().enumerate().filter(|(_, e)| {
-        session::is_human(e) && squash(&session::content_text(e)).contains(&needle)
-    });
+    let hits = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| (format.is_human)(e) && squash(&(format.text)(e)).contains(&needle));
     let distance = |e: &Value| match (receipt.at_ms, session::timestamp_ms(e)) {
         (Some(want), Some(at)) => want.abs_diff(at),
         _ => u64::MAX,
@@ -215,7 +295,7 @@ fn locate<'a>(entries: &'a [Value], receipt: &Candidate) -> std::result::Result<
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, e)| session::is_human(e))
+        .find(|(_, e)| (format.is_human)(e))
         .ok_or(Skip::NoPromptBeforeCorrection)?;
     Ok(Located {
         prompt_line,
@@ -266,29 +346,106 @@ mod tests {
             human("no, not like that", "2026-01-01T00:03:00Z"),
         ];
         let late = 1_767_225_780_000; // 00:03:00
-        let found = locate(&entries, &receipt("no, not like that", Some(late)))
+        let found = locate(&entries, &receipt("no, not like that", Some(late)), &CLAUDE)
             .ok()
             .unwrap();
         assert_eq!((found.prompt_line, found.correction_line), (2, 3));
-        let early = locate(&entries, &receipt("no, not like that", None))
+        let early = locate(&entries, &receipt("no, not like that", None), &CLAUDE)
             .ok()
             .unwrap();
         assert_eq!((early.prompt_line, early.correction_line), (0, 1));
     }
 
     #[test]
+    fn a_codex_correction_becomes_a_codex_case() {
+        let home = tempfile::tempdir().unwrap();
+        let native = "01a1a371-ecbd-7873-9451-a0afb83c99a1";
+        let dir = home.path().join("sessions/2026/01/01");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(format!("rollout-2026-01-01T00-00-00-{native}.jsonl"));
+        let item = |ts: &str, payload: Value| json!({"timestamp": ts, "type": "response_item", "payload": payload});
+        let user = |ts: &str, text: &str| {
+            item(
+                ts,
+                json!({"type": "message", "role": "user",
+                            "content": [{"type": "input_text", "text": text}]}),
+            )
+        };
+        let lines = [
+            json!({"timestamp": "2026-01-01T00:00:00Z", "type": "session_meta",
+                   "payload": {"id": native, "cwd": "/r", "git": {"branch": "feat"}}}),
+            user(
+                "2026-01-01T00:00:00Z",
+                "<environment_context>x</environment_context>",
+            ),
+            user("2026-01-01T00:00:01Z", "ship it"),
+            item(
+                "2026-01-01T00:00:02Z",
+                json!({"type": "function_call", "name": "exec_command",
+                                               "arguments": "{\"cmd\":\"git push\"}"}),
+            ),
+            item(
+                "2026-01-01T00:00:03Z",
+                json!({"type": "function_call_output", "output": "ok"}),
+            ),
+            user("2026-01-01T00:01:00Z", "no, never push without asking"),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&file, text).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE agent_session (id TEXT, native_session_id TEXT, primary_model TEXT);
+             INSERT INTO agent_session VALUES ('s_1', '01a1a371-ecbd-7873-9451-a0afb83c99a1', 'gpt-x');",
+        )
+        .unwrap();
+        let rollouts = codex::rollout_index(home.path());
+        let files = Files {
+            projects: None,
+            rollouts: &rollouts,
+        };
+        let mut mined = receipt("no, never push without asking", None);
+        mined.agent = "codex".into();
+        let case = case_for(&conn, &files, "l", &mined).unwrap().unwrap();
+        assert_eq!(case.agent, Agent::Codex);
+        assert_eq!(case.id, "s_1:5");
+        assert_eq!(case.native, native);
+        assert_eq!(case.file, file);
+        assert_eq!((case.prompt_line, case.correction_line), (2, 5));
+        assert_eq!(case.prompt, "ship it");
+        assert_eq!(case.cwd, Some(PathBuf::from("/r")));
+        assert_eq!(case.branch.as_deref(), Some("feat"));
+        assert_eq!(case.model.as_deref(), Some("gpt-x"));
+        assert_eq!(
+            case.actions,
+            vec![Action::Tool {
+                name: "exec_command".into(),
+                input: json!({"cmd": "git push"})
+            }]
+        );
+        let json = serde_json::to_value(&case).unwrap();
+        assert_eq!(json["agent"], "codex");
+
+        mined.agent = "gemini".into();
+        assert!(matches!(
+            case_for(&conn, &files, "l", &mined).unwrap(),
+            Err(Skip::UnsupportedAgent)
+        ));
+    }
+
+    #[test]
     fn misses_carry_their_reason() {
         let entries = vec![human("only turn", "2026-01-01T00:00:00Z")];
         assert!(matches!(
-            locate(&entries, &receipt("absent", None)),
+            locate(&entries, &receipt("absent", None), &CLAUDE),
             Err(Skip::CorrectionLineNotFound)
         ));
         assert!(matches!(
-            locate(&entries, &receipt("only turn", None)),
+            locate(&entries, &receipt("only turn", None), &CLAUDE),
             Err(Skip::NoPromptBeforeCorrection)
         ));
         assert!(matches!(
-            locate(&entries, &receipt("   ", None)),
+            locate(&entries, &receipt("   ", None), &CLAUDE),
             Err(Skip::EmptyCorrection)
         ));
     }

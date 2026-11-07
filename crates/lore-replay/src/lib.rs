@@ -1,26 +1,29 @@
-//! `lore-replay`: replay a Claude Code session from the point a person
-//! corrected the agent, to measure whether lessons stop the agent from
+//! `lore-replay`: replay a Claude Code or Codex session from the point a
+//! person corrected the agent, to measure whether lessons stop the agent from
 //! repeating the mistake.
 //!
 //! **This crate starts an agent that talks to a model provider.** `run`
-//! launches Claude Code (`claude -p`), which sends the session prefix and the
-//! prompt to Anthropic's API under the person's own login, and is billed to
-//! it. Unlike lore-core, lore-memory, and lorectl, this crate is not
+//! launches Claude Code (`claude -p`) or Codex (`codex exec`), whichever
+//! recorded the case, which sends the session prefix and the prompt to the
+//! agent's provider (Anthropic or OpenAI) under the person's own login, and
+//! is billed to it. Unlike lore-core, lore-memory, and lorectl, this crate is not
 //! network-incapable by design, and nothing in the archive depends on it. It
 //! holds no networking code itself; the agent it starts does.
 //!
-//! `cases` only reads: the archive, opened read only, and Claude Code's
+//! `cases` only reads: the archive, opened read only, and the agents'
 //! session files. `label` and `grade` ask a model judge through `claude -p`
 //! (also under the person's login); `grade --no-judge` and `report` only read.
 //!
 //! Each replay is isolated so that it measures the agent and not a leak:
 //! a scratch clone at the commit HEAD pointed at when the prompt was given,
 //! an OS sandbox with no network and no reads of `/Users` or `/Volumes`, a
-//! session prefix rewritten into the clone, and a project folder Lore never
-//! ingests. See [`isolation`] for why each rule exists.
+//! session prefix rewritten into the clone, and a project folder (or, for
+//! Codex, a `CODEX_HOME`) Lore never ingests. See [`isolation`] and
+//! [`codex`] for why each rule exists.
 
 pub mod cases;
 pub mod claude;
+pub mod codex;
 pub mod error;
 pub mod grade;
 pub mod isolation;
@@ -38,7 +41,7 @@ use std::path::Path;
 
 pub use error::{Error, Result};
 pub use types::{
-    Action, Arm, ArmName, ArmsFile, Case, Fidelity, GradeLine, Grader, Label, LabeledCase,
+    Action, Agent, Arm, ArmName, ArmsFile, Case, Fidelity, GradeLine, Grader, Label, LabeledCase,
     RunRecord, ScreenLine, ShownLine, Verdict, DELIVERY, HARNESS,
 };
 

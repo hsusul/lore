@@ -42,21 +42,79 @@ impl From<lore_memory::mine::Signal> for Signal {
     }
 }
 
+/// The coding agent a session was recorded by, and a replay runs.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum Agent {
+    /// Claude Code. Files written before the field existed are all this.
+    #[default]
+    #[serde(rename = "claude-code")]
+    ClaudeCode,
+    /// OpenAI's Codex CLI.
+    #[serde(rename = "codex")]
+    Codex,
+}
+
+impl Agent {
+    /// The archive's `agent_id`, and the JSON value.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+        }
+    }
+
+    /// The agent for an archive `agent_id`, `None` for one replay cannot run.
+    #[must_use]
+    pub fn from_archive(id: &str) -> Option<Self> {
+        match id {
+            "claude-code" => Some(Self::ClaudeCode),
+            "codex" => Some(Self::Codex),
+            _ => None,
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Self::ClaudeCode
+    }
+}
+
+impl fmt::Display for Agent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Agent {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_archive(s)
+            .ok_or_else(|| format!("unknown agent `{s}`; expected claude-code or codex"))
+    }
+}
+
 /// A correction point: the human turn that prompted an assistant turn, that
 /// assistant turn, and the human turn that corrected it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Case {
     /// `<archive session id>:<correction line>`, stable across extractions.
     pub id: String,
+    /// The agent that recorded the session, and that replays it.
+    #[serde(default)]
+    pub agent: Agent,
     /// The mined lesson this correction is a receipt of.
     pub lesson: String,
     /// The archive session id.
     pub session: String,
-    /// Claude Code's own session id: the session file's stem.
+    /// The agent's own session id: the Claude Code session file's stem, or
+    /// the Codex rollout's `session_meta` id.
     pub native: String,
     /// The model the original session ran, when the archive knows it.
     pub model: Option<String>,
-    /// The Claude Code session file.
+    /// The Claude Code session file, or the Codex rollout file.
     pub file: PathBuf,
     /// Zero-based line of the prompting human turn; the replay prefix is every
     /// line before it.
@@ -270,9 +328,19 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<String>,
     pub case: String,
+    /// The agent replayed; Claude Code in records written before it was
+    /// recorded.
+    #[serde(default)]
+    pub agent: Agent,
     pub arm: ArmName,
     pub trial: u32,
+    /// The model asked for: `--model`, or the agent's default as
+    /// [`crate::run::requested_model`] names it.
     pub model: String,
+    /// The model the agent reported using, when it says and it can differ
+    /// from [`Self::model`] (Codex run with its own default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_model: Option<String>,
     /// `--max-turns`; `None` in records written before it was recorded.
     #[serde(default)]
     pub max_turns: Option<u32>,
@@ -290,14 +358,16 @@ pub struct RunRecord {
     pub is_error: Option<bool>,
     /// The agent stopped at `--max-turns`. Claude Code reports that as an
     /// error, but the turn it made is complete enough to grade, so the run is
-    /// recorded as finished and marked here.
+    /// recorded as finished and marked here. Codex has no turn cap of its
+    /// own; the replay stops it after that many tool calls.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub capped: bool,
     /// The last characters of the agent's stderr.
     pub stderr: String,
     /// Each attempt to reach GitHub through `gh`, which the stub refuses.
     pub outward: Vec<String>,
-    /// The agent's stream-json events, in order.
+    /// The agent's events, in order: Claude Code's stream-json, or Codex's
+    /// `exec --json`.
     pub events: Vec<Value>,
 }
 
@@ -485,6 +555,9 @@ impl Verdict {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GradeLine {
     pub case: String,
+    /// The run's agent; absent reads as Claude Code.
+    #[serde(default, skip_serializing_if = "Agent::is_default")]
+    pub agent: Agent,
     pub arm: ArmName,
     pub trial: u32,
     /// The label's grader kind.
