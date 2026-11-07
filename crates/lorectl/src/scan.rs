@@ -73,7 +73,11 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     // `Worker::scan` already stamped completion; read it back so the report
     // shows exactly what a later `status` will read, rather than a second clock
     // reading that could differ.
-    let completed_at = settings::last_scan_completed_at(&conn)?.unwrap_or_else(now_ms);
+    let completed_at = match since {
+        Some(_) => settings::last_window_scan(&conn)?.map(|(at, _)| at),
+        None => settings::last_scan_completed_at(&conn)?,
+    }
+    .unwrap_or_else(now_ms);
 
     let mut stdout = std::io::stdout().lock();
     let report = if invocation.json {

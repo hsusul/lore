@@ -176,6 +176,41 @@ fn json_output_is_one_parseable_line() {
 }
 
 #[test]
+fn window_scan_json_reports_its_own_completion_stamp() {
+    let archive = tempfile::tempdir().unwrap();
+    let homes = empty_homes();
+
+    let full_out = lorectl(archive.path(), homes.path(), &["--json", "scan"]);
+    assert_eq!(code(&full_out), 0);
+    let full_val: serde_json::Value =
+        serde_json::from_str(String::from_utf8(full_out.stdout).unwrap().trim()).unwrap();
+    let full_completed = full_val["completed_at_ms"].as_i64().unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    let window_out = lorectl(
+        archive.path(),
+        homes.path(),
+        &["--json", "scan", "--since", "30d"],
+    );
+    assert_eq!(code(&window_out), 0);
+    let window_val: serde_json::Value =
+        serde_json::from_str(String::from_utf8(window_out.stdout).unwrap().trim()).unwrap();
+    let window_completed = window_val["completed_at_ms"].as_i64().unwrap();
+
+    let conn = lore_core::storage::open_read_only(&archive.path().join("lore.db")).unwrap();
+    let (window_stamp, _) = lore_core::settings::last_window_scan(&conn)
+        .unwrap()
+        .expect("window scan completion stamp must exist");
+
+    assert_eq!(window_completed, window_stamp);
+    assert!(
+        window_completed > full_completed,
+        "window scan reported stale full scan stamp ({window_completed} <= {full_completed})"
+    );
+}
+
+#[test]
 fn a_relative_archive_is_refused_before_anything_is_created() {
     // Exit 1, and no stray directory: a rejected invocation must not leave
     // half an archive behind.
