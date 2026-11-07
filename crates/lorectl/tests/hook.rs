@@ -858,6 +858,10 @@ fn pre_edit_reads_the_files_a_codex_patch_names() {
                  +fn retry_once() {}\n\
                  *** End Patch\n";
 
+    let expected = context_reply(
+        "Lore notes anchored to src/a.rs:\n\
+         - [fresh] Retry the migration (01JD0000000000000000000001)\n",
+    );
     let out = hook(
         "pre-edit",
         &repo,
@@ -866,13 +870,37 @@ fn pre_edit_reads_the_files_a_codex_patch_names() {
         &patch_json(&repo, patch),
     );
     assert_eq!(code(&out), 0);
-    assert_eq!(
-        stdout(&out),
-        context_reply(
-            "Lore notes anchored to src/a.rs:\n\
-             - [fresh] Retry the migration (01JD0000000000000000000001)\n"
-        )
-    );
+    assert_eq!(stdout(&out), expected);
+
+    for payload in [
+        serde_json::json!({
+            "session_id": "s-1",
+            "cwd": &repo,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "apply_patch",
+            "tool_input": { "patch": patch },
+        }),
+        serde_json::json!({
+            "session_id": "s-1",
+            "cwd": &repo,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "apply_patch",
+            "tool_input": { "input": patch },
+        }),
+        serde_json::json!({
+            "session_id": "s-1",
+            "cwd": &repo,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "apply_patch",
+            "tool_input": patch,
+        }),
+    ] {
+        let out = hook("pre-edit", &repo, home.path(), &vault, &payload.to_string());
+        assert_eq!(stdout(&out), expected);
+
+        let out = hook("pre-tool", &repo, home.path(), &vault, &payload.to_string());
+        assert_eq!(stdout(&out), expected);
+    }
 
     // A move names the file it moves to; a patch with no header names none.
     let moved =

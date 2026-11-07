@@ -44,7 +44,7 @@
 //!
 //! `pre-edit` runs before a tool changes a file. It reads `tool_input.file_path`
 //! (or `notebook_path`) from the hook JSON, or for Codex's `apply_patch` every
-//! file the patch text in `tool_input.command` adds, updates, deletes, or
+//! file the patch text in `tool_input` adds, updates, deletes, or
 //! moves to, and prints the accepted notes anchored to those files, each with
 //! its freshness label, as the PreToolUse `additionalContext` reply Claude
 //! Code and Codex pass to the model. It never answers with a permission
@@ -223,15 +223,19 @@ fn read_input(json: &serde_json::Value) -> HookInput {
             .filter(|id| !id.is_empty())
             .map(str::to_owned),
         file_paths: if text("tool_name") == Some("apply_patch") {
-            json.pointer("/tool_input/command")
-                .and_then(serde_json::Value::as_str)
-                .map(|patch| {
-                    enforce::patch_paths(patch)
-                        .into_iter()
-                        .map(PathBuf::from)
-                        .collect()
+            let input = json.get("tool_input");
+            let patch = input
+                .and_then(|ti| {
+                    ["command", "input", "patch"]
+                        .iter()
+                        .find_map(|key| ti.get(key).and_then(serde_json::Value::as_str))
+                        .or_else(|| ti.as_str())
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            enforce::patch_paths(patch)
+                .into_iter()
+                .map(PathBuf::from)
+                .collect()
         } else {
             ["/tool_input/file_path", "/tool_input/notebook_path"]
                 .iter()
