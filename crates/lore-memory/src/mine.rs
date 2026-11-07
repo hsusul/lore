@@ -916,9 +916,12 @@ pub fn content_words(text: &str) -> BTreeSet<String> {
 /// `word` without a plain `ing`, `ed`, or `s` ending, so "edit", "editing",
 /// and "edited" count as one word. Short words are kept whole.
 fn stem(word: &str) -> String {
+    let word = word.trim_end_matches('\'');
     for (suffix, min) in [("ing", 6), ("ed", 5), ("s", 4)] {
         if word.len() >= min && word.ends_with(suffix) && !word.ends_with("ss") {
-            return word[..word.len() - suffix.len()].to_owned();
+            return word[..word.len() - suffix.len()]
+                .trim_end_matches('\'')
+                .to_owned();
         }
     }
     word.to_owned()
@@ -1359,5 +1362,13 @@ mod tests {
         assert!(!is_invocation("[$50 budget] prompt"));
         assert!(!is_invocation("/home/me/path prompt"));
         assert!(!is_invocation("hello world"));
+    }
+
+    #[test]
+    fn stems_possessive_apostrophes_and_plurals_to_base() {
+        assert_eq!(stem("user"), "user");
+        assert_eq!(stem("users"), "user");
+        assert_eq!(stem("user's"), "user");
+        assert_eq!(stem("users'"), "user");
     }
 }
