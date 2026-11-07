@@ -573,6 +573,16 @@ fn find_proposal(vault: &Vault, id: &str) -> Result<Proposal, ReviewError> {
 /// or is not UTF-8, such as one torn by a crash, is ignored: the commit it
 /// would describe is found again from the vault.
 pub fn decisions(vault: &Vault) -> Result<HashMap<NoteId, Decision>, VaultError> {
+    Ok(decisions_at(vault)?
+        .into_iter()
+        .map(|(id, (decision, _))| (id, decision))
+        .collect())
+}
+
+/// [`decisions`], each with when it was made, when the line says.
+pub fn decisions_at(
+    vault: &Vault,
+) -> Result<HashMap<NoteId, (Decision, Option<OffsetDateTime>)>, VaultError> {
     let path = vault.lore_dir().join(DECISIONS_FILE);
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
@@ -585,7 +595,11 @@ pub fn decisions(vault: &Vault) -> Result<HashMap<NoteId, Decision>, VaultError>
         .filter_map(|raw| std::str::from_utf8(raw).ok());
     for line in lines {
         if let Some((id, decision)) = parse_decision(line) {
-            out.insert(id, decision);
+            let at = serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|v| v.get("at")?.as_str().map(str::to_owned))
+                .and_then(|at| OffsetDateTime::parse(&at, &Rfc3339).ok());
+            out.insert(id, (decision, at));
         }
     }
     Ok(out)

@@ -476,6 +476,19 @@ impl Vault {
         Ok(stamps)
     }
 
+    /// Every note file in the vault that parses, by path, read straight from
+    /// the files. Writes nothing, not even the index, so a read-only report
+    /// can use it; files that are not notes are left out.
+    pub fn notes(&self) -> Result<Vec<(String, Note)>, VaultError> {
+        let mut notes = Vec::new();
+        for stamp in self.stamps()? {
+            if let Ok(note) = self.parse_indexed(&stamp.path)? {
+                notes.push((stamp.path, note));
+            }
+        }
+        Ok(notes)
+    }
+
     /// Notes matching every word of `query`, best first.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>, VaultError> {
         Ok(self.index()?.search(query, limit)?)
