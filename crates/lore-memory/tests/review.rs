@@ -528,6 +528,21 @@ fn an_update_is_not_applied_again_after_a_lost_decision_and_a_retire() {
 }
 
 #[test]
+fn an_update_converges_when_its_decision_line_is_lost_and_target_deleted() {
+    let (dir, vault) = new_vault();
+    let (target, _) = vault.add(TARGET).unwrap();
+    inbox::propose(&vault, update_of(&target)).unwrap();
+    let first = review::accept(&vault, P2, None).unwrap();
+    lose_decisions(dir.path());
+    fs::remove_file(dir.path().join(&first.rel)).unwrap();
+    let again = review::accept(&vault, P2, None).unwrap();
+    assert_eq!((again.outcome, again.updated), (Added::Unchanged, true));
+    assert_eq!(again.rel, first.rel);
+    assert_eq!(again.id, first.id);
+    assert_eq!(decision_lines(dir.path(), P2), 1);
+}
+
+#[test]
 fn a_decision_after_a_torn_line_is_still_read() {
     let (dir, vault) = new_vault();
     inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
