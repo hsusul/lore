@@ -426,10 +426,6 @@ pub fn analyze(input: &Input, data: Data, seed: u64) -> Report {
         }
     }
 
-    let arms: Vec<ArmName> = ArmName::ALL
-        .into_iter()
-        .filter(|arm| raw.keys().any(|(_, a)| a == arm))
-        .collect();
     let cell = |case: &str, arm: ArmName| -> Option<Cell> {
         let substitute = arm != ArmName::None && input.empty.contains(&(case.to_owned(), arm));
         let source = if substitute { ArmName::None } else { arm };
@@ -440,6 +436,13 @@ pub fn analyze(input: &Input, data: Data, seed: u64) -> Report {
             same_as_none: substitute,
         })
     };
+    let arms: Vec<ArmName> = ArmName::ALL
+        .into_iter()
+        .filter(|&arm| {
+            raw.keys().any(|(_, a)| *a == arm)
+                || input.cases.iter().any(|(id, _)| cell(id, arm).is_some())
+        })
+        .collect();
 
     let (none_repeats, none_trials) = input
         .cases
@@ -1074,6 +1077,25 @@ mod tests {
         assert_eq!(lore.vs_none.as_ref().unwrap().cases, 3);
         assert_eq!(r.spread.n, 5);
         assert!(r.text().contains("lore 2/3=none"));
+    }
+
+    #[test]
+    fn an_arm_empty_for_all_cases_is_reported_as_same_as_none() {
+        let mut inp = input(&[(3, 0), (2, 0), (3, 1)], ArmName::Lore);
+        inp.grades.retain(|g| g.arm != ArmName::Lore);
+        inp.empty.insert(("c:0".into(), ArmName::Lore));
+        inp.empty.insert(("c:1".into(), ArmName::Lore));
+        inp.empty.insert(("c:2".into(), ArmName::Lore));
+        let r = analyze(&inp, Data::Synthetic, DEFAULT_SEED);
+        let lore = arm(&r, ArmName::Lore);
+        assert_eq!(lore.same_as_none, ["c:0", "c:1", "c:2"]);
+        let cell = r.per_case[0]
+            .cells
+            .iter()
+            .find(|c| c.arm == ArmName::Lore)
+            .unwrap();
+        assert_eq!((cell.repeats, cell.trials, cell.same_as_none), (3, 3, true));
+        assert!(r.text().contains("lore 3/3=none"));
     }
 
     #[test]

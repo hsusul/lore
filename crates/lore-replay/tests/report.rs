@@ -304,3 +304,30 @@ fn the_report_implements_the_preregistered_analysis() {
         report(tmp.path(), &["--seed", "9"])
     );
 }
+
+#[test]
+fn an_arm_empty_across_all_cases_is_reported_as_same_as_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    fixture(tmp.path());
+    let grades: Vec<Value> = std::fs::read_to_string(tmp.path().join("grades.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .filter(|g: &Value| g["arm"] != "lore")
+        .collect();
+    write_lines(&tmp.path().join("grades.jsonl"), &grades);
+    std::fs::write(
+        tmp.path().join("arms.json"),
+        json!({
+            "c:0": {"lore": ""},
+            "c:1": {"lore": ""},
+            "c:2": {"lore": ""},
+            "c:3": {"lore": ""},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let text = report(tmp.path(), &[]);
+    assert!(text.contains("same as none for 4 case(s) whose lore context is empty"));
+    assert!(text.contains("lore 3/3=none"));
+}
