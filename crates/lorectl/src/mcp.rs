@@ -66,7 +66,8 @@ const READ_PAGE_DOCUMENTS: i64 = 50;
 /// flood the agent's context window.
 const READ_PAGE_CHARS: usize = 24_000;
 
-const RECALL_DEFAULT_LIMIT: u64 = 5;
+/// Session start's cap, so a call with no limit sees what session start lists.
+const RECALL_DEFAULT_LIMIT: u64 = lore_memory::session_start::NOTE_CAP as u64;
 const RECALL_MAX_LIMIT: u64 = 10;
 const RECALL_EXCERPT_CHARS: usize = 300;
 /// Characters of serialized `recall_memory` reply, so recall stays a glance.
@@ -171,7 +172,8 @@ Thinking and raw tool payloads are not included.",
         name: "recall_memory",
         description: "Call before you start or change direction in a repo, to get accepted \
 notes (conventions, pitfalls, decisions) for it, each labelled with whether its code anchors \
-still match.",
+still match. total counts every active note for the repo, so a reply may hold fewer notes \
+than total; pass query words to reach the others.",
         input_schema: recall_schema,
         call: recall_memory,
     },
@@ -622,11 +624,21 @@ fn recall_memory(_ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let dir = vault::resolve_dir(None).map_err(|e| vault_error(&e))?;
     let vault = match Vault::open(&dir) {
         Ok(vault) => vault,
-        Err(VaultError::Missing(_)) => return Ok(json!({ "vault": "missing", "notes": [] })),
+        Err(VaultError::Missing(_)) => {
+            return Ok(json!({ "vault": "missing", "notes": [], "total": 0 }))
+        }
         Err(e) => return Err(vault_error(&e)),
     };
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let found = recall::recall(&vault, query_text, cwd, limit).map_err(|e| vault_error(&e))?;
+    // Recall left the index fresh, so counting the scope is one query.
+    let scope = found.context.key().map(|k| format!("repo:{}", k.as_str()));
+    let total = lore_memory::index::Index::open(&vault.lore_dir())
+        .ok()
+        .flatten()
+        .and_then(|index| index.count_active(scope.as_deref()).ok())
+        .unwrap_or(0)
+        .max(found.notes.len());
     let mut notes = Vec::new();
     for recalled in &found.notes {
         let excerpt: String = redact(&recalled.excerpt)?
@@ -643,7 +655,9 @@ fn recall_memory(_ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     }
     let mut truncated = false;
     loop {
-        let reply = json!({ "vault": "ok", "notes": notes, "truncated": truncated });
+        let reply = json!({
+            "vault": "ok", "notes": notes, "total": total, "truncated": truncated
+        });
         if notes.is_empty() || reply.to_string().chars().count() <= RECALL_REPLY_CHARS {
             return Ok(reply);
         }
