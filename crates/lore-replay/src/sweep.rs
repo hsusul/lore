@@ -259,9 +259,11 @@ fn plan(opts: &SweepOptions) -> Result<Vec<Plan>> {
                     }
                 }
                 _ => {
-                    let oracle = text(name).ok_or_else(|| Error::ArmTextMissing {
-                        case: id.clone(),
-                        arm: name.to_string(),
+                    let oracle = text(name).filter(|t| !t.trim().is_empty()).ok_or_else(|| {
+                        Error::ArmTextMissing {
+                            case: id.clone(),
+                            arm: name.to_string(),
+                        }
                     })?;
                     run_arms.extend(Arm::new(name, Some(oracle)));
                 }
