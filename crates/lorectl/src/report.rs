@@ -17,16 +17,17 @@
 //! - Delivery: the `.lore/shown/` records the hooks write, one per session.
 //!   They hold a hash of the session id, and the hooks prune them after
 //!   seven days, so a longer window cannot see older deliveries.
-//! - Repeats: rule-flagged corrections that share at least two content words
-//!   with an active note accepted before them. Notes are found by BM25 with
-//!   the rule `lorectl hook prompt` uses (two shared index words), and a match
-//!   then also needs two shared words by the miner's [`mine::content_words`]:
-//!   three letters or more, with contractions kept whole. The hook's
-//!   tokenizer splits "don't" into "don" and "t", so on its own it matches
-//!   any two turns that both say "don't". This is an estimate from word
+//! - Repeats: rule-flagged corrections that share the lesson of an active
+//!   note accepted strictly before them. Notes are found by BM25 with the
+//!   rule `lorectl hook prompt` uses (two shared index words), and a match
+//!   then also needs, by [`related_words`], two words shared with the
+//!   note's lesson (its title and the statement above `Receipts:`), or two
+//!   shared with one of its receipts of which one is a lesson word. A
+//!   receipt's other words, such as "make sure", were said around the
+//!   lesson and match turns about anything. This is an estimate from word
 //!   overlap.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -36,7 +37,7 @@ use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::storage::{self, StorageError};
 use lore_memory::considered::{self, CorrectionId};
 use lore_memory::inbox;
-use lore_memory::index::{split_timeline, Index};
+use lore_memory::index::{related_words, split_timeline, without_receipts, Index};
 use lore_memory::mine::{self, Candidate};
 use lore_memory::note::{Note, Status};
 use lore_memory::repo::RepoContext;
@@ -486,23 +487,19 @@ fn vault_sections(
             (id, at)
         })
         .collect();
-    let words: HashMap<&str, std::collections::BTreeSet<String>> = active
+    let words: HashMap<&str, NoteWords> = active
         .iter()
-        .map(|(_, n)| {
-            let statement = split_timeline(&n.body).0;
-            let text = format!("{} {statement}", n.title);
-            (n.id.as_str(), mine::content_words(&text))
-        })
+        .map(|(_, n)| (n.id.as_str(), NoteWords::of(n)))
         .collect();
     let mut scopes: HashMap<String, Option<String>> = HashMap::new();
     let mut repeats = Vec::new();
     let mut checked = 0;
     for c in flagged {
         let Some(at) = c.at_ms else { continue };
-        let said = mine::content_words(&c.text);
-        if said.len() < 2 {
+        if mine::content_words(&c.text).len() < 2 {
             continue;
         }
+        let said: BTreeSet<String> = related_words(&c.text).into_iter().collect();
         checked += 1;
         let scope = match &c.repo_path {
             Some(path) => scopes
@@ -518,13 +515,9 @@ fn vault_sections(
         let hits = index
             .search_active_related(&c.text, scope.as_deref(), REPEAT_CANDIDATES)
             .map_err(|e| CliError::from(vault::VaultError::from(e)))?;
-        let shares_two = |id: &str| {
-            words
-                .get(id)
-                .is_some_and(|w| w.intersection(&said).nth(1).is_some())
-        };
         let earlier = hits.iter().find(|hit| {
-            since_accept.get(hit.id.as_str()).is_some_and(|&a| a < at) && shares_two(&hit.id)
+            since_accept.get(hit.id.as_str()).is_some_and(|&a| a < at)
+                && words.get(hit.id.as_str()).is_some_and(|w| w.matches(&said))
         });
         if let Some(hit) = earlier {
             let excerpt: String = inbox::redact(&c.text)
@@ -553,6 +546,56 @@ fn vault_sections(
         repeats,
         checked,
     })
+}
+
+/// The words of a note a correction must share to repeat it, by
+/// [`related_words`]: its lesson (the title and the statement above
+/// `Receipts:`), and each receipt (a quoted correction under `Receipts:`).
+struct NoteWords {
+    lesson: BTreeSet<String>,
+    receipts: Vec<BTreeSet<String>>,
+}
+
+impl NoteWords {
+    fn of(note: &Note) -> Self {
+        let statement = split_timeline(&note.body).0;
+        let above = without_receipts(statement);
+        // related_words keeps at most a dozen words of a text, so a long
+        // lesson is read a line at a time.
+        let words =
+            |text: &str| -> BTreeSet<String> { text.lines().flat_map(related_words).collect() };
+        let lesson = words(&format!("{}\n{above}", note.title));
+        let receipts = statement
+            .get(above.len()..)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("- "))
+            .map(|line| {
+                // The quote, when the receipt has one: `agent session date: "..."`.
+                let quote = match (line.find('"'), line.rfind('"')) {
+                    (Some(a), Some(b)) if b > a => &line[a + 1..b],
+                    _ => line,
+                };
+                words(quote)
+            })
+            .filter(|w| !w.is_empty())
+            .collect();
+        Self { lesson, receipts }
+    }
+
+    /// Whether `said` shares two words with the lesson, or two with one
+    /// receipt where at least one is also a lesson word. A quote's other
+    /// words were said around the lesson, often about something else ("make
+    /// sure"), so on their own they never make a repeat.
+    fn matches(&self, said: &BTreeSet<String>) -> bool {
+        if self.lesson.intersection(said).nth(1).is_some() {
+            return true;
+        }
+        self.receipts.iter().any(|quote| {
+            let shared: Vec<&String> = quote.intersection(said).collect();
+            shared.len() >= 2 && shared.iter().any(|w| self.lesson.contains(*w))
+        })
+    }
 }
 
 fn day(ms: i64) -> String {
