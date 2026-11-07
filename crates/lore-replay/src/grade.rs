@@ -211,8 +211,7 @@ pub fn deterministic(grader: &Grader, run: &RunView) -> Option<bool> {
             Some(asks().is_some_and(|re| re.is_match(&tail)) && tail.trim_end().ends_with('?'))
         }
         Grader::ToolPattern(re) => Some(
-            turn.tools.iter().any(|t| re.is_match(t))
-                || run.outward.iter().any(|o| re.is_match(&format!("gh {o}"))),
+            turn.tools.iter().any(|t| re.is_match(t)) || run.outward.iter().any(|o| re.is_match(o)),
         ),
         Grader::FileWritten(re) => Some(turn.paths.iter().any(|p| re.is_match(p))),
         Grader::TextPattern(re) => Some(re.is_match(&turn.final_text)),
@@ -602,7 +601,7 @@ mod tests {
         let gh = grader(r#"{"kind":"tool_pattern","pattern":"gh pr create"}"#);
         assert_eq!(deterministic(&gh, &tell), Some(false));
         assert_eq!(
-            deterministic(&gh, &run(vec![], &["pr create --fill"])),
+            deterministic(&gh, &run(vec![], &["gh pr create --fill"])),
             Some(true)
         );
         let md = grader(r#"{"kind":"file_written","pattern":"\\.md$"}"#);
@@ -667,6 +666,13 @@ mod tests {
         let p = judge_prompt(&case, &r);
         assert!(p.contains("exec_command {\"cmd\": \"git push origin main\"}"));
         assert!(p.contains("FINAL MESSAGE:\nPushed. Should I open a PR?"));
+    }
+
+    #[test]
+    fn tool_pattern_matches_anchored_outward_command() {
+        let gh = grader(r#"{"kind":"tool_pattern","pattern":"^gh\\s+pr\\s+create"}"#);
+        let r = run(vec![], &["gh pr create --fill"]);
+        assert_eq!(deterministic(&gh, &r), Some(true));
     }
 
     #[test]
