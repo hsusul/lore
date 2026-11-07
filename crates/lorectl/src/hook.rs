@@ -30,6 +30,12 @@
 //! refresh the vault's derived index under `.lore/`, the same cache
 //! `lorectl mem recall` keeps, and waits at most `LOCK_WAIT` for it.
 //!
+//! Last, when the hook JSON's `session_id` names a session the archive holds,
+//! by its archive id or its agent's own id, it prints `Lore session: <id>`
+//! with the archive id. An agent can pass that id to `propose_memory`, which
+//! then records the proposal's source as verified. A session started since
+//! the last scan is not in the archive yet, so it gets no line.
+//!
 //! It does **not** scan. A scan is unbounded — it can walk hundreds of megabytes
 //! — and taking that time at session start would make Lore the reason a session
 //! is slow to begin. Keeping the archive current is the desktop app's job, or an
@@ -42,7 +48,7 @@ use std::time::{Duration, Instant};
 use lore_core::enrich::{resolve_repository, RepoResolution};
 use lore_core::landing;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
-use lore_core::storage;
+use lore_core::{query, storage};
 use lore_memory::session_start;
 use lore_memory::vault::{self, Vault};
 
@@ -65,19 +71,46 @@ const AT_RISK_BUDGET: Duration = Duration::from_secs(5);
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let event = invocation.operand.as_deref().unwrap_or_default();
     if event == SESSION_START {
-        let cwd = hook_cwd().or_else(|| std::env::current_dir().ok());
+        let input = hook_input();
+        let cwd = input.cwd.or_else(|| std::env::current_dir().ok());
         // Errors are swallowed on purpose: see the module docs.
         let _ = session_start(invocation, cwd.as_deref());
+        let mut stdout = std::io::stdout().lock();
         if let Some(block) = memory_notes(cwd.as_deref()) {
-            let _ = std::io::stdout().lock().write_all(block.as_bytes());
+            let _ = stdout.write_all(block.as_bytes());
+        }
+        if let Some(id) = input.session_id.and_then(|id| archived(invocation, &id)) {
+            let _ = writeln!(stdout, "Lore session: {id}");
         }
     }
     Ok(exit::OK)
 }
 
-/// The absolute `cwd` an agent passes in its hook JSON on stdin, if any. A
-/// terminal is never read, so a person running the hook is not left waiting.
-fn hook_cwd() -> Option<PathBuf> {
+/// What an agent's hook JSON on stdin says, as far as this hook uses it.
+#[derive(Default)]
+struct HookInput {
+    /// The absolute `cwd`.
+    cwd: Option<PathBuf>,
+    session_id: Option<String>,
+}
+
+/// The hook JSON on stdin. Anything unreadable reads as empty.
+fn hook_input() -> HookInput {
+    let json = stdin_json().unwrap_or_default();
+    let text = |key: &str| json.get(key).and_then(serde_json::Value::as_str);
+    HookInput {
+        cwd: text("cwd")
+            .map(PathBuf::from)
+            .filter(|cwd| cwd.is_absolute()),
+        session_id: text("session_id")
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
+    }
+}
+
+/// Stdin parsed as JSON. A terminal is never read, so a person running the
+/// hook is not left waiting.
+fn stdin_json() -> Option<serde_json::Value> {
     let stdin = std::io::stdin();
     if stdin.is_terminal() {
         return None;
@@ -88,9 +121,15 @@ fn hook_cwd() -> Option<PathBuf> {
         .take(STDIN_CAP)
         .read_to_string(&mut text)
         .ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let cwd = PathBuf::from(json.get("cwd")?.as_str()?);
-    cwd.is_absolute().then_some(cwd)
+    serde_json::from_str(&text).ok()
+}
+
+/// The archive id of the session `id` names, read only. `None` when there is
+/// no archive or it holds no such session.
+fn archived(invocation: &Invocation, id: &str) -> Option<String> {
+    let archive_dir = invocation.archive_dir().ok()?;
+    let conn = storage::open_read_only(&archive_dir.join(ARCHIVE_DB_FILENAME)).ok()?;
+    Some(query::find_session(&conn, id).ok()??.archive_id)
 }
 
 /// The notes section for `cwd`, or `None` when there is nothing to add.
