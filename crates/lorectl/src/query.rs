@@ -135,7 +135,7 @@ pub fn inspect(invocation: &Invocation) -> Result<u8, CliError> {
 
     let mut stdout = std::io::stdout().lock();
     if invocation.json {
-        let line = serde_json::json!({
+        let mut line = serde_json::json!({
             "session_id": detail.summary.id,
             "agent_id": detail.summary.agent_id,
             "title": detail.summary.title,
@@ -147,6 +147,9 @@ pub fn inspect(invocation: &Invocation) -> Result<u8, CliError> {
             "parse_note": detail.parse_note,
             "file_events": detail.file_events.len(),
         });
+        if invocation.patch {
+            line["patches"] = serde_json::json!(session_patches(&conn, &archive_dir, &detail)?);
+        }
         let _ = writeln!(stdout, "{line}");
     } else {
         let title = detail.summary.title.as_deref().unwrap_or("(untitled)");
@@ -168,12 +171,30 @@ pub fn inspect(invocation: &Invocation) -> Result<u8, CliError> {
                 let _ = writeln!(stdout, "         {note}");
             }
         }
-    }
-
-    if invocation.patch {
-        print_patches(&conn, &archive_dir, &detail, &mut stdout)?;
+        if invocation.patch {
+            print_patches(&conn, &archive_dir, &detail, &mut stdout)?;
+        }
     }
     Ok(exit::OK)
+}
+
+/// Collect every recorded patch for a session, in file-event order.
+fn session_patches(
+    conn: &Connection,
+    archive_dir: &std::path::Path,
+    detail: &lore_ipc::SessionDetail,
+) -> Result<Vec<serde_json::Value>, CliError> {
+    let blobs = BlobStore::open_existing(archive_dir.join(BLOBS_DIRNAME))?;
+    let mut patches = Vec::with_capacity(detail.file_events.len());
+    for event in &detail.file_events {
+        let patch = query::file_patch_text(conn, &blobs, &event.id)?;
+        patches.push(serde_json::json!({
+            "path": event.path,
+            "change_kind": event.change_kind,
+            "patch": patch,
+        }));
+    }
+    Ok(patches)
 }
 
 /// Print every recorded patch for a session, in file-event order.
