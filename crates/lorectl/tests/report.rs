@@ -309,6 +309,72 @@ fn no_vault_reports_the_archive_and_explains() {
     assert!(!home.join("vault").exists(), "report created a vault");
 }
 
+/// A correction repeats a note only when the note was accepted before it
+/// and the correction shares the note's lesson words, not just words a
+/// receipt said around the lesson.
+#[test]
+fn repeats_need_an_earlier_note_with_the_same_lesson() {
+    const FMT: &str = "01JD0000000000000000000011";
+    const BRANCH: &str = "01JD0000000000000000000012";
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            (
+                "Pushed both changes to main.",
+                "no, make sure each change gets its own branch",
+            ),
+            ("Pushed it.", "no, run cargo fmt before you push"),
+        ],
+    );
+    ok(&lorectl(home, &["mem", "init"], ""));
+    for (name, id, title, created, body) in [
+        // Accepted before both corrections. Its receipt says "make sure",
+        // which the branch correction also says, about something else.
+        (
+            "fmt.md",
+            FMT,
+            "Format before pushing",
+            "2026-07-01",
+            "Run cargo fmt before each push.\n\nReceipts:\n\
+             - codex s1 2026-06-30: \"make sure you format the code\"",
+        ),
+        // The branch correction's own lesson, accepted after it.
+        (
+            "branch.md",
+            BRANCH,
+            "One branch per change",
+            "2026-08-10",
+            "Give each change its own branch.",
+        ),
+    ] {
+        let path = home.join(name);
+        std::fs::write(
+            &path,
+            format!("---\nid: {id}\ntype: convention\ntitle: {title}\ncreated: {created}\n---\n{body}\n"),
+        )
+        .unwrap();
+        ok(&lorectl(home, &["mem", "add", path.to_str().unwrap()], ""));
+    }
+
+    let json: serde_json::Value = serde_json::from_str(&ok(&lorectl(
+        home,
+        &["report", "--since", "2026-08-01", "--json"],
+        "",
+    )))
+    .unwrap();
+    assert_eq!(json["corrections"]["flagged"], 2, "{json}");
+    assert_eq!(json["repeats"]["checked"], 2, "{json}");
+    let repeated: Vec<(&str, &str)> = json["repeats"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["note_id"].as_str().unwrap(), r["date"].as_str().unwrap()))
+        .collect();
+    assert_eq!(repeated, [(FMT, "2026-08-02")], "{json}");
+}
+
 #[test]
 fn bad_arguments_are_usage_errors() {
     let dir = tempfile::tempdir().unwrap();
