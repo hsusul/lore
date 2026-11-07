@@ -263,9 +263,20 @@ impl Finding {
                 }
             },
             Finding::Drift { copies, .. } => {
-                let paths: Vec<String> =
-                    copies.iter().take(2).map(|c| quote_path(&c.path)).collect();
-                Fix::Command(format!("diff -ru {}", paths.join(" ")))
+                let Some((first, rest)) = copies.split_first() else {
+                    return Fix::Hint(String::new());
+                };
+                let diffs: Vec<String> = rest
+                    .iter()
+                    .map(|other| {
+                        format!(
+                            "diff -ru {} {}",
+                            quote_path(&first.path),
+                            quote_path(&other.path)
+                        )
+                    })
+                    .collect();
+                Fix::Command(diffs.join("; "))
             }
             Finding::CodexBudget { largest, .. } => match roots.manager(largest) {
                 Some(manager) => Fix::Hint(format!(
@@ -493,6 +504,36 @@ mod tests {
             Fix::Command(
                 "diff -ru '/h/a' '/h/b'; diff -ru '/h/a' '/h/.codex/plugins/cache/c'".into()
             )
+        );
+    }
+
+    #[test]
+    fn drift_with_three_copies_diffs_each_against_the_first() {
+        let roots = Roots::from_home(Path::new("/h"));
+        let fix = Finding::Drift {
+            skill: "s".into(),
+            copies: vec![
+                DriftCopy {
+                    path: "/h/a".into(),
+                    hash: ContentHash("111111111111".into()),
+                    lines: 10,
+                },
+                DriftCopy {
+                    path: "/h/b".into(),
+                    hash: ContentHash("222222222222".into()),
+                    lines: 12,
+                },
+                DriftCopy {
+                    path: "/h/c".into(),
+                    hash: ContentHash("333333333333".into()),
+                    lines: 14,
+                },
+            ],
+        }
+        .fix(&roots);
+        assert_eq!(
+            fix,
+            Fix::Command("diff -ru '/h/a' '/h/b'; diff -ru '/h/a' '/h/c'".into())
         );
     }
 
