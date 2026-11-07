@@ -183,6 +183,24 @@ fn status_outside_a_repository_exits_not_a_repo() {
 }
 
 #[test]
+fn status_outside_a_repository_exits_not_a_repo_even_without_an_archive() {
+    let plain = tempfile::tempdir().unwrap();
+    let homes = empty_homes();
+    let parent = tempfile::tempdir().unwrap();
+    let missing = parent.path().join("nope");
+
+    let out = lorectl_in(plain.path(), &missing, homes.path(), &["status"]);
+    assert_eq!(
+        code(&out),
+        3,
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Git repository"), "{stderr}");
+}
+
+#[test]
 fn status_on_a_missing_archive_exits_no_archive() {
     let repo = repo();
     let homes = empty_homes();

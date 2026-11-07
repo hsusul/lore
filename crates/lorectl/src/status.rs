@@ -31,6 +31,7 @@
 use std::io::Write;
 
 use lore_core::enrich::{resolve_repository, RepoResolution};
+use lore_core::git;
 use lore_core::landing::{self, Landing, LandingIndex};
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::{settings, storage};
@@ -44,13 +45,17 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let cwd = std::env::current_dir()
         .map_err(|_| CliError::Usage("could not determine the current directory".into()))?;
 
+    if git::capture_identity(&cwd).is_none() {
+        // The one condition exit 3 was reserved for. Not an archive problem:
+        // the archive may be perfectly fine and simply not the issue.
+        return Err(CliError::NotARepository);
+    }
+
     let archive_dir = invocation.archive_dir()?;
     let conn = storage::open_read_only(&archive_dir.join(ARCHIVE_DB_FILENAME))?;
 
     let resolution = resolve_repository(&conn, &cwd)?;
     if resolution == RepoResolution::NotARepository {
-        // The one condition exit 3 was reserved for. Not an archive problem:
-        // the archive may be perfectly fine and simply not the issue.
         return Err(CliError::NotARepository);
     }
 
