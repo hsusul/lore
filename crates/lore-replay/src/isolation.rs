@@ -64,8 +64,10 @@ pub fn settings() -> Value {
 
 /// Absolute paths under `/Users` or `/Volumes` that the corrected turn's tool
 /// calls named outside the repository (`toplevel`), sorted. Claude Code's own
-/// folders (`/.claude/`) are left out. The sandbox hides these paths, so a
-/// case that needs them cannot replay faithfully; the report says so.
+/// folders (any `.claude` path component) are left out. Codex folders are
+/// not: a Codex replay gets a fresh home, so a turn that read `~/.codex`
+/// cannot replay either. The sandbox hides these paths, so a case that needs
+/// them cannot replay faithfully; the report says so.
 #[must_use]
 pub fn foreign_paths(actions: &[Action], toplevel: Option<&Path>) -> Vec<String> {
     let mut found = BTreeSet::new();
@@ -73,8 +75,9 @@ pub fn foreign_paths(actions: &[Action], toplevel: Option<&Path>) -> Vec<String>
         if let Action::Tool { input, .. } = action {
             each_string(input, &mut |s| {
                 for path in absolute_paths(s) {
-                    let inside = toplevel.is_some_and(|top| Path::new(path).starts_with(top));
-                    if !inside && !path.contains("/.claude/") {
+                    let p = Path::new(path);
+                    let inside = toplevel.is_some_and(|top| p.starts_with(top));
+                    if !inside && !is_agent_path(p) {
                         found.insert(path.to_owned());
                     }
                 }
@@ -82,6 +85,10 @@ pub fn foreign_paths(actions: &[Action], toplevel: Option<&Path>) -> Vec<String>
         }
     }
     found.into_iter().collect()
+}
+
+fn is_agent_path(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == ".claude")
 }
 
 fn each_string(value: &Value, f: &mut dyn FnMut(&str)) {
@@ -259,6 +266,32 @@ mod tests {
             vec!["/Users/me/notes.md", "/Users/me/repo-two/a", "/Volumes/990"]
         );
         assert!(foreign_paths(&actions, None).contains(&"/Users/me/repo/src".to_owned()));
+    }
+
+    #[test]
+    fn foreign_paths_skips_claude_paths_but_reports_codex_paths() {
+        let actions = vec![
+            Action::Tool {
+                name: "Bash".into(),
+                input: json!({"command": "ls /Users/alice/.claude && cat /Users/alice/.codex/config.toml"}),
+            },
+            Action::Tool {
+                name: "Read".into(),
+                input: json!({"file_path": "/Users/alice/.claude/x"}),
+            },
+            Action::Tool {
+                name: "Read".into(),
+                input: json!({"file_path": "/Users/alice/.codex"}),
+            },
+        ];
+        let top = Path::new("/Users/alice/repo");
+        assert_eq!(
+            foreign_paths(&actions, Some(top)),
+            vec![
+                "/Users/alice/.codex".to_owned(),
+                "/Users/alice/.codex/config.toml".to_owned()
+            ]
+        );
     }
 
     #[test]
