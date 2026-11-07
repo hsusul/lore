@@ -89,7 +89,7 @@ impl Command {
             Command::Inspect => "Show one archived session in detail",
             Command::Search => "Full-text search across archived sessions",
             Command::Hook => "Agent hook entry point; run by an agent, not a person",
-            Command::Report => "Longer-form summary of archived work",
+            Command::Report => "Corrections, lessons, delivery, and repeats over a window",
             Command::Mcp => "MCP server on stdin/stdout; run by an agent, not a person",
             Command::Skills => "`ls` every agent skill folder, or `doctor` to report problems",
             Command::Mem => "Memory notes in a git vault; see Memory below",
@@ -111,8 +111,8 @@ impl Command {
             | Command::Mcp
             | Command::Skills
             | Command::Mem
-            | Command::Connect => true,
-            Command::Report => false,
+            | Command::Connect
+            | Command::Report => true,
         }
     }
 
@@ -252,7 +252,7 @@ where
                     Command::from_name(&name)
                         .ok_or_else(|| CliError::Usage(format!("unknown command `{name}`")))?,
                 );
-                if command == Some(Command::Init) {
+                if matches!(command, Some(Command::Init | Command::Report)) {
                     rest = parser
                         .raw_args()
                         .map_err(usage)?
@@ -303,14 +303,22 @@ where
                     }
                     _ => {}
                 }
-                if since.is_some() && !matches!(command, Command::Scan | Command::Init) {
+                if since.is_some()
+                    && !matches!(command, Command::Scan | Command::Init | Command::Report)
+                {
                     return Err(CliError::Usage(
-                        "--since works only with `lorectl scan` and `lorectl init`".into(),
+                        "--since works only with `lorectl scan`, `lorectl init`, and \
+                         `lorectl report`"
+                            .into(),
                     ));
                 }
-                if vault.is_some() && !matches!(command, Command::Init | Command::Mem) {
+                if vault.is_some()
+                    && !matches!(command, Command::Init | Command::Mem | Command::Report)
+                {
                     return Err(CliError::Usage(
-                        "--vault works only with `lorectl init` and `lorectl mem`".into(),
+                        "--vault works only with `lorectl init`, `lorectl mem`, and \
+                         `lorectl report`"
+                            .into(),
                     ));
                 }
                 Action::Run(command)
@@ -401,7 +409,7 @@ mod tests {
             implemented,
             [
                 "init", "scan", "status", "inspect", "search", "hook", "mcp", "skills", "mem",
-                "connect"
+                "connect", "report"
             ]
         );
     }
@@ -436,9 +444,9 @@ mod tests {
     #[test]
     fn a_command_that_takes_no_operand_refuses_a_stray_one() {
         // Ignoring it would let `lorectl scan something` look like it worked.
-        // `init` parses its own flags, and refuses a stray operand there
-        // (tests/init.rs).
-        let own_flags = |c: &&Command| **c == Command::Init;
+        // `init` and `report` parse their own flags, and refuse a stray
+        // operand there (tests/init.rs, tests/report.rs).
+        let own_flags = |c: &&Command| matches!(**c, Command::Init | Command::Report);
         for command in COMMANDS
             .iter()
             .filter(|c| c.operand().is_none() && !own_flags(c))
@@ -516,7 +524,7 @@ mod tests {
         assert_eq!(exit::exit_code(&err), USAGE);
         assert_eq!(
             err.to_string(),
-            "--vault works only with `lorectl init` and `lorectl mem`"
+            "--vault works only with `lorectl init`, `lorectl mem`, and `lorectl report`"
         );
     }
 

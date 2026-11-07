@@ -830,7 +830,7 @@ fn vault_flag_is_refused_for_commands_that_do_not_take_it() {
     assert_eq!(o.status.code(), Some(1));
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(
-        err.contains("--vault works only with `lorectl init` and `lorectl mem`"),
+        err.contains("--vault works only with `lorectl init`, `lorectl mem`, and `lorectl report`"),
         "{err}"
     );
 }

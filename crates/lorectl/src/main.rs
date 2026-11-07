@@ -9,9 +9,9 @@
 //! This build implements `scan` — the CLI's only writer, and the first surface
 //! other than the desktop app that writes to the archive at all. It runs
 //! synchronously under an advisory writer lock ([`lore_core::lock`]) and stamps
-//! when it finished. The remaining commands are recognized but not implemented;
-//! the parser and the exit codes are the contract that later slices fill in, and
-//! `--help` marks which is which so the listing cannot flatter the binary.
+//! when it finished. A command the parser knows but this build does not
+//! implement is refused with a usage error, and `--help` marks it, so the
+//! listing cannot flatter the binary. Every command is implemented today.
 
 mod cli;
 mod connect;
@@ -26,6 +26,7 @@ mod mem;
 mod mine;
 mod query;
 mod receipt;
+mod report;
 mod review;
 mod scan;
 mod skills;
@@ -65,6 +66,13 @@ fn run() -> Result<u8, CliError> {
             eprint!("{}", help::usage());
             Ok(exit::USAGE)
         }
+        Action::Run(command) if !command.is_implemented() => {
+            // Resolve the archive location before refusing the command, so a
+            // bad `--archive` is reported as the bad `--archive` it is rather
+            // than being masked by "not implemented".
+            invocation.archive_dir()?;
+            Err(CliError::NotImplemented(command.name()))
+        }
         Action::Run(cli::Command::Init) => init::run(&invocation),
         Action::Run(cli::Command::Scan) => scan::run(&invocation),
         Action::Run(cli::Command::Status) => status::run(&invocation),
@@ -75,13 +83,7 @@ fn run() -> Result<u8, CliError> {
         Action::Run(cli::Command::Inspect) => query::inspect(&invocation),
         Action::Run(cli::Command::Skills) => skills::run(&invocation),
         Action::Run(cli::Command::Connect) => Ok(connect::run()),
-        Action::Run(command) => {
-            // Resolve the archive location before refusing the command, so a
-            // bad `--archive` is reported as the bad `--archive` it is rather
-            // than being masked by "not implemented".
-            invocation.archive_dir()?;
-            Err(CliError::NotImplemented(command.name()))
-        }
+        Action::Run(cli::Command::Report) => report::run(&invocation),
     }
 }
 
@@ -153,29 +155,6 @@ mod tests {
             assert!(matches!(error, CliError::NotImplemented(name) if name == command.name()));
             assert_eq!(exit::exit_code(&error), exit::USAGE);
         }
-    }
-
-    #[test]
-    fn json_does_not_conjure_an_implementation() {
-        // Asserted `status` here until `status` was implemented, at which point
-        // it kept passing only because the helper it used was a fiction. Now it
-        // names a command that genuinely does nothing, and the assertion is
-        // guarded by `dispatch_unimplemented` if that ever stops being true.
-        let error =
-            dispatch_unimplemented(&["--json", "report"]).expect_err("`report` is not implemented");
-        assert!(matches!(error, CliError::NotImplemented("report")));
-        assert_eq!(exit::exit_code(&error), exit::USAGE);
-    }
-
-    #[test]
-    fn a_bad_archive_flag_outranks_not_implemented() {
-        // Otherwise the first thing a user fixes would be the wrong thing.
-        let error = dispatch_unimplemented(&["--archive", "relative", "report"])
-            .expect_err("relative is refused");
-        assert!(matches!(
-            error,
-            CliError::Path(lore_core::paths::PathError::RelativeOverride)
-        ));
     }
 
     #[test]
