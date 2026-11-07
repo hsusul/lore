@@ -153,6 +153,7 @@ impl Proposal {
             created: date,
             forget_after: None,
             enforce: self.enforce.clone(),
+            enforce_errors: Vec::new(),
             body: append_timeline(&self.body, &self.timeline_line(date)),
             extra: Frontmatter::default(),
         }

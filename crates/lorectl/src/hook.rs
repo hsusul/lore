@@ -58,8 +58,8 @@
 //! PreToolUse `deny` naming the note, and nothing else. When no rule matches,
 //! it prints what `pre-edit` would for the same input, so one hook carries
 //! both and an edit starts one process, not two. Reading the rules reads only
-//! note files that have an `enforce:` key; an unreadable vault, or a note
-//! whose rule does not parse, blocks nothing. `pre-edit` stays for configs
+//! note files that have an `enforce:` key; an unreadable vault, or a rule
+//! that does not parse, blocks nothing. `pre-edit` stays for configs
 //! written before `pre-tool` existed.
 //!
 //! All four record the note ids they print for the hook JSON's `session_id`

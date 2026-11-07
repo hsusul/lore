@@ -8,8 +8,10 @@
 //! A rule is parsed once, at the note boundary, into [`Enforcement`]: its tool
 //! is one of a closed set and its patterns are compiled regexes, so whatever
 //! holds an `Enforcement` can match with it and never has to handle a bad one.
-//! A pattern that does not compile, or that matches the empty string, makes
-//! the note invalid, and an invalid note blocks nothing.
+//! A rule that does not parse (a pattern that does not compile, matches the
+//! empty string, or is too long, an unknown tool, a rule past the limit)
+//! becomes a [`RuleError`] instead: that rule blocks nothing, and the note
+//! stays valid, so a typo in a rule never hides the lesson from recall.
 
 use std::fmt;
 use std::path::Path;
@@ -143,6 +145,26 @@ impl Eq for Pattern {}
 impl fmt::Debug for Pattern {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Pattern").field(&self.source).finish()
+    }
+}
+
+/// An `enforce` rule that did not parse. Only this rule is dropped: the note
+/// it is on stays valid and is recalled as usual. The rule is kept as written,
+/// so rewriting the note keeps it for a person to fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleError {
+    /// The rule's place in the note's `enforce` list.
+    pub index: usize,
+    /// What is wrong, naming the field, as in `enforce[0].pattern`.
+    pub error: NoteError,
+    /// The list item as written, without its `- `, continuation lines
+    /// indented four spaces.
+    pub(crate) written: String,
+}
+
+impl fmt::Display for RuleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.error)
     }
 }
 
@@ -353,11 +375,23 @@ pub struct Rule {
     pub enforcement: Enforcement,
 }
 
-/// Every active note's rules, and the files that mention `enforce:` but are
-/// not valid notes (so their rules block nothing).
+/// An active note's rule that did not parse, so it blocks nothing.
+#[derive(Debug, Clone)]
+pub struct DroppedRule {
+    pub id: NoteId,
+    pub title: String,
+    /// The note's path in the vault.
+    pub rel: String,
+    pub error: RuleError,
+}
+
+/// Every active note's rules, the rules that did not parse, and the files
+/// that mention `enforce:` but are not valid notes (so their rules block
+/// nothing).
 #[derive(Debug, Default)]
 pub struct Rules {
     pub rules: Vec<Rule>,
+    pub dropped: Vec<DroppedRule>,
     pub broken: Vec<(String, NoteError)>,
 }
 
@@ -383,6 +417,14 @@ impl Rules {
             };
             if note.status != Status::Active {
                 continue;
+            }
+            for error in note.enforce_errors {
+                out.dropped.push(DroppedRule {
+                    id: note.id.clone(),
+                    title: note.title.clone(),
+                    rel: stamp.path.clone(),
+                    error,
+                });
             }
             for enforcement in note.enforce {
                 out.rules.push(Rule {

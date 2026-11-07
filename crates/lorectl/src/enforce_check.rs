@@ -63,6 +63,15 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     for (rel, error) in &rules.broken {
         eprintln!("lorectl: {rel} blocks nothing: {error}");
     }
+    for dropped in &rules.dropped {
+        eprintln!(
+            "lorectl: invalid rule in {} {} ({}): {}; the rule blocks nothing",
+            dropped.id.as_str(),
+            dropped.title,
+            dropped.rel,
+            dropped.error
+        );
+    }
     let chosen: Vec<&Rule> = match &cwd {
         Some(cwd) => rules.in_scope(cwd),
         None => rules.rules.iter().collect(),
@@ -79,7 +88,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
             let _ = out.write_all(report(rule, past.as_deref()).as_bytes());
         }
     }
-    Ok(if rules.broken.is_empty() {
+    Ok(if rules.broken.is_empty() && rules.dropped.is_empty() {
         exit::OK
     } else {
         exit::NOTE_REFUSED

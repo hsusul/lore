@@ -342,6 +342,7 @@ fn apply_update(target: Note, proposal: &Proposal, date: NoteDate) -> Note {
     }
     if !proposal.enforce.is_empty() {
         note.enforce = proposal.enforce.clone();
+        note.enforce_errors = Vec::new();
     }
     let source = proposal.source();
     if !note.sources.contains(&source) {

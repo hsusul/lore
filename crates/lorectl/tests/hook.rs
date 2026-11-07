@@ -1032,28 +1032,71 @@ fn a_rule_blocks_nothing_when_retired_out_of_scope_or_invalid() {
     let out = attribution(&repo);
     assert_eq!((code(&out), stdout(&out)), (0, String::new()));
 
-    // A rule whose pattern does not compile is refused by `mem add`, and a
-    // file written by hand with one blocks nothing and is reported.
+    // A rule whose pattern does not compile is dropped, not the note: the
+    // note is added, recalled, and shown at session start, the rule blocks
+    // nothing, and every place that lists problems names it.
     let broken = NO_ATTRIBUTION
         .replace("0011", "0019")
+        .replace("Never add an AI", "Still never add an AI")
         .replace("(claude|codex)'", "(claude'");
     let file = home.path().join("broken.md");
     std::fs::write(&file, &broken).unwrap();
-    let added = Command::new(env!("CARGO_BIN_EXE_lorectl"))
-        .args(["mem", "add"])
-        .arg(&file)
-        .arg("--vault")
-        .arg(&vault)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("HOME", home.path())
-        .output()
-        .unwrap();
-    assert_eq!(code(&added), 7);
+    let lorectl_mem = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_lorectl"))
+            .arg("mem")
+            .args(args)
+            .arg("--vault")
+            .arg(&vault)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", home.path())
+            .env_remove("LORE_VAULT_DIR")
+            .output()
+            .unwrap()
+    };
+    let added = lorectl_mem(&["add", file.to_str().unwrap()]);
+    assert_eq!(
+        code(&added),
+        0,
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
     let stderr = String::from_utf8_lossy(&added.stderr);
-    assert!(stderr.contains("enforce[0].pattern"), "{stderr}");
-    std::fs::write(vault.join("global/broken.md"), &broken).unwrap();
+    assert!(
+        stderr.contains(
+            "rule `enforce[0].pattern`: `(?i)co-authored-by:\\s*(claude` is not a valid regex"
+        ),
+        "{stderr}"
+    );
+    let rel = stdout(&added)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_string();
     let out = attribution(&repo);
     assert_eq!((code(&out), stdout(&out)), (0, String::new()));
+    let recalled = lorectl_mem(&["recall", "co-author"]);
+    assert!(
+        stdout(&recalled).contains("still-never-add-an-ai-co-author-line"),
+        "{}",
+        stdout(&recalled)
+    );
+    let started = session_start(&repo, home.path(), &vault, "{}");
+    assert!(
+        stdout(&started).contains("Still never add an AI co-author line"),
+        "{}",
+        stdout(&started)
+    );
+    let reindexed = lorectl_mem(&["reindex"]);
+    assert_eq!(code(&reindexed), 0);
+    assert!(stdout(&reindexed).contains("skipped 0 files"));
+    let stderr = String::from_utf8_lossy(&reindexed.stderr);
+    assert!(
+        stderr.contains(&format!("lorectl: {rel}: rule `enforce[0].pattern`: "))
+            && stderr.contains("the rule blocks nothing"),
+        "{stderr}"
+    );
     let check = Command::new(env!("CARGO_BIN_EXE_lorectl"))
         .arg("--archive")
         .arg(home.path().join("no-archive"))
@@ -1065,7 +1108,10 @@ fn a_rule_blocks_nothing_when_retired_out_of_scope_or_invalid() {
     assert_eq!(code(&check), 7);
     let stderr = String::from_utf8_lossy(&check.stderr);
     assert!(
-        stderr.contains("global/broken.md blocks nothing: `enforce[0].pattern`"),
+        stderr.contains(&format!(
+            "lorectl: invalid rule in 01JD0000000000000000000019 \
+             Still never add an AI co-author line ({rel}): `enforce[0].pattern`"
+        )),
         "{stderr}"
     );
     let listed = stdout(&check);

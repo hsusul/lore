@@ -8,7 +8,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::enforce::{self, Enforcement};
+use crate::enforce::{self, Enforcement, RuleError};
 
 /// A note's stable id: a ULID, 26 characters of Crockford base32.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -130,6 +130,9 @@ pub struct Note {
     pub forget_after: Option<NoteDate>,
     /// Rules a hook denies matching tool calls with, written `enforce:`.
     pub enforce: Vec<Enforcement>,
+    /// The `enforce` rules that did not parse, in list order. They block
+    /// nothing; the note is still valid. Rendered back as written.
+    pub enforce_errors: Vec<RuleError>,
     pub body: String,
     pub extra: Frontmatter,
 }
@@ -874,7 +877,7 @@ impl Note {
             Key::Anchors => !self.anchors.is_empty(),
             Key::Relations => !self.relations.is_empty(),
             Key::Sources => !self.sources.is_empty(),
-            Key::Enforce => !self.enforce.is_empty(),
+            Key::Enforce => !self.enforce.is_empty() || !self.enforce_errors.is_empty(),
             Key::ForgetAfter => self.forget_after.is_some(),
             Key::Repo => self.repo.is_some(),
             Key::Id | Key::Type | Key::Title | Key::Scope | Key::Status | Key::Created => true,
@@ -909,7 +912,14 @@ impl Note {
             Key::Anchors | Key::Relations | Key::Sources | Key::Enforce => {
                 let items: Vec<String> = match key {
                     Key::Anchors => self.anchors.iter().map(render_anchor).collect(),
-                    Key::Enforce => self.enforce.iter().map(render_enforcement).collect(),
+                    Key::Enforce => {
+                        let mut items: Vec<String> =
+                            self.enforce.iter().map(render_enforcement).collect();
+                        for bad in &self.enforce_errors {
+                            items.insert(bad.index.min(items.len()), bad.written.clone());
+                        }
+                        items
+                    }
                     Key::Relations => self
                         .relations
                         .iter()
@@ -1202,6 +1212,7 @@ struct Fields {
     created: Option<NoteDate>,
     forget_after: Option<NoteDate>,
     enforce: Vec<Enforcement>,
+    enforce_errors: Vec<RuleError>,
 }
 
 fn scalar_field(key: Key, block: &Block<'_>) -> Result<String, NoteError> {
@@ -1329,13 +1340,26 @@ fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), No
             }
         }
         Key::Enforce => {
-            let items = list_field(key, block)?;
-            if items.len() > enforce::MAX_RULES {
-                let most = format!("at most {} rules", enforce::MAX_RULES);
-                return Err(field_error(key.name(), most));
-            }
-            for (index, item) in items.iter().enumerate() {
-                fields.enforce.push(read_enforcement(index, item)?);
+            // A bad rule is dropped, not the note: a typo in a rule must not
+            // hide the lesson from recall.
+            for (index, item) in list_field(key, block)?.iter().enumerate() {
+                let read = if index < enforce::MAX_RULES {
+                    read_enforcement(index, item)
+                } else {
+                    let most = format!("a note may carry at most {} rules", enforce::MAX_RULES);
+                    Err(field_error(format!("enforce[{index}]"), most))
+                };
+                match read {
+                    Ok(rule) => fields.enforce.push(rule),
+                    Err(error) => fields.enforce_errors.push(RuleError {
+                        index,
+                        error,
+                        written: std::iter::once(item.head)
+                            .chain(item.more.iter().copied())
+                            .collect::<Vec<_>>()
+                            .join("\n    "),
+                    }),
+                }
             }
         }
         Key::Relations => {
@@ -1446,6 +1470,7 @@ fn parse_note(text: &str, fill: Option<Fill>) -> Result<Draft, NoteError> {
         created: fields.created.ok_or(NoteError::Missing("created"))?,
         forget_after: fields.forget_after,
         enforce: fields.enforce,
+        enforce_errors: fields.enforce_errors,
         body: body.to_string(),
         extra,
     };

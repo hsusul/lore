@@ -87,8 +87,8 @@ Hooks (lorectl hook <EVENT> [--archive <DIR>]):
                       `enforce` rules of the active notes in scope. The
                       first rule the call matches prints a PreToolUse
                       `deny` naming the note. Otherwise prints what
-                      pre-edit would. An unreadable vault or a note whose
-                      rule does not parse blocks nothing.
+                      pre-edit would. An unreadable vault or a rule that
+                      does not parse blocks nothing.
     Notes are for `cwd` in the hook JSON on stdin, else the current
     directory. LORE_VAULT_DIR names the vault; otherwise ~/Lore.
     Run by an agent, not a person. It never scans, and it writes nothing
