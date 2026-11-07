@@ -113,6 +113,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "part_body",
         sql: include_str!("../../migrations/0019_part_body.sql"),
     },
+    Migration {
+        version: 20,
+        name: "tool_output_once",
+        sql: include_str!("../../migrations/0020_tool_output_once.sql"),
+    },
 ];
 
 /// How many migrations exist. Tests assert against this rather than a literal
@@ -307,10 +312,15 @@ pub fn run(conn: &Connection) -> Result<()> {
 
 /// The first migration after which an older build refuses the archive and no
 /// downgrade exists: 0019 moves attachment bodies out of `message_part`.
+#[cfg(test)]
 const ONE_WAY_FROM: i64 = 19;
 
-/// Back up an archive that holds data before the first one-way migration is
-/// applied to it, unless a backup under an hour old exists
+/// The latest one-way migration: 0020 stores tool output once. An archive
+/// that has not applied it is backed up before it is.
+const ONE_WAY_LATEST: i64 = 20;
+
+/// Back up an archive that holds data before a one-way migration is applied
+/// to it, unless a backup under an hour old exists
 /// ([`crate::backup::ensure_recent_backup`]). An empty archive has nothing to
 /// lose, and an in-memory one has no backup directory. When the backup fails,
 /// nothing is migrated and the archive stays readable by the build that wrote
@@ -318,7 +328,7 @@ const ONE_WAY_FROM: i64 = 19;
 fn back_up_before_one_way(conn: &Connection) -> Result<()> {
     let one_way_applied: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version >= ?1)",
-        [ONE_WAY_FROM],
+        [ONE_WAY_LATEST],
         |r| r.get(0),
     )?;
     if one_way_applied {
@@ -346,10 +356,11 @@ fn back_up_before_one_way(conn: &Connection) -> Result<()> {
         crate::backup::RECENT_BACKUP_MS,
     )
     .map_err(|_| {
-        StorageError::Migration(format!(
-            "could not back up the archive before migration {ONE_WAY_FROM}, which older \
-             builds cannot read back; nothing was changed. Free disk space and reopen Lore"
-        ))
+        StorageError::Migration(
+            "could not back up the archive before a migration older builds cannot read \
+             back; nothing was changed. Free disk space and reopen Lore"
+                .into(),
+        )
     })?;
     Ok(())
 }
@@ -583,6 +594,31 @@ mod tests {
             },
             "still readable by the build that wrote it"
         );
+    }
+
+    #[test]
+    fn the_tool_output_migration_backs_up_an_archive_at_19_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = archive_at_18(dir.path(), true);
+        {
+            let conn = Connection::open(&path).unwrap();
+            let m19 = MIGRATIONS
+                .iter()
+                .find(|m| m.version == ONE_WAY_FROM)
+                .unwrap();
+            apply(&conn, m19).unwrap();
+        }
+        let conn = crate::storage::open(&path).unwrap();
+        assert_eq!(compatibility(&conn).unwrap(), Compatibility::Ok);
+        assert_eq!(backups(dir.path()), 1, "backed up before migrating to 20");
+        let backup = &crate::backup::list_backups(&dir.path().join("backups")).unwrap()[0];
+        let version: i64 = Connection::open(backup)
+            .unwrap()
+            .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, ONE_WAY_LATEST - 1);
     }
 
     #[test]

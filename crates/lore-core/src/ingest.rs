@@ -542,10 +542,18 @@ fn insert_rows(
                 (Some(body), crate::compact::ATTACHMENT) => crate::compact::store_body(tx, body)?,
                 _ => None,
             };
+            // A tool result's payload is stored without the output it repeats
+            // from `text` when the rule holds; checked below.
+            let slim_json = match (p.kind.as_str(), &p.text, &p.content_json) {
+                (crate::compact::TOOL_RESULT, Some(text), Some(content)) => {
+                    crate::compact::slim_tool_output(text, content)
+                }
+                _ => None,
+            };
             let inline_json = if body_hash.is_some() {
                 None
             } else {
-                p.content_json.as_deref()
+                slim_json.as_deref().or(p.content_json.as_deref())
             };
             tx.prepare_cached(
                 "INSERT INTO message_part
@@ -564,6 +572,14 @@ fn insert_rows(
                 p.searchable,
                 p.metadata_json,
             ])?;
+            // Lossless is checked, not assumed: a slim payload that does not
+            // read back byte-equal through message_part_full is stored whole.
+            if let (Some(_), Some(original)) = (&slim_json, &p.content_json) {
+                if !crate::compact::serves_exactly(tx, &pid, original)? {
+                    tx.prepare_cached("UPDATE message_part SET content_json = ?2 WHERE id = ?1")?
+                        .execute(params![pid, original])?;
+                }
+            }
 
             // Scan every cleartext part for secrets. Index the text projection
             // only when the part is searchable (thinking is scanned, not
