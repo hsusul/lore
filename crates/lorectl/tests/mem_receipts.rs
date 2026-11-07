@@ -171,3 +171,115 @@ fn a_receipt_quotes_the_person_before_the_agent() {
         )
     );
 }
+
+/// The made-up Claude Code session's native id.
+const CONTINUED: &str = "cccccccc-0000-4000-8000-000000000003";
+
+/// A vault, and an archive holding one Claude Code session of `turns`,
+/// alternating person and agent, the person first.
+fn home_with_claude_session(home: &Path, turns: &[&str]) {
+    ok(&lorectl(home, &["mem", "init"], ""));
+    let project = home.join("claude/projects/p");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut jsonl = String::new();
+    let mut parent = serde_json::Value::Null;
+    for (i, text) in turns.iter().enumerate() {
+        let (kind, content) = if i % 2 == 0 {
+            ("user", serde_json::json!(text))
+        } else {
+            (
+                "assistant",
+                serde_json::json!([{ "type": "text", "text": text }]),
+            )
+        };
+        let uuid = format!("t{i}");
+        let line = serde_json::json!({
+            "type": kind, "uuid": uuid, "parentUuid": parent, "sessionId": CONTINUED,
+            "timestamp": format!("2026-08-12T10:00:{i:02}.000Z"), "cwd": "/p",
+            "isSidechain": false, "message": { "role": kind, "content": content },
+        });
+        jsonl.push_str(&format!("{line}\n"));
+        parent = serde_json::json!(uuid);
+    }
+    std::fs::write(project.join(format!("{CONTINUED}.jsonl")), jsonl).unwrap();
+    ok(&lorectl(home, &["scan"], ""));
+}
+
+/// The excerpt `mem inbox --json` shows for a proposal from the session.
+fn excerpt_for(home: &Path, title: &str, body: &str) -> serde_json::Value {
+    ok(&lorectl(
+        home,
+        &[
+            "mem",
+            "propose",
+            "--agent",
+            "claude-code",
+            "--session",
+            CONTINUED,
+            "--type",
+            "convention",
+            "--title",
+            title,
+        ],
+        body,
+    ));
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "inbox", "--json"], ""))).unwrap();
+    json[0]["receipt"]["excerpt"].clone()
+}
+
+/// The summary a continued session opens with shares the most words with
+/// the proposal, but the harness wrote it, not the person.
+const SUMMARY: &str = "This session is being continued from a previous conversation. \
+     Summary: the schema version pin and the migration retry were discussed; \
+     pin the schema version before a migration retry.";
+
+#[test]
+fn a_receipt_skips_the_summary_a_continued_session_opens_with() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    home_with_claude_session(
+        home,
+        &[
+            SUMMARY,
+            "Picking up from the summary.",
+            "Stop retrying the flaky migration, pin the schema version first.",
+            "Pinned it.",
+        ],
+    );
+    assert_eq!(
+        excerpt_for(
+            home,
+            "Pin the schema version before a migration retry",
+            "Pin the schema version before a migration retry.\n",
+        ),
+        "Stop retrying the flaky migration, pin the schema version first."
+    );
+}
+
+#[test]
+fn a_receipt_shows_the_turn_the_proposal_quotes() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    home_with_claude_session(
+        home,
+        &[
+            SUMMARY,
+            "Picking up from the summary.",
+            "Stop retrying the flaky migration, pin the schema version first.",
+            "Retrying once more.",
+            "No, I said pin it before anything else runs.",
+            "Pinned it.",
+        ],
+    );
+    // The third turn shares more words; the fifth is the one quoted.
+    assert_eq!(
+        excerpt_for(
+            home,
+            "Pin the schema version before a migration retry",
+            "Pin the schema version before a migration retry.\n\n\
+             - 2026-08-12 claude-code s: \"I said pin it before anything else runs.\"\n",
+        ),
+        "...I said pin it before anything else runs."
+    );
+}
