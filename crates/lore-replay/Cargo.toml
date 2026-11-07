@@ -41,5 +41,11 @@ time = { version = "0.3", features = ["parsing"] }
 # A fresh session id for each prefix. Already in the graph.
 uuid = { version = "1", features = ["v4"] }
 
+# The turn cap signals the agent's process group itself, without a `kill`
+# program whose argv differs by platform. Safe `kill(-pgid)`; already in the
+# graph through gix and tempfile.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [dev-dependencies]
 tempfile = "3"

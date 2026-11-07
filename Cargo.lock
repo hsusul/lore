@@ -2903,6 +2903,7 @@ dependencies = [
  "lore-memory",
  "regex",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
