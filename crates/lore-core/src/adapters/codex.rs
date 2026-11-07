@@ -194,10 +194,10 @@ fn parse_from(
                         contexts.push((cwd.clone(), model.clone()));
                         seq += 1;
                     }
-                    // tool_search_* / web_search_call are recorded but not yet modeled.
+                    // tool_search_* / web_search_* are recorded but not yet modeled.
                     // additional_tools lists tool definitions, not conversation.
                     "tool_search_call" | "tool_search_output" | "web_search_call"
-                    | "additional_tools" => {}
+                    | "web_search_output" | "additional_tools" => {}
                     other => {
                         session.note_partial(format!("unknown response_item: {}", bounded(other)));
                     }
@@ -1873,6 +1873,22 @@ mod tests {
         // world_state and inter_agent_communication_metadata should NOT create notes
         assert!(!s.notes.iter().any(|n| n.message.contains("world_state")
             || n.message.contains("inter_agent_communication_metadata")));
+    }
+
+    #[test]
+    fn web_search_call_and_output_response_items_keep_session_ok() {
+        let content = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s_web\",\"cwd\":\"/dir\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:00.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"what is lore?\"}}\n",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:00.500Z\",\"payload\":{\"type\":\"web_search_start\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:01.000Z\",\"payload\":{\"type\":\"web_search_call\",\"call_id\":\"call_ws_1\",\"query\":\"lore archive\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:02.000Z\",\"payload\":{\"type\":\"web_search_output\",\"call_id\":\"call_ws_1\",\"results\":[{\"title\":\"Lore\",\"url\":\"https://example.com\"}]}}\n",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-11T10:00:02.500Z\",\"payload\":{\"type\":\"web_search_end\"}}\n",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-08-11T10:00:03.000Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Lore is a local archive.\"}}\n"
+        );
+        let s = CodexAdapter::new().parse_str(content, "s_web");
+        assert_eq!(s.status, crate::model::ParseStatus::Ok, "{:?}", s.notes);
+        assert_eq!(s.messages.len(), 2);
     }
 
     #[test]
