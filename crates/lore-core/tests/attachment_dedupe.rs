@@ -7,7 +7,7 @@
 use std::sync::atomic::AtomicBool;
 
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
-use lore_core::compact::{self, VacuumOutcome};
+use lore_core::compact::{self, VacuumOutcome, VacuumSpace};
 use lore_core::export::export_session_markdown;
 use lore_core::forget::forget_session;
 use lore_core::ingest::persist_session;
@@ -363,13 +363,13 @@ fn an_old_archive_is_vacuumed_once_and_only_with_room() {
     let view_before = reader_view(&conn, &[&a, &b]);
 
     assert_eq!(
-        compact::vacuum_once_with(&conn, u64::MAX).unwrap(),
+        compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX)).unwrap(),
         VacuumOutcome::DedupePending,
         "the file is rewritten once, after the conversion"
     );
     compact::dedupe_attachments(&conn, 100, &AtomicBool::new(false)).unwrap();
 
-    let skipped = compact::vacuum_once_with(&conn, 1024).unwrap();
+    let skipped = compact::vacuum_once_with(&conn, VacuumSpace::one_volume(1024)).unwrap();
     assert!(matches!(
         skipped,
         VacuumOutcome::LowSpace {
@@ -385,11 +385,16 @@ fn an_old_archive_is_vacuumed_once_and_only_with_room() {
         Some("\"skipped_low_space\"")
     );
 
-    let done = compact::vacuum_once_with(&conn, u64::MAX).unwrap();
+    let done = compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX)).unwrap();
     assert!(matches!(done, VacuumOutcome::Vacuumed { .. }), "{done:?}");
     assert!(compact::is_incremental(&conn).unwrap());
     assert_eq!(
-        compact::vacuum_once_with(&conn, u64::MAX).unwrap(),
+        count(&conn, "PRAGMA temp_store"),
+        2,
+        "back to MEMORY after the VACUUM wrote its copy to a file"
+    );
+    assert_eq!(
+        compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX)).unwrap(),
         VacuumOutcome::AlreadyIncremental
     );
     let ok: String = conn

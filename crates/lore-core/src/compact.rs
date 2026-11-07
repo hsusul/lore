@@ -282,8 +282,12 @@ pub enum VacuumOutcome {
     DedupePending,
     /// No file behind the connection (an in-memory archive).
     NoFile,
-    /// The volume has less free space than twice the archive's size, which a
-    /// `VACUUM` in WAL mode can need (the rewritten copy plus its log).
+    /// Too little free space for the `VACUUM`: it writes a full copy of the
+    /// archive to SQLite's temporary directory, then writes every page of it
+    /// again through the archive's write-ahead log. Each volume needs the
+    /// archive's size for each of the two it holds, so one volume holding both
+    /// needs twice the size. `needed` and `available` are for the volume that
+    /// fell short.
     LowSpace { needed: u64, available: u64 },
     /// The archive was rewritten in incremental mode.
     Vacuumed { pages_before: i64, pages_after: i64 },
@@ -303,26 +307,61 @@ impl VacuumOutcome {
     }
 }
 
+/// Free space where a `VACUUM` writes, in bytes: the volume holding the
+/// archive (its write-ahead log) and the one holding SQLite's temporary
+/// directory (the rewritten copy). `same_volume` when they are one volume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VacuumSpace {
+    pub archive: u64,
+    pub temp: u64,
+    pub same_volume: bool,
+}
+
+impl VacuumSpace {
+    /// The same free space for both, on one volume. For tests.
+    #[must_use]
+    pub fn one_volume(available: u64) -> Self {
+        Self {
+            archive: available,
+            temp: available,
+            same_volume: true,
+        }
+    }
+
+    /// `None` when a `VACUUM` of an archive of `size` bytes fits, else the
+    /// shortfall as `(needed, available)` on the volume that lacks it.
+    fn shortfall(self, size: u64) -> Option<(u64, u64)> {
+        if self.same_volume {
+            let needed = size.saturating_mul(2);
+            return (self.archive < needed).then_some((needed, self.archive));
+        }
+        if self.temp < size {
+            return Some((size, self.temp));
+        }
+        (self.archive < size).then_some((size, self.archive))
+    }
+}
+
 /// Switch an existing archive to `auto_vacuum = INCREMENTAL` with the one
 /// full `VACUUM` that takes, after the attachment conversion has finished and
-/// only when the archive's volume has at least twice the archive's size free.
-/// Otherwise it skips, and a later launch tries again.
+/// only when there is room for it ([`VacuumSpace`]). Otherwise it skips, and a
+/// later launch tries again.
 ///
 /// The outcome is recorded under [`VACUUM_SETTING`] so a skip is visible
 /// afterwards. The `VACUUM` holds the write lock for its duration (seconds on
 /// a multi-gigabyte archive), once.
 pub fn vacuum_once(conn: &Connection) -> Result<VacuumOutcome> {
-    let available = match conn.path().filter(|p| !p.is_empty()) {
-        Some(path) => free_bytes_beside(std::path::Path::new(path))?,
-        None => 0,
+    let space = match conn.path().filter(|p| !p.is_empty()) {
+        Some(path) => vacuum_space(std::path::Path::new(path))?,
+        None => VacuumSpace::one_volume(0),
     };
-    vacuum_once_with(conn, available)
+    vacuum_once_with(conn, space)
 }
 
-/// [`vacuum_once`] with the volume's free space given, so the space rule can
-/// be tested without filling a disk.
-pub fn vacuum_once_with(conn: &Connection, available: u64) -> Result<VacuumOutcome> {
-    let outcome = decide_vacuum(conn, available)?;
+/// [`vacuum_once`] with the free space given, so the space rule can be tested
+/// without filling a disk.
+pub fn vacuum_once_with(conn: &Connection, space: VacuumSpace) -> Result<VacuumOutcome> {
+    let outcome = decide_vacuum(conn, space)?;
     let outcome = match outcome {
         Some(outcome) => outcome,
         None => {
@@ -330,7 +369,13 @@ pub fn vacuum_once_with(conn: &Connection, available: u64) -> Result<VacuumOutco
             {
                 let _write = crate::storage::write_lock();
                 crate::storage::checkpoint(conn);
-                conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;")?;
+                // The rewritten copy goes to a temporary file, not memory:
+                // with the connection's usual `temp_store = MEMORY` it would
+                // hold the whole archive in RAM. Restored whatever happens.
+                conn.execute_batch("PRAGMA temp_store = FILE;")?;
+                let vacuumed = conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;");
+                conn.execute_batch("PRAGMA temp_store = MEMORY;")?;
+                vacuumed?;
             }
             crate::storage::checkpoint(conn);
             VacuumOutcome::Vacuumed {
@@ -347,7 +392,7 @@ pub fn vacuum_once_with(conn: &Connection, available: u64) -> Result<VacuumOutco
 }
 
 /// `Some(outcome)` when the `VACUUM` should not run, `None` when it should.
-fn decide_vacuum(conn: &Connection, available: u64) -> Result<Option<VacuumOutcome>> {
+fn decide_vacuum(conn: &Connection, space: VacuumSpace) -> Result<Option<VacuumOutcome>> {
     if is_incremental(conn)? {
         return Ok(Some(VacuumOutcome::AlreadyIncremental));
     }
@@ -359,8 +404,7 @@ fn decide_vacuum(conn: &Connection, available: u64) -> Result<Option<VacuumOutco
     }
     let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
     let size = u64::try_from(page_count(conn)?.saturating_mul(page_size)).unwrap_or(u64::MAX);
-    let needed = size.saturating_mul(2);
-    if available < needed {
+    if let Some((needed, available)) = space.shortfall(size) {
         return Ok(Some(VacuumOutcome::LowSpace { needed, available }));
     }
     Ok(None)
@@ -370,11 +414,50 @@ fn page_count(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("PRAGMA page_count", [], |row| row.get(0))?)
 }
 
-/// Bytes available to this user on the volume holding `db_path`.
-fn free_bytes_beside(db_path: &std::path::Path) -> Result<u64> {
-    let dir = db_path.parent().unwrap_or(db_path);
+/// Free space beside the archive at `db_path` and in SQLite's temporary
+/// directory.
+fn vacuum_space(db_path: &std::path::Path) -> Result<VacuumSpace> {
+    let archive_dir = db_path.parent().unwrap_or(db_path);
+    let temp_dir = sqlite_temp_dir();
+    let (archive, archive_dev) = free_bytes(archive_dir)?;
+    let (temp, temp_dev) = free_bytes(&temp_dir)?;
+    Ok(VacuumSpace {
+        archive,
+        temp,
+        same_volume: archive_dev == temp_dev,
+    })
+}
+
+/// Bytes available to this user on the volume holding `dir`, and that
+/// volume's device id.
+fn free_bytes(dir: &std::path::Path) -> Result<(u64, rustix::fs::Dev)> {
     let stat = rustix::fs::statvfs(dir).map_err(|_| StorageError::Io)?;
-    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
+    let dev = rustix::fs::stat(dir).map_err(|_| StorageError::Io)?.st_dev;
+    Ok((stat.f_bavail.saturating_mul(stat.f_frsize), dev))
+}
+
+/// The directory SQLite writes temporary files to on unix: the first usable
+/// of `SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/usr/tmp` and `/tmp`, else the
+/// working directory. The same order SQLite's unix VFS searches
+/// (`unixTempFileDir`), so the space check covers the volume the copy lands on.
+fn sqlite_temp_dir() -> std::path::PathBuf {
+    let env = ["SQLITE_TMPDIR", "TMPDIR"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(std::path::PathBuf::from);
+    let fixed = ["/var/tmp", "/usr/tmp", "/tmp"]
+        .into_iter()
+        .map(std::path::PathBuf::from);
+    env.chain(fixed)
+        .find(|dir| {
+            dir.is_dir()
+                && rustix::fs::access(
+                    dir.as_path(),
+                    rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
+                )
+                .is_ok()
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 /// Outcome of [`compact`].
@@ -408,4 +491,37 @@ pub fn part_content(conn: &Connection, part_id: &str) -> Result<Option<String>> 
         )
         .optional()?
         .flatten())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_volume_needs_twice_the_size() {
+        let space = VacuumSpace::one_volume(1999);
+        assert_eq!(space.shortfall(1000), Some((2000, 1999)));
+        assert_eq!(VacuumSpace::one_volume(2000).shortfall(1000), None);
+    }
+
+    #[test]
+    fn two_volumes_each_need_the_size() {
+        let split = |archive, temp| VacuumSpace {
+            archive,
+            temp,
+            same_volume: false,
+        };
+        assert_eq!(split(1000, 1000).shortfall(1000), None);
+        assert_eq!(split(1000, 999).shortfall(1000), Some((1000, 999)), "temp");
+        assert_eq!(
+            split(999, 5000).shortfall(1000),
+            Some((1000, 999)),
+            "archive"
+        );
+    }
+
+    #[test]
+    fn the_temp_dir_is_a_writable_directory() {
+        assert!(sqlite_temp_dir().is_dir());
+    }
 }
