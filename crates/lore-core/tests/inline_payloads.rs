@@ -175,7 +175,7 @@ fn inline_base64_payloads_are_stored_once_as_blobs_and_never_scanned() {
     let conn = archive(dir.path(), &png, &jpeg, &pdf, &tiny);
 
     let parts: Vec<String> = conn
-        .prepare("SELECT content_json FROM message_part WHERE content_json IS NOT NULL")
+        .prepare("SELECT content_json FROM message_part_full WHERE content_json IS NOT NULL")
         .unwrap()
         .query_map([], |r| r.get(0))
         .unwrap()
@@ -244,7 +244,7 @@ fn inline_base64_payloads_are_stored_once_as_blobs_and_never_scanned() {
     let spans: Vec<String> = conn
         .prepare(
             "SELECT substr(p.content_json, f.span_start + 1, f.span_end - f.span_start)
-             FROM secret_finding f JOIN message_part p ON p.id = f.source_id
+             FROM secret_finding f JOIN message_part_full p ON p.id = f.source_id
              WHERE f.field = 'content_json'",
         )
         .unwrap()

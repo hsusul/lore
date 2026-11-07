@@ -108,6 +108,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "fts_optimize",
         sql: include_str!("../../migrations/0018_fts_optimize.sql"),
     },
+    Migration {
+        version: 19,
+        name: "part_body",
+        sql: include_str!("../../migrations/0019_part_body.sql"),
+    },
 ];
 
 /// How many migrations exist. Tests assert against this rather than a literal

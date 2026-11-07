@@ -4,7 +4,10 @@
 //! projections (so the FTS index is cleared), findings, and any blob that is no
 //! longer referenced by anything — then merges the search index so the
 //! deleted rows' terms leave its segments, with `secure_delete` zeroing the
-//! pages that frees. Forgetting everything also runs `VACUUM`, which is cheap
+//! pages that frees, and returns the freed pages to the file system when the
+//! archive is in incremental auto-vacuum mode (`crate::compact`). Attachment
+//! bodies only the forgotten session used go with it; bodies other sessions
+//! share stay. Forgetting everything also runs `VACUUM`, which is cheap
 //! once almost nothing is left and shrinks the file. Original agent logs and
 //! user-chosen exports are **outside Lore's ownership** and are never deleted;
 //! the report names the source copies that remain so the UI can disclose them.
@@ -56,7 +59,9 @@ pub fn forget_session(
                  (SELECT source_artifact_id FROM session_source WHERE session_id = ?1)",
             [session_id, crate::ingest::FORGOTTEN],
         )?;
+        let bodies = crate::compact::session_body_hashes(&tx, session_id)?;
         tx.execute("DELETE FROM agent_session WHERE id = ?1", [session_id])?;
+        crate::compact::delete_orphan_bodies(&tx, &bodies)?;
 
         let orphans = orphan_blobs(&tx)?;
         for (id, _) in &orphans {
@@ -64,6 +69,9 @@ pub fn forget_session(
         }
         tx.commit()?;
         merge_search_index(conn)?;
+        // Hand the freed pages back to the file system. A no-op until the
+        // archive is in incremental mode.
+        crate::compact::reclaim_free_pages(conn)?;
         orphans
     };
 
@@ -108,6 +116,7 @@ pub fn forget_all(conn: &Connection, blobs: &BlobStore) -> Result<ForgetReport> 
         tx.execute("DELETE FROM repository", [])?;
         tx.execute("DELETE FROM source_artifact", [])?;
         tx.execute("DELETE FROM agent", [])?;
+        crate::compact::delete_all_orphan_bodies(&tx)?;
         // Every blob is now unreferenced.
         let orphans = orphan_blobs(&tx)?;
         tx.execute("DELETE FROM blob", [])?;
