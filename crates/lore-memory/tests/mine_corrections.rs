@@ -71,6 +71,48 @@ fn a_user_turn_that_corrects_the_previous_assistant_turn_is_a_candidate() {
 }
 
 #[test]
+fn a_codex_correction_after_injected_context_is_a_candidate() {
+    // Codex opens each turn with developer notes and injected context ahead
+    // of what the person typed; none of it is the person's turn.
+    let dir = tempfile::tempdir().unwrap();
+    let conn = archive::codex_archive(
+        dir.path(),
+        &[&[
+            ("developer", "<permissions instructions>sandboxed</permissions instructions>"),
+            (
+                "user",
+                "# AGENTS.md instructions for /proj\n\n<INSTRUCTIONS>\nKeep diffs small.\n</INSTRUCTIONS>",
+            ),
+            (
+                "user",
+                "<environment_context>\n  <cwd>/proj</cwd>\n</environment_context>",
+            ),
+            ("user", "add a retry to the client"),
+            ("assistant", "I'll install axios with npm."),
+            ("developer", "<model_switch>The model changed.</model_switch>"),
+            (
+                "user",
+                "<environment_context>\n  <current_date>2026-08-01</current_date>\n</environment_context>",
+            ),
+            ("user", "no, use pnpm not npm in this repo"),
+        ]],
+    );
+    let found = corrections(&conn).unwrap();
+    let got: Vec<(&str, Option<&str>, Signal)> = found
+        .iter()
+        .map(|c| (c.text.as_str(), c.preceding.as_deref(), c.signal))
+        .collect();
+    assert_eq!(
+        got,
+        [(
+            "no, use pnpm not npm in this repo",
+            Some("I'll install axios with npm."),
+            Signal::Correction
+        )]
+    );
+}
+
+#[test]
 fn a_negation_mid_turn_without_its_apostrophe_is_a_correction() {
     let dir = tempfile::tempdir().unwrap();
     let conn = archive::codex_archive(
