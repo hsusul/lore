@@ -28,7 +28,8 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -47,6 +48,10 @@ const STDERR_TAIL: usize = 2000;
 /// `--max-turns` unless the caller says otherwise. Of 103 real runs, 88 ended
 /// within 4 turns.
 pub const DEFAULT_MAX_TURNS: u32 = 6;
+/// After a forced stop, how long [`drive`] waits for the agent's stdin and
+/// stderr to close. A descendant that left the agent's process group survives
+/// the stop and can hold them open for as long as it runs.
+const STOPPED_PIPE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct RunOptions {
@@ -335,13 +340,13 @@ fn drive(
         source,
     })?;
     let stdin = child.stdin.take().map(|mut pipe| {
-        std::thread::spawn(move || {
+        background(move || {
             // A closed pipe means the agent stopped reading; its exit says why.
             let _ = pipe.write_all(prompt.as_bytes());
         })
     });
     let stderr = child.stderr.take().map(|mut pipe| {
-        std::thread::spawn(move || {
+        background(move || {
             let mut buf = Vec::new();
             let _ = pipe.read_to_end(&mut buf);
             String::from_utf8_lossy(&buf).into_owned()
@@ -367,10 +372,12 @@ fn drive(
     }
     let waited = child.wait();
     let seconds = (started.elapsed().as_secs_f64() * 10.0).round() / 10.0;
-    if let Some(handle) = stdin {
-        let _ = handle.join();
+    if let Some(rx) = stdin {
+        finish(&rx, stopped);
     }
-    let stderr = stderr.and_then(|h| h.join().ok()).unwrap_or_default();
+    let stderr = stderr
+        .and_then(|rx| finish(&rx, stopped))
+        .unwrap_or_default();
     waited.map_err(|e| Error::io("wait for", Path::new(program), e))?;
     Ok(Driven {
         events,
@@ -438,17 +445,40 @@ pub fn case_session_id(case_id: &str) -> String {
         .to_string()
 }
 
-/// Stop `child` and every process in its group.
+/// Run `f` on its own thread; the receiver gets what it returns, or an
+/// error if it panicked.
+fn background<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> mpsc::Receiver<T> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx
+}
+
+/// What a [`background`] thread returned. Waits as long as it takes unless the
+/// agent was `stopped`, so a run that ends on its own keeps all of its stderr
+/// however long the last writer takes.
+fn finish<T>(rx: &mpsc::Receiver<T>, stopped: bool) -> Option<T> {
+    if stopped {
+        rx.recv_timeout(STOPPED_PIPE_GRACE).ok()
+    } else {
+        rx.recv().ok()
+    }
+}
+
+/// Stop `child` and every process in its group. [`drive`] made `child` the
+/// leader of its own group, so the group id is its pid.
+///
+/// The signal goes from this process, not through a `kill` program: when one
+/// misread its argv (procps on Linux takes `-<pid>` for an option) or failed
+/// to run, only `child` was stopped, and what it had started kept running and
+/// held its stderr open.
 fn kill_group(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
-        // `--` so procps `kill` on Linux reads the negative id as a process
-        // group, not as an option; without it only the parent was stopped.
-        let _ = Command::new("kill")
-            .args(["-s", "KILL", "--", &format!("-{}", child.id())])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        use rustix::process::{kill_process_group, Pid, Signal};
+        // Fails only when the group is already gone.
+        let _ = kill_process_group(Pid::from_child(child), Signal::KILL);
     }
     let _ = child.kill();
 }

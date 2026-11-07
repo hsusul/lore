@@ -71,7 +71,9 @@ fn files(dir: &Path) -> Vec<String> {
 
 /// Records argv, env, cwd, and stdin, copies the rollout `exec resume` would
 /// load, tries `gh`, and prints `exec --json` events. With `SLOW` set it
-/// pauses after the first tool call, so a turn cap has something to stop.
+/// pauses after the first tool call, so a turn cap has something to stop;
+/// with `ESCAPE` set too, it first starts a process that leaves the group and
+/// holds stdout and stderr open.
 const FAKE_CODEX: &str = r#"#!/bin/sh
 rec="$REC"
 mkdir -p "$rec"
@@ -96,6 +98,7 @@ echo 'warming up' >&2
 echo "{\"type\":\"thread.started\",\"thread_id\":\"$sid\"}"
 echo '{"type":"turn.started"}'
 echo 'not json'
+if [ -n "$ESCAPE" ]; then perl -e 'setpgrp(0, 0); sleep 20' & sleep 1; fi
 echo '{"type":"item.completed","item":{"id":"i0","type":"command_execution","command":"git push origin feat","aggregated_output":"","exit_code":1,"status":"failed"}}'
 if [ -n "$SLOW" ]; then sleep 20; fi
 echo "{\"type\":\"item.completed\",\"item\":{\"id\":\"i1\",\"type\":\"file_change\",\"changes\":[{\"path\":\"$(pwd -P)/PLAN.md\",\"kind\":\"add\"}],\"status\":\"completed\"}}"
@@ -195,6 +198,10 @@ fn fixture() -> Fixture {
 }
 
 fn replay(f: &Fixture, arm: &str, extra: &[&str], slow: bool) -> std::process::Output {
+    replay_cmd(f, arm, extra, slow).output().unwrap()
+}
+
+fn replay_cmd(f: &Fixture, arm: &str, extra: &[&str], slow: bool) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_lore-replay"));
     cmd.args(["run", "--cases"])
         .arg(&f.cases)
@@ -213,7 +220,8 @@ fn replay(f: &Fixture, arm: &str, extra: &[&str], slow: bool) -> std::process::O
     } else {
         cmd.env_remove("SLOW");
     }
-    cmd.output().unwrap()
+    cmd.env_remove("ESCAPE");
+    cmd
 }
 
 fn ok(out: &std::process::Output) {
@@ -402,6 +410,48 @@ fn the_turn_cap_stops_codex_after_that_many_tool_calls() {
     assert_eq!(record["max_turns"], 1);
     let last = record["events"].as_array().unwrap().last().unwrap().clone();
     assert_eq!(last["item"]["type"], "command_execution");
+}
+
+/// A capped replay that has to end within 15 s, when 20 s means the agent's
+/// `sleep 20` was waited for.
+fn capped_in_time(f: &Fixture, mut cmd: Command) {
+    let started = std::time::Instant::now();
+    ok(&cmd.output().unwrap());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(15),
+        "the agent was not stopped"
+    );
+    let record: Value =
+        serde_json::from_str(&read(&f.root.join("runs/s_cdx_9/none-1/run.json"))).unwrap();
+    assert_eq!(record["capped"], true);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_turn_cap_stops_the_group_without_a_kill_program() {
+    use std::os::unix::fs::PermissionsExt;
+    // A `kill` that fails, first on PATH: the group is still stopped.
+    let f = fixture();
+    let bin = f.root.join("failing-kill");
+    std::fs::create_dir_all(&bin).unwrap();
+    let kill = bin.join("kill");
+    std::fs::write(&kill, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&kill, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs = vec![bin];
+    dirs.extend(std::env::split_paths(&path));
+    let mut cmd = replay_cmd(&f, "none", &["--max-turns", "1"], true);
+    cmd.env("PATH", std::env::join_paths(dirs).unwrap());
+    capped_in_time(&f, cmd);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_turn_cap_does_not_wait_for_a_process_that_left_the_group() {
+    let f = fixture();
+    let mut cmd = replay_cmd(&f, "none", &["--max-turns", "1"], true);
+    cmd.env("ESCAPE", "1");
+    capped_in_time(&f, cmd);
 }
 
 #[test]
