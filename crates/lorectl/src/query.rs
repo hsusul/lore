@@ -18,7 +18,7 @@
 use std::io::Write;
 
 use lore_core::paths::{ARCHIVE_DB_FILENAME, BLOBS_DIRNAME};
-use lore_core::search::SortOrder;
+use lore_core::search::{SortOrder, HIGHLIGHT_END, HIGHLIGHT_START};
 use lore_core::storage::blob::BlobStore;
 use lore_core::{query, search, storage};
 use rusqlite::Connection;
@@ -35,6 +35,12 @@ const SEARCH_HITS: i64 = 200;
 // A compile-time check rather than a test: the bound is a property of the
 // constant, so it should fail the build, not a test run.
 const _: () = assert!(SEARCH_LIMIT > 0 && SEARCH_LIMIT <= 100);
+
+fn strip_highlights(snippet: &str) -> String {
+    snippet
+        .replace(HIGHLIGHT_START, "")
+        .replace(HIGHLIGHT_END, "")
+}
 
 /// Open the archive this invocation targets, for reading only.
 fn open_reader(invocation: &Invocation) -> Result<(Connection, std::path::PathBuf), CliError> {
@@ -76,7 +82,7 @@ pub fn search(invocation: &Invocation) -> Result<u8, CliError> {
                 "started_at_ms": hit.started_at,
                 "source_kind": hit.source_kind,
                 "field": hit.field,
-                "snippet": hit.snippet,
+                "snippet": strip_highlights(&hit.snippet),
                 "matches": matches,
             });
             let _ = writeln!(stdout, "{line}");
@@ -90,7 +96,11 @@ pub fn search(invocation: &Invocation) -> Result<u8, CliError> {
         for (hit, matches) in &sessions {
             let title = hit.title.as_deref().unwrap_or("(untitled)");
             let _ = writeln!(stdout, "{}  {}  {}", hit.session_id, hit.agent_id, title);
-            let _ = writeln!(stdout, "    {}", hit.snippet.replace('\n', " "));
+            let _ = writeln!(
+                stdout,
+                "    {}",
+                strip_highlights(&hit.snippet).replace('\n', " ")
+            );
             if *matches > 1 {
                 let _ = writeln!(stdout, "    and {} more matches here", matches - 1);
             }

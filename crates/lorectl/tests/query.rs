@@ -127,8 +127,26 @@ fn a_search_finds_archived_content() {
     for line in &lines {
         let value: serde_json::Value = serde_json::from_str(line).expect("each line is JSON");
         assert!(value["session_id"].as_str().is_some());
-        assert!(value["snippet"].as_str().is_some());
+        let snippet = value["snippet"].as_str().expect("snippet is present");
+        assert!(
+            !snippet.contains(lore_core::search::HIGHLIGHT_START)
+                && !snippet.contains(lore_core::search::HIGHLIGHT_END),
+            "JSON snippet must strip highlight markers: {snippet:?}"
+        );
     }
+}
+
+#[test]
+fn search_human_output_strips_highlight_markers() {
+    let (archive, homes) = scanned_archive();
+    let out = lorectl(archive.path(), homes.path(), &["search", "the"]);
+    assert_eq!(code(&out), 0);
+    let text = stdout(&out);
+    assert!(
+        !text.contains(lore_core::search::HIGHLIGHT_START)
+            && !text.contains(lore_core::search::HIGHLIGHT_END),
+        "human output must strip highlight markers: {text:?}"
+    );
 }
 
 #[test]
