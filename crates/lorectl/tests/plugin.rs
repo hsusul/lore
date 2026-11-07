@@ -104,9 +104,33 @@ fn each_plugin_runs_the_session_start_hook() {
                 .unwrap()
                 .keys()
                 .collect::<Vec<_>>(),
-            ["SessionStart"],
-            "{dir} hooks only session start"
+            ["PreToolUse", "SessionStart", "UserPromptSubmit"],
+            "{dir} hooks session start, each prompt, and each edit"
         );
+    }
+}
+
+#[test]
+fn each_plugin_runs_the_prompt_and_pre_edit_hooks() {
+    for (dir, edit_tools) in [
+        ("plugins/claude-code", "Edit|Write|MultiEdit|NotebookEdit"),
+        ("plugins/codex", "apply_patch"),
+    ] {
+        let hooks = read_json(&repo_root().join(dir).join("hooks/hooks.json"));
+        let prompt = &hooks["hooks"]["UserPromptSubmit"][0];
+        assert_eq!(
+            prompt["hooks"][0]["command"], "lorectl hook prompt",
+            "{dir}"
+        );
+        let edit = &hooks["hooks"]["PreToolUse"][0];
+        assert_eq!(edit["matcher"], edit_tools, "{dir}");
+        assert_eq!(
+            edit["hooks"][0]["command"], "lorectl hook pre-edit",
+            "{dir}"
+        );
+        for hook in [prompt, edit] {
+            assert_eq!(hook["hooks"][0]["timeout"], 5, "{dir}");
+        }
     }
 }
 
