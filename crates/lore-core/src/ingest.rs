@@ -68,7 +68,11 @@ use crate::storage::{Result, StorageError};
 ///
 /// v14: Codex `token_usage_record` lines no longer mark a session partially
 /// parsed, so sessions flagged for them at v13 clear only after a re-parse.
-pub const PARSER_VERSION: &str = "14";
+///
+/// v15: Codex `developer` messages and user-role messages that are only
+/// injected context (AGENTS.md, `<environment_context>`) are system text,
+/// so archives stop reading them as the person's turns only after a re-parse.
+pub const PARSER_VERSION: &str = "15";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.

@@ -396,10 +396,12 @@ fn message_item(
     model: Option<String>,
     offset: i64,
 ) -> ParsedMessage {
+    let parts = text_parts(p.get("content"));
     let role = match p.get("role").and_then(Value::as_str).unwrap_or("") {
         "assistant" => Role::Assistant,
-        "system" => Role::System,
+        "system" | "developer" => Role::System,
         "tool" => Role::Tool,
+        _ if is_injected_context(&parts) => Role::System,
         _ => Role::User,
     };
     ParsedMessage {
@@ -416,8 +418,30 @@ fn message_item(
         stop_reason: None,
         source_offset: Some(offset),
         metadata_json: None,
-        parts: text_parts(p.get("content")),
+        parts,
     }
+}
+
+/// How the blocks open that Codex writes into a user-role message on the
+/// person's behalf: the repository's instructions, the environment, and the
+/// desktop app's page and goal context.
+const INJECTED_CONTEXT: &[&str] = &[
+    "# AGENTS.md instructions",
+    "<environment_context>",
+    "<user_instructions>",
+    "<external_codex_apps_open_page>",
+    "<codex_internal_context",
+];
+
+/// Whether a user-role message is only context Codex injected, with nothing
+/// the person typed. Such a message is filed as system text, so the person's
+/// next turn reads as the reply to the agent's last turn.
+fn is_injected_context(parts: &[ParsedPart]) -> bool {
+    !parts.is_empty()
+        && parts.iter().all(|part| {
+            let text = part.text.as_deref().unwrap_or("").trim_start();
+            INJECTED_CONTEXT.iter().any(|p| text.starts_with(p))
+        })
 }
 
 /// A message one Codex agent sent another, such as a subagent's final answer
@@ -1517,6 +1541,59 @@ mod tests {
         assert_eq!(
             s.messages[2].parts[0].text.as_deref(),
             Some("fallback to user")
+        );
+    }
+
+    #[test]
+    fn developer_notes_and_injected_context_are_system_text() {
+        let blocks = |role: &str, texts: &[&str]| {
+            let content: Vec<Value> = texts
+                .iter()
+                .map(|t| serde_json::json!({"type": "input_text", "text": t}))
+                .collect();
+            serde_json::json!({"type": "response_item", "payload": {"type": "message",
+                "role": role, "content": content}})
+            .to_string()
+                + "\n"
+        };
+        let line = |role: &str, text: &str| blocks(role, &[text]);
+        let content = [
+            line("developer", "<model_switch>switched</model_switch>"),
+            line(
+                "user",
+                "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>x</INSTRUCTIONS>",
+            ),
+            line(
+                "user",
+                "  <environment_context><cwd>/repo</cwd></environment_context>",
+            ),
+            line("user", "<user_instructions>be brief</user_instructions>"),
+            blocks(
+                "user",
+                &[
+                    "<environment_context>x</environment_context>",
+                    "rename the flag",
+                ],
+            ),
+            line("user", "<turn_aborted>stopped</turn_aborted>"),
+            line("user", "rename the flag"),
+        ]
+        .concat();
+        let s = CodexAdapter::new().parse_str(&content, "injected-context");
+        let roles: Vec<Role> = s.messages.iter().map(|m| m.role).collect();
+        assert_eq!(
+            roles,
+            [
+                Role::System,
+                Role::System,
+                Role::System,
+                Role::System,
+                // The person typed something after the context: still theirs.
+                Role::User,
+                // A harness notice, like Claude's, stays where it was filed.
+                Role::User,
+                Role::User,
+            ]
         );
     }
 
