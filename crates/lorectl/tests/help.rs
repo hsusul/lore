@@ -172,10 +172,12 @@ fn the_version_is_set_and_matches_the_desktop_app_and_ui() {
     let json = |rel: &str| -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(root.join(rel)).unwrap()).unwrap()
     };
-    assert_eq!(help_text(&["--version"]), "lorectl 0.2.0\n");
-    assert_eq!(json("src-tauri/tauri.conf.json")["version"], "0.2.0");
-    assert_eq!(json("package.json")["version"], "0.2.0");
-    assert_eq!(json("package-lock.json")["version"], "0.2.0");
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(!version.is_empty() && version != "0.0.0", "{version}");
+    assert_eq!(help_text(&["--version"]), format!("lorectl {version}\n"));
+    assert_eq!(json("src-tauri/tauri.conf.json")["version"], version);
+    assert_eq!(json("package.json")["version"], version);
+    assert_eq!(json("package-lock.json")["version"], version);
 }
 
 /// Every `lorectl` command in the README's "Get started" section, and each of
