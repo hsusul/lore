@@ -490,3 +490,27 @@ fn a_disabled_lore_plugin_connects_nothing() {
     assert!(!out.contains("plugin"), "{out}");
     assert_eq!(out.matches("not connected").count(), 8, "{out}");
 }
+
+#[test]
+fn empty_env_config_roots_fall_back_to_home_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(home.join(".claude")).unwrap();
+    fs::create_dir_all(home.join(".codex")).unwrap();
+    fs::write(home.join(".claude.json"), "{}").unwrap();
+    let out = connect(tmp.path(), |command| {
+        command.env("CLAUDE_CONFIG_DIR", "").env("CODEX_HOME", "");
+    });
+    assert!(
+        out.contains("Claude Code  <tmp>/home/.claude\n"),
+        "did not fall back to home/.claude:\n{out}"
+    );
+    assert!(
+        out.contains("Codex  <tmp>/home/.codex\n"),
+        "did not fall back to home/.codex:\n{out}"
+    );
+    assert!(
+        !out.contains("agent not found"),
+        "reported agents missing when installed in home:\n{out}"
+    );
+}
