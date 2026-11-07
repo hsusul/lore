@@ -155,13 +155,16 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             );
         }
     }
+    // A windowed scan leaves older files unread only until a full scan has
+    // completed: after one, every file has been read, whichever came last.
     let last = match (last_scan, window_scan) {
-        (last, Some((at, since))) if last.is_none_or(|l| at > l) => format!(
+        (None, Some((at, since))) => format!(
             "{}, of files modified since {} only; `lorectl scan` reads the rest",
             describe_last_scan(Some(at)),
             crate::receipt::date(since).unwrap_or_else(|| since.to_string())
         ),
-        _ => describe_last_scan(last_scan),
+        (Some(full), Some((at, _))) => describe_last_scan(Some(full.max(at))),
+        (last, None) => describe_last_scan(last),
     };
     let _ = writeln!(stdout, "last scan   {last}");
 
