@@ -108,26 +108,30 @@ pub fn prompt(batch: &[Value]) -> String {
         .replace("{cases}", &cases)
 }
 
-/// The labels in a judge reply: the JSON array between its first `[` and
-/// last `]`. Entries that are not a label, or carry no id, are dropped.
+/// The labels in a judge reply: the first JSON array in the text holding
+/// labels. Only entries with a `mistake` key count as labels, so an array of
+/// echoed case briefs is skipped. Entries that are not a label, or carry no
+/// id, are dropped.
 #[must_use]
 pub fn parse_reply(reply: &str) -> Vec<(String, Label)> {
-    let (Some(start), Some(end)) = (reply.find('['), reply.rfind(']')) else {
-        return Vec::new();
-    };
-    let Some(slice) = reply.get(start..=end) else {
-        return Vec::new();
-    };
-    let Ok(items) = serde_json::from_str::<Vec<Value>>(slice) else {
-        return Vec::new();
-    };
-    items
-        .into_iter()
-        .filter_map(|item| {
-            let label: Label = serde_json::from_value(item).ok()?;
-            Some((label.id.clone()?, label))
-        })
-        .collect()
+    for (start, _) in reply.match_indices('[') {
+        let mut de = serde_json::Deserializer::from_str(&reply[start..]).into_iter::<Vec<Value>>();
+        let Ok(Some(items)) = de.next().transpose() else {
+            continue;
+        };
+        let labels: Vec<(String, Label)> = items
+            .into_iter()
+            .filter_map(|item| {
+                item.get("mistake")?;
+                let label: Label = serde_json::from_value(item).ok()?;
+                Some((label.id.clone()?, label))
+            })
+            .collect();
+        if !labels.is_empty() {
+            return labels;
+        }
+    }
+    Vec::new()
 }
 
 /// Label every case in `opts.cases` not already labeled in `opts.out`,
@@ -248,6 +252,35 @@ done"#;
         assert!(matches!(labels[0].1.grader, Some(Grader::Judge { .. })));
         assert!(!labels[1].1.mistake);
         assert!(parse_reply("no array").is_empty());
+    }
+
+    #[test]
+    fn a_reply_that_echoes_the_briefs_first_yields_the_real_labels() {
+        let reply = r#"Cases: [{"id":"a:1","prompt":"p"},{"id":"a:2","prompt":"q"}]
+Labels:
+[{"id":"a:1","mistake":true,"what":"w","lesson":"l","grader":null,"visible":true},
+{"id":"a:2","mistake":false,"what":"","lesson":"","grader":null,"visible":false}]"#;
+        let labels = parse_reply(reply);
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].0, "a:1");
+        assert!(labels[0].1.mistake);
+        assert_eq!(labels[1].0, "a:2");
+    }
+
+    #[test]
+    fn a_reply_with_brackets_in_introductory_prose_parses() {
+        let reply = r#"Evaluating cases [1-2]:
+[{"id":"a:1","mistake":false,"what":"","lesson":"","grader":null,"visible":false}]"#;
+        let labels = parse_reply(reply);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].0, "a:1");
+
+        let with_trailing = r#"Evaluating cases [1-2]:
+[{"id":"a:1","mistake":false,"what":"","lesson":"","grader":null,"visible":false}]
+[Note: done]"#;
+        let labels = parse_reply(with_trailing);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].0, "a:1");
     }
 
     #[test]
