@@ -227,7 +227,12 @@ fn title_from_text(text: &str) -> Option<String> {
         .map(|l| {
             l.trim_start_matches(|c: char| c == '#' || c == '-' || c == '*' || c.is_whitespace())
         })
-        .find(|line| !line.is_empty() && !(line.starts_with('<') && line.ends_with('>')))?;
+        .find(|line| {
+            !line.is_empty()
+                && !(line.starts_with('<') && line.ends_with('>'))
+                && !line.starts_with("```")
+                && !line.starts_with("~~~")
+        })?;
 
     let mut title = String::with_capacity(TITLE_MAX_CHARS + 4);
     let mut count = 0;
@@ -620,6 +625,35 @@ mod tests {
     }
 
     #[test]
+    fn fallback_title_skips_code_fence_lines() {
+        assert_eq!(
+            title_from_text("```bash\nmake release\n```"),
+            Some("make release".to_string())
+        );
+        assert_eq!(
+            title_from_text("   ```bash\n   make release\n   ```"),
+            Some("make release".to_string())
+        );
+        assert_eq!(
+            title_from_text("~~~python\npython main.py\n~~~"),
+            Some("python main.py".to_string())
+        );
+        assert_eq!(
+            title_from_text("````sh\necho 'hello world'\n````"),
+            Some("echo 'hello world'".to_string())
+        );
+        assert_eq!(
+            title_from_text("```\ngit commit -m 'fix'\n```"),
+            Some("git commit -m 'fix'".to_string())
+        );
+        assert_eq!(
+            title_from_text("<task>\n```bash\nmake check\n```\n</task>"),
+            Some("make check".to_string())
+        );
+        assert_eq!(title_from_text("```bash\n```"), None);
+    }
+
+    #[test]
     fn fallback_title_is_single_line_and_bounded() {
         assert_eq!(
             title_from_text("  #   Improve   session   titles\nMore detail"),
@@ -852,6 +886,34 @@ mod tests {
         }];
 
         assert_eq!(fallback_title(&[msg1, msg2]), None);
+
+        let code_fence_msg = ParsedMessage {
+            seq: 2,
+            segment_ix: 0,
+            native_uuid: None,
+            parent_native_uuid: None,
+            role: Role::User,
+            event_kind: EventKind::Message,
+            is_sidechain: false,
+            ts: None,
+            model: None,
+            tokens: Tokens::default(),
+            stop_reason: None,
+            source_offset: None,
+            metadata_json: None,
+            parts: vec![ParsedPart {
+                ordinal: 0,
+                kind: PartKind::Text,
+                text: Some("```bash\nmake release\n```".to_string()),
+                content_json: None,
+                searchable: true,
+                metadata_json: None,
+            }],
+        };
+        assert_eq!(
+            fallback_title(&[code_fence_msg]),
+            Some("make release".to_string())
+        );
     }
 
     #[test]
