@@ -78,11 +78,20 @@ pub fn is_human(entry: &Value) -> bool {
     {
         return false;
     }
-    let text = content_text(entry);
-    let text = text.trim_start();
-    !text.is_empty()
-        && !text.starts_with('<')
-        && !text.starts_with("This session is being continued")
+    let typed = |text: &str| {
+        let text = text.trim();
+        !text.is_empty()
+            && !text.starts_with('<')
+            && !text.starts_with("This session is being continued")
+    };
+    match content(entry) {
+        Some(Value::String(s)) => typed(s),
+        Some(Value::Array(_)) => parts(entry)
+            .filter(|p| part_is(p, "text"))
+            .filter_map(|p| p.get("text").and_then(Value::as_str))
+            .any(typed),
+        _ => false,
+    }
 }
 
 /// What the main-thread assistant did across `entries`: non-blank prose and
@@ -185,6 +194,19 @@ mod tests {
         assert!(!is_human(&empty_array));
         assert!(!is_human(&blank_array));
         assert!(is_human(&typed_array));
+    }
+
+    #[test]
+    fn ide_context_before_typed_text_is_a_human_turn() {
+        let entry = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "<ide_opened_file>The user opened src/widget.rs</ide_opened_file>"},
+            {"type": "text", "text": "rename the widget helper"}]}});
+        let context_only = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "<ide_opened_file>The user opened src/widget.rs</ide_opened_file>"},
+            {"type": "text", "text": "  "}]}});
+
+        assert!(is_human(&entry));
+        assert!(!is_human(&context_only));
     }
 
     #[test]
