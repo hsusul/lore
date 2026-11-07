@@ -219,7 +219,10 @@ fn the_readme_first_run_uses_only_commands_the_cli_lists() {
             .find(needle)
             .unwrap_or_else(|| panic!("no `{needle}`:\n{section}"))
     };
-    assert!(at("cargo build --release -p lorectl") < at("lorectl init\n"));
+    // Install comes first: a release download, with building from source as the
+    // alternative, both before the first `lorectl init`.
+    assert!(at("releases/download") < at("lorectl init\n"));
+    assert!(at("cargo build --release -p lorectl") < at("lorectl init --review"));
     assert!(at("lorectl init\n") < at("/plugin install lore@lore"));
     assert!(at("/plugin install lore@lore") < at("/lore:lore-lessons"));
     assert!(at("/lore:lore-lessons") < at("lorectl init --review"));
