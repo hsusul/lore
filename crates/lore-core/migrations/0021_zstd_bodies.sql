@@ -21,7 +21,8 @@
 --
 -- The views are the one place a value is decoded: lore_unpack (registered on
 -- every archive connection) returns TEXT as it is and decompresses a BLOB
--- with the dictionary its header names. Every reader selects from
+-- with the dictionary its header names, whose bytes lore_dict_miss asks for
+-- only when the connection has not prepared that dictionary yet. Every reader selects from
 -- part_body_full, message_part_full or tool_call_full, so it still gets the
 -- exact bytes that were ingested. The tool output marker (migration 0020) is
 -- put back after decoding, from the decoded text.
@@ -99,7 +100,7 @@ CREATE INDEX ix_toolcall_call_part ON tool_call (call_part_id);
 CREATE VIEW part_body_full AS
 SELECT
     hash,
-    lore_unpack(body, (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_id(body))) AS body
+    lore_unpack(body, (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_miss(body))) AS body
 FROM part_body;
 
 CREATE VIEW tool_call_full AS
@@ -111,7 +112,7 @@ SELECT
     native_call_id,
     name,
     lore_unpack(input_json,
-                (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_id(input_json)))
+                (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_miss(input_json)))
         AS input_json,
     input_blob_id,
     output_text,
@@ -127,10 +128,10 @@ SELECT
     message_id,
     ordinal,
     kind,
-    lore_unpack(text, (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_id(text)))
+    lore_unpack(text, (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_miss(text)))
         AS text,
     lore_unpack(content_json,
-                (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_id(content_json)))
+                (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_miss(content_json)))
         AS content_json,
     blob_id,
     searchable,

@@ -10,23 +10,29 @@
 //! `message_part.text`, `message_part.content_json` and `tool_call.input_json`.
 //! `search_document.redacted_text`, the full-text index's content, never does.
 //!
-//! The decoder is reached only through SQL: [`register`] installs two scalar
+//! The decoder is reached only through SQL: [`register`] installs three scalar
 //! functions on every archive connection ([`crate::storage`] and
 //! [`crate::storage::migrations`] call it), and the views of migration 0021
 //! (`part_body_full`, `message_part_full`, `tool_call_full`) hold the one
 //! expression per column that applies them ([`unpack_sql`]):
 //!
 //! ```sql
-//! lore_unpack(body, (SELECT dict FROM zstd_dict WHERE id = lore_dict_id(body)))
+//! lore_unpack(body, (SELECT dict FROM zstd_dict WHERE id = lore_dict_miss(body)))
 //! ```
 //!
-//! `lore_dict_id` reads a value's dictionary id (NULL for plain text), and
-//! `lore_unpack` returns plain text unchanged and decompresses a BLOB with the
-//! dictionary passed beside it. Passing the dictionary in, rather than looking
-//! it up from inside the function, keeps the decode inside the reader's own
-//! transaction snapshot with no state shared across connections. Every reader
-//! selects from those views. A test (`tests/zstd_bodies.rs`) fails when other
-//! SQL reads a raw column.
+//! `lore_unpack` returns plain text unchanged and decompresses a BLOB. Each
+//! connection keeps the decoder dictionaries it has prepared, by id, so
+//! `lore_dict_miss` returns a value's dictionary id only when that connection
+//! has not prepared it yet, and NULL otherwise (and for plain text). The
+//! dictionary's bytes are therefore read once per connection, inside the
+//! reader's own transaction snapshot, instead of once per value. That is safe
+//! because a dictionary is never changed once stored and its id is never
+//! reused, and a frame names the zstd id of the dictionary it needs and
+//! carries a checksum: a kept dictionary that does not match the frame is
+//! fetched again, and a wrong one is an error, never other bytes.
+//! `lore_dict_id` reads a value's dictionary id. Every reader selects from
+//! those views. A test (`tests/zstd_bodies.rs`) fails when other SQL reads a
+//! raw column.
 //!
 //! A value that does not decode, because its header, frame, checksum or
 //! dictionary is wrong, or because its bytes are not UTF-8, is a query error.
@@ -105,7 +111,7 @@ pub const COLUMNS: [Column; 4] = [PART_BODY, PART_TEXT, PART_CONTENT, TOOL_INPUT
 #[must_use]
 pub fn unpack_sql(expr: &str) -> String {
     format!(
-        "lore_unpack({expr}, (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_id({expr})))"
+        "lore_unpack({expr}, (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_miss({expr})))"
     )
 }
 
@@ -171,51 +177,107 @@ impl Encoder {
     }
 }
 
-/// A prepared decoder dictionary and the bytes it was built from.
+/// The zstd id of the dictionary a compressed value's frame needs, `0` for
+/// none (or a value too short to say).
+fn frame_dict_id(value: &[u8]) -> u32 {
+    value
+        .get(HEADER_LEN..)
+        .and_then(zstd::zstd_safe::get_dict_id_from_frame)
+        .map_or(0, std::num::NonZeroU32::get)
+}
+
+/// A decoder dictionary prepared once per connection.
 struct Prepared {
-    bytes: Vec<u8>,
+    /// The `zstd_dict` id.
+    id: u32,
+    /// The zstd id inside the dictionary, which frames compressed with it name.
+    zstd_id: u32,
     dict: zstd::dict::DecoderDictionary<'static>,
 }
 
-/// What `lore_unpack` keeps between rows on one connection: the prepared
-/// dictionary, and the last two values it decoded. A view refers to a decoded
-/// column more than once (the tool output marker tests and rebuilds
+impl Prepared {
+    fn new(id: u32, bytes: &[u8]) -> Self {
+        Self {
+            id,
+            zstd_id: zstd::zstd_safe::get_dict_id_from_dict(bytes)
+                .map_or(0, std::num::NonZeroU32::get),
+            dict: zstd::dict::DecoderDictionary::copy(bytes),
+        }
+    }
+}
+
+/// Most prepared dictionaries one connection keeps: one per column, with room
+/// for a superseded one each.
+const DICTS_KEPT: usize = 8;
+
+/// Decoded values one connection remembers.
+const MEMO: usize = 4;
+
+/// What the decoding functions keep between rows on one connection: the
+/// prepared dictionaries, and the last few values decoded. A view refers to
+/// a decoded column more than once (the tool output marker tests and rebuilds
 /// `content_json` from `text`), and SQLite evaluates the function at each
 /// reference; the memo makes the repeats a compare instead of a decompress.
 #[derive(Default)]
 struct UnpackState {
-    prepared: Option<Prepared>,
-    memo: [Option<(Vec<u8>, String)>; 2],
+    dicts: Vec<Prepared>,
+    memo: [Option<(Vec<u8>, String)>; MEMO],
     next: usize,
 }
 
 impl UnpackState {
+    /// The prepared dictionary `value` needs, if this connection has it.
+    fn prepared(&self, value: &[u8]) -> Option<&Prepared> {
+        let id = dict_id(value)?;
+        let zstd_id = frame_dict_id(value);
+        self.dicts
+            .iter()
+            .find(|p| p.id == id && p.zstd_id == zstd_id)
+    }
+
+    /// `lore_dict_miss`: the dictionary id `value` names when decoding it
+    /// needs that dictionary's bytes, because this connection has not
+    /// prepared it; `None` for a value that names none or one already kept.
+    fn miss(&self, value: &[u8]) -> Option<u32> {
+        match dict_id(value)? {
+            0 => None,
+            id => self.prepared(value).is_none().then_some(id),
+        }
+    }
+
+    /// `lore_unpack` of a compressed value. `dict` is the bytes of the
+    /// dictionary it names when [`UnpackState::miss`] asked for them.
     fn unpack(&mut self, value: &[u8], dict: Option<&[u8]>) -> Result<String, DecodeError> {
         let id = dict_id(value).ok_or(DecodeError::Header)?;
-        if id != 0 {
-            let dict = dict.ok_or(DecodeError::MissingDictionary)?;
-            if self.prepared.as_ref().is_none_or(|p| p.bytes != dict) {
-                // A different dictionary: the memo was decoded with the old one.
-                self.memo = [None, None];
+        if let (Some(bytes), true) = (dict, id != 0) {
+            if self.prepared(value).is_none() {
+                if self.dicts.len() >= DICTS_KEPT {
+                    self.dicts.clear();
+                }
+                self.dicts.retain(|p| p.id != id);
+                self.dicts.push(Prepared::new(id, bytes));
             }
         }
         if let Some((_, out)) = self.memo.iter().flatten().find(|(v, _)| v == value) {
             return Ok(out.clone());
         }
-        let out = decode_blob(value, dict, &mut self.prepared)?;
+        let out = if id == 0 {
+            decode_frame(value, None)?
+        } else {
+            let prepared = self.prepared(value).ok_or(DecodeError::MissingDictionary)?;
+            decode_frame(value, Some(&prepared.dict))?
+        };
         self.memo[self.next] = Some((value.to_vec(), out.clone()));
-        self.next = (self.next + 1) % 2;
+        self.next = (self.next + 1) % MEMO;
         Ok(out)
     }
 }
 
-/// Decompress the compressed value `value` with `dict`, the bytes of the
-/// dictionary its header names (`None` when it names none or it is missing).
-/// `cache` keeps the prepared dictionary between rows.
-fn decode_blob(
+/// Decompress the compressed value `value` with `dict`, the prepared
+/// dictionary its header names (`None` when it names none).
+fn decode_frame(
     value: &[u8],
-    dict: Option<&[u8]>,
-    cache: &mut Option<Prepared>,
+    dict: Option<&zstd::dict::DecoderDictionary<'static>>,
 ) -> Result<String, DecodeError> {
     let id = dict_id(value).ok_or(DecodeError::Header)?;
     let frame = value.get(HEADER_LEN..).ok_or(DecodeError::Header)?;
@@ -231,23 +293,24 @@ fn decode_blob(
             .and_then(|mut d| d.decompress(frame, size))
             .map_err(|_| DecodeError::Frame)?,
         (_, None) => return Err(DecodeError::MissingDictionary),
-        (_, Some(dict)) => {
-            if cache.as_ref().is_none_or(|p| p.bytes != dict) {
-                *cache = Some(Prepared {
-                    bytes: dict.to_vec(),
-                    dict: zstd::dict::DecoderDictionary::copy(dict),
-                });
-            }
-            let prepared = cache.as_ref().ok_or(DecodeError::MissingDictionary)?;
-            zstd::bulk::Decompressor::with_prepared_dictionary(&prepared.dict)
-                .and_then(|mut d| d.decompress(frame, size))
-                .map_err(|_| DecodeError::Frame)?
-        }
+        (_, Some(dict)) => zstd::bulk::Decompressor::with_prepared_dictionary(dict)
+            .and_then(|mut d| d.decompress(frame, size))
+            .map_err(|_| DecodeError::Frame)?,
     };
     if bytes.len() != size {
         return Err(DecodeError::Frame);
     }
     String::from_utf8(bytes).map_err(|_| DecodeError::NotText)
+}
+
+/// Decompress the compressed value `value` with `dict`, the bytes of the
+/// dictionary its header names (`None` when it names none or it is missing).
+fn decode_blob(value: &[u8], dict: Option<&[u8]>) -> Result<String, DecodeError> {
+    let prepared = match (dict_id(value), dict) {
+        (Some(0) | None, _) | (_, None) => None,
+        (Some(_), Some(bytes)) => Some(zstd::dict::DecoderDictionary::copy(bytes)),
+    };
+    decode_frame(value, prepared.as_ref())
 }
 
 /// Decode a stored value: TEXT as it is, a compressed BLOB decompressed with
@@ -258,7 +321,7 @@ pub fn decode(value: ValueRef<'_>, dict: Option<&[u8]>) -> Result<Option<String>
         ValueRef::Text(t) => std::str::from_utf8(t)
             .map(|s| Some(s.to_owned()))
             .map_err(|_| DecodeError::NotText),
-        ValueRef::Blob(b) => decode_blob(b, dict, &mut None).map(Some),
+        ValueRef::Blob(b) => decode_blob(b, dict).map(Some),
         _ => Err(DecodeError::Type),
     }
 }
@@ -267,8 +330,10 @@ fn user_error(e: DecodeError) -> rusqlite::Error {
     rusqlite::Error::UserFunctionError(Box::new(e))
 }
 
-/// Install `lore_dict_id(value)` and `lore_unpack(value, dict)` on `conn`.
-/// Both are deterministic and innocuous, so the schema's views may call them.
+/// Install `lore_dict_id(value)`, `lore_dict_miss(value)` and
+/// `lore_unpack(value, dict)` on `conn`, with fresh per-connection state. All
+/// are innocuous, so the schema's views may call them; `lore_dict_miss`
+/// depends on what the connection has prepared, so it is not deterministic.
 pub fn register(conn: &Connection) -> rusqlite::Result<()> {
     let flags = FunctionFlags::SQLITE_UTF8
         | FunctionFlags::SQLITE_DETERMINISTIC
@@ -282,6 +347,22 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
     // The state sits behind a mutex only because SQLite requires the function
     // to be `Send`; one connection calls it from one thread at a time.
     let state: Arc<Mutex<UnpackState>> = Arc::new(Mutex::new(UnpackState::default()));
+    let miss_state = Arc::clone(&state);
+    conn.create_scalar_function(
+        "lore_dict_miss",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_INNOCUOUS,
+        move |ctx: &Context<'_>| {
+            Ok(match ctx.get_raw(0) {
+                ValueRef::Blob(b) => miss_state
+                    .lock()
+                    .map_err(|_| user_error(DecodeError::MissingDictionary))?
+                    .miss(b)
+                    .map(i64::from),
+                _ => None,
+            })
+        },
+    )?;
     conn.create_scalar_function("lore_unpack", 2, flags, move |ctx: &Context<'_>| {
         let dict = match ctx.get_raw(1) {
             ValueRef::Blob(d) => Some(d),
@@ -474,7 +555,7 @@ mod tests {
         let mut plain = Encoder::new(7, None).unwrap();
         let value = plain.encode(&body).unwrap();
         assert_eq!(dict_id(&value), Some(0));
-        assert_eq!(decode_blob(&value, None, &mut None).unwrap(), body);
+        assert_eq!(decode_blob(&value, None).unwrap(), body);
 
         let samples: Vec<Vec<u8>> = (0..2000)
             .map(|i| {
@@ -489,12 +570,45 @@ mod tests {
         let mut with = Encoder::new(3, Some(&dict)).unwrap();
         let value = with.encode(&body).unwrap();
         assert_eq!(dict_id(&value), Some(3));
-        let mut cache = None;
-        assert_eq!(decode_blob(&value, Some(&dict), &mut cache).unwrap(), body);
+        assert_eq!(decode_blob(&value, Some(&dict)).unwrap(), body);
         assert_eq!(
-            decode_blob(&value, None, &mut None),
+            decode_blob(&value, None),
             Err(DecodeError::MissingDictionary)
         );
+    }
+
+    fn dict_from(word: &str) -> Vec<u8> {
+        let samples: Vec<Vec<u8>> = (0..2000)
+            .map(|i| format!("{{\"{word}\":{i},\"path\":\"/{word}/m{}.rs\"}}", i % 37).into_bytes())
+            .collect();
+        train(&samples, 4096).unwrap()
+    }
+
+    #[test]
+    fn a_connection_prepares_each_dictionary_once_and_refetches_one_that_does_not_match() {
+        let body = "{\"path\":\"/src/m1.rs\",\"n\":12}".repeat(10);
+        let (a, b) = (dict_from("alpha"), dict_from("beta"));
+        // The same id for two dictionaries, as if an id were ever reused.
+        let value_a = Encoder::new(3, Some(&a)).unwrap().encode(&body).unwrap();
+        let value_b = Encoder::new(3, Some(&b)).unwrap().encode(&body).unwrap();
+        let mut state = UnpackState::default();
+        assert_eq!(state.miss(&value_a), Some(3), "not prepared yet");
+        assert_eq!(state.unpack(&value_a, Some(&a)).unwrap(), body);
+        assert_eq!(state.miss(&value_a), None, "prepared once");
+        assert_eq!(state.unpack(&value_a, None).unwrap(), body);
+
+        // The kept dictionary 3 is not the one value_b's frame names.
+        assert_eq!(state.miss(&value_b), Some(3));
+        assert_eq!(
+            state.unpack(&value_b, None),
+            Err(DecodeError::MissingDictionary)
+        );
+        assert_eq!(state.unpack(&value_b, Some(&b)).unwrap(), body);
+        assert_eq!(state.miss(&value_b), None);
+        // Plain text and dictionary-less frames never ask for one.
+        let plain = Encoder::new(0, None).unwrap().encode(&body).unwrap();
+        assert_eq!(state.miss(&plain), None);
+        assert_eq!(state.unpack(&plain, None).unwrap(), body);
     }
 
     #[test]
@@ -509,13 +623,13 @@ mod tests {
         // Every truncation and every single-byte flip is an error or the exact
         // original; never other bytes, never a panic.
         for len in 0..value.len() {
-            assert!(decode_blob(&value[..len], None, &mut None).is_err());
+            assert!(decode_blob(&value[..len], None).is_err());
         }
         for at in 0..value.len() {
             for bit in 0..8 {
                 let mut bad = value.clone();
                 bad[at] ^= 1 << bit;
-                if let Ok(out) = decode_blob(&bad, None, &mut None) {
+                if let Ok(out) = decode_blob(&bad, None) {
                     assert_eq!(out, body);
                 }
             }

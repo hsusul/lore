@@ -261,12 +261,16 @@ fn a_corrupt_value_is_a_query_error() {
         .unwrap()
         .is_some());
 
-    // A value naming a dictionary that is not there is an error too.
+    // A value naming a dictionary that is not there is an error too, on a
+    // connection that has not prepared it (re-registering gives this one
+    // fresh state, as a new connection has). One that already prepared it
+    // keeps decoding the exact bytes the frame's checksum vouches for.
     conn.execute(
         "DELETE FROM zstd_dict WHERE \"column\" = ?1",
         [codec::TOOL_INPUT.key],
     )
     .unwrap();
+    codec::register(&conn).unwrap();
     let missing = conn.query_row("SELECT count(input_json) FROM tool_call_full", [], |r| {
         r.get::<_, i64>(0)
     });
