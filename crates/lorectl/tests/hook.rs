@@ -34,7 +34,7 @@ fn lorectl_in(cwd: &Path, archive: &Path, homes: &Path, args: &[&str]) -> Output
 fn session_start(cwd: &Path, home: &Path, vault: &Path, stdin: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
         .args(["hook", "session-start", "--archive"])
-        .arg(home.join("no-archive"))
+        .arg(home.join("archive"))
         .current_dir(cwd)
         .env("HOME", home)
         .env("LORE_VAULT_DIR", vault)
@@ -486,5 +486,69 @@ fn at_risk_work_is_found_in_the_repo_named_on_stdin() {
         stdout(&out),
         "lore: 1 file(s) written by agents are staged and not committed \
          (a reset would discard them) \u{2014} see `lorectl status`\n"
+    );
+}
+
+/// Scan the Codex fixture session, which ran in `repo`, into `home/archive`,
+/// the archive [`session_start`] reads. Returns its archive id.
+fn archive_session_in(repo: &Path, home: &Path) -> String {
+    seed_codex_session_in(repo, home);
+    let archive = home.join("archive");
+    assert_eq!(code(&lorectl_in(repo, &archive, home, &["scan"])), 0);
+    let conn = lore_core::storage::open_read_only(&archive.join("lore.db")).unwrap();
+    conn.query_row("SELECT id FROM agent_session", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// The fixture's native Codex session id, as an agent's hook JSON carries it.
+const CODEX_SESSION: &str = "019e0000-0000-7000-8000-000000000003";
+
+#[test]
+fn session_start_names_the_archived_session_from_stdin() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[GLOBAL]);
+    let archive_id = archive_session_in(&repo, home.path());
+    assert!(archive_id.starts_with("s_"), "{archive_id}");
+
+    for given in [CODEX_SESSION, archive_id.as_str()] {
+        let stdin = serde_json::json!({ "session_id": given, "cwd": repo }).to_string();
+        let out = session_start(&repo, home.path(), &vault, &stdin);
+        assert_eq!(code(&out), 0);
+        assert_eq!(
+            stdout(&out),
+            format!(
+                "Lore memory for this repo:\n\
+                 - [unanchored] Migrations are global (01JD0000000000000000000003)\n\
+                 Lore session: {archive_id}\n"
+            ),
+            "{given}"
+        );
+    }
+}
+
+#[test]
+fn session_start_names_the_session_even_with_no_vault() {
+    let (home, _vault, repo) = memory_home();
+    let archive_id = archive_session_in(&repo, home.path());
+    let stdin = serde_json::json!({ "session_id": CODEX_SESSION, "cwd": repo }).to_string();
+
+    let out = session_start(&repo, home.path(), &home.path().join("no-vault"), &stdin);
+    assert_eq!(code(&out), 0);
+    assert_eq!(stdout(&out), format!("Lore session: {archive_id}\n"));
+}
+
+#[test]
+fn session_start_says_nothing_of_a_session_the_archive_lacks() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[GLOBAL]);
+    archive_session_in(&repo, home.path());
+    let stdin = serde_json::json!({ "session_id": "not-archived", "cwd": repo }).to_string();
+
+    let out = session_start(&repo, home.path(), &vault, &stdin);
+    assert_eq!(code(&out), 0);
+    assert_eq!(
+        stdout(&out),
+        "Lore memory for this repo:\n\
+         - [unanchored] Migrations are global (01JD0000000000000000000003)\n"
     );
 }
