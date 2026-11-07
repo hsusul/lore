@@ -230,7 +230,7 @@ pub fn mentions(body: &str) -> Vec<String> {
 }
 
 fn opens_mention(c: char) -> bool {
-    c.is_whitespace() || "([{\"'\u{feff}«‹“‘（【「『《〈〔〖".contains(c)
+    c.is_whitespace() || "`([{\"'\u{feff}«‹“‘（【「『《〈〔〖".contains(c)
 }
 
 fn line_around(body: &str, at: usize) -> &str {
@@ -390,6 +390,12 @@ mod tests {
             mentions(body),
             ["how", "poteto-mode", "principle-x", "swarm"]
         );
+    }
+
+    #[test]
+    fn mentions_recognizes_slash_skills_in_markdown_code_spans() {
+        let body = "Run `/clean-git-commit` first.";
+        assert_eq!(mentions(body), ["clean-git-commit"]);
     }
 
     #[test]

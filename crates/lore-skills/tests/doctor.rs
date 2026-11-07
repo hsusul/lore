@@ -170,3 +170,33 @@ fn unclosed_frontmatter_fence_is_reported_without_double_frontmatter() {
         Some("frontmatter has no closing `---`")
     );
 }
+
+#[test]
+fn broken_reference_in_markdown_code_span_is_reported() {
+    let tmp = std::env::temp_dir().join(format!("lore-skills-codespan-{}", std::process::id()));
+    let referrer_dir = tmp.join(".agents/skills/referrer");
+    let target_dir = tmp.join(".claude/skills/target-skill");
+    std::fs::create_dir_all(&referrer_dir).unwrap();
+    std::fs::create_dir_all(&target_dir).unwrap();
+    std::fs::write(
+        referrer_dir.join("SKILL.md"),
+        "---\nname: referrer\ndescription: Has code span ref\n---\nRun `/target-skill` here.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        target_dir.join("SKILL.md"),
+        "---\nname: target-skill\ndescription: Claude only\n---\nTarget body.\n",
+    )
+    .unwrap();
+    let inventory = lore_skills::inventory(&Roots::from_home(&tmp));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let findings = lore_skills::doctor(&inventory);
+    assert!(
+        findings.iter().any(|f| matches!(
+            f,
+            Finding::BrokenRef { skill, missing, agent, .. }
+                if skill == "referrer" && missing == "target-skill" && *agent == Agent::Codex
+        )),
+        "expected BrokenRef for target-skill, got: {findings:?}"
+    );
+}
