@@ -238,6 +238,53 @@ pub fn run_scheduled_backup(
     Ok(Some(info))
 }
 
+/// How recent a backup must be for [`ensure_recent_backup`] to rely on it
+/// instead of taking another: one hour.
+pub const RECENT_BACKUP_MS: i64 = 60 * 60 * 1000;
+
+/// The Lore-owned backup directory beside the archive `conn` has open, or
+/// `None` for an in-memory archive.
+#[must_use]
+pub fn backup_dir_for(conn: &Connection) -> Option<PathBuf> {
+    let db = Path::new(conn.path().filter(|p| !p.is_empty())?);
+    Some(db.parent()?.join(crate::paths::BACKUPS_DIRNAME))
+}
+
+/// Back up the archive before a change an older build cannot read back,
+/// unless a Lore-owned backup taken less than `max_age_ms` before `now_ms`
+/// already exists. Returns the new backup, or `None` when a recent one made it
+/// unnecessary. Uses [`create_backup`] and the user's retention.
+///
+/// The caller makes no change when this fails: a one-way step without a way
+/// back is exactly what this exists to prevent.
+pub fn ensure_recent_backup(
+    conn: &Connection,
+    backup_dir: &Path,
+    now_ms: i64,
+    max_age_ms: i64,
+) -> Result<Option<BackupInfo>> {
+    let recent = list_backups(backup_dir)?
+        .iter()
+        .filter_map(|path| backup_taken_at_ms(path))
+        .any(|taken| (0..max_age_ms).contains(&now_ms.saturating_sub(taken)));
+    if recent {
+        return Ok(None);
+    }
+    let keep = read_schedule(conn).map_or(DEFAULT_BACKUP_RETENTION, |s| s.keep);
+    create_backup(conn, backup_dir, keep).map(Some)
+}
+
+/// When a Lore-owned backup was taken, in epoch millis, read from its name
+/// ([`backup_path`]). `None` for a name that does not carry one.
+fn backup_taken_at_ms(path: &Path) -> Option<i64> {
+    let name = path.file_name()?.to_str()?;
+    name.strip_prefix(BACKUP_PREFIX)?
+        .split('-')
+        .next()?
+        .parse()
+        .ok()
+}
+
 /// A collision-free, lexicographically-chronological backup path.
 fn backup_path(backup_dir: &Path) -> PathBuf {
     let stamp = SystemTime::now()
@@ -348,6 +395,39 @@ fn set_private(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_recent_backup_skips_only_when_a_backup_is_under_an_hour_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::storage::open(&dir.path().join("lore.db")).unwrap();
+        let backup_dir = backup_dir_for(&conn).unwrap();
+        assert_eq!(backup_dir, dir.path().join(crate::paths::BACKUPS_DIRNAME));
+
+        let now = crate::now_ms();
+        let first = ensure_recent_backup(&conn, &backup_dir, now, RECENT_BACKUP_MS).unwrap();
+        assert!(first.is_some(), "no backup yet, so one is taken");
+        let taken = backup_taken_at_ms(&first.unwrap().path).unwrap();
+        assert!((now - taken).abs() < 60_000, "the name carries the time");
+
+        let soon = taken + RECENT_BACKUP_MS - 1;
+        assert_eq!(
+            ensure_recent_backup(&conn, &backup_dir, soon, RECENT_BACKUP_MS).unwrap(),
+            None,
+            "under an hour old: relied on"
+        );
+        let later = taken + RECENT_BACKUP_MS;
+        assert!(
+            ensure_recent_backup(&conn, &backup_dir, later, RECENT_BACKUP_MS)
+                .unwrap()
+                .is_some(),
+            "an hour old: another is taken"
+        );
+        assert_eq!(list_backups(&backup_dir).unwrap().len(), 2);
+        assert_eq!(
+            backup_dir_for(&crate::storage::open_in_memory().unwrap()),
+            None
+        );
+    }
 
     #[test]
     fn backup_interval_display_and_parse_roundtrip() {

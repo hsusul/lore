@@ -319,6 +319,46 @@ fn file_archive(dir: &std::path::Path) -> (Connection, BlobStore) {
     (conn, blobs)
 }
 
+fn backups(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    lore_core::backup::list_backups(&dir.join(lore_core::paths::BACKUPS_DIRNAME)).unwrap()
+}
+
+#[test]
+fn compaction_backs_up_before_its_first_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, blobs) = file_archive(dir.path());
+    two_sessions(&conn, &blobs);
+    make_legacy(&conn);
+    assert!(backups(dir.path()).is_empty());
+
+    let report = compact::compact(&conn, &AtomicBool::new(false)).unwrap();
+    assert_eq!(report.dedupe.converted, 4);
+    let taken = backups(dir.path());
+    assert_eq!(taken.len(), 1, "backed up first");
+    let old = Connection::open(&taken[0]).unwrap();
+    assert_eq!(
+        count(&old, "SELECT count(*) FROM message_part WHERE content_json IS NOT NULL AND kind = 'attachment'"),
+        4,
+        "the backup holds the rows as they were"
+    );
+
+    compact::compact(&conn, &AtomicBool::new(false)).unwrap();
+    assert_eq!(backups(dir.path()).len(), 1, "nothing left to convert");
+}
+
+#[test]
+fn compaction_converts_nothing_without_a_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, blobs) = file_archive(dir.path());
+    two_sessions(&conn, &blobs);
+    make_legacy(&conn);
+    std::fs::write(dir.path().join(lore_core::paths::BACKUPS_DIRNAME), b"").unwrap();
+
+    let err = compact::compact(&conn, &AtomicBool::new(false)).unwrap_err();
+    assert!(err.to_string().contains("back up"), "{err}");
+    assert_eq!(compact::inline_attachments(&conn).unwrap(), 4);
+}
+
 #[test]
 fn a_new_archive_is_incremental_and_forget_returns_its_pages() {
     let dir = tempfile::tempdir().unwrap();

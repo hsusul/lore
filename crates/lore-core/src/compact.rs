@@ -470,7 +470,12 @@ pub struct CompactReport {
 /// Convert inline attachments, then switch the file to incremental mode once.
 /// The desktop worker runs this after its startup scan, at the lowest
 /// priority the worker has: nothing else is queued by then.
+///
+/// Before the first batch, the archive is backed up unless a backup under an
+/// hour old exists ([`crate::backup::ensure_recent_backup`]); without one,
+/// nothing is converted.
 pub fn compact(conn: &Connection, stop: &AtomicBool) -> Result<CompactReport> {
+    back_up_before_converting(conn)?;
     let dedupe = dedupe_attachments(conn, DEDUPE_BATCH, stop)?;
     let vacuum = if stop.load(Ordering::Relaxed) {
         VacuumOutcome::DedupePending
@@ -478,6 +483,28 @@ pub fn compact(conn: &Connection, stop: &AtomicBool) -> Result<CompactReport> {
         vacuum_once(conn)?
     };
     Ok(CompactReport { dedupe, vacuum })
+}
+
+/// Back up a file archive that still has rows to convert.
+fn back_up_before_converting(conn: &Connection) -> Result<()> {
+    if inline_attachments(conn)? == 0 {
+        return Ok(());
+    }
+    let Some(dir) = crate::backup::backup_dir_for(conn) else {
+        return Ok(());
+    };
+    crate::backup::ensure_recent_backup(
+        conn,
+        &dir,
+        crate::now_ms(),
+        crate::backup::RECENT_BACKUP_MS,
+    )
+    .map_err(|_| {
+        StorageError::Migration(
+            "could not back up the archive before compacting it; nothing was converted".into(),
+        )
+    })?;
+    Ok(())
 }
 
 /// The stored body of a part, read through the one read path. For tests and
