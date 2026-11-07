@@ -123,6 +123,29 @@ pub fn add_custom_root(
     Ok(selected)
 }
 
+fn canonicalize_best_effort(path: &Path, depth: usize) -> Option<PathBuf> {
+    if depth > 32 {
+        return None;
+    }
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return Some(canonical);
+    }
+    if path.is_symlink() {
+        if let Ok(target) = std::fs::read_link(path) {
+            let resolved = if target.is_relative() {
+                path.parent().unwrap_or(Path::new("")).join(target)
+            } else {
+                target
+            };
+            return canonicalize_best_effort(&resolved, depth + 1);
+        }
+    }
+    let parent = path.parent()?;
+    let file_name = path.file_name()?;
+    let canonical_parent = canonicalize_best_effort(parent, depth + 1)?;
+    Some(canonical_parent.join(file_name))
+}
+
 /// Remove a user-selected root. Documented adapter defaults are never stored
 /// here and therefore cannot be removed through this function.
 pub fn remove_custom_root(
@@ -136,7 +159,12 @@ pub fn remove_custom_root(
     }
     let trimmed = path.trim_end_matches(std::path::is_separator);
     let selected = PathBuf::from(trimmed);
-    let canonical = std::fs::canonicalize(Path::new(trimmed)).ok();
+    let canonical = canonicalize_best_effort(Path::new(trimmed), 0);
+    let canonical_trimmed = canonical.as_ref().map(|c| {
+        c.to_string_lossy()
+            .trim_end_matches(std::path::is_separator)
+            .to_string()
+    });
     let mut roots = custom_roots(conn, agent_id)?;
     let before = roots.len();
     roots.retain(|root| {
@@ -146,6 +174,7 @@ pub fn remove_custom_root(
             && root != Path::new(path)
             && root_trimmed != trimmed
             && canonical.as_ref() != Some(root)
+            && canonical_trimmed.as_deref() != Some(root_trimmed)
     });
     if roots.len() != before {
         store_custom_roots(conn, agent_id, &roots)?;
@@ -366,6 +395,87 @@ mod tests {
         )
         .unwrap();
         assert!(custom_roots(&conn, "claude-code").unwrap().is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remove_custom_root_when_deleted_target_was_added_via_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("real_folder");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let symlink_dir = dir.path().join("symlink_folder");
+        std::os::unix::fs::symlink(&target_dir, &symlink_dir).unwrap();
+
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+
+        let canonical = add_custom_root(
+            &conn,
+            &registry,
+            "claude-code",
+            symlink_dir.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(canonical, std::fs::canonicalize(&target_dir).unwrap());
+        assert_eq!(custom_roots(&conn, "claude-code").unwrap(), vec![canonical]);
+
+        // Delete the real target directory on disk (leaving dangling symlink)
+        std::fs::remove_dir_all(&target_dir).unwrap();
+
+        // Removing by the original symlink path must still remove the custom root
+        remove_custom_root(
+            &conn,
+            &registry,
+            "claude-code",
+            symlink_dir.to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            custom_roots(&conn, "claude-code").unwrap().is_empty(),
+            "custom root was not removed after target was deleted"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remove_custom_root_when_ancestor_is_symlink_and_leaf_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_parent = dir.path().join("real_parent");
+        std::fs::create_dir_all(&real_parent).unwrap();
+        let symlink_parent = dir.path().join("symlink_parent");
+        std::os::unix::fs::symlink(&real_parent, &symlink_parent).unwrap();
+
+        let project_dir = real_parent.join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let conn = crate::storage::open_in_memory().unwrap();
+        let registry = AdapterRegistry::v0();
+
+        let input_path = symlink_parent.join("project");
+        let canonical = add_custom_root(
+            &conn,
+            &registry,
+            "claude-code",
+            input_path.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(canonical, std::fs::canonicalize(&project_dir).unwrap());
+
+        // Delete the project folder
+        std::fs::remove_dir_all(&project_dir).unwrap();
+
+        // Removing by the symlinked parent path must remove the custom root
+        remove_custom_root(
+            &conn,
+            &registry,
+            "claude-code",
+            input_path.to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            custom_roots(&conn, "claude-code").unwrap().is_empty(),
+            "custom root was not removed when leaf was deleted under symlink parent"
+        );
     }
 
     #[test]
