@@ -405,7 +405,8 @@ where
         let _ = worker.scan(&sink);
         // The lowest-priority work there is: it runs only once the startup
         // scan has drained the queue, and resumes on the next launch if the
-        // app quits first.
+        // app quits first. There is no caller to return an error to here, so
+        // `compact` records it under `compact::ERROR_SETTING` itself.
         let _ = worker.compact();
 
         loop {

@@ -344,6 +344,29 @@ fn compaction_backs_up_before_its_first_batch() {
 
     compact::compact(&conn, &AtomicBool::new(false)).unwrap();
     assert_eq!(backups(dir.path()).len(), 1, "nothing left to convert");
+    assert_eq!(compact_error(&conn).as_deref(), Some("null"));
+}
+
+fn compact_error(conn: &Connection) -> Option<String> {
+    lore_core::settings::get(conn, compact::ERROR_SETTING).unwrap()
+}
+
+#[test]
+fn a_failed_compaction_is_recorded_not_silent() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, blobs) = file_archive(dir.path());
+    two_sessions(&conn, &blobs);
+    make_legacy(&conn);
+    // The conversion cannot store a body anywhere.
+    conn.execute_batch("DROP TABLE part_body;").unwrap();
+
+    compact::compact(&conn, &AtomicBool::new(false)).unwrap_err();
+    assert_eq!(
+        compact_error(&conn).as_deref(),
+        Some(r#"{"stage":"dedupe","sqlite_code":1}"#),
+        "the stage and SQLite's code, no content"
+    );
+    assert_eq!(compact::inline_attachments(&conn).unwrap(), 4);
 }
 
 #[test]
@@ -357,6 +380,10 @@ fn compaction_converts_nothing_without_a_backup() {
     let err = compact::compact(&conn, &AtomicBool::new(false)).unwrap_err();
     assert!(err.to_string().contains("back up"), "{err}");
     assert_eq!(compact::inline_attachments(&conn).unwrap(), 4);
+    assert_eq!(
+        compact_error(&conn).as_deref(),
+        Some(r#"{"stage":"backup","sqlite_code":null}"#)
+    );
 }
 
 #[test]

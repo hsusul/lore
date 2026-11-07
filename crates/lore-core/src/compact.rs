@@ -43,6 +43,11 @@ pub const RECLAIM_MIN_FREE_PAGES: i64 = 2048;
 /// The setting that records the one-time `VACUUM`'s outcome, content-free.
 pub const VACUUM_SETTING: &str = "compact.vacuum";
 
+/// The setting that records why the last [`compact`] failed, content-free:
+/// `{"stage": "backup" | "dedupe" | "vacuum", "sqlite_code": n | null}`,
+/// or JSON `null` after a run that finished without error.
+pub const ERROR_SETTING: &str = "compact.error";
+
 /// BLAKE3 of `body`'s exact bytes, as lowercase hex. The address of a body in
 /// `part_body`.
 #[must_use]
@@ -144,7 +149,12 @@ pub fn dedupe_attachments(
     let limit = i64::try_from(batch.max(1)).unwrap_or(i64::MAX);
     while !stop.load(Ordering::Relaxed) {
         let _write = crate::storage::write_lock();
-        let tx = conn.unchecked_transaction()?;
+        // IMMEDIATE: the write lock is taken at BEGIN, where a busy archive
+        // waits out the busy timeout. A deferred transaction would read first
+        // and then fail its first write with SQLITE_BUSY_SNAPSHOT, which no
+        // timeout retries, whenever another connection committed in between.
+        let tx =
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
         let rows: Vec<(i64, String, String)> = tx
             .prepare_cached(
                 "SELECT rowid, id, content_json FROM message_part
@@ -474,13 +484,39 @@ pub struct CompactReport {
 /// Before the first batch, the archive is backed up unless a backup under an
 /// hour old exists ([`crate::backup::ensure_recent_backup`]); without one,
 /// nothing is converted.
+///
+/// The outcome is recorded under [`ERROR_SETTING`], so a failure is visible
+/// to a caller that runs this in the background and cannot report it.
 pub fn compact(conn: &Connection, stop: &AtomicBool) -> Result<CompactReport> {
-    back_up_before_converting(conn)?;
-    let dedupe = dedupe_attachments(conn, DEDUPE_BATCH, stop)?;
+    let result = compact_stages(conn, stop);
+    let recorded = match &result {
+        Ok(_) => "null".to_owned(),
+        Err((stage, error)) => {
+            let code = match error {
+                StorageError::Sqlite(rusqlite::Error::SqliteFailure(e, _)) => {
+                    e.extended_code.to_string()
+                }
+                _ => "null".to_owned(),
+            };
+            format!("{{\"stage\":\"{stage}\",\"sqlite_code\":{code}}}")
+        }
+    };
+    // Best-effort: failing to record must not replace the error itself.
+    let _ = crate::settings::set(conn, ERROR_SETTING, &recorded);
+    result.map_err(|(_, error)| error)
+}
+
+/// [`compact`]'s stages, each error tagged with the stage it came from.
+fn compact_stages(
+    conn: &Connection,
+    stop: &AtomicBool,
+) -> std::result::Result<CompactReport, (&'static str, StorageError)> {
+    back_up_before_converting(conn).map_err(|e| ("backup", e))?;
+    let dedupe = dedupe_attachments(conn, DEDUPE_BATCH, stop).map_err(|e| ("dedupe", e))?;
     let vacuum = if stop.load(Ordering::Relaxed) {
         VacuumOutcome::DedupePending
     } else {
-        vacuum_once(conn)?
+        vacuum_once(conn).map_err(|e| ("vacuum", e))?
     };
     Ok(CompactReport { dedupe, vacuum })
 }
