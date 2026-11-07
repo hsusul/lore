@@ -437,3 +437,17 @@ fn a_missing_oracle_text_fails_before_any_run() {
     assert!(stderr(&out).contains("no `oracle` text for case `c:2`"));
     assert_eq!(f.calls(), 0);
 }
+
+#[test]
+fn a_blank_oracle_text_fails_before_any_run() {
+    for blank in ["", "   ", "\t\n "] {
+        let f = fixture(
+            &["c:1", "c:2"],
+            &json!({"c:1": {"oracle": "O"}, "c:2": {"oracle": blank}}),
+        );
+        let out = sweep(&f, &["c:1", "c:2"], &[], &[]);
+        assert!(!out.status.success());
+        assert!(stderr(&out).contains("no `oracle` text for case `c:2`"));
+        assert_eq!(f.calls(), 0);
+    }
+}
