@@ -114,12 +114,14 @@ fn day(candidate: &Candidate) -> String {
 /// The repository every receipt came from, when they share one this machine
 /// can still find; otherwise global.
 fn scope(lesson: &Lesson) -> Scope {
-    let mut paths = lesson.receipts.iter().map(|r| r.repo_path.as_deref());
-    let first = paths.next().flatten();
-    match first.filter(|first| paths.all(|p| p == Some(first))) {
-        Some(path) => RepoContext::discover(Path::new(path))
-            .key()
-            .map_or(Scope::Global, |key| Scope::Repo(key.clone())),
+    let mut keys = lesson.receipts.iter().map(|r| {
+        r.repo_path
+            .as_deref()
+            .and_then(|p| RepoContext::discover(Path::new(p)).key().cloned())
+    });
+    let first = keys.next().flatten();
+    match first.filter(|first| keys.all(|k| k.as_ref() == Some(first))) {
+        Some(key) => Scope::Repo(key),
         None => Scope::Global,
     }
 }
