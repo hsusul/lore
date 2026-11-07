@@ -834,3 +834,20 @@ fn vault_flag_is_refused_for_commands_that_do_not_take_it() {
         "{err}"
     );
 }
+
+#[test]
+fn init_accepts_json_flag_on_either_side_of_the_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let before_help = lorectl(home, &["--json", "init", "--help"]);
+    assert_eq!(before_help.status.code(), Some(0));
+    let after_help = lorectl(home, &["init", "--json", "--help"]);
+    assert_eq!(after_help.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&before_help.stdout),
+        String::from_utf8_lossy(&after_help.stdout)
+    );
+
+    let out = masked(&lorectl(home, &["init", "--json", "--no-review"]));
+    assert!(out.contains("Lore\nVault      created"), "{out}");
+}
