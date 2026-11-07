@@ -303,3 +303,30 @@ fn grade_without_the_judge_never_starts_claude() {
     let c1 = grades.iter().find(|g| g["case"] == "c:1").unwrap();
     assert_eq!(c1["graded_by"], "deterministic");
 }
+
+#[test]
+fn grade_with_missing_labels_fails_with_io_error() {
+    let f = Fixture::new();
+    f.write_run("c:1", "none", 1, "gh pr create --fill", false);
+    let args = [
+        "grade",
+        "--labels",
+        "nonexistent.jsonl",
+        "--runs",
+        "runs",
+        "--out",
+        "grades.jsonl",
+        "--no-judge",
+    ];
+    let out = f.cmd(&args, false);
+    assert!(
+        !out.status.success(),
+        "expected failure on missing labels file, got: {:?}",
+        out
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("could not read nonexistent.jsonl"),
+        "stderr: {stderr}"
+    );
+}

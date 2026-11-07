@@ -189,6 +189,7 @@ fn labeled_ids(path: &Path) -> Result<HashSet<String>> {
 
 /// The labels file: one [`LabeledCase`] per line.
 pub fn read_labels(path: &Path) -> Result<Vec<LabeledCase>> {
+    std::fs::metadata(path).map_err(|e| Error::io("read", path, e))?;
     read_lines(path)
 }
 
@@ -293,5 +294,11 @@ Labels:
         assert_eq!(b["assistant"].as_array().unwrap().len(), 12);
         assert_eq!(b["assistant"][0], "TOOL Bash: {\"command\": 8}");
         assert!(prompt(&[case]).contains("\"next_human_message\": \"c\""));
+    }
+
+    #[test]
+    fn read_labels_fails_when_file_is_missing() {
+        let err = read_labels(Path::new("nonexistent-labels.jsonl")).unwrap_err();
+        assert!(matches!(err, Error::Io { action: "read", .. }));
     }
 }
