@@ -177,7 +177,7 @@ fn the_plugin_hook_puts_the_notes_on_stdout_for_the_session() {
         for command in session_start_commands(&hooks) {
             assert_eq!(
                 run_hook(&command, home.path(), &vault, &work),
-                "Lore memory for this repo:\n\
+                "Lore memory:\n\
                  - [unanchored] Migrations are global (01JD0000000000000000000003)\n",
                 "{dir}"
             );

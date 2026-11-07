@@ -447,6 +447,21 @@ fn session_start_adds_nothing_without_a_vault_or_a_matching_note() {
 }
 
 #[test]
+fn session_start_uses_general_header_outside_a_git_repository() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[GLOBAL]);
+    let plain = tempfile::tempdir().unwrap();
+
+    let out = session_start(plain.path(), home.path(), &vault, "");
+    assert_eq!(code(&out), 0);
+    assert_eq!(
+        stdout(&out),
+        "Lore memory:\n\
+         - [unanchored] Migrations are global (01JD0000000000000000000003)\n"
+    );
+}
+
+#[test]
 fn at_risk_work_is_found_in_the_repo_named_on_stdin() {
     // An agent may start the hook from anywhere. The notes already follow the
     // `cwd` in the hook JSON, and the at-risk check must look at the same repo.
