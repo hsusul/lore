@@ -442,8 +442,10 @@ pub fn case_session_id(case_id: &str) -> String {
 fn kill_group(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
+        // `--` so procps `kill` on Linux reads the negative id as a process
+        // group, not as an option; without it only the parent was stopped.
         let _ = Command::new("kill")
-            .args(["-KILL", &format!("-{}", child.id())])
+            .args(["-s", "KILL", "--", &format!("-{}", child.id())])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
