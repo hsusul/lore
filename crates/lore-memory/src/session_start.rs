@@ -43,15 +43,7 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
         .and_then(|index| index.count_active(scope.as_deref()).ok())
         .unwrap_or(0)
         .max(found.notes.len());
-    let lines = found.notes.iter().map(|recalled| {
-        format!(
-            "- [{}] {} ({})",
-            recalled.freshness.label(),
-            title(&recalled.note.title),
-            recalled.note.id.as_str()
-        )
-    });
-    let (text, shown) = render(lines, total);
+    let (text, shown) = render(found.notes.iter().map(line), total);
     Ok(Some(SessionStart {
         context: found.context,
         notes: found.notes,
@@ -59,6 +51,17 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
         total,
         text,
     }))
+}
+
+/// One note as an agent reads it: its freshness label, its title, and its id.
+#[must_use]
+pub fn line(recalled: &Recalled) -> String {
+    format!(
+        "- [{}] {} ({})",
+        recalled.freshness.label(),
+        title(&recalled.note.title),
+        recalled.note.id.as_str()
+    )
 }
 
 /// A note title fit for an agent's context: secrets masked, on one line.

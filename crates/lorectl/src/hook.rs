@@ -36,12 +36,26 @@
 //! then records the proposal's source as verified. A session started since
 //! the last scan is not in the archive yet, so it gets no line.
 //!
+//! `prompt` runs when a person sends a prompt. It recalls the notes that share
+//! words with the prompt (see [`PROMPT_NOTE_CAP`] for which) and prints them
+//! as the UserPromptSubmit `additionalContext` reply, so a lesson arrives
+//! next to the request it is about rather than far back at session start.
+//! A prompt with no content words, such as "yes", prints nothing.
+//!
 //! `pre-edit` runs before a tool changes a file. It reads `tool_input.file_path`
-//! (or `notebook_path`) from the hook JSON and prints the accepted notes
-//! anchored to that file, each with its freshness label, as the PreToolUse
-//! `additionalContext` reply Claude Code and Codex pass to the model. It
-//! never answers with a permission decision, so it cannot allow or block the
-//! edit. No note on that file prints nothing.
+//! (or `notebook_path`) from the hook JSON, or for Codex's `apply_patch` every
+//! file the patch text in `tool_input.command` adds, updates, deletes, or
+//! moves to, and prints the accepted notes anchored to those files, each with
+//! its freshness label, as the PreToolUse `additionalContext` reply Claude
+//! Code and Codex pass to the model. It never answers with a permission
+//! decision, so it cannot allow or block the edit. No note on those files
+//! prints nothing.
+//!
+//! All three record the note ids they print for the hook JSON's `session_id`
+//! (`lore_memory::shown`). `prompt` skips a note the session was already
+//! shown. `session-start` and `pre-edit` print theirs regardless: the first
+//! comes before anything else, and the second exists to repeat a note at the
+//! moment its file is touched.
 //!
 //! It does **not** scan. A scan is unbounded — it can walk hundreds of megabytes
 //! — and taking that time at session start would make Lore the reason a session
@@ -57,9 +71,10 @@ use lore_core::landing;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::{query, storage};
 use lore_memory::note::RelPath;
-use lore_memory::recall::{self, Recalled};
+use lore_memory::recall;
 use lore_memory::repo::RepoContext;
-use lore_memory::session_start::{self, title};
+use lore_memory::session_start::{self, line};
+use lore_memory::shown::Shown;
 use lore_memory::vault::{self, Vault};
 
 use crate::cli::Invocation;
@@ -71,10 +86,24 @@ use crate::exit::{self, CliError};
 /// Lore that refused an unfamiliar one would break sessions on upgrade.
 const SESSION_START: &str = "session-start";
 const PRE_EDIT: &str = "pre-edit";
+const PROMPT: &str = "prompt";
 
 /// At most this many notes before an edit, in at most this many bytes.
 const EDIT_NOTE_CAP: usize = 5;
 const EDIT_CHAR_CAP: usize = 1_000;
+/// At most this many notes for a prompt, in at most this many bytes.
+///
+/// The relevance cut is the match itself, not a score: a note is a candidate
+/// only when it holds at least two of the prompt's content words, or the one
+/// word when the prompt has a single content word (`recall::related`).
+/// BM25 scores are not comparable from one vault or prompt to the next, so a
+/// score threshold would be arbitrary, while a two-word overlap rules out
+/// notes that share one common word with a long prompt. The candidates are
+/// shown best first by BM25, with changed and gone notes last.
+const PROMPT_NOTE_CAP: usize = 3;
+const PROMPT_CHAR_CAP: usize = 800;
+/// Recall this many for a prompt, so notes already shown can be skipped.
+const PROMPT_CANDIDATES: usize = 10;
 /// Hook JSON past this many bytes is not read.
 const STDIN_CAP: u64 = 1 << 20;
 /// The history walk behind the at-risk line gives up past this. Half the 10 s
@@ -90,7 +119,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         // Errors are swallowed on purpose: see the module docs.
         let _ = session_start(invocation, cwd.as_deref());
         let mut stdout = std::io::stdout().lock();
-        if let Some(block) = memory_notes(cwd.as_deref()) {
+        if let Some(block) = memory_notes(cwd.as_deref(), input.session_id.as_deref()) {
             let _ = stdout.write_all(block.as_bytes());
         }
         if let Some(id) = input.session_id.and_then(|id| archived(invocation, &id)) {
@@ -98,13 +127,22 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         }
     } else if event == PRE_EDIT {
         if let Some(text) = anchored_notes(&hook_input()) {
-            // Plain stdout before a tool call reaches no model; this field does.
-            let reply = serde_json::json!({ "hookSpecificOutput": {
-                "hookEventName": "PreToolUse", "additionalContext": text } });
-            let _ = writeln!(std::io::stdout().lock(), "{reply}");
+            reply("PreToolUse", &text);
+        }
+    } else if event == PROMPT {
+        if let Some(text) = prompt_notes(&hook_input()) {
+            reply("UserPromptSubmit", &text);
         }
     }
     Ok(exit::OK)
+}
+
+/// Print `text` as the `additionalContext` of a hook reply for `event`.
+/// Plain stdout before a tool call reaches no model; this field does.
+fn reply(event: &str, text: &str) {
+    let reply = serde_json::json!({ "hookSpecificOutput": {
+        "hookEventName": event, "additionalContext": text } });
+    let _ = writeln!(std::io::stdout().lock(), "{reply}");
 }
 
 /// What an agent's hook JSON on stdin says, as far as this hook uses it.
@@ -113,8 +151,10 @@ struct HookInput {
     /// The absolute `cwd`.
     cwd: Option<PathBuf>,
     session_id: Option<String>,
-    /// The file a tool is about to change, as the agent wrote it.
-    file_path: Option<PathBuf>,
+    /// The files a tool is about to change, as the agent wrote them.
+    file_paths: Vec<PathBuf>,
+    /// What the person just sent.
+    prompt: Option<String>,
 }
 
 /// The hook JSON on stdin. Anything unreadable reads as empty.
@@ -128,12 +168,49 @@ fn hook_input() -> HookInput {
         session_id: text("session_id")
             .filter(|id| !id.is_empty())
             .map(str::to_owned),
-        file_path: ["/tool_input/file_path", "/tool_input/notebook_path"]
-            .iter()
-            .find_map(|at| json.pointer(at).and_then(serde_json::Value::as_str))
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from),
+        file_paths: if text("tool_name") == Some("apply_patch") {
+            json.pointer("/tool_input/command")
+                .and_then(serde_json::Value::as_str)
+                .map(patch_paths)
+                .unwrap_or_default()
+        } else {
+            ["/tool_input/file_path", "/tool_input/notebook_path"]
+                .iter()
+                .find_map(|at| json.pointer(at).and_then(serde_json::Value::as_str))
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .into_iter()
+                .collect()
+        },
+        prompt: text("prompt").map(str::to_owned),
     }
+}
+
+/// Every file a Codex `apply_patch` patch adds, updates, deletes, or moves to,
+/// once each, in order. A patch with no file header names none.
+fn patch_paths(patch: &str) -> Vec<PathBuf> {
+    const HEADERS: [&str; 4] = [
+        "*** Add File:",
+        "*** Update File:",
+        "*** Delete File:",
+        "*** Move to:",
+    ];
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for line in patch.lines() {
+        let Some(path) = HEADERS
+            .iter()
+            .find_map(|header| line.strip_prefix(header))
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+        else {
+            continue;
+        };
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
 }
 
 /// Stdin parsed as JSON. A terminal is never read, so a person running the
@@ -160,32 +237,106 @@ fn archived(invocation: &Invocation, id: &str) -> Option<String> {
     Some(query::find_session(&conn, id).ok()??.archive_id)
 }
 
-/// The notes section for `cwd`, or `None` when there is nothing to add.
-fn memory_notes(cwd: Option<&Path>) -> Option<String> {
+/// The notes section for `cwd`, or `None` when there is nothing to add. The
+/// notes it holds are recorded as shown to `session_id`.
+fn memory_notes(cwd: Option<&Path>, session_id: Option<&str>) -> Option<String> {
     let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
     let found = session_start::session_start(&vault, cwd?).ok()??;
+    let shown = found.notes.iter().take(found.shown);
+    Shown::open(&vault, session_id).record(shown.map(|r| r.note.id.as_str()));
     Some(found.text)
 }
 
-/// The notes anchored to the file the hook JSON says a tool will change, or
-/// `None` when there are none. A relative path is relative to `cwd`.
-fn anchored_notes(input: &HookInput) -> Option<String> {
+/// The notes that match what the person just sent and the session has not
+/// been shown, or `None` when there are none. See [`PROMPT_NOTE_CAP`].
+fn prompt_notes(input: &HookInput) -> Option<String> {
+    let prompt = input.prompt.as_deref()?;
     let cwd = input.cwd.clone().or_else(|| std::env::current_dir().ok())?;
-    let file = cwd.join(input.file_path.as_ref()?);
-    let root = RepoContext::discover(&cwd).root()?.to_path_buf();
-    let rel = repo_relative(&root, &file)?;
     let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
-    let found = recall::anchored_to(&vault, &cwd, &rel, EDIT_NOTE_CAP).ok()?;
-    let mut out = format!("Lore notes anchored to {}:\n", rel.as_str());
-    let heading = out.len();
-    for line in found.iter().map(note_line) {
-        if out.len() + line.len() + 1 > EDIT_CHAR_CAP {
+    let found = recall::related(&vault, prompt, &cwd, PROMPT_CANDIDATES).ok()?;
+    if found.notes.is_empty() {
+        return None;
+    }
+    let mut shown = Shown::open(&vault, input.session_id.as_deref());
+    let fresh = found
+        .notes
+        .iter()
+        .filter(|r| !shown.contains(r.note.id.as_str()));
+    let mut out = String::from("Lore notes for this request:\n");
+    let mut ids = Vec::new();
+    for recalled in fresh.take(PROMPT_NOTE_CAP) {
+        let line = line(recalled);
+        if out.len() + line.len() + 1 > PROMPT_CHAR_CAP {
             break;
         }
         out.push_str(&line);
         out.push('\n');
+        ids.push(recalled.note.id.as_str());
     }
-    (out.len() > heading).then_some(out)
+    if ids.is_empty() {
+        return None;
+    }
+    shown.record(ids);
+    Some(out)
+}
+
+/// The notes anchored to the files the hook JSON says a tool will change, a
+/// heading per file, or `None` when there are none. A relative path is
+/// relative to `cwd`. A note anchored to several of the files is listed once.
+fn anchored_notes(input: &HookInput) -> Option<String> {
+    let cwd = input.cwd.clone().or_else(|| std::env::current_dir().ok())?;
+    if input.file_paths.is_empty() {
+        return None;
+    }
+    let root = RepoContext::discover(&cwd).root()?.to_path_buf();
+    let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
+    // Look no further once the files read so far fill the cap.
+    let (mut notes, mut count) = (Vec::new(), 0);
+    for file in &input.file_paths {
+        if count >= EDIT_NOTE_CAP {
+            break;
+        }
+        let Some(rel) = repo_relative(&root, &cwd.join(file)) else {
+            continue;
+        };
+        let Ok(found) = recall::anchored_to(&vault, &cwd, &rel, EDIT_NOTE_CAP) else {
+            continue;
+        };
+        count += found.len();
+        notes.push((rel, found));
+    }
+    let mut out = String::new();
+    let mut ids: Vec<&str> = Vec::new();
+    'files: for (rel, found) in &notes {
+        let mut block = format!("Lore notes anchored to {}:\n", rel.as_str());
+        let heading = block.len();
+        for recalled in found {
+            let id = recalled.note.id.as_str();
+            if ids.contains(&id) {
+                continue;
+            }
+            let line = line(recalled);
+            let full = ids.len() >= EDIT_NOTE_CAP
+                || out.len() + block.len() + line.len() + 1 > EDIT_CHAR_CAP;
+            if full {
+                if block.len() > heading {
+                    out.push_str(&block);
+                }
+                break 'files;
+            }
+            block.push_str(&line);
+            block.push('\n');
+            ids.push(id);
+        }
+        if block.len() > heading {
+            out.push_str(&block);
+        }
+    }
+    if ids.is_empty() {
+        return None;
+    }
+    Shown::open(&vault, input.session_id.as_deref()).record(ids);
+    Some(out)
 }
 
 /// `file` relative to `root`, comparing real paths when the two are spelled
@@ -202,16 +353,6 @@ fn repo_relative(root: &Path, file: &Path) -> Option<RelPath> {
         }
     };
     RelPath::parse(&rel.to_str()?.replace('\\', "/")).ok()
-}
-
-/// One note as a line: its freshness label, its title, and its id.
-fn note_line(recalled: &Recalled) -> String {
-    format!(
-        "- [{}] {} ({})",
-        recalled.freshness.label(),
-        title(&recalled.note.title),
-        recalled.note.id.as_str()
-    )
 }
 
 /// Report at-risk agent work for the current repository, if any.

@@ -652,3 +652,164 @@ fn pre_edit_is_silent_unless_a_note_is_anchored_to_the_file() {
         assert_eq!(stdout(&out), "", "{stdin}");
     }
 }
+
+/// The UserPromptSubmit hook JSON for `prompt` in `session`.
+fn prompt_json(cwd: &Path, session: &str, prompt: &str) -> String {
+    serde_json::json!({
+        "session_id": session,
+        "cwd": cwd,
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": prompt,
+    })
+    .to_string()
+}
+
+/// The UserPromptSubmit `additionalContext` reply that carries `text`.
+fn prompt_reply(text: &str) -> String {
+    let reply = serde_json::json!({
+        "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": text }
+    });
+    format!("{reply}\n")
+}
+
+const RETRY_FOR_PROMPT: &str = "Lore notes for this request:\n\
+     - [fresh] Retry the migration (01JD0000000000000000000001)\n";
+
+#[test]
+fn prompt_shows_the_note_that_shares_words_with_the_prompt() {
+    let (home, vault, repo) = memory_home();
+    add_notes(
+        home.path(),
+        &vault,
+        &repo,
+        &[RETRY, PIN, GLOBAL, OTHER_REPO],
+    );
+    // GLOBAL shares only "migration"; one shared word is not enough.
+    let stdin = prompt_json(&repo, "s-1", "Why did the migration fail? Retry it.");
+
+    let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+    assert_eq!(code(&out), 0);
+    assert_eq!(stdout(&out), prompt_reply(RETRY_FOR_PROMPT));
+    let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        reply["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+}
+
+#[test]
+fn prompt_is_silent_without_matching_words() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[RETRY, PIN, GLOBAL]);
+    for prompt in [
+        "deploy the frontend bundle",
+        "yes",
+        "ok, continue",
+        "/compact",
+        "",
+    ] {
+        let stdin = prompt_json(&repo, "s-1", prompt);
+        let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+        assert_eq!(code(&out), 0, "{prompt}");
+        assert_eq!(stdout(&out), "", "{prompt}");
+    }
+    let out = hook("prompt", &repo, home.path(), &vault, "not json");
+    assert_eq!((code(&out), stdout(&out)), (0, String::new()));
+}
+
+#[test]
+fn prompt_skips_a_note_the_session_was_already_shown() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[RETRY]);
+    let retry = "retry the failed migration";
+
+    // Session start shows every note to s-1.
+    let out = session_start(&repo, home.path(), &vault, &cwd_json(&repo));
+    assert!(stdout(&out).contains("Retry the migration"), "{out:?}");
+    let out = hook(
+        "prompt",
+        &repo,
+        home.path(),
+        &vault,
+        &prompt_json(&repo, "s-1", retry),
+    );
+    assert_eq!(stdout(&out), "");
+
+    // Another session has not seen it, and sees it once.
+    let s2 = prompt_json(&repo, "s-2", retry);
+    let out = hook("prompt", &repo, home.path(), &vault, &s2);
+    assert_eq!(stdout(&out), prompt_reply(RETRY_FOR_PROMPT));
+    let out = hook("prompt", &repo, home.path(), &vault, &s2);
+    assert_eq!(stdout(&out), "");
+
+    // Without a session id there is nothing to remember it by.
+    let anonymous = serde_json::json!({ "cwd": repo, "prompt": retry }).to_string();
+    for _ in 0..2 {
+        let out = hook("prompt", &repo, home.path(), &vault, &anonymous);
+        assert_eq!(stdout(&out), prompt_reply(RETRY_FOR_PROMPT));
+    }
+}
+
+/// Codex's PreToolUse hook JSON for an `apply_patch` of `patch`.
+fn patch_json(cwd: &Path, patch: &str) -> String {
+    serde_json::json!({
+        "session_id": "s-1",
+        "cwd": cwd,
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "tool_input": { "command": patch },
+    })
+    .to_string()
+}
+
+#[test]
+fn pre_edit_reads_the_files_a_codex_patch_names() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[RETRY, PIN, GLOBAL]);
+    let patch = "*** Begin Patch\n\
+                 *** Add File: src/b.rs\n\
+                 +fn b() {}\n\
+                 *** Update File: src/a.rs\n\
+                 @@\n\
+                 -fn retry() {}\n\
+                 +fn retry_once() {}\n\
+                 *** End Patch\n";
+
+    let out = hook(
+        "pre-edit",
+        &repo,
+        home.path(),
+        &vault,
+        &patch_json(&repo, patch),
+    );
+    assert_eq!(code(&out), 0);
+    assert_eq!(
+        stdout(&out),
+        context_reply(
+            "Lore notes anchored to src/a.rs:\n\
+             - [fresh] Retry the migration (01JD0000000000000000000001)\n"
+        )
+    );
+
+    // A move names the file it moves to; a patch with no header names none.
+    let moved =
+        "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/a.rs\n*** End Patch\n";
+    let out = hook(
+        "pre-edit",
+        &repo,
+        home.path(),
+        &vault,
+        &patch_json(&repo, moved),
+    );
+    assert!(stdout(&out).contains("Retry the migration"), "{out:?}");
+    for patch in ["*** Begin Patch\n*** End Patch\n", "", "src/a.rs"] {
+        let out = hook(
+            "pre-edit",
+            &repo,
+            home.path(),
+            &vault,
+            &patch_json(&repo, patch),
+        );
+        assert_eq!((code(&out), stdout(&out)), (0, String::new()), "{patch}");
+    }
+}

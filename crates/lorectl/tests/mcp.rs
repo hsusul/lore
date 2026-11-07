@@ -445,6 +445,7 @@ fn recall_memory_labels_a_fresh_note_and_returns_no_notes_for_no_match() {
                 "freshness": "fresh",
                 "excerpt": "Retry a failed migration once.",
             }],
+            "total": 1,
             "truncated": false,
         })
     );
@@ -456,7 +457,7 @@ fn recall_memory_labels_a_fresh_note_and_returns_no_notes_for_no_match() {
     );
     assert_eq!(
         structured(&reply),
-        &json!({ "vault": "ok", "notes": [], "truncated": false })
+        &json!({ "vault": "ok", "notes": [], "total": 1, "truncated": false })
     );
 }
 
@@ -483,6 +484,7 @@ fn recall_memory_without_words_returns_every_note_in_scope() {
             "freshness": "fresh",
             "excerpt": "Retry a failed migration once.",
         }],
+        "total": 1,
         "truncated": false,
     });
 
@@ -551,7 +553,7 @@ fn recall_memory_without_a_vault_is_missing_and_creates_nothing() {
     );
     assert_eq!(
         structured(&reply),
-        &json!({ "vault": "missing", "notes": [] })
+        &json!({ "vault": "missing", "notes": [], "total": 0 })
     );
     assert!(!vault.exists(), "the server created a vault");
     assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
@@ -605,6 +607,38 @@ scope: global\nstatus: active\ncreated: 2026-11-02\n---\nZanzibar body.\n",
     assert_eq!(content["truncated"], true);
     assert_eq!(content["notes"].as_array().unwrap().len(), 8);
     assert!(content.to_string().chars().count() <= 6_000);
+}
+
+#[test]
+fn recall_memory_returns_ten_by_default_and_counts_every_note_in_scope() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    std::fs::create_dir_all(vault.join("global")).unwrap();
+    for i in 0..12 {
+        let note = format!(
+            "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H{i:02}\ntype: fact\ntitle: Kestrel {i}\n\
+scope: global\nstatus: active\ncreated: 2026-11-02\n---\nKestrel body.\n"
+        );
+        std::fs::write(vault.join(format!("global/k{i}.md")), note).unwrap();
+    }
+    let cwd = home.path().to_str().unwrap();
+    for arguments in [
+        json!({ "cwd": cwd }),
+        json!({ "cwd": cwd, "query": "kestrel" }),
+    ] {
+        let reply = recall(home.path(), &vault, arguments.clone());
+        let content = structured(&reply);
+        assert_eq!(
+            content["notes"].as_array().unwrap().len(),
+            10,
+            "{arguments}"
+        );
+        assert_eq!(content["total"], 12, "{arguments}");
+        assert_eq!(content["truncated"], false, "{arguments}");
+    }
+    let reply = recall(home.path(), &vault, json!({ "cwd": cwd, "limit": 2 }));
+    assert_eq!(structured(&reply)["notes"].as_array().unwrap().len(), 2);
+    assert_eq!(structured(&reply)["total"], 12);
 }
 
 #[test]

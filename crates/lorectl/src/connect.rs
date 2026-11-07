@@ -1,5 +1,6 @@
 //! `lorectl connect`: whether Claude Code and Codex run Lore's MCP server and
-//! session-start hook, and the exact command or config to add each one missing.
+//! its three hooks (session start, prompt, and pre-edit), and the exact
+//! command or config to add each one missing.
 //!
 //! Read only. It never writes an agent's config and never runs `claude` or
 //! `codex`. Locations follow each agent's documentation. Claude Code keeps MCP
@@ -15,8 +16,22 @@ use serde_json::Value;
 
 /// A piece's status, and how to add it when it is not connected.
 type Piece = (String, Option<String>);
-/// Reads one agent's config folder into its two pieces.
-type Pieces<'a> = &'a dyn Fn(&Path) -> [Piece; 2];
+/// Reads one agent's config folder into its pieces, in [`LABELS`] order.
+type Pieces<'a> = &'a dyn Fn(&Path) -> [Piece; 4];
+
+/// Each piece's label in the report, and its name in a fix.
+const LABELS: [(&str, &str); 4] = [
+    ("MCP server", "MCP server"),
+    ("Session hook", "session hook"),
+    ("Prompt hook", "prompt hook"),
+    ("Edit hook", "edit hook"),
+];
+/// Each hook's agent event and `lorectl hook` event, in [`LABELS`] order.
+const HOOKS: [(&str, &str); 3] = [
+    ("SessionStart", "session-start"),
+    ("UserPromptSubmit", "prompt"),
+    ("PreToolUse", "pre-edit"),
+];
 
 /// Print the report for the running binary. Always exit 0.
 pub fn run() -> u8 {
@@ -28,21 +43,42 @@ pub fn run() -> u8 {
 // How to add each piece. `{exe}` and `{hook}` are JSON strings, which are also
 // TOML strings; `{exe_sh}` is quoted for a shell.
 const CLAUDE_MCP: &str = "run:\n  claude mcp add --scope user lore -- {exe_sh} mcp";
-const CLAUDE_HOOK: &str = r#"merge this into {file}:
-  {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": {hook}}]}]}}"#;
+const CLAUDE_HOOKS: [&str; 3] = [
+    r#"merge this into {file}:
+  {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": {hook}}]}]}}"#,
+    r#"merge this into {file}:
+  {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": {hook}, "timeout": 5}]}]}}"#,
+    r#"merge this into {file}:
+  {"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": {hook}, "timeout": 5}]}]}}"#,
+];
 const CODEX_MCP: &str = r#"add this to {file}:
   [mcp_servers.lore]
   command = {exe}
   args = ["mcp"]"#;
-const CODEX_HOOK: &str = r#"add this to {file}:
+const CODEX_HOOKS: [&str; 3] = [
+    r#"add this to {file}:
   [[hooks.SessionStart]]
   [[hooks.SessionStart.hooks]]
   type = "command"
-  command = {hook}"#;
+  command = {hook}"#,
+    r#"add this to {file}:
+  [[hooks.UserPromptSubmit]]
+  [[hooks.UserPromptSubmit.hooks]]
+  type = "command"
+  command = {hook}
+  timeout = 5"#,
+    r#"add this to {file}:
+  [[hooks.PreToolUse]]
+  matcher = "apply_patch"
+  [[hooks.PreToolUse.hooks]]
+  type = "command"
+  command = {hook}
+  timeout = 5"#,
+];
 
 fn report(exe: &str) -> String {
-    let fill = |template: &str, file: &Path| {
-        let hook = format!("{} hook session-start", sh(exe));
+    let fill = |template: &str, file: &Path, event: &str| {
+        let hook = format!("{} hook {event}", sh(exe));
         template
             .replace("{exe_sh}", &sh(exe))
             .replace("{exe}", &json(exe))
@@ -54,22 +90,33 @@ fn report(exe: &str) -> String {
             Some(_) => dir.join(".claude.json"),
             None => dir.with_file_name(".claude.json"),
         };
-        let settings = dir.join("settings.json");
+        let settings = [(dir.join("settings.json"), false)];
+        let hook = |i: usize| {
+            let (event, sub) = HOOKS[i];
+            let fix = fill(CLAUDE_HOOKS[i], &settings[0].0, sub);
+            check(&settings, &|root| hook_entry(root, event, sub), fix)
+        };
+        let mcp_fix = fill(CLAUDE_MCP, &mcp, "");
         [
-            check(&[(mcp.clone(), false)], claude_mcp, fill(CLAUDE_MCP, &mcp)),
-            check(
-                &[(settings.clone(), false)],
-                session_hook,
-                fill(CLAUDE_HOOK, &settings),
-            ),
+            check(&[(mcp, false)], &claude_mcp, mcp_fix),
+            hook(0),
+            hook(1),
+            hook(2),
         ]
     };
     let codex = |dir: &Path| {
         let config = dir.join("config.toml");
         let files = [(config.clone(), true), (dir.join("hooks.json"), false)];
+        let hook = |i: usize| {
+            let (event, sub) = HOOKS[i];
+            let fix = fill(CODEX_HOOKS[i], &config, sub);
+            check(&files, &|root| hook_entry(root, event, sub), fix)
+        };
         [
-            check(&files[..1], codex_mcp, fill(CODEX_MCP, &config)),
-            check(&files, session_hook, fill(CODEX_HOOK, &config)),
+            check(&files[..1], &codex_mcp, fill(CODEX_MCP, &config, "")),
+            hook(0),
+            hook(1),
+            hook(2),
         ]
     };
     let agents: [(&str, &str, &str, Pieces<'_>); 2] = [
@@ -91,11 +138,10 @@ fn report(exe: &str) -> String {
         let pieces = dir.as_deref().filter(|dir| dir.is_dir()).map(pieces);
         found |= pieces.is_some();
         let missing = || ("agent not found".to_string(), None);
-        let pieces = pieces.unwrap_or_else(|| [missing(), missing()]);
-        for (label, (status, fix)) in ["MCP server", "Session hook"].into_iter().zip(pieces) {
+        let pieces = pieces.unwrap_or_else(|| [missing(), missing(), missing(), missing()]);
+        for ((label, noun), (status, fix)) in LABELS.into_iter().zip(pieces) {
             out.push_str(&format!("  {label:<12}  {status}\n"));
             if let Some(fix) = fix {
-                let noun = label.replace("Session", "session");
                 fixes.push_str(&format!("\nTo connect {name}'s {noun}, {fix}\n"));
             }
         }
@@ -109,7 +155,7 @@ fn report(exe: &str) -> String {
 }
 
 /// The first file (JSON, or TOML when flagged) where `find` names an entry.
-fn check(files: &[(PathBuf, bool)], find: fn(&Value) -> Option<String>, fix: String) -> Piece {
+fn check(files: &[(PathBuf, bool)], find: &dyn Fn(&Value) -> Option<String>, fix: String) -> Piece {
     let mut status = "not connected".to_string();
     for (path, is_toml) in files {
         let parsed = match std::fs::read_to_string(path) {
@@ -152,16 +198,17 @@ fn mcp_entry(servers: Option<&Value>, prefix: &str) -> Option<String> {
     Some(format!("{prefix}.{name}"))
 }
 
-/// `hooks.SessionStart[].hooks[].command`, the shape both agents share.
-fn session_hook(root: &Value) -> Option<String> {
-    let groups = root["hooks"]["SessionStart"].as_array()?.iter();
+/// `hooks.<event>[].hooks[].command` running `lorectl hook <sub>`, the shape
+/// both agents share.
+fn hook_entry(root: &Value, event: &str, sub: &str) -> Option<String> {
+    let groups = root["hooks"][event].as_array()?.iter();
     let hooks = groups
         .filter_map(|group| group["hooks"].as_array())
         .flatten();
     let mut commands = hooks.filter_map(|hook| hook["command"].as_str());
     commands
-        .any(|command| runs_lorectl(command, &["hook", "session-start"]))
-        .then(|| "hooks.SessionStart".to_string())
+        .any(|command| runs_lorectl(command, &["hook", sub]))
+        .then(|| format!("hooks.{event}"))
 }
 
 /// Whether the command line runs `lorectl`, by basename or path, quoted or
@@ -290,7 +337,11 @@ mod tests {
                 ]
             }
         });
-        assert_eq!(session_hook(&root), Some("hooks.SessionStart".into()));
+        assert_eq!(
+            hook_entry(&root, "SessionStart", "session-start"),
+            Some("hooks.SessionStart".into())
+        );
+        assert_eq!(hook_entry(&root, "UserPromptSubmit", "prompt"), None);
 
         let unrelated = json!({
             "hooks": {
@@ -303,6 +354,9 @@ mod tests {
                 ]
             }
         });
-        assert_eq!(session_hook(&unrelated), None);
+        assert_eq!(
+            hook_entry(&unrelated, "SessionStart", "session-start"),
+            None
+        );
     }
 }
