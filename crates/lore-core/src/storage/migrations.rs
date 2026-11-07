@@ -289,10 +289,22 @@ fn ledger_shape_matches(conn: &Connection) -> Result<bool> {
 /// migrations (`NeedsUpgrade`) are exactly what this function is for, so only
 /// `TooNew` and `Inconsistent` are refused.
 pub fn run(conn: &Connection) -> Result<()> {
+    run_with(conn, &|dir| {
+        crate::compact::free_bytes(dir).map(|(free, _)| free)
+    })
+}
+
+/// [`run`] with the free-space probe given, so the space rule can be tested
+/// without filling a disk. `free` returns the bytes available on the volume
+/// holding a directory.
+fn run_with(conn: &Connection, free: &dyn Fn(&std::path::Path) -> Result<u64>) -> Result<()> {
     match compatibility(conn)? {
         Compatibility::Ok => return Ok(()),
         Compatibility::NotAnArchive => {}
-        Compatibility::NeedsUpgrade { .. } => back_up_before_one_way(conn)?,
+        Compatibility::NeedsUpgrade { .. } => {
+            back_up_before_one_way(conn)?;
+            ensure_room_to_rebuild(conn, free)?;
+        }
         Compatibility::TooNew { archive, supported } => {
             return Err(StorageError::SchemaTooNew { archive, supported });
         }
@@ -367,13 +379,58 @@ fn back_up_before_one_way(conn: &Connection) -> Result<()> {
         crate::now_ms(),
         crate::backup::RECENT_BACKUP_MS,
     )
-    .map_err(|_| {
-        StorageError::Migration(
-            "could not back up the archive before a migration older builds cannot read \
-             back; nothing was changed. Free disk space and reopen Lore"
-                .into(),
-        )
-    })?;
+    .map_err(|_| low_space())?;
+    Ok(())
+}
+
+/// The refusal when the archive cannot be backed up, or has no room to be
+/// rebuilt, before a one-way migration. Nothing has been changed.
+fn low_space() -> StorageError {
+    StorageError::Migration(
+        "could not back up the archive before a migration older builds cannot read \
+         back; nothing was changed. Free disk space and reopen Lore"
+            .into(),
+    )
+}
+
+/// Refuse a pending [`ONE_WAY_LATEST`] unless the archive's volume has room
+/// for it: about twice the database. Migration 0021 rebuilds the three body
+/// tables in one transaction, so the new copies and their WAL frames exist
+/// beside the old pages until it commits, the way `VACUUM` needs its
+/// copy (`crate::compact::vacuum_once`). Refused before any migration runs, so
+/// the archive stays at its old schema and an older build still opens it.
+/// An archive without parts and an in-memory one are not checked.
+fn ensure_room_to_rebuild(
+    conn: &Connection,
+    free: &dyn Fn(&std::path::Path) -> Result<u64>,
+) -> Result<()> {
+    let one_way_applied: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version >= ?1)",
+        [ONE_WAY_LATEST],
+        |r| r.get(0),
+    )?;
+    let has_parts: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message_part')",
+        [],
+        |r| r.get(0),
+    )?;
+    let Some(path) = conn.path().filter(|p| !p.is_empty()) else {
+        return Ok(());
+    };
+    if one_way_applied || !has_parts {
+        return Ok(());
+    }
+    let path = std::path::Path::new(path);
+    let dir = path.parent().unwrap_or(path);
+    let size: i64 = conn.query_row(
+        "SELECT page_count * page_size FROM pragma_page_count, pragma_page_size",
+        [],
+        |r| r.get(0),
+    )?;
+    let needed = u64::try_from(size).unwrap_or(u64::MAX).saturating_mul(2);
+    if free(dir).map_err(|_| low_space())? < needed {
+        return Err(low_space());
+    }
     Ok(())
 }
 
@@ -643,6 +700,47 @@ mod tests {
             },
             "still readable by the build that wrote it"
         );
+    }
+
+    #[test]
+    fn the_body_rebuild_waits_for_twice_the_archive_in_free_space() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = archive_at_18(dir.path(), true);
+        let open = || {
+            let conn = Connection::open(&path).unwrap();
+            crate::storage::configure(&conn).unwrap();
+            conn
+        };
+        {
+            let conn = open();
+            for m in MIGRATIONS.iter().filter(|m| m.version < ONE_WAY_LATEST) {
+                apply(&conn, m).unwrap();
+            }
+        }
+        let size = std::fs::metadata(&path).unwrap().len();
+        let seen = std::cell::Cell::new(None);
+        let short = |d: &std::path::Path| {
+            seen.set(Some(d.to_path_buf()));
+            Ok(2 * size - 1)
+        };
+        let err = run_with(&open(), &short).unwrap_err();
+        assert!(err.to_string().contains("Free disk space"), "{err}");
+        assert_eq!(seen.take().as_deref(), Some(dir.path()));
+        assert_eq!(backups(dir.path()), 1, "backed up first");
+        assert_eq!(
+            compatibility(&open()).unwrap(),
+            Compatibility::NeedsUpgrade {
+                archive: ONE_WAY_LATEST - 1,
+                supported: COUNT
+            },
+            "left at the old schema"
+        );
+
+        // A probe that fails refuses too.
+        assert!(run_with(&open(), &|_| Err(StorageError::Io)).is_err());
+
+        run_with(&open(), &|_| Ok(2 * size)).unwrap();
+        assert_eq!(compatibility(&open()).unwrap(), Compatibility::Ok);
     }
 
     #[test]

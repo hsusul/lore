@@ -1051,7 +1051,7 @@ fn vacuum_space(db_path: &std::path::Path) -> Result<VacuumSpace> {
 
 /// Bytes available to this user on the volume holding `dir`, and that
 /// volume's device id.
-fn free_bytes(dir: &std::path::Path) -> Result<(u64, rustix::fs::Dev)> {
+pub(crate) fn free_bytes(dir: &std::path::Path) -> Result<(u64, rustix::fs::Dev)> {
     let stat = rustix::fs::statvfs(dir).map_err(|_| StorageError::Io)?;
     let dev = rustix::fs::stat(dir).map_err(|_| StorageError::Io)?.st_dev;
     Ok((stat.f_bavail.saturating_mul(stat.f_frsize), dev))
