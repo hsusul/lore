@@ -90,7 +90,7 @@ fn report(exe: &str) -> String {
             .replace("{file}", &file.to_string_lossy())
     };
     let claude = |dir: &Path| {
-        let mcp = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        let mcp = match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
             Some(_) => dir.join(".claude.json"),
             None => dir.with_file_name(".claude.json"),
         };
@@ -140,8 +140,13 @@ fn report(exe: &str) -> String {
     for (name, var, home_sub, pieces) in agents {
         // `$VAR`, else `$HOME/<home_sub>`, the way the scanner resolves it.
         let dir = std::env::var_os(var)
+            .filter(|v| !v.is_empty())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(home_sub)));
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|v| !v.is_empty())
+                    .map(|home| PathBuf::from(home).join(home_sub))
+            });
         out.push_str(name);
         if let Some(dir) = &dir {
             out.push_str(&format!("  {}", dir.display()));
