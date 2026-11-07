@@ -153,6 +153,18 @@ pub fn accept_edited(
     if let Some(accepted) = decided(vault)? {
         return Ok(accepted);
     }
+    // A commit already accepted it and only the decision line was lost. The
+    // note may since be retired, updated, or deleted, so check before looking
+    // for the target.
+    if accepted_commit(vault, &proposal.id)?.is_some() {
+        let _lock = vault.lock()?;
+        if let Some(accepted) = decided(vault)? {
+            return Ok(accepted);
+        }
+        if let Some(accepted) = recover_locked(vault, &proposal.id, updates)? {
+            return Ok(accepted);
+        }
+    }
     let target = match &proposal.relation {
         Some(Relation::Updates(target)) => Some(vault.find(target.as_str())?),
         _ => None,
@@ -161,12 +173,14 @@ pub fn accept_edited(
     if let Some(accepted) = decided(vault)? {
         return Ok(accepted);
     }
+    // Again under the lock: another accept may have committed it since the
+    // check above and been stopped before it recorded the decision.
+    if let Some(accepted) = recover_locked(vault, &proposal.id, updates)? {
+        return Ok(accepted);
+    }
     let today = NoteDate::today();
     let (accepted, note) = match target {
-        Some(rel) => {
-            let (accepted, note) = update_locked(vault, &proposal, rel, today)?;
-            (accepted, Some(note))
-        }
+        Some(rel) => update_locked(vault, &proposal, rel, today)?,
         None => create_locked(vault, &proposal, as_slug, today)?,
     };
     record(
@@ -177,10 +191,39 @@ pub fn accept_edited(
             id: accepted.id.clone(),
         },
     )?;
-    if let Some(note) = note {
-        upsert_index(vault, &accepted.rel, &note)?;
-    }
+    upsert_index(vault, &accepted.rel, &note)?;
     Ok(accepted)
+}
+
+/// Record the decision for proposal `id` when a commit already accepted it,
+/// and return that note. `None` when no commit did. Call with the lock held.
+fn recover_locked(
+    vault: &Vault,
+    id: &NoteId,
+    updated: bool,
+) -> Result<Option<Accepted>, ReviewError> {
+    let Some((rel, note_id)) = accepted_commit(vault, id)? else {
+        return Ok(None);
+    };
+    let current = read_optional(vault, &rel)?.and_then(|text| Note::parse(&text).ok());
+    let accepted = Accepted {
+        rel,
+        id: note_id,
+        updated,
+        outcome: Added::Unchanged,
+    };
+    record(
+        vault,
+        id,
+        &Decision::Accepted {
+            note: accepted.rel.clone(),
+            id: accepted.id.clone(),
+        },
+    )?;
+    if let Some(note) = &current {
+        upsert_index(vault, &accepted.rel, note)?;
+    }
+    Ok(Some(accepted))
 }
 
 /// Reject proposal `id`. Writes only the decision log, never the vault's
@@ -261,19 +304,7 @@ fn create_locked(
     proposal: &Proposal,
     as_slug: Option<&str>,
     today: NoteDate,
-) -> Result<(Accepted, Option<Note>), ReviewError> {
-    // A commit already accepted it and only the decision line was lost. The
-    // note may since be retired or written under another `--as` name.
-    if let Some((rel, id)) = accepted_commit(vault, &proposal.id)? {
-        let current = read_optional(vault, &rel)?.and_then(|text| Note::parse(&text).ok());
-        let accepted = Accepted {
-            rel,
-            id,
-            updated: false,
-            outcome: Added::Unchanged,
-        };
-        return Ok((accepted, current));
-    }
+) -> Result<(Accepted, Note), ReviewError> {
     let mut note = proposal.note(NoteId::generate(), today);
     let rel = match as_slug {
         Some(slug) => format!("{}/{slug}.md", note.scope.dir()),
@@ -313,7 +344,7 @@ fn create_locked(
         updated: false,
         outcome,
     };
-    Ok((accepted, Some(note)))
+    Ok((accepted, note))
 }
 
 /// The target with the proposal's statement in place of its own, the
@@ -371,15 +402,6 @@ fn update_locked(
     let note = if vault.is_committed(&rel)? {
         let current = Note::parse(&text).map_err(VaultError::from)?;
         same_scope(&current)?;
-        if history_names(vault, &rel, &proposal.id)? {
-            let accepted = Accepted {
-                rel,
-                id: current.id.clone(),
-                updated: true,
-                outcome: Added::Unchanged,
-            };
-            return Ok((accepted, current));
-        }
         let note = apply_update(current, proposal, today);
         write_atomically(&vault.root().join(&rel), &note.render())?;
         note
@@ -429,15 +451,6 @@ fn commit(vault: &Vault, rel: &str, message: &str) -> Result<(), VaultError> {
     vault.git(&["add", "--", rel])?;
     vault.git(&["commit", "-q", "-m", message, "--", rel])?;
     Ok(())
-}
-
-/// Whether any commit that touched `rel` came from proposal `id`. Not only the
-/// newest: a retire or a later update may have landed after it.
-fn history_names(vault: &Vault, rel: &str, id: &NoteId) -> Result<bool, VaultError> {
-    let trailer = format!("Lore-Proposal: {}", id.as_str());
-    let grep = format!("--grep={trailer}");
-    let bodies = vault.git(&["log", "-F", &grep, "--format=%B", "--", rel])?;
-    Ok(bodies.lines().any(|line| line == trailer))
 }
 
 /// Each commit whose message carries a `Lore-Proposal:` trailer, oldest first:

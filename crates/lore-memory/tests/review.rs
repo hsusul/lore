@@ -528,6 +528,76 @@ fn an_update_is_not_applied_again_after_a_lost_decision_and_a_retire() {
 }
 
 #[test]
+fn an_update_converges_when_its_decision_line_is_lost_and_target_deleted() {
+    let (dir, vault) = new_vault();
+    let (target, _) = vault.add(TARGET).unwrap();
+    inbox::propose(&vault, update_of(&target)).unwrap();
+    let first = review::accept(&vault, P2, None).unwrap();
+    lose_decisions(dir.path());
+    fs::remove_file(dir.path().join(&first.rel)).unwrap();
+    let again = review::accept(&vault, P2, None).unwrap();
+    assert_eq!((again.outcome, again.updated), (Added::Unchanged, true));
+    assert_eq!(again.rel, first.rel);
+    assert_eq!(again.id, first.id);
+    assert_eq!(decision_lines(dir.path(), P2), 1);
+}
+
+#[test]
+fn an_update_committed_by_a_stopped_accept_is_not_applied_again() {
+    let (dir, vault) = new_vault();
+    let (target, _) = vault.add(TARGET).unwrap();
+    let rel = target.rel_path();
+    inbox::propose(&vault, update_of(&target)).unwrap();
+    let lock = vault.lock().unwrap();
+    std::thread::scope(|s| {
+        // Finds no commit yet, then waits for the lock.
+        let root = dir.path();
+        let second = s.spawn(move || {
+            let vault = Vault::open(root).unwrap();
+            review::accept(&vault, P2, None).unwrap()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        // The first accept commits its update and is stopped before it
+        // records the decision.
+        let updated = format!(
+            "{}\n## Timeline\n- {} updated by codex\n",
+            vault.read(&rel).unwrap().replace(BODY, "Fetch once.\n"),
+            today()
+        );
+        fs::write(dir.path().join(&rel), &updated).unwrap();
+        let message = format!("mem: update worktrees-share-refs\n\nLore-Proposal: {P2}");
+        // The test isolates git config, so the commit names its own author.
+        git(
+            dir.path(),
+            &[
+                "-c",
+                "user.name=Lore test",
+                "-c",
+                "user.email=test@lore.invalid",
+                "commit",
+                "-q",
+                "-am",
+                &message,
+            ],
+        );
+        drop(lock);
+        let again = second.join().unwrap();
+        assert_eq!((again.outcome, again.updated), (Added::Unchanged, true));
+        assert_eq!(again.rel, rel);
+        assert_eq!(vault.read(&rel).unwrap(), updated);
+    });
+    assert_eq!(
+        subjects(dir.path()),
+        [
+            "mem: update worktrees-share-refs",
+            "mem: add worktrees-share-refs",
+            "mem: init vault"
+        ]
+    );
+    assert_eq!(decision_lines(dir.path(), P2), 1);
+}
+
+#[test]
 fn a_decision_after_a_torn_line_is_still_read() {
     let (dir, vault) = new_vault();
     inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
