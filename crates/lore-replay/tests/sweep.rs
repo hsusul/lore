@@ -25,6 +25,10 @@ if [ -n "$LIMIT_STDERR" ]; then
   echo "You've hit your weekly limit · resets 5pm" >&2
   exit 1
 fi
+if [ -n "$LIMIT_ZERO_TURNS" ]; then
+  echo '{"type":"result","is_error":true,"num_turns":0,"total_cost_usd":0}'
+  exit 1
+fi
 if [ -n "$LIMIT_AFTER" ] && [ "$n" -gt "$LIMIT_AFTER" ]; then
   echo '{"type":"result","is_error":true,"num_turns":0,"total_cost_usd":0,"result":"You'"'"'ve hit your 5-hour limit"}'
   exit 1
@@ -149,6 +153,7 @@ fn sweep(f: &Fixture, cases: &[&str], extra: &[&str], env: &[(&str, &str)]) -> O
         .env_remove("PREFIXES")
         .env_remove("LIMIT_AFTER")
         .env_remove("LIMIT_STDERR")
+        .env_remove("LIMIT_ZERO_TURNS")
         .env_remove("CAPPED");
     for (k, v) in env {
         cmd.env(k, v);
@@ -181,6 +186,7 @@ fn run_one(f: &Fixture, case: &str, env: &[(&str, &str)]) -> Output {
         .env_remove("PREFIXES")
         .env_remove("LIMIT_AFTER")
         .env_remove("LIMIT_STDERR")
+        .env_remove("LIMIT_ZERO_TURNS")
         .env_remove("CAPPED");
     for (k, v) in env {
         cmd.env(k, v);
@@ -396,6 +402,24 @@ fn a_claude_usage_limit_on_stderr_is_its_own_run_result() {
     )
     .unwrap();
     assert!(record.get("limited").is_none(), "{record}");
+}
+
+#[test]
+fn a_claude_usage_limit_with_zero_turns_is_its_own_run_result() {
+    let f = fixture(&["c:1"], &arms_for("c:1"));
+    let out = run_one(&f, "c:1", &[("LIMIT_ZERO_TURNS", "1")]);
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert_eq!(
+        stderr(&out).trim_end(),
+        "lore-replay: run stopped: c:1 none-1 hit the usage limit \
+         (an error with no turns and no cost). \
+         Rerun after the limit resets; run.json is marked limited"
+    );
+    let record: Value = serde_json::from_str(
+        &std::fs::read_to_string(f.out().join("c_1/none-1/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["limited"], true);
 }
 
 #[test]

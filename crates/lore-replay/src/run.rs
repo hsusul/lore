@@ -167,7 +167,7 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
             .unwrap_or_default(),
         events: ran.events,
     };
-    record.limited = limit_message(&record).is_some();
+    record.limited = usage_limited(&record);
     let path = dir.join("run.json");
     let json = serde_json::to_string(&record).map_err(|source| Error::Json {
         path: path.clone(),

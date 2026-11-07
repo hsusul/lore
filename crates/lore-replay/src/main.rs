@@ -271,7 +271,13 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let record = lore_replay::run::run(&case, &arm, &opts)?;
     println!("{}", lore_replay::run::progress(&record));
     if record.limited {
-        let text = lore_replay::run::limit_message(&record).unwrap_or_default();
+        let text = lore_replay::run::limit_message(&record).unwrap_or_else(|| {
+            let text = lore_replay::run::result_event(&record.events)
+                .and_then(|r| r.get("result"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("an error with no turns and no cost");
+            lore_replay::claude::head(text, 200)
+        });
         return Err(Failure::Stopped(
             format!(
                 "run stopped: {} {}-{} hit the usage limit ({text}). Rerun after the limit resets; run.json is marked limited",
