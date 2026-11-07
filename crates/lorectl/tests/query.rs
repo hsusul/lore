@@ -500,3 +500,24 @@ fn search_with_worktree_filter_resolves_worktree_path_and_name() {
         assert_eq!(hits, vec![sid.clone()], "{filter}");
     }
 }
+
+#[test]
+fn patch_flag_on_commands_other_than_inspect_fails_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let homes = tempfile::tempdir().unwrap();
+    let out = lorectl(dir.path(), homes.path(), &["scan", "--patch"]);
+    assert_eq!(code(&out), 1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--patch works only with `lorectl inspect`"),
+        "{stderr}"
+    );
+
+    let out = lorectl(dir.path(), homes.path(), &["search", "foo", "--patch"]);
+    assert_eq!(code(&out), 1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--patch works only with `lorectl inspect`"),
+        "{stderr}"
+    );
+}
