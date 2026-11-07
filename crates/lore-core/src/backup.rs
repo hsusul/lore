@@ -33,7 +33,11 @@ const BACKUP_PREFIX: &str = "lore-";
 /// Extension of Lore-owned backup files.
 const BACKUP_EXT: &str = "db";
 /// Upper bound on pages copied per backup step and the pause between steps.
-const PAGES_PER_STEP: i32 = 100;
+/// 4 MiB per step at the default page size: the pause still lets a concurrent
+/// writer in between steps, and a 4 GB archive spends about 10 s paused
+/// rather than the 100 s 100-page steps took. That matters now that the
+/// archive is backed up while the app opens it (`storage::migrations`).
+const PAGES_PER_STEP: i32 = 1024;
 const PAUSE_BETWEEN_STEPS: Duration = Duration::from_millis(10);
 
 /// Default number of Lore-owned backups to keep on disk. Bounded and
