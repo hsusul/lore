@@ -32,8 +32,13 @@ fn lorectl_in(cwd: &Path, archive: &Path, homes: &Path, args: &[&str]) -> Output
 /// `lorectl hook session-start` as an agent runs it, with the hook JSON on
 /// stdin, `HOME` in `home`, and the vault at `vault`.
 fn session_start(cwd: &Path, home: &Path, vault: &Path, stdin: &str) -> Output {
+    hook("session-start", cwd, home, vault, stdin)
+}
+
+/// `lorectl hook <event>` as an agent runs it; see [`session_start`].
+fn hook(event: &str, cwd: &Path, home: &Path, vault: &Path, stdin: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
-        .args(["hook", "session-start", "--archive"])
+        .args(["hook", event, "--archive"])
         .arg(home.join("archive"))
         .current_dir(cwd)
         .env("HOME", home)
@@ -551,4 +556,99 @@ fn session_start_says_nothing_of_a_session_the_archive_lacks() {
         "Lore memory for this repo:\n\
          - [unanchored] Migrations are global (01JD0000000000000000000003)\n"
     );
+}
+
+/// Claude Code's PreToolUse hook JSON for an edit of `file_path`.
+fn edit_json(cwd: &Path, file_path: &str) -> String {
+    serde_json::json!({
+        "session_id": "s-1",
+        "cwd": cwd,
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Edit",
+        "tool_input": { "file_path": file_path, "old_string": "a", "new_string": "b" },
+    })
+    .to_string()
+}
+
+/// The `additionalContext` reply that carries `text` to the agent.
+fn context_reply(text: &str) -> String {
+    let reply = serde_json::json!({
+        "hookSpecificOutput": { "hookEventName": "PreToolUse", "additionalContext": text }
+    });
+    format!("{reply}\n")
+}
+
+#[test]
+fn pre_edit_shows_the_notes_anchored_to_the_file_as_context() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[RETRY, PIN, GLOBAL]);
+    let file = repo.join("src/a.rs");
+    let expected = context_reply(
+        "Lore notes anchored to src/a.rs:\n\
+         - [fresh] Retry the migration (01JD0000000000000000000001)\n",
+    );
+
+    let out = hook(
+        "pre-edit",
+        &repo,
+        home.path(),
+        &vault,
+        &edit_json(&repo, file.to_str().unwrap()),
+    );
+    assert_eq!(code(&out), 0);
+    assert_eq!(stdout(&out), expected);
+
+    // A path relative to the session's directory names the same file.
+    let src = repo.join("src");
+    let out = hook(
+        "pre-edit",
+        &repo,
+        home.path(),
+        &vault,
+        &edit_json(&src, "a.rs"),
+    );
+    assert_eq!(stdout(&out), expected);
+}
+
+#[test]
+fn pre_edit_labels_a_note_whose_anchored_lines_changed() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[RETRY]);
+    std::fs::write(repo.join("src/a.rs"), "fn retry_twice() {}\n").unwrap();
+    let file = repo.join("src/a.rs");
+
+    let out = hook(
+        "pre-edit",
+        &repo,
+        home.path(),
+        &vault,
+        &edit_json(&repo, file.to_str().unwrap()),
+    );
+    assert_eq!(
+        stdout(&out),
+        context_reply(
+            "Lore notes anchored to src/a.rs:\n\
+             - [changed] Retry the migration (01JD0000000000000000000001)\n"
+        )
+    );
+}
+
+#[test]
+fn pre_edit_is_silent_unless_a_note_is_anchored_to_the_file() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[RETRY, PIN, GLOBAL]);
+    let elsewhere = tempfile::tempdir().unwrap();
+    let outside = elsewhere.path().join("a.rs");
+    for stdin in [
+        edit_json(&repo, repo.join("src/b.rs").to_str().unwrap()),
+        edit_json(&repo, outside.to_str().unwrap()),
+        serde_json::json!({ "cwd": repo, "tool_name": "Bash", "tool_input": { "command": "ls" } })
+            .to_string(),
+        String::new(),
+        "not json".to_owned(),
+    ] {
+        let out = hook("pre-edit", &repo, home.path(), &vault, &stdin);
+        assert_eq!(code(&out), 0, "{stdin}");
+        assert_eq!(stdout(&out), "", "{stdin}");
+    }
 }
