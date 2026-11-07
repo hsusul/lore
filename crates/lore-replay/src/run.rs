@@ -142,7 +142,7 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
         Agent::Codex => launch_codex(setup)?,
     };
 
-    let record = RunRecord {
+    let mut record = RunRecord {
         harness: HARNESS,
         delivery: Some(DELIVERY.to_owned()),
         case: case.id.clone(),
@@ -160,12 +160,14 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
         cost_usd: ran.cost_usd,
         is_error: ran.is_error,
         capped: ran.capped,
+        limited: false,
         stderr: tail(&ran.stderr, STDERR_TAIL),
         outward: std::fs::read_to_string(&tools.outward_log)
             .map(|log| log.lines().map(str::to_owned).collect())
             .unwrap_or_default(),
         events: ran.events,
     };
+    record.limited = limit_message(&record).is_some();
     let path = dir.join("run.json");
     let json = serde_json::to_string(&record).map_err(|source| Error::Json {
         path: path.clone(),
@@ -498,11 +500,11 @@ pub fn result_event(events: &[Value]) -> Option<&Value> {
 /// kept going would burn through every remaining run the same way.
 #[must_use]
 pub fn usage_limited(record: &RunRecord) -> bool {
+    if record.limited || limit_message(record).is_some() {
+        return true;
+    }
     if record.agent == Agent::Codex {
-        return codex::error_messages(&record.events).any(|m| {
-            let m = m.to_lowercase();
-            m.contains("usage limit") || (m.contains("hit your") && m.contains("limit"))
-        });
+        return false;
     }
     let result = result_event(&record.events);
     let text = result
@@ -517,6 +519,35 @@ pub fn usage_limited(record: &RunRecord) -> bool {
         .and_then(|r| r.get("num_turns"))
         .and_then(Value::as_u64);
     record.is_error == Some(true) && (turns == Some(0) || record.cost_usd == Some(0.0))
+}
+
+/// The agent's own words saying the usage limit was hit, when it said so:
+/// Claude Code's "You've hit your ... limit" in its result, Codex's "usage
+/// limit" or "try again at" in an error event, or either on stderr. Only
+/// error text is read, never what the agent wrote as its answer.
+#[must_use]
+pub fn limit_message(record: &RunRecord) -> Option<String> {
+    let says_limit = |text: &str| {
+        let t = text.to_lowercase();
+        (t.contains("hit your") && t.contains("limit"))
+            || t.contains("usage limit")
+            || t.contains("try again at")
+    };
+    let errors: Vec<&str> = match record.agent {
+        Agent::ClaudeCode => result_event(&record.events)
+            .filter(|r| r.get("is_error").and_then(Value::as_bool) != Some(false))
+            .and_then(|r| r.get("result"))
+            .and_then(Value::as_str)
+            .into_iter()
+            .collect(),
+        Agent::Codex => codex::error_messages(&record.events).collect(),
+    };
+    errors
+        .into_iter()
+        .chain(record.stderr.lines())
+        .map(str::trim)
+        .find(|text| says_limit(text))
+        .map(|text| crate::claude::head(text, 200))
 }
 
 /// The one-line progress record `run` and `sweep` print for each run.

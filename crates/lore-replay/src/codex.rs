@@ -189,6 +189,22 @@ pub fn branch(entries: &[Value]) -> Option<String> {
         })
 }
 
+/// Whether `session_meta` says the rollout is a sub-agent's, one a parent
+/// thread spawned (`source: {"subagent": ...}`, `thread_source: "subagent"`).
+/// Codex refuses to resume a multi-agent v2 sub-agent on its own ("resume the
+/// parent first"), so such a rollout cannot be replayed.
+#[must_use]
+pub fn is_subagent(entries: &[Value]) -> bool {
+    entries
+        .iter()
+        .filter(|e| kind(e) == Some("session_meta"))
+        .filter_map(payload)
+        .any(|p| {
+            p.pointer("/source/subagent").is_some()
+                || p.get("thread_source").and_then(Value::as_str) == Some("subagent")
+        })
+}
+
 /// Every rollout under `home`'s `sessions` and `archived_sessions`, by the
 /// session id at the end of its name.
 #[must_use]

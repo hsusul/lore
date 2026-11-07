@@ -436,14 +436,16 @@ impl Shared<'_> {
             tally.cost_usd += record.cost_usd.unwrap_or(0.0);
         }
         if run::usage_limited(&record) {
-            let text = run::result_event(&record.events)
-                .and_then(|r| r.get("result"))
-                .and_then(Value::as_str)
-                .or_else(|| crate::codex::error_messages(&record.events).last())
-                .unwrap_or("an error with no turns and no cost");
+            let text = run::limit_message(&record).unwrap_or_else(|| {
+                let text = run::result_event(&record.events)
+                    .and_then(|r| r.get("result"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("an error with no turns and no cost");
+                crate::claude::head(text, 200)
+            });
             self.halt_with(Halt::Stop(Stop::UsageLimit {
                 run: format!("{} {}-{}", record.case, record.arm, record.trial),
-                text: crate::claude::head(text, 200),
+                text,
             }));
             return Ok(None);
         }

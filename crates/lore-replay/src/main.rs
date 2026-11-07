@@ -45,7 +45,8 @@ USAGE:
       model Codex used as resolved_model). A Codex run gets its own CODEX_HOME
       in the run directory (sharing only auth.json), a permission profile with
       no network and no reads of /Users or /Volumes, and is stopped after
-      --max-turns tool calls, as Codex has no turn cap.
+      --max-turns tool calls, as Codex has no turn cap. When the agent says
+      the usage limit was hit, run.json has \"limited\": true and run exits 3.
       This starts the agent, which sends the session to the model provider.
       Set LORE_REPLAY_CLAUDE or LORE_REPLAY_CODEX to use a claude or codex
       other than the one on PATH.
@@ -269,6 +270,16 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     };
     let record = lore_replay::run::run(&case, &arm, &opts)?;
     println!("{}", lore_replay::run::progress(&record));
+    if record.limited {
+        let text = lore_replay::run::limit_message(&record).unwrap_or_default();
+        return Err(Failure::Stopped(
+            format!(
+                "run stopped: {} {}-{} hit the usage limit ({text}). Rerun after the limit resets; run.json is marked limited",
+                record.case, record.arm, record.trial
+            ),
+            3,
+        ));
+    }
     Ok(())
 }
 
