@@ -463,7 +463,17 @@ const RELATED_WORDS: usize = 12;
 pub fn related_words(text: &str) -> Vec<String> {
     let text = text.trim_start();
     let text = match text.strip_prefix('/') {
-        Some(rest) => rest.trim_start_matches(|c: char| !c.is_whitespace()),
+        Some(rest) => {
+            let (cmd, after) = match rest.find(char::is_whitespace) {
+                Some(i) => (&rest[..i], &rest[i..]),
+                None => (rest, ""),
+            };
+            if !cmd.is_empty() && !cmd.contains('/') {
+                after
+            } else {
+                text
+            }
+        }
         None => text,
     };
     let mut words: Vec<String> = Vec::new();
@@ -524,6 +534,11 @@ mod tests {
         assert!(related_words("ok, continue!").is_empty());
         assert!(related_words("/compact").is_empty());
         assert_eq!(related_words("/review the migration"), ["migration"]);
+        assert_eq!(
+            related_words("/src/lib.rs needs a fix"),
+            ["src", "lib", "rs", "needs", "fix"]
+        );
+        assert_eq!(related_words("/src/lib.rs"), ["src", "lib", "rs"]);
         assert_eq!(fts_related("retry").unwrap(), "\"retry\"");
         assert_eq!(
             fts_related("retry flaky test").unwrap(),
