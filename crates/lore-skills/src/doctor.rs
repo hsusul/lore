@@ -171,10 +171,25 @@ fn broken_refs(
         }
     }
     for missing in &record.refs {
-        let found_at = by_name
-            .get(missing.as_str())
-            .and_then(|rs| rs.first())
-            .map(|r| first_path(r))
+        // Prefer a user-owned copy so the fix command links it rather than
+        // warning against linking a managed copy.
+        let records = by_name.get(missing.as_str());
+        let unmanaged = records
+            .into_iter()
+            .flatten()
+            .flat_map(|r| &r.installs)
+            .filter(|i| !managed(i, &inventory.roots))
+            .min_by_key(|i| locations::order(i.location))
+            .map(|i| i.path.clone())
+            .or_else(|| {
+                inventory
+                    .elsewhere
+                    .get(missing)
+                    .filter(|p| inventory.roots.manager(p).is_none())
+                    .cloned()
+            });
+        let found_at = unmanaged
+            .or_else(|| records.and_then(|rs| rs.first()).map(|r| first_path(r)))
             .or_else(|| inventory.elsewhere.get(missing).cloned());
         let Some(found_at) = found_at else { continue };
         for (agent, path) in &agents {
