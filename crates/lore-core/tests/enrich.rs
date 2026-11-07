@@ -478,25 +478,75 @@ fn user_can_relink_segment_to_different_repository() {
     let repo_b_id = repo_of(&conn, &sid_b);
     assert_ne!(repo_a_id, repo_b_id);
 
-    let segment_a_id: String = conn
+    let (segment_a_id, wt_a_id): (String, String) = conn
         .query_row(
-            "SELECT id FROM session_segment WHERE session_id = ?1",
+            "SELECT id, worktree_id FROM session_segment WHERE session_id = ?1",
             [&sid_a],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
 
     // Relink segment from repo_a to repo_b
     lore_core::enrich::relink_segment_repository(&conn, &segment_a_id, &repo_b_id).unwrap();
 
-    let new_repo_id: String = conn
+    let (new_repo_id, new_wt_id): (String, Option<String>) = conn
         .query_row(
-            "SELECT repository_id FROM session_segment WHERE id = ?1",
+            "SELECT repository_id, worktree_id FROM session_segment WHERE id = ?1",
+            [&segment_a_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(new_repo_id, repo_b_id);
+    assert_ne!(
+        new_wt_id.as_deref(),
+        Some(wt_a_id.as_str()),
+        "worktree_id must not point to repo_a's worktree"
+    );
+    assert_eq!(new_wt_id, None);
+
+    // Deleting repo_a must succeed because no segments reference its worktrees
+    conn.execute("DELETE FROM repository WHERE id = ?1", [&repo_a_id])
+        .unwrap();
+
+    // A segment whose cwd matches repo_b resolves to repo_b's worktree
+    let (wt_b_id, wt_b_path): (String, String) = conn
+        .query_row(
+            "SELECT id, path FROM worktree WHERE repository_id = ?1",
+            [&repo_b_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    conn.execute(
+        "UPDATE session_segment SET cwd = ?1 WHERE id = ?2",
+        rusqlite::params![wt_b_path, segment_a_id],
+    )
+    .unwrap();
+    lore_core::enrich::relink_segment_repository(&conn, &segment_a_id, &repo_b_id).unwrap();
+    let updated_wt_id: Option<String> = conn
+        .query_row(
+            "SELECT worktree_id FROM session_segment WHERE id = ?1",
             [&segment_a_id],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(new_repo_id, repo_b_id);
+    assert_eq!(updated_wt_id, Some(wt_b_id.clone()));
+
+    // A segment whose cwd is a subdirectory of repo_b's worktree also matches
+    let subpath = format!("{}/src/foo", wt_b_path);
+    conn.execute(
+        "UPDATE session_segment SET cwd = ?1 WHERE id = ?2",
+        rusqlite::params![subpath, segment_a_id],
+    )
+    .unwrap();
+    lore_core::enrich::relink_segment_repository(&conn, &segment_a_id, &repo_b_id).unwrap();
+    let sub_wt_id: Option<String> = conn
+        .query_row(
+            "SELECT worktree_id FROM session_segment WHERE id = ?1",
+            [&segment_a_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(sub_wt_id, Some(wt_b_id));
 }
 
 #[test]
