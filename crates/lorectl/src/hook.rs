@@ -36,6 +36,13 @@
 //! then records the proposal's source as verified. A session started since
 //! the last scan is not in the archive yet, so it gets no line.
 //!
+//! `pre-edit` runs before a tool changes a file. It reads `tool_input.file_path`
+//! (or `notebook_path`) from the hook JSON and prints the accepted notes
+//! anchored to that file, each with its freshness label, as the PreToolUse
+//! `additionalContext` reply Claude Code and Codex pass to the model. It
+//! never answers with a permission decision, so it cannot allow or block the
+//! edit. No note on that file prints nothing.
+//!
 //! It does **not** scan. A scan is unbounded — it can walk hundreds of megabytes
 //! — and taking that time at session start would make Lore the reason a session
 //! is slow to begin. Keeping the archive current is the desktop app's job, or an
@@ -49,7 +56,10 @@ use lore_core::enrich::{resolve_repository, RepoResolution};
 use lore_core::landing;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::{query, storage};
-use lore_memory::session_start;
+use lore_memory::note::RelPath;
+use lore_memory::recall::{self, Recalled};
+use lore_memory::repo::RepoContext;
+use lore_memory::session_start::{self, title};
 use lore_memory::vault::{self, Vault};
 
 use crate::cli::Invocation;
@@ -60,7 +70,11 @@ use crate::exit::{self, CliError};
 /// An unknown event is not an error: agents add hook points over time, and a
 /// Lore that refused an unfamiliar one would break sessions on upgrade.
 const SESSION_START: &str = "session-start";
+const PRE_EDIT: &str = "pre-edit";
 
+/// At most this many notes before an edit, in at most this many bytes.
+const EDIT_NOTE_CAP: usize = 5;
+const EDIT_CHAR_CAP: usize = 1_000;
 /// Hook JSON past this many bytes is not read.
 const STDIN_CAP: u64 = 1 << 20;
 /// The history walk behind the at-risk line gives up past this. Half the 10 s
@@ -82,6 +96,13 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         if let Some(id) = input.session_id.and_then(|id| archived(invocation, &id)) {
             let _ = writeln!(stdout, "Lore session: {id}");
         }
+    } else if event == PRE_EDIT {
+        if let Some(text) = anchored_notes(&hook_input()) {
+            // Plain stdout before a tool call reaches no model; this field does.
+            let reply = serde_json::json!({ "hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "additionalContext": text } });
+            let _ = writeln!(std::io::stdout().lock(), "{reply}");
+        }
     }
     Ok(exit::OK)
 }
@@ -92,6 +113,8 @@ struct HookInput {
     /// The absolute `cwd`.
     cwd: Option<PathBuf>,
     session_id: Option<String>,
+    /// The file a tool is about to change, as the agent wrote it.
+    file_path: Option<PathBuf>,
 }
 
 /// The hook JSON on stdin. Anything unreadable reads as empty.
@@ -105,6 +128,11 @@ fn hook_input() -> HookInput {
         session_id: text("session_id")
             .filter(|id| !id.is_empty())
             .map(str::to_owned),
+        file_path: ["/tool_input/file_path", "/tool_input/notebook_path"]
+            .iter()
+            .find_map(|at| json.pointer(at).and_then(serde_json::Value::as_str))
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from),
     }
 }
 
@@ -137,6 +165,53 @@ fn memory_notes(cwd: Option<&Path>) -> Option<String> {
     let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
     let found = session_start::session_start(&vault, cwd?).ok()??;
     Some(found.text)
+}
+
+/// The notes anchored to the file the hook JSON says a tool will change, or
+/// `None` when there are none. A relative path is relative to `cwd`.
+fn anchored_notes(input: &HookInput) -> Option<String> {
+    let cwd = input.cwd.clone().or_else(|| std::env::current_dir().ok())?;
+    let file = cwd.join(input.file_path.as_ref()?);
+    let root = RepoContext::discover(&cwd).root()?.to_path_buf();
+    let rel = repo_relative(&root, &file)?;
+    let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
+    let found = recall::anchored_to(&vault, &cwd, &rel, EDIT_NOTE_CAP).ok()?;
+    let mut out = format!("Lore notes anchored to {}:\n", rel.as_str());
+    let heading = out.len();
+    for line in found.iter().map(note_line) {
+        if out.len() + line.len() + 1 > EDIT_CHAR_CAP {
+            break;
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    (out.len() > heading).then_some(out)
+}
+
+/// `file` relative to `root`, comparing real paths when the two are spelled
+/// differently. The file itself may not exist yet; its folder must.
+fn repo_relative(root: &Path, file: &Path) -> Option<RelPath> {
+    let rel = match file.strip_prefix(root) {
+        Ok(rel) => rel.to_path_buf(),
+        Err(_) => {
+            let dir = std::fs::canonicalize(file.parent()?).ok()?;
+            let real = dir.join(file.file_name()?);
+            real.strip_prefix(std::fs::canonicalize(root).ok()?)
+                .ok()?
+                .to_path_buf()
+        }
+    };
+    RelPath::parse(&rel.to_str()?.replace('\\', "/")).ok()
+}
+
+/// One note as a line: its freshness label, its title, and its id.
+fn note_line(recalled: &Recalled) -> String {
+    format!(
+        "- [{}] {} ({})",
+        recalled.freshness.label(),
+        title(&recalled.note.title),
+        recalled.note.id.as_str()
+    )
 }
 
 /// Report at-risk agent work for the current repository, if any.

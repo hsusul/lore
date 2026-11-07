@@ -71,6 +71,11 @@ Hooks (lorectl hook <EVENT> [--archive <DIR>]):
                       lists. Then `Lore session: <ID>` when the archive
                       holds the hook JSON's `session_id`; pass that ID to
                       propose_memory. Prints nothing when there is none.
+    pre-edit          Before a tool edits `tool_input.file_path`, up to 5
+                      accepted notes anchored to that file, each with its
+                      freshness label, as PreToolUse `additionalContext`
+                      JSON. It never allows or blocks the edit. Prints
+                      nothing when no note is anchored there.
     Notes are for `cwd` in the hook JSON on stdin, else the current
     directory. LORE_VAULT_DIR names the vault; otherwise ~/Lore.
     Run by an agent, not a person. It never scans, and it writes nothing
