@@ -509,4 +509,20 @@ mod tests {
             Err(Skip::EmptyCorrection)
         ));
     }
+
+    #[test]
+    fn locating_claude_prompt_skips_array_wrappers_and_blank_turns() {
+        let entries = vec![
+            human("fix the bug", "2026-01-01T00:00:00Z"),
+            json!({"type": "user", "timestamp": "2026-01-01T00:00:01Z", "message": {
+                "content": [{"type": "text", "text": "<command-name>/review</command-name>"}]}}),
+            human("", "2026-01-01T00:00:02Z"),
+            human("no, fix the test first", "2026-01-01T00:00:03Z"),
+        ];
+        let found = locate(&entries, &receipt("no, fix the test first", None), &CLAUDE)
+            .ok()
+            .unwrap();
+        assert_eq!((found.prompt_line, found.correction_line), (0, 3));
+        assert_eq!(found.prompt["message"]["content"], "fix the bug");
+    }
 }

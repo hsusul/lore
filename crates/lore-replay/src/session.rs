@@ -74,17 +74,22 @@ pub fn is_human(entry: &Value) -> bool {
     if str_field(entry, "type") != Some("user")
         || flag(entry, "isSidechain")
         || flag(entry, "isMeta")
+        || parts(entry).any(|p| part_is(p, "tool_result"))
     {
         return false;
     }
+    let typed = |text: &str| {
+        let text = text.trim();
+        !text.is_empty()
+            && !text.starts_with('<')
+            && !text.starts_with("This session is being continued")
+    };
     match content(entry) {
-        Some(Value::String(s)) => {
-            !s.starts_with("This session is being continued") && !s.starts_with('<')
-        }
-        Some(Value::Array(_)) => {
-            parts(entry).any(|p| part_is(p, "text"))
-                && !parts(entry).any(|p| part_is(p, "tool_result"))
-        }
+        Some(Value::String(s)) => typed(s),
+        Some(Value::Array(_)) => parts(entry)
+            .filter(|p| part_is(p, "text"))
+            .filter_map(|p| p.get("text").and_then(Value::as_str))
+            .any(typed),
         _ => false,
     }
 }
@@ -162,6 +167,46 @@ mod tests {
         assert!(!is_human(&wrapper));
         assert!(!is_human(&result));
         assert!(!is_human(&meta));
+    }
+
+    #[test]
+    fn array_wrappers_continuations_and_empty_are_not_human_turns() {
+        let wrapper_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "<command-name>/review</command-name>"}]}});
+        let continued_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "This session is being continued from a previous conversation."}]}});
+        let continued_str = json!({"type": "user", "message": {"content":
+            "This session is being continued from a previous conversation."}});
+        let empty_str = json!({"type": "user", "message": {"content": ""}});
+        let blank_str = json!({"type": "user", "message": {"content": "   \n\t  "}});
+        let empty_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": ""}]}});
+        let blank_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "   "}]}});
+        let typed_array = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "fix the test"}]}});
+
+        assert!(!is_human(&wrapper_array));
+        assert!(!is_human(&continued_array));
+        assert!(!is_human(&continued_str));
+        assert!(!is_human(&empty_str));
+        assert!(!is_human(&blank_str));
+        assert!(!is_human(&empty_array));
+        assert!(!is_human(&blank_array));
+        assert!(is_human(&typed_array));
+    }
+
+    #[test]
+    fn ide_context_before_typed_text_is_a_human_turn() {
+        let entry = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "<ide_opened_file>The user opened src/widget.rs</ide_opened_file>"},
+            {"type": "text", "text": "rename the widget helper"}]}});
+        let context_only = json!({"type": "user", "message": {"content": [
+            {"type": "text", "text": "<ide_opened_file>The user opened src/widget.rs</ide_opened_file>"},
+            {"type": "text", "text": "  "}]}});
+
+        assert!(is_human(&entry));
+        assert!(!is_human(&context_only));
     }
 
     #[test]
