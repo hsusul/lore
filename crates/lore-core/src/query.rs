@@ -567,9 +567,11 @@ fn query_session_messages_window(
 
     let mut parts_by_seq: HashMap<i64, Vec<MessagePartDto>> = HashMap::new();
     {
+        // Through message_part_full, the one read path for part bodies: an
+        // attachment stored once in part_body comes back byte for byte.
         let mut stmt = conn.prepare(
             "SELECT m.seq, mp.ordinal, mp.kind, mp.text, mp.content_json, mp.searchable
-             FROM message_part mp JOIN message m ON m.id = mp.message_id
+             FROM message_part_full mp JOIN message m ON m.id = mp.message_id
              WHERE m.session_id = ?1 AND m.seq >= ?2 AND m.seq <= ?3
              ORDER BY m.seq, mp.ordinal",
         )?;

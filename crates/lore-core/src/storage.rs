@@ -210,10 +210,17 @@ fn configure_common(conn: &Connection) -> Result<()> {
 /// - `wal_autocheckpoint = 16384` checkpoints every 64 MiB of WAL instead of
 ///   every 4 MiB. Each automatic checkpoint fsyncs, and a bulk scan writes
 ///   gigabytes; the worker still checkpoints and truncates after each scan.
+/// - `auto_vacuum = INCREMENTAL` comes first, before anything can create a
+///   table: only then does a new archive take it at once. On an existing
+///   archive it only records the wish, and the one full `VACUUM` in
+///   [`crate::compact`] makes it take effect. With it, `PRAGMA
+///   incremental_vacuum` returns free pages to the file system after a forget
+///   or a re-ingest instead of keeping them for reuse.
 fn configure(conn: &Connection) -> Result<()> {
     configure_common(conn)?;
     conn.execute_batch(
-        "PRAGMA foreign_keys = ON;\n\
+        "PRAGMA auto_vacuum = INCREMENTAL;\n\
+         PRAGMA foreign_keys = ON;\n\
          PRAGMA journal_mode = WAL;\n\
          PRAGMA synchronous = NORMAL;\n\
          PRAGMA wal_autocheckpoint = 16384;",

@@ -18,6 +18,7 @@
 
 pub mod adapters;
 pub mod backup;
+pub mod compact;
 pub mod discovery;
 pub mod enrich;
 pub mod export;

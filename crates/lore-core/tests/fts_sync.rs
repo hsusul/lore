@@ -276,6 +276,13 @@ fn an_archive_indexed_by_the_insert_trigger_stays_in_sync_after_migration_0015()
              END;
              DELETE FROM schema_migrations WHERE version >= 15;
              DROP TABLE part_blob;
+             DROP VIEW message_part_full;
+             DROP INDEX ix_part_body_hash;
+             UPDATE message_part
+                SET content_json = (SELECT body FROM part_body WHERE hash = body_hash)
+              WHERE body_hash IS NOT NULL;
+             ALTER TABLE message_part DROP COLUMN body_hash;
+             DROP TABLE part_body;
              INSERT INTO agent (id, display_name) VALUES ('old', 'Old');
              INSERT INTO agent_session (id, agent_id, dedupe_key) VALUES ('s-old', 'old', 'k');
              INSERT INTO search_document

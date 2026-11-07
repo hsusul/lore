@@ -174,9 +174,12 @@ fn persist_rows(
         tx.prepare_cached("SELECT EXISTS(SELECT 1 FROM agent_session WHERE id = ?1)")?;
     let is_existing: bool = check_existing.query_row([&session_id], |r| r.get(0))?;
 
-    let (existing_sources, kept) = if is_existing {
+    let (existing_sources, kept, old_bodies) = if is_existing {
         let existing_sources = session_sources(tx, &session_id)?;
         let kept = KeptRows::save(tx, &session_id)?;
+        // The attachment bodies the old rows used. Those the new rows do not
+        // reuse are deleted below, so a re-ingest leaves no orphaned body.
+        let old_bodies = crate::compact::session_body_hashes(tx, &session_id)?;
 
         // Explicitly delete search projections first so the FTS external-content
         // delete trigger fires (an FK cascade would not fire it), then cascade-delete
@@ -189,9 +192,9 @@ fn persist_rows(
             "DELETE FROM agent_session WHERE id = ?1",
             params![session_id],
         )?;
-        (existing_sources, kept)
+        (existing_sources, kept, old_bodies)
     } else {
-        (Vec::new(), KeptRows::empty())
+        (Vec::new(), KeptRows::empty(), Vec::new())
     };
     let high_water = search_high_water(tx)?;
 
@@ -251,6 +254,7 @@ fn persist_rows(
     link_payloads(tx, &session_id, staged)?;
     kept.restore(tx, &session_id)?;
     index_search_rows(tx, high_water)?;
+    crate::compact::delete_orphan_bodies(tx, &old_bodies)?;
     Ok(session_id)
 }
 
@@ -528,21 +532,34 @@ fn insert_rows(
         )?;
         for p in &m.parts {
             let pid = det_id("p", &[mid, &p.ordinal.to_string()]);
-            tx.execute(
+            // An attachment body is stored once, in part_body, and the part
+            // points at it; readers get it back through message_part_full.
+            let body_hash = match (&p.content_json, p.kind.as_str()) {
+                (Some(body), crate::compact::ATTACHMENT) => crate::compact::store_body(tx, body)?,
+                _ => None,
+            };
+            let inline_json = if body_hash.is_some() {
+                None
+            } else {
+                p.content_json.as_deref()
+            };
+            tx.prepare_cached(
                 "INSERT INTO message_part
-                    (id, message_id, ordinal, kind, text, content_json, searchable, metadata_json)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                params![
-                    pid,
-                    mid,
-                    p.ordinal,
-                    p.kind.as_str(),
-                    p.text,
-                    p.content_json,
-                    p.searchable,
-                    p.metadata_json,
-                ],
-            )?;
+                    (id, message_id, ordinal, kind, text, content_json, body_hash,
+                     searchable, metadata_json)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            )?
+            .execute(params![
+                pid,
+                mid,
+                p.ordinal,
+                p.kind.as_str(),
+                p.text,
+                inline_json,
+                body_hash,
+                p.searchable,
+                p.metadata_json,
+            ])?;
 
             // Scan every cleartext part for secrets. Index the text projection
             // only when the part is searchable (thinking is scanned, not
@@ -1617,6 +1634,7 @@ fn detach_reassigned_source(
     };
 
     let mut folder = None;
+    let mut old_bodies = Vec::new();
     for old_session_id in old_session_ids {
         tx.execute(
             "DELETE FROM session_source WHERE session_id = ?1 AND source_artifact_id = ?2",
@@ -1637,9 +1655,11 @@ fn detach_reassigned_source(
                     )
                     .optional()?;
             }
+            old_bodies.extend(crate::compact::session_body_hashes(tx, &old_session_id)?);
             tx.execute("DELETE FROM agent_session WHERE id = ?1", [&old_session_id])?;
         }
     }
+    crate::compact::delete_orphan_bodies(tx, &old_bodies)?;
     Ok(folder)
 }
 

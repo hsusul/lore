@@ -42,7 +42,7 @@ const TABLES: &[(&str, &str)] = &[
         "message_part",
         "SELECT p.id, p.message_id, p.ordinal, p.kind, p.text, p.content_json, p.searchable,
                 p.metadata_json
-         FROM message_part p JOIN message m ON m.id = p.message_id
+         FROM message_part_full p JOIN message m ON m.id = p.message_id
          WHERE m.session_id = ?1 ORDER BY m.seq, p.ordinal",
     ),
     (

@@ -108,6 +108,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "fts_optimize",
         sql: include_str!("../../migrations/0018_fts_optimize.sql"),
     },
+    Migration {
+        version: 19,
+        name: "part_body",
+        sql: include_str!("../../migrations/0019_part_body.sql"),
+    },
 ];
 
 /// How many migrations exist. Tests assert against this rather than a literal
@@ -269,7 +274,8 @@ fn ledger_shape_matches(conn: &Connection) -> Result<bool> {
 pub fn run(conn: &Connection) -> Result<()> {
     match compatibility(conn)? {
         Compatibility::Ok => return Ok(()),
-        Compatibility::NotAnArchive | Compatibility::NeedsUpgrade { .. } => {}
+        Compatibility::NotAnArchive => {}
+        Compatibility::NeedsUpgrade { .. } => back_up_before_one_way(conn)?,
         Compatibility::TooNew { archive, supported } => {
             return Err(StorageError::SchemaTooNew { archive, supported });
         }
@@ -296,6 +302,55 @@ pub fn run(conn: &Connection) -> Result<()> {
         previous = m.version;
         apply(conn, m)?;
     }
+    Ok(())
+}
+
+/// The first migration after which an older build refuses the archive and no
+/// downgrade exists: 0019 moves attachment bodies out of `message_part`.
+const ONE_WAY_FROM: i64 = 19;
+
+/// Back up an archive that holds data before the first one-way migration is
+/// applied to it, unless a backup under an hour old exists
+/// ([`crate::backup::ensure_recent_backup`]). An empty archive has nothing to
+/// lose, and an in-memory one has no backup directory. When the backup fails,
+/// nothing is migrated and the archive stays readable by the build that wrote
+/// it.
+fn back_up_before_one_way(conn: &Connection) -> Result<()> {
+    let one_way_applied: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version >= ?1)",
+        [ONE_WAY_FROM],
+        |r| r.get(0),
+    )?;
+    if one_way_applied {
+        return Ok(());
+    }
+    let has_parts: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message_part')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_parts
+        || !conn.query_row("SELECT EXISTS(SELECT 1 FROM message_part)", [], |r| {
+            r.get::<_, bool>(0)
+        })?
+    {
+        return Ok(());
+    }
+    let Some(dir) = crate::backup::backup_dir_for(conn) else {
+        return Ok(());
+    };
+    crate::backup::ensure_recent_backup(
+        conn,
+        &dir,
+        crate::now_ms(),
+        crate::backup::RECENT_BACKUP_MS,
+    )
+    .map_err(|_| {
+        StorageError::Migration(format!(
+            "could not back up the archive before migration {ONE_WAY_FROM}, which older \
+             builds cannot read back; nothing was changed. Free disk space and reopen Lore"
+        ))
+    })?;
     Ok(())
 }
 
@@ -431,6 +486,103 @@ mod tests {
                 supported
             } if archive == COUNT + 1 && supported == COUNT
         ));
+    }
+
+    /// A file archive at schema 18, the last version an older build reads,
+    /// holding one attachment part when `with_data`.
+    fn archive_at_18(dir: &std::path::Path, with_data: bool) -> std::path::PathBuf {
+        let path = dir.join(crate::paths::ARCHIVE_DB_FILENAME);
+        let conn = Connection::open(&path).unwrap();
+        crate::storage::configure(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL,
+             checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < ONE_WAY_FROM) {
+            apply(&conn, m).unwrap();
+        }
+        if with_data {
+            conn.execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT INTO message_part (id, message_id, ordinal, kind, content_json)
+                 VALUES ('p1', 'm1', 0, 'attachment', '\"body\"');",
+            )
+            .unwrap();
+        }
+        path
+    }
+
+    fn backups(dir: &std::path::Path) -> usize {
+        crate::backup::list_backups(&dir.join(crate::paths::BACKUPS_DIRNAME))
+            .unwrap()
+            .len()
+    }
+
+    #[test]
+    fn the_one_way_migration_backs_up_an_archive_with_data_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = archive_at_18(dir.path(), true);
+        let conn = crate::storage::open(&path).unwrap();
+        assert_eq!(compatibility(&conn).unwrap(), Compatibility::Ok);
+        assert_eq!(backups(dir.path()), 1, "backed up before migrating");
+
+        // The backup is the archive as it was: schema 18, the part inline.
+        let backup = &crate::backup::list_backups(&dir.path().join("backups")).unwrap()[0];
+        let old = Connection::open(backup).unwrap();
+        let (version, body): (i64, String) = old
+            .query_row(
+                "SELECT (SELECT max(version) FROM schema_migrations),
+                        (SELECT content_json FROM message_part WHERE id = 'p1')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((version, body.as_str()), (ONE_WAY_FROM - 1, "\"body\""));
+
+        drop(conn);
+        crate::storage::open(&path).unwrap();
+        assert_eq!(backups(dir.path()), 1, "once: already migrated");
+    }
+
+    #[test]
+    fn the_one_way_migration_relies_on_a_recent_backup_and_skips_an_empty_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = archive_at_18(dir.path(), true);
+        {
+            let conn = Connection::open(&path).unwrap();
+            let backup_dir = dir.path().join(crate::paths::BACKUPS_DIRNAME);
+            crate::backup::create_backup(&conn, &backup_dir, 7).unwrap();
+        }
+        crate::storage::open(&path).unwrap();
+        assert_eq!(
+            backups(dir.path()),
+            1,
+            "the backup taken just now is enough"
+        );
+
+        let empty = tempfile::tempdir().unwrap();
+        crate::storage::open(&archive_at_18(empty.path(), false)).unwrap();
+        assert_eq!(backups(empty.path()), 0, "nothing to lose");
+    }
+
+    #[test]
+    fn the_one_way_migration_waits_when_the_backup_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = archive_at_18(dir.path(), true);
+        // A file where the backup directory goes: the backup cannot be made.
+        std::fs::write(dir.path().join(crate::paths::BACKUPS_DIRNAME), b"").unwrap();
+        let err = crate::storage::open(&path).unwrap_err();
+        assert!(err.to_string().contains("nothing was changed"), "{err}");
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(
+            compatibility(&conn).unwrap(),
+            Compatibility::NeedsUpgrade {
+                archive: ONE_WAY_FROM - 1,
+                supported: COUNT
+            },
+            "still readable by the build that wrote it"
+        );
     }
 
     #[test]

@@ -192,6 +192,9 @@ impl Worker {
         // checkpoint can do its job. Ingesting a large source commits more in a
         // single transaction than `wal_autocheckpoint` can act on, so without
         // this the WAL keeps that high-water mark for the life of the process.
+        // Re-ingesting replaces a session's rows, so return the pages that
+        // freed first, while the same quiet moment lasts.
+        crate::compact::reclaim_if_worthwhile(&self.conn);
         crate::storage::checkpoint(&self.conn);
         sink.emit(crate::pipeline::ProgressEvent::ScanFinished);
         Ok((summary, 0))
@@ -239,7 +242,17 @@ impl Worker {
         if enqueued > 0 || drained != DrainSummary::default() {
             let _ = crate::settings::record_scan_completed(&self.conn, now_ms());
         }
+        if drained != DrainSummary::default() {
+            crate::compact::reclaim_if_worthwhile(&self.conn);
+        }
         Ok(WorkPass { enqueued, drained })
+    }
+
+    /// Store attachment bodies once and switch the file to incremental
+    /// auto-vacuum ([`crate::compact::compact`]). Resumable and a no-op once
+    /// done; stops between batches when the worker is asked to stop.
+    pub fn compact(&self) -> crate::storage::Result<crate::compact::CompactReport> {
+        crate::compact::compact(&self.conn, &self.stop)
     }
 
     /// Drain one bounded batch of already-queued jobs.
@@ -390,6 +403,11 @@ where
         // Startup: recover interrupted work, then an initial incremental scan.
         let _ = worker.recover();
         let _ = worker.scan(&sink);
+        // The lowest-priority work there is: it runs only once the startup
+        // scan has drained the queue, and resumes on the next launch if the
+        // app quits first. There is no caller to return an error to here, so
+        // `compact` records it under `compact::ERROR_SETTING` itself.
+        let _ = worker.compact();
 
         loop {
             let signal = rx.recv_timeout(idle_poll);
