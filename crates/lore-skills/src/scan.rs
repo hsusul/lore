@@ -105,6 +105,11 @@ pub fn inventory(roots: &Roots) -> Inventory {
     }
 
     let mut records = group(found);
+    // Skills loaded by an agent do not belong in elsewhere, even if an
+    // un-enabled plugin cache or vendor directory holds another copy.
+    for record in &records {
+        elsewhere.remove(&record.name);
+    }
     let known: HashSet<String> = records
         .iter()
         .map(|r| r.name.clone())

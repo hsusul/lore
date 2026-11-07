@@ -139,8 +139,29 @@ fn a_link_to_one_folder_is_one_copy_not_a_duplicate() {
 fn skills_no_agent_loads_are_known_but_not_reported() {
     let inventory = lore_skills::inventory(&Roots::from_home(&home()));
     assert!(inventory.elsewhere.contains_key("off-skill"));
-    assert!(inventory.elsewhere.contains_key("linked"));
+    assert!(!inventory.elsewhere.contains_key("linked"));
     assert!(inventory.records.iter().all(|r| r.name != "off-skill"));
+}
+
+#[test]
+fn loaded_skills_with_duplicate_in_vendor_or_cache_are_not_in_elsewhere() {
+    let tmp = std::env::temp_dir().join(format!("lore-skills-elsewhere-{}", std::process::id()));
+    let loaded = tmp.join(".agents/skills/tool");
+    let vendor = tmp.join(".agents/vendor/pack/skills/tool");
+    let cached = tmp.join(".codex/plugins/cache/mkt/unloaded/1.0/skills/unloaded-skill");
+    std::fs::create_dir_all(&loaded).unwrap();
+    std::fs::create_dir_all(&vendor).unwrap();
+    std::fs::create_dir_all(&cached).unwrap();
+    std::fs::write(loaded.join("SKILL.md"), "---\nname: tool\n---\n").unwrap();
+    std::fs::write(vendor.join("SKILL.md"), "---\nname: tool\n---\n").unwrap();
+    std::fs::write(cached.join("SKILL.md"), "---\nname: unloaded-skill\n---\n").unwrap();
+
+    let inventory = lore_skills::inventory(&Roots::from_home(&tmp));
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(inventory.records.iter().any(|r| r.name == "tool"));
+    assert!(!inventory.elsewhere.contains_key("tool"));
+    assert!(inventory.elsewhere.contains_key("unloaded-skill"));
 }
 
 #[test]
