@@ -30,6 +30,7 @@ pub enum Skip {
     UnsupportedAgent,
     NotInArchive,
     SessionFileGone,
+    CodexSubagent,
     EmptyCorrection,
     CorrectionLineNotFound,
     NoPromptBeforeCorrection,
@@ -44,6 +45,7 @@ impl fmt::Display for Skip {
             Self::UnsupportedAgent => "not claude-code or codex",
             Self::NotInArchive => "session not in archive",
             Self::SessionFileGone => "session file gone",
+            Self::CodexSubagent => "sub-agent rollout, resumable only through its parent",
             Self::EmptyCorrection => "empty correction text",
             Self::CorrectionLineNotFound => "correction line not found",
             Self::NoPromptBeforeCorrection => "no prompt turn before correction",
@@ -207,6 +209,9 @@ fn case_for(
     let Ok(entries) = session::read_lines(&file) else {
         return Ok(Err(Skip::SessionFileGone));
     };
+    if agent == Agent::Codex && codex::is_subagent(&entries) {
+        return Ok(Err(Skip::CodexSubagent));
+    }
     let codex_branch = match agent {
         Agent::ClaudeCode => None,
         Agent::Codex => codex::branch(&entries),
@@ -431,6 +436,61 @@ mod tests {
             case_for(&conn, &files, "l", &mined).unwrap(),
             Err(Skip::UnsupportedAgent)
         ));
+    }
+
+    #[test]
+    fn a_codex_sub_agent_rollout_is_skipped_by_reason() {
+        let home = tempfile::tempdir().unwrap();
+        let native = "01a1a220-7433-7310-95b5-72920ec9b737";
+        let dir = home.path().join("sessions/2026/01/01");
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = |ts: &str, text: &str| {
+            json!({"timestamp": ts, "type": "response_item", "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": text}]}})
+        };
+        // What a sub-agent's rollout opens with: the parent spawned it.
+        let meta = json!({"timestamp": "2026-01-01T00:00:00Z", "type": "session_meta",
+            "payload": {"id": native, "cwd": "/r", "thread_source": "subagent",
+                "multi_agent_version": "v2",
+                "parent_thread_id": "01a19d41-05b4-7612-96d3-3c2ab1feba5e",
+                "source": {"subagent": {"thread_spawn": {
+                    "parent_thread_id": "01a19d41-05b4-7612-96d3-3c2ab1feba5e",
+                    "depth": 1, "agent_role": "worker"}}}}});
+        let lines = [
+            meta,
+            user("2026-01-01T00:00:01Z", "review the change"),
+            user("2026-01-01T00:01:00Z", "no, never push without asking"),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(
+            dir.join(format!("rollout-2026-01-01T00-00-00-{native}.jsonl")),
+            text,
+        )
+        .unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE agent_session (id TEXT, native_session_id TEXT, primary_model TEXT);
+             INSERT INTO agent_session VALUES ('s_1', '{native}', NULL);"
+        ))
+        .unwrap();
+        let rollouts = codex::rollout_index(home.path());
+        let files = Files {
+            projects: None,
+            rollouts: &rollouts,
+        };
+        let mut mined = receipt("no, never push without asking", None);
+        mined.agent = "codex".into();
+        let skip = case_for(&conn, &files, "l", &mined).unwrap().unwrap_err();
+        assert_eq!(skip, Skip::CodexSubagent);
+
+        let mut found = Extraction::default();
+        found.skipped.insert(("codex".into(), skip), 1);
+        assert_eq!(
+            found.summary(),
+            "cases 0 (claude-code 0, codex 0); skipped \
+             codex sub-agent rollout, resumable only through its parent: 1"
+        );
     }
 
     #[test]

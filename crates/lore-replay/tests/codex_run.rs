@@ -97,6 +97,12 @@ gh pr create --fill 2>/dev/null
 echo 'warming up' >&2
 echo "{\"type\":\"thread.started\",\"thread_id\":\"$sid\"}"
 echo '{"type":"turn.started"}'
+if [ -n "$LIMITED" ]; then
+  msg="You've hit your usage limit. Visit the usage page to purchase more credits or try again at Jan 2nd, 2026 3:05 PM."
+  echo "{\"type\":\"error\",\"message\":\"$msg\"}"
+  echo "{\"type\":\"turn.failed\",\"error\":{\"message\":\"$msg\"}}"
+  exit 1
+fi
 echo 'not json'
 if [ -n "$ESCAPE" ]; then perl -e 'setpgrp(0, 0); sleep 20' & sleep 1; fi
 echo '{"type":"item.completed","item":{"id":"i0","type":"command_execution","command":"git push origin feat","aggregated_output":"","exit_code":1,"status":"failed"}}'
@@ -220,8 +226,36 @@ fn replay_cmd(f: &Fixture, arm: &str, extra: &[&str], slow: bool) -> Command {
     } else {
         cmd.env_remove("SLOW");
     }
-    cmd.env_remove("ESCAPE");
+    cmd.env_remove("ESCAPE").env_remove("LIMITED");
     cmd
+}
+
+#[test]
+fn a_codex_usage_limit_is_its_own_result() {
+    let f = fixture();
+    let out = replay_cmd(&f, "oracle", &[], false)
+        .env("LIMITED", "1")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    let message: Vec<&str> = stderr.lines().collect();
+    assert_eq!(message.len(), 1, "{stderr}");
+    assert!(
+        message[0].starts_with("lore-replay: run stopped: s_cdx:9 oracle-1 hit the usage limit ("),
+        "{stderr}"
+    );
+    assert!(message[0].contains("try again at Jan 2nd"), "{stderr}");
+    let record: Value =
+        serde_json::from_str(&read(&f.root.join("runs/s_cdx_9/oracle-1/run.json"))).unwrap();
+    assert_eq!(record["limited"], true);
+    assert_eq!(record["is_error"], true);
+
+    // A run that is not limited says nothing of it.
+    ok(&replay(&f, "oracle", &[], false));
+    let record: Value =
+        serde_json::from_str(&read(&f.root.join("runs/s_cdx_9/oracle-1/run.json"))).unwrap();
+    assert!(record.get("limited").is_none(), "{record}");
 }
 
 fn ok(out: &std::process::Output) {

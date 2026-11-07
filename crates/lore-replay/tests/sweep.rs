@@ -21,6 +21,10 @@ for a in "$@"; do
   prev="$a"
 done
 n=$(wc -l < "$CALLS" | tr -d ' ')
+if [ -n "$LIMIT_STDERR" ]; then
+  echo "You've hit your weekly limit · resets 5pm" >&2
+  exit 1
+fi
 if [ -n "$LIMIT_AFTER" ] && [ "$n" -gt "$LIMIT_AFTER" ]; then
   echo '{"type":"result","is_error":true,"num_turns":0,"total_cost_usd":0,"result":"You'"'"'ve hit your 5-hour limit"}'
   exit 1
@@ -144,6 +148,7 @@ fn sweep(f: &Fixture, cases: &[&str], extra: &[&str], env: &[(&str, &str)]) -> O
         .env_remove("FAKE_TEXT")
         .env_remove("PREFIXES")
         .env_remove("LIMIT_AFTER")
+        .env_remove("LIMIT_STDERR")
         .env_remove("CAPPED");
     for (k, v) in env {
         cmd.env(k, v);
@@ -157,6 +162,30 @@ fn stdout(out: &Output) -> String {
 
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// `lore-replay run` of one case under `none`, trial 1, against the fake.
+fn run_one(f: &Fixture, case: &str, env: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lore-replay"));
+    cmd.args(["run", "--cases"])
+        .arg(f.root.join("labeled.jsonl"))
+        .arg("--arms")
+        .arg(f.root.join("arms.json"))
+        .args(["--case", case, "--arm", "none", "--trial", "1", "--out"])
+        .arg(f.out())
+        .env("HOME", f.root.join("home"))
+        .env("CLAUDE_CONFIG_DIR", f.root.join("claude"))
+        .env("LORE_REPLAY_CLAUDE", f.root.join("fake-claude"))
+        .env("CALLS", f.root.join("calls"))
+        .env_remove("FAKE_TEXT")
+        .env_remove("PREFIXES")
+        .env_remove("LIMIT_AFTER")
+        .env_remove("LIMIT_STDERR")
+        .env_remove("CAPPED");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd.output().unwrap()
 }
 
 fn arms_for(case: &str) -> Value {
@@ -341,6 +370,32 @@ fn a_case_that_does_not_reproduce_stops_at_screening() {
     let again = sweep(&f, &[], &["--case-list", &list], &[]);
     assert!(again.status.success(), "{}", stderr(&again));
     assert_eq!(f.calls(), 2);
+}
+
+#[test]
+fn a_claude_usage_limit_on_stderr_is_its_own_run_result() {
+    let f = fixture(&["c:1"], &arms_for("c:1"));
+    let out = run_one(&f, "c:1", &[("LIMIT_STDERR", "1")]);
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert_eq!(
+        stderr(&out).trim_end(),
+        "lore-replay: run stopped: c:1 none-1 hit the usage limit \
+         (You've hit your weekly limit · resets 5pm). \
+         Rerun after the limit resets; run.json is marked limited"
+    );
+    let record: Value = serde_json::from_str(
+        &std::fs::read_to_string(f.out().join("c_1/none-1/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["limited"], true);
+
+    let out = run_one(&f, "c:1", &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let record: Value = serde_json::from_str(
+        &std::fs::read_to_string(f.out().join("c_1/none-1/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(record.get("limited").is_none(), "{record}");
 }
 
 #[test]

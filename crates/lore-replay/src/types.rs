@@ -362,6 +362,11 @@ pub struct RunRecord {
     /// own; the replay stops it after that many tool calls.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub capped: bool,
+    /// The agent said the subscription's usage limit was hit, in an error
+    /// event or on stderr. Nothing was replayed; rerun after the limit
+    /// resets.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub limited: bool,
     /// The last characters of the agent's stderr.
     pub stderr: String,
     /// Each attempt to reach GitHub through `gh`, which the stub refuses.
