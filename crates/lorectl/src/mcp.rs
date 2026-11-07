@@ -328,7 +328,8 @@ fn propose_schema() -> Value {
                 "required": ["path"]
             } },
             "updates": { "type": "string", "description": "Id of the note this supersedes." },
-            "session_id": { "type": "string", "description": "Your own session id, if known." }
+            "session_id": { "type": "string", "description": "The id after `Lore session:` in \
+    your session-start context, else your own session id, if known." }
         },
         "required": ["title", "body", "type", "scope"]
     })
