@@ -72,14 +72,20 @@ fn skill_lock(home: &Path) -> Vec<(SkillName, Source)> {
     skills
         .iter()
         .map(|(name, entry)| {
-            let url = match text(entry, "sourceUrl") {
-                url if url.is_empty() => text(entry, "source"),
-                url => url,
-            };
-            let source = Source::Git {
-                url,
-                rev: text(entry, "skillFolderHash"),
-                subpath: text(entry, "skillPath"),
+            let source = if text(entry, "sourceType") == "local" {
+                Source::Local {
+                    path: PathBuf::from(text(entry, "source")),
+                }
+            } else {
+                let url = match text(entry, "sourceUrl") {
+                    url if url.is_empty() => text(entry, "source"),
+                    url => url,
+                };
+                Source::Git {
+                    url,
+                    rev: text(entry, "skillFolderHash"),
+                    subpath: text(entry, "skillPath"),
+                }
             };
             (name.clone(), source)
         })
