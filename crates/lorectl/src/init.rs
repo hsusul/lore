@@ -123,10 +123,11 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
 
     let started = Instant::now();
     let deadline = started + std::time::Duration::from_secs(args.scan_seconds);
-    let scanned = crate::scan::scan_until(&archive_dir, Some(since), Some(deadline));
+    // No compaction: `init` is a timed first look, and `lorectl scan` compacts.
+    let scanned = crate::scan::scan_until(&archive_dir, Some(since), Some(deadline), false);
     let secs = started.elapsed().as_secs();
     let line = match scanned {
-        Ok((_, _, summary, left)) => {
+        Ok((_, _, summary, left, _)) => {
             let mut line = match summary.ingested {
                 0 => "no new sessions".to_owned(),
                 n => format!("scanned {n} new session{}", plural(n)),

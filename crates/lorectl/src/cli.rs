@@ -174,6 +174,8 @@ pub struct Invocation {
     pub patch: bool,
     /// `--since <DURATION>`, as given. Only `scan` takes it.
     pub since: Option<String>,
+    /// `--no-compact`. Only `scan` takes it: skip compacting after the scan.
+    pub no_compact: bool,
     /// The command's operand, when it takes one (a search query, a session id).
     pub operand: Option<String>,
     /// Everything after `mem <SUBCOMMAND>` or `init`, parsed by that command.
@@ -209,6 +211,7 @@ where
     let mut json = false;
     let mut patch = false;
     let mut since = None;
+    let mut no_compact = false;
     let mut help = false;
     let mut version = false;
     let mut command: Option<Command> = None;
@@ -235,6 +238,7 @@ where
             Short('V') | Long("version") => version = true,
             Long("json") => json = true,
             Long("patch") => patch = true,
+            Long("no-compact") => no_compact = true,
             Long("since") => {
                 since = Some(
                     parser
@@ -312,6 +316,11 @@ where
                             .into(),
                     ));
                 }
+                if no_compact && command != Command::Scan {
+                    return Err(CliError::Usage(
+                        "--no-compact works only with `lorectl scan`".into(),
+                    ));
+                }
                 if vault.is_some()
                     && !matches!(command, Command::Init | Command::Mem | Command::Report)
                 {
@@ -333,6 +342,7 @@ where
         json,
         patch,
         since,
+        no_compact,
         operand,
         rest,
         action,

@@ -11,8 +11,15 @@
 //! resolve archive dir → create it → TAKE THE WRITER LOCK
 //!   → storage::open (creates + migrates) → BlobStore::open
 //!   → discovery_config → Worker::new → recover() → scan()
-//!   → stamp scan.last_completed_at
+//!   → stamp scan.last_completed_at → compact()
 //! ```
+//!
+//! After a scan that finished, `lorectl scan` compacts the archive the way the
+//! desktop worker does after its startup scan, with the same
+//! [`lore_core::compact::compact`]: a backup before the first converted row,
+//! old attachment and tool rows moved to stored-once bodies, failures recorded
+//! under `compact.error`, and the one `VACUUM` only with room for it. Still
+//! under the writer lock. `--no-compact` skips it.
 //!
 //! The lock is taken **before** the database is opened, not after. `recover()`
 //! is the dangerous call — it returns every `running` job to `pending` with no
@@ -29,6 +36,7 @@ use std::io::Write;
 use std::path::Path;
 
 use lore_core::adapters::AdapterRegistry;
+use lore_core::compact::{CompactReport, VacuumOutcome};
 use lore_core::lock::ScanLock;
 use lore_core::paths::{ARCHIVE_DB_FILENAME, BLOBS_DIRNAME};
 use lore_core::pipeline::{DrainSummary, NullSink};
@@ -47,7 +55,20 @@ use crate::exit::{self, CliError};
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let since = invocation.since.as_deref().map(window).transpose()?;
     let archive_dir = invocation.archive_dir()?;
-    let (conn, recovered, summary) = scan_into(&archive_dir, since.as_ref().map(|(_, at)| *at))?;
+    let at = since.as_ref().map(|(_, at)| *at);
+    let (conn, recovered, summary, _, compacted) =
+        scan_until(&archive_dir, at, None, !invocation.no_compact)?;
+    // A failed compaction leaves every row it had not verified as it was and
+    // is recorded under `compact.error`; the scan itself completed, so it is
+    // said, not fatal.
+    let compacted = compacted.map(|result| {
+        result
+            .map(|report| (report, page_size(&conn)))
+            .map_err(|e| {
+                eprintln!("lorectl: compacting the archive failed ({e}); the scan completed");
+                e.to_string()
+            })
+    });
 
     // `Worker::scan` already stamped completion; read it back so the report
     // shows exactly what a later `status` will read, rather than a second clock
@@ -56,11 +77,20 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
 
     let mut stdout = std::io::stdout().lock();
     let report = if invocation.json {
-        json_report(&archive_dir, recovered, &summary, completed_at)
+        json_report(
+            &archive_dir,
+            recovered,
+            &summary,
+            completed_at,
+            compacted.as_ref(),
+        )
     } else {
         let mut text = text_report(&archive_dir, recovered, &summary);
         if let Some((given, _)) = &since {
             text.push_str(&format!("\nonly sources modified in the last {given}"));
+        }
+        if let Some(Ok((report, page_size))) = &compacted {
+            text.push_str(&compact_text(report, *page_size));
         }
         text
     };
@@ -69,25 +99,28 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     Ok(exit::OK)
 }
 
+/// What [`scan_until`] returns: the archive connection, the recovered job
+/// count, what the scan did, how many sources it left queued, and the
+/// compaction's outcome when it ran.
+type Scanned = (
+    rusqlite::Connection,
+    usize,
+    DrainSummary,
+    usize,
+    Option<storage::Result<CompactReport>>,
+);
+
 /// Scan every configured source root into the archive at `archive_dir`,
 /// creating it if need be, and only sources modified since `since` when
-/// given. Returns the archive connection, the recovered job count, and what
-/// the scan did. `lorectl init` scans through this too.
-pub(crate) fn scan_into(
-    archive_dir: &Path,
-    since: Option<std::time::SystemTime>,
-) -> Result<(rusqlite::Connection, usize, DrainSummary), CliError> {
-    let (conn, recovered, summary, _) = scan_until(archive_dir, since, None)?;
-    Ok((conn, recovered, summary))
-}
-
-/// [`scan_into`] that starts no new source after `deadline`, and also
-/// returns how many sources it left queued.
+/// given, starting no new source after `deadline`. Then compact the archive
+/// when `compact` is set and the scan left nothing queued. `lorectl init`
+/// scans through this too.
 pub(crate) fn scan_until(
     archive_dir: &Path,
     since: Option<std::time::SystemTime>,
     deadline: Option<std::time::Instant>,
-) -> Result<(rusqlite::Connection, usize, DrainSummary, usize), CliError> {
+    compact: bool,
+) -> Result<Scanned, CliError> {
     std::fs::create_dir_all(archive_dir).map_err(|_| CliError::Storage(StorageError::Io))?;
 
     // Before anything opens the database. See the module docs.
@@ -113,13 +146,57 @@ pub(crate) fn scan_until(
     // concurrently-running writer's jobs.
     let recovered = worker.recover()?;
     let (summary, left) = worker.scan_until(&NullSink, since, deadline)?;
+    // Only after a scan that finished, as the desktop worker does, and still
+    // under the lock: it converts rows and may rewrite the file.
+    let compacted = (compact && left == 0).then(|| worker.compact());
 
     // Close the worker's connection before stamping, so the write below is the
     // only one open. Not required for correctness — WAL permits both, and the
     // worker is idle by now — but it keeps "the scan is over" a fact about the
     // process rather than a claim about the worker's internal state.
     drop(worker);
-    Ok((conn, recovered, summary, left))
+    Ok((conn, recovered, summary, left, compacted))
+}
+
+fn page_size(conn: &rusqlite::Connection) -> u64 {
+    conn.query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap_or(0)
+}
+
+/// Rows a compaction moved to stored-once bodies.
+fn converted(report: &CompactReport) -> u64 {
+    report.dedupe.converted + report.slim.converted
+}
+
+/// Bytes a compaction returned to the file system: the `VACUUM`'s, or the
+/// free pages it reclaimed on an archive already in incremental mode.
+fn reclaimed_bytes(report: &CompactReport, page_size: u64) -> u64 {
+    let pages = match report.vacuum {
+        VacuumOutcome::Vacuumed {
+            pages_before,
+            pages_after,
+        } => pages_before.saturating_sub(pages_after),
+        _ => report.reclaimed_pages,
+    };
+    u64::try_from(pages).unwrap_or(0).saturating_mul(page_size)
+}
+
+/// The compaction's lines in the text report: nothing when it did nothing.
+fn compact_text(report: &CompactReport, page_size: u64) -> String {
+    let (rows, bytes) = (converted(report), reclaimed_bytes(report, page_size));
+    let mut text = String::new();
+    if rows > 0 || bytes > 0 {
+        text.push_str(&format!(
+            "\ncompacted {rows} row(s), reclaimed {bytes} bytes"
+        ));
+    }
+    if let VacuumOutcome::LowSpace { needed, available } = report.vacuum {
+        text.push_str(&format!(
+            "\ncompact skipped the one-time VACUUM: it needs {needed} bytes free, \
+             {available} available"
+        ));
+    }
+    text
 }
 
 /// `--since` as given and the moment it reaches back to: a whole number of
@@ -188,7 +265,18 @@ fn json_report(
     recovered: usize,
     summary: &DrainSummary,
     completed_at: i64,
+    compacted: Option<&Result<(CompactReport, u64), String>>,
 ) -> String {
+    let compact = match compacted {
+        None => serde_json::Value::Null,
+        Some(Ok((report, page_size))) => serde_json::json!({
+            "converted": converted(report),
+            "failed": report.dedupe.failed + report.slim.failed,
+            "vacuum": report.vacuum.as_str(),
+            "reclaimed_bytes": reclaimed_bytes(report, *page_size),
+        }),
+        Some(Err(error)) => serde_json::json!({ "error": error }),
+    };
     let value = serde_json::json!({
         "archive": archive_dir.display().to_string(),
         "completed_at_ms": completed_at,
@@ -200,6 +288,7 @@ fn json_report(
         "enriched": summary.enriched,
         "enrich_failed": summary.enrich_failed,
         "reverified": summary.reverified,
+        "compact": compact,
     });
     value.to_string()
 }
@@ -250,7 +339,13 @@ mod tests {
 
     #[test]
     fn the_json_report_parses_and_carries_every_count() {
-        let raw = json_report(Path::new("/tmp/archive"), 1, &summary(), 1_725_000_000_000);
+        let raw = json_report(
+            Path::new("/tmp/archive"),
+            1,
+            &summary(),
+            1_725_000_000_000,
+            None,
+        );
         let value: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
         assert_eq!(value["archive"], "/tmp/archive");
         assert_eq!(value["completed_at_ms"], 1_725_000_000_000_i64);
@@ -265,7 +360,7 @@ mod tests {
     fn the_json_report_escapes_an_awkward_archive_path() {
         // The path comes from `--archive`, so it is caller-supplied text landing
         // in a machine-read format. Hand-built JSON would break here.
-        let raw = json_report(Path::new(r#"/tmp/we"ird\path"#), 0, &summary(), 0);
+        let raw = json_report(Path::new(r#"/tmp/we"ird\path"#), 0, &summary(), 0, None);
         let value: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
         assert_eq!(value["archive"], r#"/tmp/we"ird\path"#);
     }
@@ -273,7 +368,7 @@ mod tests {
     #[test]
     fn the_json_report_is_one_line() {
         // So a caller can read a scan's result with `read`/`jq` per line.
-        let raw = json_report(Path::new("/tmp/a"), 0, &summary(), 0);
+        let raw = json_report(Path::new("/tmp/a"), 0, &summary(), 0, None);
         assert!(!raw.contains('\n'), "{raw}");
     }
 

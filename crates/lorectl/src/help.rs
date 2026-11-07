@@ -174,6 +174,10 @@ Options:
                       such as 30d, 12h, or 90m, newest first. With `init`:
                       the window to scan, default 30d. With `report`: the
                       window, or a start date; default 7d.
+    --no-compact      With `scan`: skip compacting the archive afterwards.
+                      Otherwise a scan that finished stores old attachment
+                      and tool rows once, after a backup, and runs the
+                      one-time VACUUM when there is room for it.
     --limit <N>       With `init`: lessons to show, default 5.
     --scan-seconds <N> With `init`: stop scanning after N seconds, newest
                       files first, and show lessons; default 60. The rest
