@@ -21,6 +21,12 @@
 //!   INCREMENTAL`, [`reclaim_free_pages`] hands them back. New archives get the
 //!   mode at creation; an existing one needs one full `VACUUM`
 //!   ([`vacuum_once`]), which runs only when the volume has room for it.
+//! - **Half-empty pages leave the file too.** Incremental vacuum returns only
+//!   whole free pages. A conversion that shrinks most rows leaves B-tree pages
+//!   half empty, which only a full `VACUUM` packs. The one-time `VACUUM` runs
+//!   after every conversion, so it covers them, except on an archive that had
+//!   it before the tool output conversion existed: [`vacuum_after_slim`] gives
+//!   that archive one more, once, when the conversion removed enough.
 //!
 //! Lossless is checked, not assumed: a row's old column is cleared only after
 //! its body reads back byte-equal through the view. A row that does not is
@@ -54,7 +60,7 @@ pub const VACUUM_SETTING: &str = "compact.vacuum";
 pub const FAILED_ROWS_SETTING: &str = "compact.failed_rows";
 
 /// The setting that records why the last [`compact`] failed, content-free:
-/// `{"stage": "backup" | "dedupe" | "slim" | "vacuum" | "reclaim",
+/// `{"stage": "backup" | "dedupe" | "slim" | "vacuum" | "vacuum_after_slim" | "reclaim",
 /// "sqlite_code": n | null}`,
 /// or JSON `null` after a run that finished without error.
 pub const ERROR_SETTING: &str = "compact.error";
@@ -109,6 +115,21 @@ pub const TOOL_OUTPUT_AFTER_SETTING: &str = "compact.tool_output_after";
 /// The setting counting tool result rows whose slim form did not read back
 /// byte-equal and were left as they were. A count only.
 pub const TOOL_OUTPUT_FAILED_SETTING: &str = "compact.tool_output_failed_rows";
+
+/// The setting that records [`vacuum_after_slim`]'s outcome, content-free.
+/// Any value but `"skipped_low_space"` is final.
+pub const VACUUM_AFTER_SLIM_SETTING: &str = "compact.vacuum_after_slim";
+
+/// The setting caching the bytes the tool output conversion removed, once it
+/// is complete ([`slim_bytes_saved`]). A count only.
+pub const TOOL_OUTPUT_BYTES_SAVED_SETTING: &str = "compact.tool_output_bytes_saved";
+
+/// [`vacuum_after_slim`] rewrites the file only when the tool output
+/// conversion removed more than this percentage of the file's bytes. Below
+/// it, the half-empty pages are not worth rewriting the archive for. On one
+/// real archive the conversion removed 14% and left 180 MB in half-empty
+/// pages that incremental vacuum could not return.
+pub const VACUUM_AFTER_SLIM_MIN_PERCENT: u64 = 10;
 
 /// The slim form of a tool result payload, or `None` when the row keeps both
 /// columns as they are.
@@ -609,22 +630,10 @@ pub fn vacuum_once_with(
     let outcome = match outcome {
         Some(outcome) => outcome,
         None => {
-            let pages_before = page_count(conn)?;
-            {
-                let _write = crate::storage::write_lock();
-                crate::storage::checkpoint(conn);
-                // The rewritten copy goes to a temporary file, not memory:
-                // with the connection's usual `temp_store = MEMORY` it would
-                // hold the whole archive in RAM. Restored whatever happens.
-                conn.execute_batch("PRAGMA temp_store = FILE;")?;
-                let vacuumed = conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;");
-                conn.execute_batch("PRAGMA temp_store = MEMORY;")?;
-                vacuumed?;
-            }
-            crate::storage::checkpoint(conn);
+            let (pages_before, pages_after) = full_vacuum(conn)?;
             VacuumOutcome::Vacuumed {
                 pages_before,
-                pages_after: page_count(conn)?,
+                pages_after,
             }
         }
     };
@@ -656,6 +665,168 @@ fn decide_vacuum(
         return Ok(Some(VacuumOutcome::LowSpace { needed, available }));
     }
     Ok(None)
+}
+
+/// Rewrite the whole file in incremental mode under the write lock, as
+/// `(pages_before, pages_after)`. The caller has checked the free space.
+fn full_vacuum(conn: &Connection) -> Result<(i64, i64)> {
+    let pages_before = page_count(conn)?;
+    {
+        let _write = crate::storage::write_lock();
+        crate::storage::checkpoint(conn);
+        // The rewritten copy goes to a temporary file, not memory: with the
+        // connection's usual `temp_store = MEMORY` it would hold the whole
+        // archive in RAM. Restored whatever happens.
+        conn.execute_batch("PRAGMA temp_store = FILE;")?;
+        let vacuumed = conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;");
+        conn.execute_batch("PRAGMA temp_store = MEMORY;")?;
+        vacuumed?;
+    }
+    crate::storage::checkpoint(conn);
+    Ok((pages_before, page_count(conn)?))
+}
+
+/// Outcome of [`vacuum_after_slim`]. Content-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlimVacuumOutcome {
+    /// A final outcome is already recorded; nothing to do, ever again.
+    AlreadyDone,
+    /// The archive is not yet in incremental mode: the one-time `VACUUM`
+    /// ([`vacuum_once`]) still has to run, and covers the conversion.
+    AwaitingVacuum,
+    /// Tool results are still unexamined, or the run was stopped.
+    SlimPending,
+    /// No file behind the connection (an in-memory archive).
+    NoFile,
+    /// The one-time `VACUUM` ran after the conversion, in this run.
+    Covered,
+    /// The conversion removed too little to be worth a rewrite
+    /// ([`VACUUM_AFTER_SLIM_MIN_PERCENT`]).
+    NotNeeded { bytes_saved: u64 },
+    /// Too little free space; a later launch tries again. As
+    /// [`VacuumOutcome::LowSpace`].
+    LowSpace { needed: u64, available: u64 },
+    /// The archive was rewritten.
+    Vacuumed { pages_before: i64, pages_after: i64 },
+}
+
+impl SlimVacuumOutcome {
+    /// The stable value recorded under [`VACUUM_AFTER_SLIM_SETTING`], for the
+    /// outcomes that are recorded.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AlreadyDone => "already_done",
+            Self::AwaitingVacuum => "awaiting_vacuum",
+            Self::SlimPending => "slim_pending",
+            Self::NoFile => "no_file",
+            Self::Covered => "covered",
+            Self::NotNeeded { .. } => "not_needed",
+            Self::LowSpace { .. } => "skipped_low_space",
+            Self::Vacuumed { .. } => "vacuumed",
+        }
+    }
+}
+
+/// Give an archive whose one-time `VACUUM` ran before the tool output
+/// conversion one more full `VACUUM`, once, when the conversion removed more
+/// than [`VACUUM_AFTER_SLIM_MIN_PERCENT`] of the file. `vacuum` is what
+/// [`vacuum_once`] did in this run: when it rewrote the file, the conversion
+/// (which it waits for) is covered and nothing more runs.
+///
+/// The same rewrite as [`vacuum_once`]: a temporary file rather than memory,
+/// only with room on both volumes ([`VacuumSpace`]), under the write lock.
+/// The outcome is recorded under [`VACUUM_AFTER_SLIM_SETTING`]; every outcome
+/// but a low-space skip is final, so the rewrite never repeats.
+pub fn vacuum_after_slim(conn: &Connection, vacuum: VacuumOutcome) -> Result<SlimVacuumOutcome> {
+    match vacuum {
+        VacuumOutcome::Vacuumed { .. } => {
+            let outcome = SlimVacuumOutcome::Covered;
+            record_after_slim(conn, outcome)?;
+            Ok(outcome)
+        }
+        VacuumOutcome::AlreadyIncremental => {
+            let space = match conn.path().filter(|p| !p.is_empty()) {
+                Some(path) => vacuum_space(std::path::Path::new(path))?,
+                None => VacuumSpace::one_volume(0),
+            };
+            vacuum_after_slim_with(conn, space)
+        }
+        _ => Ok(SlimVacuumOutcome::AwaitingVacuum),
+    }
+}
+
+/// [`vacuum_after_slim`] on an archive already in incremental mode, with the
+/// free space given, so the rules can be tested without filling a disk.
+pub fn vacuum_after_slim_with(conn: &Connection, space: VacuumSpace) -> Result<SlimVacuumOutcome> {
+    let recorded = crate::settings::get(conn, VACUUM_AFTER_SLIM_SETTING)?;
+    if recorded.is_some_and(|v| v != "\"skipped_low_space\"") {
+        return Ok(SlimVacuumOutcome::AlreadyDone);
+    }
+    if conn.path().filter(|p| !p.is_empty()).is_none() {
+        return Ok(SlimVacuumOutcome::NoFile);
+    }
+    if tool_outputs_pending(conn)? {
+        return Ok(SlimVacuumOutcome::SlimPending);
+    }
+    let bytes_saved = slim_bytes_saved(conn)?;
+    let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+    let size = u64::try_from(page_count(conn)?.saturating_mul(page_size)).unwrap_or(u64::MAX);
+    let outcome =
+        if bytes_saved.saturating_mul(100) <= size.saturating_mul(VACUUM_AFTER_SLIM_MIN_PERCENT) {
+            SlimVacuumOutcome::NotNeeded { bytes_saved }
+        } else if let Some((needed, available)) = space.shortfall(size) {
+            SlimVacuumOutcome::LowSpace { needed, available }
+        } else {
+            let (pages_before, pages_after) = full_vacuum(conn)?;
+            SlimVacuumOutcome::Vacuumed {
+                pages_before,
+                pages_after,
+            }
+        };
+    record_after_slim(conn, outcome)?;
+    Ok(outcome)
+}
+
+fn record_after_slim(conn: &Connection, outcome: SlimVacuumOutcome) -> Result<()> {
+    // `settings::set` takes the write lock itself.
+    crate::settings::set(
+        conn,
+        VACUUM_AFTER_SLIM_SETTING,
+        &format!("\"{}\"", outcome.as_str()),
+    )
+}
+
+/// Bytes slim storage removed from an archive that held tool output before
+/// migration 0020, measured from its slim rows (each saved about its output's
+/// length), so an archive converted before this was counted gets a number
+/// too. Every slim row counts, not only the ones the conversion rewrote: a
+/// re-ingest replaces whole rows with slim ones above the watermark, and
+/// leaves the same half-empty pages. An archive created after the migration
+/// (watermark 0) never held the whole form and measures 0. Measured once,
+/// from a full read of the tool results, then cached under
+/// [`TOOL_OUTPUT_BYTES_SAVED_SETTING`]. The caller has checked that the
+/// conversion is complete.
+pub fn slim_bytes_saved(conn: &Connection) -> Result<u64> {
+    if let Some(cached) = crate::settings::get(conn, TOOL_OUTPUT_BYTES_SAVED_SETTING)?
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        return Ok(cached);
+    }
+    let until = setting_i64(conn, TOOL_OUTPUT_UNTIL_SETTING)?;
+    let bytes: i64 = if until <= 0 {
+        0
+    } else {
+        conn.query_row(
+            "SELECT COALESCE(sum(length(CAST(text AS BLOB))), 0) FROM message_part
+             WHERE kind = ?1 AND instr(content_json, char(1)) > 0",
+            [TOOL_RESULT],
+            |row| row.get(0),
+        )?
+    };
+    let bytes = u64::try_from(bytes).unwrap_or(0);
+    crate::settings::set(conn, TOOL_OUTPUT_BYTES_SAVED_SETTING, &bytes.to_string())?;
+    Ok(bytes)
 }
 
 fn page_count(conn: &Connection) -> Result<i64> {
@@ -714,6 +885,7 @@ pub struct CompactReport {
     pub dedupe: DedupeReport,
     pub slim: SlimReport,
     pub vacuum: VacuumOutcome,
+    pub vacuum_after_slim: SlimVacuumOutcome,
     /// Free pages returned to the file system after the conversions, on an
     /// archive already in incremental mode.
     pub reclaimed_pages: i64,
@@ -774,10 +946,18 @@ fn compact_stages(
         };
         reclaimed_pages = reclaim().map_err(|e| ("reclaim", e))?;
     }
+    // After the reclaim, so the size it weighs the savings against is the
+    // file as it now stands.
+    let vacuum_after_slim = if stop.load(Ordering::Relaxed) {
+        SlimVacuumOutcome::SlimPending
+    } else {
+        self::vacuum_after_slim(conn, vacuum).map_err(|e| ("vacuum_after_slim", e))?
+    };
     Ok(CompactReport {
         dedupe,
         slim,
         vacuum,
+        vacuum_after_slim,
         reclaimed_pages,
     })
 }

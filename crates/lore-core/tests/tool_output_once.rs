@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
 use lore_core::adapters::codex::CodexAdapter;
-use lore_core::compact::{self, SlimReport};
+use lore_core::compact::{self, SlimReport, VacuumSpace};
 use lore_core::export::export_session_markdown;
 use lore_core::forget::forget_session;
 use lore_core::ingest::persist_session;
@@ -418,6 +418,173 @@ fn compact_backs_up_first_then_returns_the_freed_pages() {
     let again = compact::compact(&conn, &AtomicBool::new(false)).unwrap();
     assert_eq!(again.slim, SlimReport::default());
     assert_eq!(backups().unwrap().len(), 1, "nothing left to back up for");
+}
+
+/// A file archive in incremental mode (its one-time `VACUUM` long done) with
+/// legacy tool results, one of them `output_bytes` long.
+fn incremental_legacy_archive(output_bytes: usize) -> (tempfile::TempDir, Connection) {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open(&dir.path().join("lore.db")).unwrap();
+    let blobs = BlobStore::open(dir.path().join("blobs")).unwrap();
+    three_sessions(&conn, &blobs);
+    make_legacy(&conn);
+    let big = served(&conn)[0].0.clone();
+    conn.execute(
+        "UPDATE message_part SET text = printf('%.*c', ?2, 'x'),
+                                 content_json = json_quote(printf('%.*c', ?2, 'x'))
+          WHERE id = ?1",
+        rusqlite::params![big, i64::try_from(output_bytes).unwrap()],
+    )
+    .unwrap();
+    lore_core::settings::set(&conn, compact::VACUUM_SETTING, "\"already_incremental\"").unwrap();
+    assert!(compact::is_incremental(&conn).unwrap());
+    (dir, conn)
+}
+
+fn after_slim_setting(conn: &Connection) -> Option<String> {
+    lore_core::settings::get(conn, compact::VACUUM_AFTER_SLIM_SETTING).unwrap()
+}
+
+#[test]
+fn an_archive_slimmed_after_its_one_time_vacuum_gets_one_more_and_only_one() {
+    let (_dir, conn) = incremental_legacy_archive(4_000_000);
+    let before = served(&conn);
+    // The conversion already ran, as it did on archives before this check
+    // existed: only incremental vacuum followed it.
+    let slim = compact::slim_tool_outputs(&conn, 100, &AtomicBool::new(false)).unwrap();
+    assert_eq!((slim.converted, slim.pending), (6, false));
+    {
+        let _write = lore_core::storage::write_lock();
+        compact::reclaim_free_pages(&conn).unwrap();
+    }
+    assert_eq!(after_slim_setting(&conn), None);
+
+    let report = compact::compact(&conn, &AtomicBool::new(false)).unwrap();
+    assert_eq!(report.vacuum, compact::VacuumOutcome::AlreadyIncremental);
+    let compact::SlimVacuumOutcome::Vacuumed {
+        pages_before,
+        pages_after,
+    } = report.vacuum_after_slim
+    else {
+        panic!("{:?}", report.vacuum_after_slim);
+    };
+    assert!(
+        pages_after <= pages_before,
+        "{pages_before} -> {pages_after}"
+    );
+    assert!(compact::is_incremental(&conn).unwrap(), "still incremental");
+    assert!(compact::slim_bytes_saved(&conn).unwrap() >= 4_000_000);
+    assert_eq!(after_slim_setting(&conn).as_deref(), Some("\"vacuumed\""));
+    assert_eq!(served(&conn), before, "payloads read back byte-equal");
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+
+    let again = compact::compact(&conn, &AtomicBool::new(false)).unwrap();
+    assert_eq!(
+        again.vacuum_after_slim,
+        compact::SlimVacuumOutcome::AlreadyDone
+    );
+    assert_eq!(after_slim_setting(&conn).as_deref(), Some("\"vacuumed\""));
+}
+
+#[test]
+fn a_small_conversion_does_not_rewrite_the_archive() {
+    let (_dir, conn) = incremental_legacy_archive(100);
+    let report = compact::compact(&conn, &AtomicBool::new(false)).unwrap();
+    assert_eq!(report.slim.converted, 6);
+    assert!(
+        matches!(
+            report.vacuum_after_slim,
+            compact::SlimVacuumOutcome::NotNeeded { .. }
+        ),
+        "{:?}",
+        report.vacuum_after_slim
+    );
+    assert_eq!(after_slim_setting(&conn).as_deref(), Some("\"not_needed\""));
+    let again = compact::compact(&conn, &AtomicBool::new(false)).unwrap();
+    assert_eq!(
+        again.vacuum_after_slim,
+        compact::SlimVacuumOutcome::AlreadyDone
+    );
+}
+
+#[test]
+fn too_little_space_skips_records_and_retries_later() {
+    let (_dir, conn) = incremental_legacy_archive(4_000_000);
+    compact::slim_tool_outputs(&conn, 100, &AtomicBool::new(false)).unwrap();
+    let pages = || -> i64 {
+        conn.query_row("PRAGMA page_count", [], |r| r.get(0))
+            .unwrap()
+    };
+    let before = pages();
+
+    let skipped = compact::vacuum_after_slim_with(&conn, VacuumSpace::one_volume(1024)).unwrap();
+    assert!(
+        matches!(
+            skipped,
+            compact::SlimVacuumOutcome::LowSpace {
+                available: 1024,
+                ..
+            }
+        ),
+        "{skipped:?}"
+    );
+    assert_eq!(pages(), before, "nothing rewritten");
+    assert_eq!(
+        after_slim_setting(&conn).as_deref(),
+        Some("\"skipped_low_space\"")
+    );
+
+    let done = compact::vacuum_after_slim_with(&conn, VacuumSpace::one_volume(u64::MAX)).unwrap();
+    assert!(
+        matches!(done, compact::SlimVacuumOutcome::Vacuumed { .. }),
+        "{done:?}"
+    );
+    assert_eq!(
+        compact::vacuum_after_slim_with(&conn, VacuumSpace::one_volume(u64::MAX)).unwrap(),
+        compact::SlimVacuumOutcome::AlreadyDone
+    );
+}
+
+#[test]
+fn an_archive_that_was_always_slim_is_not_rewritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open(&dir.path().join("lore.db")).unwrap();
+    let blobs = BlobStore::open(dir.path().join("blobs")).unwrap();
+    three_sessions(&conn, &blobs);
+    // Large outputs ingested slim: nothing was ever stored twice.
+    conn.execute_batch(
+        "UPDATE message_part SET text = printf('%.*c', 4000000, 'x')
+          WHERE kind = 'tool_result' AND instr(content_json, char(1)) > 0",
+    )
+    .unwrap();
+    let report = compact::compact(&conn, &AtomicBool::new(false)).unwrap();
+    assert_eq!(
+        report.vacuum_after_slim,
+        compact::SlimVacuumOutcome::NotNeeded { bytes_saved: 0 }
+    );
+}
+
+#[test]
+fn the_one_time_vacuum_after_the_conversion_covers_it() {
+    let (_dir, conn) = incremental_legacy_archive(4_000_000);
+    compact::slim_tool_outputs(&conn, 100, &AtomicBool::new(false)).unwrap();
+    let outcome = compact::vacuum_after_slim(
+        &conn,
+        compact::VacuumOutcome::Vacuumed {
+            pages_before: 2,
+            pages_after: 1,
+        },
+    )
+    .unwrap();
+    assert_eq!(outcome, compact::SlimVacuumOutcome::Covered);
+    assert_eq!(after_slim_setting(&conn).as_deref(), Some("\"covered\""));
+    assert_eq!(
+        compact::vacuum_after_slim_with(&conn, VacuumSpace::one_volume(u64::MAX)).unwrap(),
+        compact::SlimVacuumOutcome::AlreadyDone
+    );
 }
 
 #[test]

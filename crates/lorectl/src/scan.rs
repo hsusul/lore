@@ -36,7 +36,7 @@ use std::io::Write;
 use std::path::Path;
 
 use lore_core::adapters::AdapterRegistry;
-use lore_core::compact::{CompactReport, VacuumOutcome};
+use lore_core::compact::{CompactReport, SlimVacuumOutcome, VacuumOutcome};
 use lore_core::lock::ScanLock;
 use lore_core::paths::{ARCHIVE_DB_FILENAME, BLOBS_DIRNAME};
 use lore_core::pipeline::{DrainSummary, NullSink};
@@ -173,15 +173,23 @@ fn converted(report: &CompactReport) -> u64 {
 }
 
 /// Bytes a compaction returned to the file system: the `VACUUM`'s, or the
-/// free pages it reclaimed on an archive already in incremental mode.
+/// free pages it reclaimed on an archive already in incremental mode, plus
+/// the `VACUUM` after the tool output conversion.
 fn reclaimed_bytes(report: &CompactReport, page_size: u64) -> u64 {
-    let pages = match report.vacuum {
+    let mut pages = match report.vacuum {
         VacuumOutcome::Vacuumed {
             pages_before,
             pages_after,
         } => pages_before.saturating_sub(pages_after),
         _ => report.reclaimed_pages,
     };
+    if let SlimVacuumOutcome::Vacuumed {
+        pages_before,
+        pages_after,
+    } = report.vacuum_after_slim
+    {
+        pages = pages.saturating_add(pages_before.saturating_sub(pages_after));
+    }
     u64::try_from(pages).unwrap_or(0).saturating_mul(page_size)
 }
 
@@ -198,6 +206,12 @@ fn compact_text(report: &CompactReport, page_size: u64) -> String {
         text.push_str(&format!(
             "\ncompact skipped the one-time VACUUM: it needs {needed} bytes free, \
              {available} available"
+        ));
+    }
+    if let SlimVacuumOutcome::LowSpace { needed, available } = report.vacuum_after_slim {
+        text.push_str(&format!(
+            "\ncompact skipped the VACUUM after the tool output conversion: it needs \
+             {needed} bytes free, {available} available"
         ));
     }
     text
@@ -277,6 +291,7 @@ fn json_report(
             "converted": converted(report),
             "failed": report.dedupe.failed + report.slim.failed,
             "vacuum": report.vacuum.as_str(),
+            "vacuum_after_slim": report.vacuum_after_slim.as_str(),
             "reclaimed_bytes": reclaimed_bytes(report, *page_size),
         }),
         Some(Err(error)) => serde_json::json!({ "error": error }),
