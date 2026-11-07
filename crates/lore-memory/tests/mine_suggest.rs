@@ -3,7 +3,7 @@
 //! words, never a model. Every pair below is a real correction.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use lore_memory::mine::suggest_rule;
+use lore_memory::mine::{content_words, suggest_rule};
 
 #[test]
 fn acknowledgements_a_request_frame_and_a_trailing_please_are_cut() {
@@ -122,5 +122,17 @@ fn a_correction_opener_before_a_comma_is_cut() {
     assert_eq!(
         suggest_rule("no mocks, hit the real test database"),
         "No mocks, hit the real test database"
+    );
+}
+
+#[test]
+fn content_words_stems_possessive_apostrophe() {
+    assert_eq!(
+        content_words("the user's settings"),
+        content_words("the user settings")
+    );
+    assert_eq!(
+        content_words("the users' settings"),
+        content_words("the user settings")
     );
 }
