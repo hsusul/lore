@@ -744,6 +744,62 @@ fn prompt_does_not_match_a_note_on_a_shared_contraction() {
     }
 }
 
+/// A note whose lesson is about planning docs, with a receipt that quotes the
+/// person saying something about a release.
+const QUOTED: &str = "---\nid: 01JD0000000000000000000010\ntype: convention\ntitle: Keep planning docs local\n---\nThe agent committed planning docs, and the person wanted them kept local.\n\nReceipts:\n- \"stop, ship the release first, and keep planning docs local\" (codex, session s9, 2026-01-02)\n";
+
+const QUOTED_FOR_PROMPT: &str = "Lore notes for this request:\n\
+     - [unanchored] Keep planning docs local (01JD0000000000000000000010)\n";
+
+#[test]
+fn prompt_does_not_match_on_quoted_receipts_alone() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[QUOTED]);
+    // "ship" and "release" are only in what the person once said.
+    let stdin = prompt_json(&repo, "s-1", "ship the release");
+    let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+    assert_eq!((code(&out), stdout(&out)), (0, String::new()));
+    // With a word of the lesson itself, a quoted word can be the second one.
+    let stdin = prompt_json(&repo, "s-2", "ship the planning work");
+    let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+    assert_eq!(stdout(&out), prompt_reply(QUOTED_FOR_PROMPT));
+}
+
+/// The `n`th of a set of notes that all hold "deploy" and "server".
+fn deploy_note(n: usize) -> String {
+    format!(
+        "---\nid: 01JD00000000000000000000{n:02}\ntype: convention\ntitle: Deploy rule {n}\n---\n\
+         Before you deploy to a server, check item {n}.\n"
+    )
+}
+
+#[test]
+fn prompt_needs_a_word_most_notes_do_not_share() {
+    // Few notes: no word is generic, so the two shared words match.
+    let (home, vault, repo) = memory_home();
+    let few: Vec<String> = (20..23).map(deploy_note).collect();
+    let few: Vec<&str> = few.iter().map(String::as_str).collect();
+    add_notes(home.path(), &vault, &repo, &few);
+    let stdin = prompt_json(&repo, "s-1", "deploy the server");
+    let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+    assert!(stdout(&out).contains("Deploy rule"), "{out:?}");
+
+    // Once most of many notes hold both words, they say nothing about which
+    // note a prompt is about.
+    let (home, vault, repo) = memory_home();
+    let many: Vec<String> = (20..26).map(deploy_note).collect();
+    let mut many: Vec<&str> = many.iter().map(String::as_str).collect();
+    many.push(RETRY);
+    add_notes(home.path(), &vault, &repo, &many);
+    let stdin = prompt_json(&repo, "s-1", "deploy the server");
+    let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+    assert_eq!((code(&out), stdout(&out)), (0, String::new()));
+    // A word only one of them holds still picks that one.
+    let stdin = prompt_json(&repo, "s-2", "deploy and check item 23");
+    let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+    assert!(stdout(&out).contains("Deploy rule 23"), "{out:?}");
+}
+
 #[test]
 fn prompt_skips_a_note_the_session_was_already_shown() {
     let (home, vault, repo) = memory_home();

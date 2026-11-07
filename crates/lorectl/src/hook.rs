@@ -112,6 +112,9 @@ const EDIT_CHAR_CAP: usize = 1_000;
 /// Content words are `index::related_words`: contractions such as "don't",
 /// single letters, and stopwords never count, so two texts do not match on
 /// the pieces of a contraction.
+/// At least one of the shared words must be in the note's lesson (its title,
+/// or its body above the Receipts list) and must not be one most notes hold
+/// (`index::Index::search_active_related`).
 /// BM25 scores are not comparable from one vault or prompt to the next, so a
 /// score threshold would be arbitrary, while a two-word overlap rules out
 /// notes that share one common word with a long prompt. The candidates are
