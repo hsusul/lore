@@ -360,6 +360,87 @@ fn forget_removes_compressed_rows() {
             .unwrap();
         assert_eq!(n, 0, "{} is empty", c.table);
     }
+    assert_eq!(dict_count(&conn), 0, "no dictionary outlives the rows");
+}
+
+fn dict_count(conn: &Connection) -> i64 {
+    conn.query_row("SELECT count(*) FROM zstd_dict", [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn forgetting_the_last_session_using_a_dictionary_deletes_it() {
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let sessions = ingest(&conn, &blobs, 0..40);
+    compress(&conn, 50).unwrap();
+    assert_eq!(dict_count(&conn), 4);
+    let (last, rest) = sessions.split_last().unwrap();
+    for s in rest {
+        forget_session(&conn, &blobs, s).unwrap();
+    }
+    assert_eq!(dict_count(&conn), 4, "still used by the last session");
+    let view = session_view(&conn, std::slice::from_ref(last));
+    same(&session_view(&conn, std::slice::from_ref(last)), &view);
+    forget_session(&conn, &blobs, last).unwrap();
+    assert_eq!(dict_count(&conn), 0);
+
+    // A later compaction trains and converts afresh.
+    let again = ingest(&conn, &blobs, 100..140);
+    let view = reader_view(&conn, &again);
+    let report = compress(&conn, 50).unwrap();
+    assert_eq!(report.dicts_trained, 4);
+    assert!(report.converted > 0);
+    same(&reader_view(&conn, &again), &view);
+}
+
+#[test]
+fn dictionaries_are_trained_on_redacted_text() {
+    // Split so the source never holds a whole provider-format token.
+    let secret = format!("{}{}", "ghp_", "R7tK2mQ9xV4bN8cL1zW6pY3hJ5fD0sA2gE9u");
+    let conn = lore_core::storage::open_in_memory().unwrap();
+    let (_bd, blobs) = store();
+    let sessions: Vec<String> = (0..60)
+        .map(|k| {
+            let jsonl = transcript(k).replace(
+                "please refactor the",
+                &format!("export GITHUB_TOKEN={secret} then please refactor the"),
+            );
+            let parsed = ClaudeCodeAdapter::new().parse_str(&jsonl, &format!("s{k:03}"));
+            persist_session(&conn, "claude-code", "Claude Code", &parsed, &blobs).unwrap()
+        })
+        .collect();
+    let view = reader_view(&conn, &sessions);
+    let raw: Vec<Vec<u8>> = decoded(&conn, &codec::PART_TEXT)
+        .into_iter()
+        .filter_map(|(_, t)| t.map(String::into_bytes))
+        .collect();
+    let unredacted = codec::train(&raw, training().dict_size).unwrap();
+    assert!(
+        contains(&unredacted, secret.as_bytes()),
+        "the fixture would leak into a dictionary trained on raw text"
+    );
+
+    compress(&conn, 50).unwrap();
+    let dicts: Vec<Vec<u8>> = conn
+        .prepare("SELECT dict FROM zstd_dict")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(dicts.len(), 4);
+    for dict in &dicts {
+        assert!(!contains(dict, secret.as_bytes()));
+        assert!(!contains(dict, &secret.as_bytes()[..16]));
+    }
+    // The rows are compressed raw and read back exactly, secret included.
+    assert!(compressed(&conn, &codec::PART_TEXT) > 0);
+    same(&reader_view(&conn, &sessions), &view);
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
 }
 
 #[test]

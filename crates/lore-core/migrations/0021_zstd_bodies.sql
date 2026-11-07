@@ -26,7 +26,8 @@
 -- exact bytes that were ingested. The tool output marker (migration 0020) is
 -- put back after decoding, from the decoded text.
 CREATE TABLE zstd_dict (
-    id          INTEGER PRIMARY KEY,
+    -- Never reused after a forget deletes a dictionary no row uses.
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
     "column"    TEXT    NOT NULL,
     dict        BLOB    NOT NULL,
     until_rowid INTEGER NOT NULL,

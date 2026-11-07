@@ -227,6 +227,50 @@ pub(crate) fn delete_all_orphan_bodies(tx: &Connection) -> Result<usize> {
     )?)
 }
 
+/// Delete every dictionary no row of its column uses any more, and the
+/// conversion cursor of a column left with none, so a later compaction trains
+/// and converts afresh. Runs in the caller's transaction, after a forget has
+/// deleted rows: a dictionary holds fragments of the rows it was trained on,
+/// so one that outlives them would keep forgotten text in the archive.
+///
+/// A column's rows are searched newest first: its newest rows use its newest
+/// dictionary, so a dictionary still in use is found at once. A conversion
+/// that loaded a dictionary deleted here stops before writing with it
+/// ([`convert_column`]), and ingest loads dictionaries in its own transaction.
+pub(crate) fn delete_unused_dicts(tx: &Connection) -> Result<usize> {
+    let dicts: Vec<(i64, String)> = tx
+        .prepare("SELECT id, \"column\" FROM zstd_dict")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut removed = 0;
+    for (id, key) in dicts {
+        let Some(column) = crate::codec::COLUMNS.iter().find(|c| c.key == key) else {
+            continue;
+        };
+        let used = tx
+            .prepare_cached(&format!(
+                "SELECT 1 FROM {t} WHERE lore_dict_id({c}) = ?1 ORDER BY rowid DESC LIMIT 1",
+                t = column.table,
+                c = column.column
+            ))?
+            .query_row([id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if !used {
+            removed += tx.execute("DELETE FROM zstd_dict WHERE id = ?1", [id])?;
+        }
+    }
+    for column in crate::codec::COLUMNS {
+        if column_dict(tx, &column)?.is_none() {
+            tx.execute(
+                "DELETE FROM setting WHERE key = ?1",
+                [zstd_cursor_key(&column)],
+            )?;
+        }
+    }
+    Ok(removed)
+}
+
 /// Outcome of [`dedupe_attachments`]. Counts only, never content.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DedupeReport {
@@ -624,18 +668,43 @@ fn sample_column(
             })
             .optional()?;
         at = at.saturating_add(step);
-        let Some((rowid, mut bytes)) = row else {
+        let Some((rowid, bytes)) = row else {
             break;
         };
         if last == Some(rowid) || bytes.len() < crate::codec::MIN_LEN {
             continue;
         }
         last = Some(rowid);
-        bytes.truncate(training.sample_cap);
-        total += bytes.len();
-        samples.push(bytes);
+        let Some(sample) = redacted_sample(&bytes, training.sample_cap) else {
+            continue;
+        };
+        total += sample.len();
+        samples.push(sample);
     }
     Ok(samples)
+}
+
+/// Bytes past a sample's cap that are scanned with it, so a secret the cap
+/// cuts through (a PEM private key block is about 3 KiB) is still found whole.
+const SAMPLE_SCAN_MARGIN: usize = 16 * 1024;
+
+/// A training sample from `value`: its first `cap` bytes with every secret the
+/// scanner finds masked, the way `search_document` holds it. A dictionary
+/// keeps fragments of its samples verbatim and outlives the rows they came
+/// from, so it is trained on redacted text; the rows themselves are still
+/// compressed raw, so only the dictionary's content changes. `None` when
+/// `value` is not UTF-8 or the scan fails: such a row is not sampled.
+fn redacted_sample(value: &[u8], cap: usize) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(value).ok()?;
+    let mut end = text.len().min(cap.saturating_add(SAMPLE_SCAN_MARGIN));
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let window = &text[..end];
+    let findings = crate::secrets::scan(window).ok()?;
+    let mut sample = crate::secrets::redact(window, &findings).into_bytes();
+    sample.truncate(cap);
+    Some(sample)
 }
 
 /// Train and store a dictionary for `column` unless it has one or too few
@@ -702,6 +771,12 @@ fn convert_column(
             rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
         let after = setting_i64(&tx, &key)?;
         if after >= until {
+            break;
+        }
+        // A forget may have deleted the dictionary since it was loaded, if no
+        // row used it yet ([`delete_unused_dicts`]): never write with one
+        // that is gone. Ids are never reused (`AUTOINCREMENT`).
+        if column_dict(&tx, column)?.map(|d| d.0) != Some(id) {
             break;
         }
         // A value that is not UTF-8 text reads as `None` and is left alone.
