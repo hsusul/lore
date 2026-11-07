@@ -533,7 +533,17 @@ const CONTRACTION_ENDINGS: &[&str] = &["n't", "'re", "'ve", "'ll", "'d", "'m"];
 pub fn related_words(text: &str) -> Vec<String> {
     let text = text.trim_start();
     let text = match text.strip_prefix('/') {
-        Some(rest) => rest.trim_start_matches(|c: char| !c.is_whitespace()),
+        Some(rest) => {
+            let (cmd, after) = match rest.find(char::is_whitespace) {
+                Some(i) => (&rest[..i], &rest[i..]),
+                None => (rest, ""),
+            };
+            if !cmd.is_empty() && !cmd.contains('/') {
+                after
+            } else {
+                text
+            }
+        }
         None => text,
     };
     let text = text
@@ -624,6 +634,11 @@ mod tests {
         assert!(related_words("ok, continue!").is_empty());
         assert!(related_words("/compact").is_empty());
         assert_eq!(related_words("/review the migration"), ["migration"]);
+        assert_eq!(
+            related_words("/src/lib.rs needs a fix"),
+            ["src", "lib", "rs", "needs", "fix"]
+        );
+        assert_eq!(related_words("/src/lib.rs"), ["src", "lib", "rs"]);
         let words = |text: &str| related_words(text);
         assert_eq!(
             fts_related(&words("retry"), &["retry"]).unwrap(),

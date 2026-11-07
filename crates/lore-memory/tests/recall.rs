@@ -9,7 +9,7 @@ use std::path::Path;
 
 use common::{commit, git, repo};
 use lore_memory::anchor::{Freshness, WorkTree};
-use lore_memory::recall::recall;
+use lore_memory::recall::{recall, related};
 use lore_memory::repo::RepoContext;
 use lore_memory::vault::Vault;
 
@@ -182,4 +182,32 @@ fn recall_never_writes_the_vault_or_the_repo() {
     assert_eq!(git(vault.root(), &["status", "--porcelain"]), "");
     assert_eq!(git(vault.root(), &["rev-parse", "HEAD"]), head);
     assert_eq!(git(&app, &["status", "--porcelain"]), repo_status);
+}
+
+#[test]
+fn related_keeps_file_paths_in_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, vault) = setup(dir.path());
+    let key = RepoContext::discover(&app).key().cloned().unwrap();
+    let scope = format!("repo:{}", key.as_str());
+    vault
+        .add(&note(
+            "Source library guidelines",
+            &scope,
+            "active",
+            &[],
+            "Guidelines for src lib module.",
+        ))
+        .unwrap();
+
+    let found = related(&vault, "/src/lib.rs needs a fix", &app, 10).unwrap();
+    assert_eq!(found.notes.len(), 1);
+    assert_eq!(found.notes[0].note.title, "Source library guidelines");
+
+    let found_path_only = related(&vault, "/src/lib.rs", &app, 10).unwrap();
+    assert_eq!(found_path_only.notes.len(), 1);
+    assert_eq!(
+        found_path_only.notes[0].note.title,
+        "Source library guidelines"
+    );
 }
