@@ -96,7 +96,25 @@ pub fn export_session_markdown(
                 }
                 "thinking" => {
                     if let Some(text) = &part.text {
-                        let _ = writeln!(out, "> _(thinking)_ {}\n", render(&pid, "text", text));
+                        let rendered = render(&pid, "text", text);
+                        if rendered.is_empty() {
+                            let _ = writeln!(out, "> _(thinking)_\n");
+                        } else {
+                            for (i, line) in rendered.lines().enumerate() {
+                                if i == 0 {
+                                    if line.is_empty() {
+                                        let _ = writeln!(out, "> _(thinking)_");
+                                    } else {
+                                        let _ = writeln!(out, "> _(thinking)_ {line}");
+                                    }
+                                } else if line.is_empty() {
+                                    let _ = writeln!(out, ">");
+                                } else {
+                                    let _ = writeln!(out, "> {line}");
+                                }
+                            }
+                            let _ = writeln!(out);
+                        }
                     }
                 }
                 _ => {
@@ -356,6 +374,23 @@ mod tests {
             .unwrap();
         assert!(md.contains("> _(thinking)_ contemplating options..."));
         assert!(md.contains("here is the plan"));
+    }
+
+    #[test]
+    fn export_renders_multiline_thinking_blocks_within_blockquote() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":\"think deeply\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"e\",\"cwd\":\"/p\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Thought 1\\n\\nThought 2\"},{\"type\":\"text\",\"text\":\"final answer\"}]}}\n"
+        );
+        let sid = persist(&conn, jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .unwrap();
+        assert!(
+            md.contains("> _(thinking)_ Thought 1\n>\n> Thought 2\n\n"),
+            "multiline thinking block must prefix blank lines and paragraphs with quote markers, got:\n{md}"
+        );
     }
 
     #[test]
