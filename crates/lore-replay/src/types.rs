@@ -228,6 +228,7 @@ impl Arm {
     /// `None` when a caller-supplied arm has no text.
     #[must_use]
     pub fn new(name: ArmName, text: Option<String>) -> Option<Self> {
+        let text = text.filter(|t| !t.trim().is_empty());
         Some(match name {
             ArmName::None => Self::None,
             ArmName::Own => Self::Own,
@@ -715,6 +716,10 @@ mod tests {
     #[test]
     fn a_caller_supplied_arm_needs_its_text() {
         assert_eq!(Arm::new(ArmName::Lore, None), None);
+        assert_eq!(Arm::new(ArmName::Lore, Some("".into())), None);
+        assert_eq!(Arm::new(ArmName::Lore, Some("   \t\n ".into())), None);
+        assert_eq!(Arm::new(ArmName::File, Some("".into())), None);
+        assert_eq!(Arm::new(ArmName::Oracle, Some("".into())), None);
         assert_eq!(Arm::new(ArmName::None, None), Some(Arm::None));
         assert_eq!(
             Arm::new(ArmName::Oracle, Some("x".into())).map(|a| a.name()),

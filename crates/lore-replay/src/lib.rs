@@ -84,3 +84,39 @@ pub fn load_arm(arms: Option<&Path>, case: &str, name: ArmName) -> Result<Arm> {
         .cloned();
     Arm::new(name, text).ok_or_else(missing)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_arm_rejects_empty_or_whitespace_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let arms = dir.path().join("arms.json");
+        std::fs::write(
+            &arms,
+            serde_json::json!({
+                "c:0": {
+                    "lore": "",
+                    "file": "   \t\n  ",
+                    "oracle": "context"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            load_arm(Some(&arms), "c:0", ArmName::Lore),
+            Err(Error::ArmTextMissing { case, arm }) if case == "c:0" && arm == "lore"
+        ));
+        assert!(matches!(
+            load_arm(Some(&arms), "c:0", ArmName::File),
+            Err(Error::ArmTextMissing { case, arm }) if case == "c:0" && arm == "file"
+        ));
+        assert!(matches!(
+            load_arm(Some(&arms), "c:0", ArmName::Oracle),
+            Ok(Arm::Oracle(t)) if t == "context"
+        ));
+    }
+}
