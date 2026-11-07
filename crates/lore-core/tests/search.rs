@@ -1603,6 +1603,29 @@ fn worktree_filter_handles_non_ascii_and_git_suffix() {
 }
 
 #[test]
+fn worktree_filter_matches_hierarchical_branch_name() {
+    let (conn, _bd, [a1, _a2, _b1, _g1]) = repo_fixture();
+    link_worktree(
+        &conn,
+        "wt_hierarchical",
+        "repo_alpha",
+        "/work/trees/wt1",
+        Some("feature/auth"),
+        &[&a1],
+    );
+
+    for q in [
+        "worktree:wt_hierarchical",
+        "worktree:auth",
+        "worktree:feature/auth",
+        "worktree:feature/auth/",
+    ] {
+        let hits = search(&conn, q, 20).unwrap();
+        assert_eq!(session_ids(&hits), vec![a1.clone()], "{q}");
+    }
+}
+
+#[test]
 fn hostile_filter_values_cannot_break_the_query() {
     let (conn, _bd, _ids) = repo_fixture();
     let sessions_before: i64 = conn

@@ -530,9 +530,9 @@ fn normalize_worktree_name(value: &str) -> String {
 
 /// Resolve a `worktree:` value to the worktree ids it names: the value itself as
 /// an id (so `worktree:<id>` keeps working, even for an id with no `worktree`
-/// row), plus every worktree whose branch hint, or whose path's last component,
-/// equals it case-insensitively. A value that names nothing resolves to itself
-/// alone, which no `search_git` row carries.
+/// row), plus every worktree whose branch hint (or its last component), or whose
+/// path's last component, equals it case-insensitively. A value that names nothing
+/// resolves to itself alone, which no `search_git` row carries.
 fn resolve_worktree_ids(conn: &Connection, value: &str) -> Result<Vec<String>> {
     let wanted = normalize_worktree_name(value);
     let raw_wanted = value.to_lowercase();
@@ -552,7 +552,8 @@ fn resolve_worktree_ids(conn: &Connection, value: &str) -> Result<Vec<String>> {
             || path_lower == raw_wanted;
         let by_branch = branch_hint.as_deref().is_some_and(|b| {
             let b_lower = b.to_lowercase();
-            (!wanted.is_empty() && b_lower == wanted) || b_lower == raw_wanted
+            (!wanted.is_empty() && (b_lower == wanted || path_basename(&b_lower) == wanted))
+                || b_lower == raw_wanted
         });
         let by_id = id == value || (!wanted.is_empty() && id.to_lowercase() == wanted);
         if (by_path || by_branch || by_id) && !ids.contains(&id) {
