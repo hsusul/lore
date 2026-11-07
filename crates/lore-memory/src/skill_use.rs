@@ -19,7 +19,7 @@ use crate::mine::{self, Candidate, Limits, Turns};
 pub const REPROMPT_TURNS: usize = 2;
 
 const SKILL_CALLS: &str = "SELECT m.session_id, m.seq, m.ts, json_extract(tc.input_json, '$.skill')
-    FROM tool_call tc
+    FROM tool_call_full tc
     JOIN message_part p ON p.id = tc.call_part_id
     JOIN message m ON m.id = p.message_id
     WHERE tc.name = 'Skill' AND m.is_sidechain = 0

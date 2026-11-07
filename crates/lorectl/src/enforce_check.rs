@@ -141,7 +141,7 @@ fn history(invocation: &Invocation) -> Option<Vec<Past>> {
     let since = now_ms - DAYS * 86_400_000;
     let mut stmt = conn
         .prepare(
-            "SELECT tc.name, tc.input_json, m.ts FROM tool_call tc
+            "SELECT tc.name, tc.input_json, m.ts FROM tool_call_full tc
              JOIN message_part p ON p.id = tc.call_part_id
              JOIN message m ON m.id = p.message_id
              WHERE m.ts >= ?1 AND tc.input_json IS NOT NULL

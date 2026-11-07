@@ -277,6 +277,10 @@ fn an_archive_indexed_by_the_insert_trigger_stays_in_sync_after_migration_0015()
              DELETE FROM schema_migrations WHERE version >= 15;
              DROP TABLE part_blob;
              DROP VIEW message_part_full;
+             DROP VIEW message_part_unpacked;
+             DROP VIEW part_body_full;
+             DROP VIEW tool_call_full;
+             DROP TABLE zstd_dict;
              DROP INDEX ix_part_body_hash;
              UPDATE message_part
                 SET content_json = (SELECT body FROM part_body WHERE hash = body_hash)

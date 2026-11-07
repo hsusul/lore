@@ -71,17 +71,30 @@ pub fn body_hash(body: &str) -> String {
 /// happens unless the table was damaged, and the caller then keeps the body
 /// inline, so a bad row can never stand in for good content.
 ///
+/// Stored compressed once `part_body.body` has a dictionary. The row held
+/// under the hash is decoded here rather than through `part_body_full`, so a
+/// damaged one also reads as "not the same" instead of failing the ingest.
+///
 /// Runs in the caller's transaction.
-pub(crate) fn store_body(tx: &Connection, body: &str) -> Result<Option<String>> {
+pub(crate) fn store_body(
+    tx: &Connection,
+    packer: &crate::codec::Packer,
+    body: &str,
+) -> Result<Option<String>> {
     let hash = body_hash(body);
     tx.prepare_cached(
         "INSERT INTO part_body (hash, body) VALUES (?1, ?2) ON CONFLICT(hash) DO NOTHING",
     )?
-    .execute(params![hash, body])?;
+    .execute(params![hash, packer.pack(&crate::codec::PART_BODY, body)])?;
     let same: bool = tx
-        .prepare_cached("SELECT body FROM part_body WHERE hash = ?1")?
+        .prepare_cached(
+            "SELECT body, (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_id(body))
+             FROM part_body WHERE hash = ?1",
+        )?
         .query_row([&hash], |row| {
-            Ok(row.get_ref(0)?.as_bytes()? == body.as_bytes())
+            let dict = row.get_ref(1)?.as_blob_or_null()?;
+            Ok(crate::codec::decode(row.get_ref(0)?, dict)
+                .is_ok_and(|stored| stored.as_deref() == Some(body)))
         })?;
     Ok(same.then_some(hash))
 }

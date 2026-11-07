@@ -463,6 +463,8 @@ fn insert_rows(
     let segment_count = base.segments + parsed.segments.len();
     let segment_id =
         |ix: usize| (ix < segment_count).then(|| det_id("seg", &[session_id, &ix.to_string()]));
+    // Bodies are written compressed in every column that has a dictionary.
+    let packer = crate::codec::Packer::load(tx)?;
 
     // Segments. The first may be the open segment an append extends.
     for (i, seg) in parsed.segments.iter().enumerate() {
@@ -539,7 +541,9 @@ fn insert_rows(
             // An attachment body is stored once, in part_body, and the part
             // points at it; readers get it back through message_part_full.
             let body_hash = match (&p.content_json, p.kind.as_str()) {
-                (Some(body), crate::compact::ATTACHMENT) => crate::compact::store_body(tx, body)?,
+                (Some(body), crate::compact::ATTACHMENT) => {
+                    crate::compact::store_body(tx, &packer, body)?
+                }
                 _ => None,
             };
             // A tool result's payload is stored without the output it repeats
@@ -566,8 +570,8 @@ fn insert_rows(
                 mid,
                 p.ordinal,
                 p.kind.as_str(),
-                p.text,
-                inline_json,
+                packer.pack_opt(&crate::codec::PART_TEXT, p.text.as_deref()),
+                packer.pack_opt(&crate::codec::PART_CONTENT, inline_json),
                 body_hash,
                 p.searchable,
                 p.metadata_json,
@@ -577,7 +581,10 @@ fn insert_rows(
             if let (Some(_), Some(original)) = (&slim_json, &p.content_json) {
                 if !crate::compact::serves_exactly(tx, &pid, original)? {
                     tx.prepare_cached("UPDATE message_part SET content_json = ?2 WHERE id = ?1")?
-                        .execute(params![pid, original])?;
+                        .execute(params![
+                            pid,
+                            packer.pack(&crate::codec::PART_CONTENT, original)
+                        ])?;
                 }
             }
 
@@ -636,7 +643,7 @@ fn insert_rows(
                 result_part_id,
                 tc.native_call_id,
                 tc.name,
-                tc.input_json,
+                packer.pack_opt(&crate::codec::TOOL_INPUT, tc.input_json.as_deref()),
                 // The output is the result part's text; keep a copy only
                 // when there is no result part to hold it.
                 tc.output_text.as_ref().filter(|_| result_part_id.is_none()),

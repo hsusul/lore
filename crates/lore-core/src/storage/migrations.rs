@@ -118,7 +118,19 @@ const MIGRATIONS: &[Migration] = &[
         name: "tool_output_once",
         sql: include_str!("../../migrations/0020_tool_output_once.sql"),
     },
+    Migration {
+        version: 21,
+        name: "zstd_bodies",
+        sql: include_str!("../../migrations/0021_zstd_bodies.sql"),
+    },
 ];
+
+/// Migrations that rebuild a table other tables reference. They run with
+/// foreign keys off and must pass `foreign_key_check` before they commit, the
+/// procedure SQLite documents for changing a referenced table's shape: with
+/// foreign keys on, dropping the old table fails or renaming it rewrites the
+/// references.
+const REBUILDS: &[i64] = &[21];
 
 /// How many migrations exist. Tests assert against this rather than a literal
 /// so adding a migration does not require editing an unrelated assertion — the
@@ -315,9 +327,9 @@ pub fn run(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 const ONE_WAY_FROM: i64 = 19;
 
-/// The latest one-way migration: 0020 stores tool output once. An archive
-/// that has not applied it is backed up before it is.
-const ONE_WAY_LATEST: i64 = 20;
+/// The latest one-way migration: 0021 lets message bodies be stored
+/// compressed. An archive that has not applied it is backed up before it is.
+const ONE_WAY_LATEST: i64 = 21;
 
 /// Back up an archive that holds data before a one-way migration is applied
 /// to it, unless a backup under an hour old exists
@@ -386,8 +398,45 @@ fn apply(conn: &Connection, m: &Migration) -> Result<()> {
         return Ok(()); // already applied
     }
 
+    if !REBUILDS.contains(&m.version) {
+        return apply_in_transaction(conn, m, &checksum);
+    }
+    let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+    let applied = apply_in_transaction(conn, m, &checksum);
+    if foreign_keys != 0 {
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    }
+    applied
+}
+
+fn apply_in_transaction(conn: &Connection, m: &Migration, checksum: &str) -> Result<()> {
+    // The schema's views call the codec's functions, so they exist on every
+    // connection that migrates, including ones opened without `storage`.
+    crate::codec::register(conn)?;
     let tx = conn.unchecked_transaction()?;
+    let rebuild = REBUILDS.contains(&m.version);
+    // Violations an archive already had (rows an older build left dangling)
+    // are not the rebuild's to fix; it must only not add any.
+    let violations = |tx: &Connection| -> Result<i64> {
+        Ok(
+            tx.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })?,
+        )
+    };
+    let before = if rebuild { violations(&tx)? } else { 0 };
     tx.execute_batch(m.sql)?;
+    if rebuild {
+        let after = violations(&tx)?;
+        if after > before {
+            return Err(StorageError::Migration(format!(
+                "migration {} would add {} foreign key violations",
+                m.version,
+                after - before
+            )));
+        }
+    }
     tx.execute(
         "INSERT INTO schema_migrations (version, name, checksum, applied_at)
          VALUES (?1, ?2, ?3, unixepoch('now') * 1000)",
@@ -618,7 +667,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, ONE_WAY_LATEST - 1);
+        assert_eq!(version, ONE_WAY_FROM, "the archive as it was, at 19");
     }
 
     #[test]
