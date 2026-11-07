@@ -406,6 +406,27 @@ fn an_arm_without_its_text_is_refused() {
 }
 
 #[test]
+fn an_arm_with_empty_or_whitespace_text_is_refused() {
+    let f = fixture(2);
+    std::fs::write(
+        f.root.join("eval/arms.json"),
+        json!({"s_abc:4": {"lore": "", "file": "   \t\n"}}).to_string(),
+    )
+    .unwrap();
+    let out = replay(&f, "lore", &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no `lore` text"));
+    assert!(
+        !f.root.join("rec/argv").exists(),
+        "the agent must not start"
+    );
+
+    let out = replay(&f, "file", &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no `file` text"));
+}
+
+#[test]
 fn a_run_deletes_its_scratch_and_keeps_the_record() {
     let f = fixture(2);
     let out = replay(&f, "oracle", &[]);
