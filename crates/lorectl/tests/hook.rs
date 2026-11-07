@@ -717,6 +717,33 @@ fn prompt_is_silent_without_matching_words() {
     assert_eq!((code(&out), stdout(&out)), (0, String::new()));
 }
 
+const PLANNING: &str = "---\nid: 01JD0000000000000000000005\ntype: convention\ntitle: Keep planning docs local\n---\nDon't commit planning docs. They aren't for the repo.\n";
+
+const PLANNING_FOR_PROMPT: &str = "Lore notes for this request:\n\
+     - [unanchored] Keep planning docs local (01JD0000000000000000000005)\n";
+
+#[test]
+fn prompt_does_not_match_a_note_on_a_shared_contraction() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[PLANNING]);
+    // "don't" once split into "don" and "t", two words every such note shares.
+    for prompt in ["don't add a changelog", "don\u{2019}t add a changelog"] {
+        let stdin = prompt_json(&repo, "s-1", prompt);
+        let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+        assert_eq!(code(&out), 0, "{prompt}");
+        assert_eq!(stdout(&out), "", "{prompt}");
+    }
+    // Two real shared words still match, with either apostrophe.
+    for (session, prompt) in [
+        ("s-2", "don't commit the planning notes"),
+        ("s-3", "don\u{2019}t commit the planning notes"),
+    ] {
+        let stdin = prompt_json(&repo, session, prompt);
+        let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+        assert_eq!(stdout(&out), prompt_reply(PLANNING_FOR_PROMPT), "{prompt}");
+    }
+}
+
 #[test]
 fn prompt_skips_a_note_the_session_was_already_shown() {
     let (home, vault, repo) = memory_home();
