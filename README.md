@@ -19,15 +19,23 @@ Three rules hold the design together.
 
 ## Get started
 
-Lore is early. There is no signed build, so build from source. You need Rust and git. `rust-toolchain.toml` pins the toolchain, and rustup selects it.
+Lore is early. The [v0.2.0 release](https://github.com/hsusul/lore/releases/tag/v0.2.0) has `lorectl` for macOS on Apple Silicon (`aarch64-apple-darwin`) and Intel (`x86_64-apple-darwin`), and for Linux (`x86_64-unknown-linux-gnu`). Download the archive for your machine, check it against `SHA256SUMS` (`sha256sum -c` on Linux), and put `lorectl` on your `PATH`, where agents can run it too:
 
 ```bash
-cargo build --release -p lorectl
-export PATH="$PWD/target/release:$PATH"
+target=aarch64-apple-darwin
+base=https://github.com/hsusul/lore/releases/download/v0.2.0
+curl -LO "$base/lorectl-v0.2.0-$target.tar.gz" -LO "$base/SHA256SUMS"
+shasum -a 256 -c SHA256SUMS --ignore-missing
+tar -xzf "lorectl-v0.2.0-$target.tar.gz"
+mkdir -p ~/.local/bin && cp "lorectl-v0.2.0-$target/lorectl" ~/.local/bin/  # must be on PATH
 lorectl init
 ```
 
-`lorectl init` makes the vault at `~/Lore`, scans the sessions of the last 30 days for up to a minute, newest first, and shows the lessons it found in your corrections. Whatever it did not reach waits for the next `lorectl init` or `lorectl scan --since 30d`. It reads your Claude Code and Codex logs and never changes them. Put `target/release` on your `PATH` for good so agents can run `lorectl` too.
+The builds are not signed. macOS refuses to run a file a browser downloaded until you clear its quarantine flag with `xattr -d com.apple.quarantine lorectl`. `curl` sets no such flag.
+
+To build from source instead, you need Rust and git. `rust-toolchain.toml` pins the toolchain, and rustup selects it. Run `cargo build --release -p lorectl` and put `target/release` on your `PATH`.
+
+`lorectl init` makes the vault at `~/Lore`, scans the sessions of the last 30 days for up to a minute, newest first, and shows the lessons it found in your corrections. `--since`, `--scan-seconds`, and `--limit` change those numbers. Whatever it did not reach waits for the next `lorectl init` or `lorectl scan --since 30d`. It reads your Claude Code and Codex logs and never changes them.
 
 Then, in Claude Code, install the plugin and let the agent write your lessons:
 
@@ -43,9 +51,11 @@ The agent reads every candidate Lore mined, groups the ones that mean the same t
 lorectl init --review
 ```
 
-Accept, edit, or skip each one. From the next session on, the plugin shows the accepted notes for the repository at session start, each with a freshness label. `lorectl connect` says whether Claude Code and Codex are connected, and prints what to add for one that is not. `lorectl help mem` prints the memory commands alone.
+Accept, edit, or skip each one. `--no-review` only lists them. From the next session on, the plugin's hooks show the accepted notes to the agent, each with a freshness label: at session start, next to a prompt they match, and before an edit to a file they are anchored to. [Plugins](#plugins) says what each hook does.
 
-The desktop app is a second front end over the same archive. It needs Node.js 20, the Xcode command-line tools, and the Tauri 2 prerequisites for macOS. Run it with `npm run tauri dev`.
+Without the plugin, or for Codex, run `lorectl connect`. It says whether each agent runs the MCP server and the three hooks, and prints the exact command or config to add for each one missing. It reads the agents' config files and writes none. It does not look at installed plugins, so a plugin install still reads as not connected; do not add the printed entries on top of the plugin, or each hook runs twice. `lorectl help mem` prints the memory commands alone.
+
+The desktop app is a second front end over the same archive. The release has it as `Lore_0.2.0_aarch64.dmg`, for Apple Silicon only, and `SHA256SUMS` does not list it. It is not signed: drag Lore to Applications, then right-click it and choose Open the first time, or run `xattr -dr com.apple.quarantine /Applications/Lore.app`. To run it from source you need Node.js 20, the Xcode command-line tools, and the Tauri 2 prerequisites for macOS. Then run `npm run tauri dev`.
 
 ## The archive
 
@@ -53,7 +63,9 @@ The desktop app is a second front end over the same archive. It needs Node.js 20
 
 A large history takes a while to scan the first time. `lorectl scan --since 30d` ingests only the files modified in the last 30 days (`h` for hours and `m` for minutes work too), so you can start with recent work and run a full `lorectl scan` later. A `--since` scan never marks older files missing.
 
-The archive is a SQLite database named `lore.db` with `blobs` and `backups` beside it. It lives in the platform data directory under `dev.lore.app`. `LORE_ARCHIVE_DIR` or `--archive <DIR>` moves it. The path must be absolute.
+The archive is a SQLite database named `lore.db` with `blobs` beside it. It lives in the platform data directory under `dev.lore.app`. `LORE_ARCHIVE_DIR` or `--archive <DIR>` moves it. The path must be absolute.
+
+A newer build upgrades an older archive on its first scan, and commands that only read refuse it until then (exit 4). Before an upgrade that older builds cannot read back, it backs the archive up into `backups/` beside it. Lore stores each attachment body and tool output once. New sessions are stored that way. The desktop app converts sessions an older build stored, in the background after its startup scan; `lorectl` does not.
 
 ```bash
 lorectl scan
@@ -101,7 +113,7 @@ EOF
 lorectl mem add note.md
 ```
 
-`-` reads the note from stdin. Global notes land in `global/`. A note for one repository has `scope: repo:<key>`. The key is a hash of the repository's `origin` URL. `lorectl mem recall --json` prints it for the repository you are in. Anchors tie a note to lines of code. Pass `--cwd <DIR>` so Lore pins each anchor's hash and commit from that repository.
+`-` reads the note from stdin. Global notes land in `global/`. A note for one repository has `scope: repo:<key>` and lands in `repos/<name>-<key>/`. The key is a hash of the repository's `origin` URL. `lorectl mem recall --json` prints it for the repository you are in. Anchors tie a note to lines of code. Pass `--cwd <DIR>` so Lore pins each anchor's hash and commit from that repository.
 
 ```markdown
 ---
@@ -155,6 +167,8 @@ Under each proposal, `mem inbox` prints its receipt: the archived session it cam
 
 `lorectl mem mine` reads the archive for corrections you made to an agent, such as "no, use pnpm not npm", standing rules such as "make sure the docs are never pushed", and instructions you had to repeat. It groups the ones that say the same thing into lessons and keeps those that state a rule. Lessons rank first by how much they read like a standing rule: "from now on", "always", "never", and "make sure" raise one ("make sure" less when the same turn also says to push, merge, or the like), and a PR or issue number, a branch name, a URL, a masked secret, a one-off order like "push this branch", or a chore with a rule tacked on with "and" ("delete the runtimes and build them on my ssd from now on") lowers it. Then lessons you gave in more conversations rank higher, then newer ones. A resumed or forked copy of a conversation counts once. Each lesson prints with its receipts: the sessions it came from, the date, what you said, and what the agent had just done. Under a lesson, `may conflict with` lists up to three later turns in the same repository about the same command (PR, push, commit, branch, merge, rebase, tests, mocks, docs, permission). Lore does not judge them: read them, or let the agent judge them through `mine_candidates`, before you accept the lesson. A lesson that scores below zero reads as a one-off order and is left out; the first line counts them, and `--all` lists them too. It is a dry run: it writes nothing. `--limit N` (default 20) and `--json` are optional. Two limits tune what it finds: `--min-overlap PERCENT` (default 50) is how much of their words two corrections must share to be one lesson, and `--max-chars N` (default 300) is the longest turn still read as a correction. Pass the same limits with `--propose`, since they decide which lessons exist.
 
+`--new` keeps only lessons with a correction no Find lessons run has read yet. `--replies` also lists ordinary replies from the last 48 hours that no rule flagged.
+
 `lorectl mem mine --propose <ID>...` files the lessons you name into the inbox, each with its receipts in the body, for you to accept or reject like any proposal. It never files the same lesson twice.
 
 `lorectl mem eval` scores a policy for accepting proposals without you against the proposals you already accepted and rejected. It reports how many it would have taken off your hands, lists every one it would have accepted that you rejected, and says whether it clears a fixed bar. It accepts nothing and writes nothing. `--policy` is `never` (the default) or `starting-bar`.
@@ -184,6 +198,8 @@ lorectl report --since 30d     # or 12h, 90m, or a start date like 2026-11-01
 lorectl report --cwd . --json  # one repository, as JSON
 ```
 
+With `--cwd`, activity, corrections, and repeats cover that repository only. Lessons and delivery stay vault-wide.
+
 It reads the archive and the vault and writes to neither. With no archive or no vault yet, it says so and exits 0.
 
 ## Skills
@@ -204,8 +220,10 @@ lorectl skills doctor   # problems, each with a command to fix it or a hint
 Claude Code:
 
 ```bash
-claude mcp add lore -- /absolute/path/to/lorectl mcp
+claude mcp add --scope user lore -- /absolute/path/to/lorectl mcp
 ```
+
+Without `--scope user`, Claude Code adds the server to the current project only.
 
 Codex, in `~/.codex/config.toml`:
 
@@ -221,9 +239,11 @@ The vault is `~/Lore` by default. For another vault, set `LORE_VAULT_DIR` to an 
 
 `plugins/` holds a plugin for each agent. Each one runs three hooks, and the agent passes each its hook JSON on stdin:
 
-- `lorectl hook session-start` when a session starts. Its output becomes context the session starts with: the repository's memory notes with their freshness labels, and a warning about agent work at risk.
-- `lorectl hook prompt` when a person sends a prompt. It adds up to 3 notes that share words with the prompt and that the session has not been shown yet.
-- `lorectl hook pre-tool` before a shell command or an edit (Claude Code's `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`, and Codex's `Bash` and `apply_patch`). When an active note in scope has an `enforce` rule the call matches, it denies the call and names the note. Otherwise it adds the notes anchored to the files being changed.
+- `lorectl hook session-start` when a session starts. Its output becomes context the session starts with: a warning about agent work at risk, up to 10 of the repository's memory notes with their freshness labels and how many more `recall_memory` lists, and `Lore session: <ID>` when the archive holds the session. An agent that passes that id to `propose_memory` gets its proposals marked verified. A session started since the last scan gets no id line.
+- `lorectl hook prompt` when a person sends a prompt. It adds up to 3 notes that hold at least two of the prompt's content words (or its only one) and that the session has not been shown yet. A prompt like "yes" adds nothing.
+- `lorectl hook pre-tool` before a shell command or an edit (Claude Code's `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`, and Codex's `Bash` and `apply_patch`). When an active note in scope has an `enforce` rule the call matches, it denies the call and names the note. Otherwise it adds up to 5 notes anchored to the files being changed.
+
+The hooks never scan and always exit 0. They write nothing but the vault's index and, under `.lore/shown/`, which notes each session was shown. `lorectl help hook` has the details.
 
 A note's `enforce` rules are for mechanical lessons whose violation shows in one tool call. Each has a `tool` (`bash` for a shell command, `write` for text written to a file, `path` for the path written), a `pattern` regex, and an optional `unless` regex that exempts a call it also matches:
 
@@ -263,7 +283,7 @@ The server offers six tools. All but `propose_memory` are read only.
 
 ## Privacy
 
-Everything stays on your machine. Lore has no accounts, no telemetry, and no server. The archive code, the memory and skills code, `lorectl`, and the desktop shell have no network code. CI scans their sources for networking APIs and runs their tests with the network denied (`scripts/egress-check.sh`). The app does not check for updates.
+Everything stays on your machine. Lore has no accounts, no telemetry, and no server. The archive code, the memory and skills code, `lorectl`, and the desktop shell have no network code. CI scans their sources for networking APIs. For the archive, memory, skills, and `lorectl` crates it also checks the dependency graph for networking crates and runs the tests with the network denied (`scripts/egress-check.sh`). The app does not check for updates: its updater is compiled out unless it is built with the `updater` feature.
 
 Before text is indexed, Lore scans it for secrets with fixed rules for known key formats plus an entropy check. Flagged spans are masked. Search, snippets, exports, and MCP results use the masked text. The archive still holds the original text, and so does the original log. Proposals are redacted before they reach the inbox. Redaction is a safeguard, not a promise that nothing secret remains.
 
@@ -271,7 +291,7 @@ When you connect `lorectl mcp` to an agent, the redacted text it returns goes to
 
 ### Replays talk to a model provider
 
-`lore-replay` is an evaluation tool, not part of the app. It measures whether lessons stop an agent from repeating a mistake a person already corrected, by replaying a Claude Code or Codex session from just before the correction. `lore-replay cases` only reads the archive and the session files, and records each case's `agent`. `lore-replay run` and `lore-replay sweep` start the agent that recorded the case: Claude Code, which sends the session's earlier turns and the prompt to Anthropic, or Codex (`codex exec resume`), which sends them to OpenAI. Either runs under your own login, billed to it. `lore-replay label` and `lore-replay grade` ask a model judge through `claude -p` the same way, sending the cases and the replayed turns; `grade --no-judge` and `lore-replay report`, the preregistered analysis, only read. The crate holds no networking code itself and nothing in the archive depends on it, but it is not covered by the no-network guarantee above.
+`lore-replay` is an evaluation tool, not part of the app or the release. Build it with `cargo build --release -p lore-replay`. It measures whether lessons stop an agent from repeating a mistake a person already corrected, by replaying a Claude Code or Codex session from just before the correction. `lore-replay cases` only reads the archive and the session files, and records each case's `agent`. `lore-replay run` and `lore-replay sweep` start the agent that recorded the case: Claude Code, which sends the session's earlier turns and the prompt to Anthropic, or Codex (`codex exec resume`), which sends them to OpenAI. Either runs under your own login, billed to it. `lore-replay label` and `lore-replay grade` ask a model judge through `claude -p` the same way, sending the cases and the replayed turns; `grade --no-judge` and `lore-replay report`, the preregistered analysis, only read. The crate holds no networking code itself and nothing in the archive depends on it, but it is not covered by the no-network guarantee above.
 
 Each replay runs in a scratch clone at the commit HEAD pointed at when the prompt was given, inside Claude Code's OS sandbox with no network and no reads of `/Users` or `/Volumes`, with `gh` replaced by a stub that refuses. Its session goes into a symlinked project folder that Lore never ingests, removed when the run ends. The original repository is never written to.
 
