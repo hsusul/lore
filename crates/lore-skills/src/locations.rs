@@ -172,10 +172,17 @@ impl Roots {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())?;
+        // Empty counts as unset, as in `lore_core::paths::env_dir`, which this
+        // crate does not depend on.
+        let dir = |name: &str| {
+            std::env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        };
         Some(Self::resolve(
             &home,
-            std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from),
-            std::env::var_os("CODEX_HOME").map(PathBuf::from),
+            dir("CLAUDE_CONFIG_DIR"),
+            dir("CODEX_HOME"),
         ))
     }
 

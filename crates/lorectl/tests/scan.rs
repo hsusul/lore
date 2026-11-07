@@ -400,3 +400,52 @@ fn jsonl_names(root: &Path) -> std::collections::HashSet<std::ffi::OsString> {
         .filter_map(|p| p.file_name().map(std::ffi::OsStr::to_owned))
         .collect()
 }
+
+#[test]
+fn empty_agent_root_variables_mean_the_home_defaults_for_scan_and_connect() {
+    // `CLAUDE_CONFIG_DIR=` and `CODEX_HOME=` count as unset. Taken as set,
+    // the scan read `./projects` and `./sessions` in the working directory
+    // while `connect` reported `~/.claude` and `~/.codex`.
+    let (seeded, total) = seeded_homes(2, 2);
+    let home = seeded.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::rename(seeded.path().join("claude"), home.join(".claude")).unwrap();
+    std::fs::rename(seeded.path().join("codex"), home.join(".codex")).unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let archive = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_lorectl"))
+            .args(args)
+            .current_dir(cwd.path())
+            .env("HOME", &home)
+            .env("CLAUDE_CONFIG_DIR", "")
+            .env("CODEX_HOME", "")
+            .env_remove("LORE_ARCHIVE_DIR")
+            .output()
+            .expect("spawn lorectl")
+    };
+
+    let out = run(&[
+        "--json",
+        "scan",
+        "--archive",
+        &archive.path().to_string_lossy(),
+    ]);
+    assert_eq!(
+        code(&out),
+        0,
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(value["ingested"], total, "{value}");
+
+    let out = run(&["connect"]);
+    assert_eq!(code(&out), 0);
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    for (name, dir) in [("Claude Code", ".claude"), ("Codex", ".codex")] {
+        let line = format!("{name}  {}\n", home.join(dir).display());
+        assert!(stdout.contains(&line), "no {line:?} in:\n{stdout}");
+    }
+}

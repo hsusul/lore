@@ -84,6 +84,18 @@ pub fn archive_dir(explicit: Option<&Path>) -> Result<PathBuf> {
     resolve(explicit, env_override.as_deref(), dirs::data_dir())
 }
 
+/// The directory the environment variable `name` names, or `None` when it is
+/// unset or empty. An empty value counts as unset, so `CLAUDE_CONFIG_DIR=`
+/// falls back to the home default instead of the working directory. Every
+/// reader of `HOME`, `CLAUDE_CONFIG_DIR`, and `CODEX_HOME` goes through this
+/// so the scanner and `lorectl connect` agree on the folder.
+#[must_use]
+pub fn env_dir(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
 /// Full path to the archive database, i.e. [`archive_dir`] joined with
 /// [`ARCHIVE_DB_FILENAME`].
 pub fn archive_db_path(explicit: Option<&Path>) -> Result<PathBuf> {
