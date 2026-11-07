@@ -33,5 +33,6 @@ pub mod recall;
 pub mod repo;
 pub mod review;
 pub mod session_start;
+pub mod shown;
 pub mod skill_use;
 pub mod vault;

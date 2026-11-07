@@ -240,6 +240,26 @@ impl Index {
         collect_hits(statement, params![fts, limit, repo.unwrap_or("global")])
     }
 
+    /// Active notes that are global or in `repo` (written `repo:<key>`)
+    /// sharing at least two content words with `text`, or its only one, best
+    /// first. See [`related_words`] for what counts as a content word.
+    pub fn search_active_related(
+        &self,
+        text: &str,
+        repo: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Hit>, IndexError> {
+        let Some(fts) = fts_related(text) else {
+            return Ok(Vec::new());
+        };
+        let statement = self.conn.prepare_cached(&format!(
+            "{SELECT_HITS} WHERE notes MATCH ?1 AND status = 'active'
+               AND scope IN ('global', ?3) ORDER BY score, path LIMIT ?2"
+        ))?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        collect_hits(statement, params![fts, limit, repo.unwrap_or("global")])
+    }
+
     /// Active notes that are global or in `repo` (written `repo:<key>`), by
     /// path, with no query to match. The score is 0 and the excerpt is the
     /// start of the body above `## Timeline`.
@@ -420,6 +440,65 @@ pub fn has_words(query: &str) -> bool {
     fts_query(query).is_some()
 }
 
+/// Words that carry no topic of their own: function words, and the short
+/// replies a person gives an agent mid-task.
+const STOPWORDS: &[&str] = &[
+    "a", "about", "after", "again", "all", "also", "am", "an", "and", "any", "are", "as", "at",
+    "be", "been", "before", "but", "by", "can", "continue", "could", "did", "do", "does", "done",
+    "for", "from", "go", "good", "great", "had", "has", "have", "he", "her", "here", "him", "his",
+    "how", "i", "if", "in", "into", "is", "it", "its", "just", "let", "lets", "like", "me", "more",
+    "my", "no", "nope", "not", "now", "of", "ok", "okay", "on", "one", "or", "our", "out",
+    "please", "proceed", "same", "she", "should", "so", "some", "sure", "thank", "thanks", "that",
+    "the", "their", "them", "then", "there", "these", "they", "this", "those", "to", "too", "up",
+    "us", "very", "was", "we", "were", "what", "when", "where", "which", "who", "why", "will",
+    "with", "would", "yeah", "yes", "yep", "you", "your",
+];
+/// At most this many content words of a text are searched for.
+const RELATED_WORDS: usize = 12;
+
+/// The content words of `text`, lowercased, each once, in order, at most
+/// [`RELATED_WORDS`]: every word that is not in [`STOPWORDS`], after
+/// dropping a leading slash command such as `/review`.
+#[must_use]
+pub fn related_words(text: &str) -> Vec<String> {
+    let text = text.trim_start();
+    let text = match text.strip_prefix('/') {
+        Some(rest) => rest.trim_start_matches(|c: char| !c.is_whitespace()),
+        None => text,
+    };
+    let mut words: Vec<String> = Vec::new();
+    for word in text.split(|c: char| !c.is_alphanumeric()) {
+        let word = word.to_lowercase();
+        if word.is_empty() || STOPWORDS.contains(&word.as_str()) || words.contains(&word) {
+            continue;
+        }
+        words.push(word);
+        if words.len() == RELATED_WORDS {
+            break;
+        }
+    }
+    words
+}
+
+/// An FTS5 query matching a note that holds any two of `text`'s content
+/// words, or its only one. `None` when it has none.
+fn fts_related(text: &str) -> Option<String> {
+    let words: Vec<String> = related_words(text)
+        .iter()
+        .map(|w| format!("\"{w}\""))
+        .collect();
+    if words.len() < 2 {
+        return words.into_iter().next();
+    }
+    let mut pairs = Vec::new();
+    for (i, a) in words.iter().enumerate() {
+        for b in &words[i + 1..] {
+            pairs.push(format!("({a} AND {b})"));
+        }
+    }
+    Some(pairs.join(" OR "))
+}
+
 /// Every word of the query as a quoted FTS5 term, so punctuation in a query is
 /// never read as FTS5 syntax. `None` when the query has no words.
 fn fts_query(query: &str) -> Option<String> {
@@ -429,4 +508,26 @@ fn fts_query(query: &str) -> Option<String> {
         .map(|t| format!("\"{t}\""))
         .collect();
     (!terms.is_empty()).then(|| terms.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn related_words_drop_filler_and_a_leading_slash_command() {
+        assert_eq!(
+            related_words("Please fix THE flaky retry test, then fix it again"),
+            ["fix", "flaky", "retry", "test"]
+        );
+        assert!(related_words("yes").is_empty());
+        assert!(related_words("ok, continue!").is_empty());
+        assert!(related_words("/compact").is_empty());
+        assert_eq!(related_words("/review the migration"), ["migration"]);
+        assert_eq!(fts_related("retry").unwrap(), "\"retry\"");
+        assert_eq!(
+            fts_related("retry flaky test").unwrap(),
+            "(\"retry\" AND \"flaky\") OR (\"retry\" AND \"test\") OR (\"flaky\" AND \"test\")"
+        );
+    }
 }

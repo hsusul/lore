@@ -16,13 +16,17 @@
 //!
 //! [`anchored_to`] narrows recall to the notes anchored to one file, so an
 //! agent about to change that file can be shown them.
+//!
+//! [`related`] recalls by what a person wrote rather than by a search query:
+//! a note need not hold every word, only two of the text's content words.
+//! A text without content words recalls nothing.
 
 use std::fs;
 use std::io;
 use std::path::Path;
 
 use crate::anchor::{Freshness, Located, WorkTree};
-use crate::index::has_words;
+use crate::index::{has_words, related_words};
 use crate::note::{Note, NoteError, RelPath, Scope};
 use crate::repo::RepoContext;
 use crate::vault::{Vault, VaultError};
@@ -69,6 +73,45 @@ const MAX_CANDIDATES: usize = 200;
 /// Notes matching `query` that apply in `cwd`, best first, at most `limit`.
 /// When `query` has no words, every active note that applies in `cwd`.
 pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Recall, VaultError> {
+    let search = if has_words(query) {
+        Search::Every(query)
+    } else {
+        Search::Unranked
+    };
+    recall_by(vault, search, cwd, limit)
+}
+
+/// Notes sharing at least two content words with `text`, or its only one,
+/// that apply in `cwd`, best first, at most `limit`, ranked and labeled as in
+/// [`recall`]. When `text` has no content words, no notes: unlike
+/// [`recall`], it never falls back to every note in scope.
+pub fn related(vault: &Vault, text: &str, cwd: &Path, limit: usize) -> Result<Recall, VaultError> {
+    if related_words(text).is_empty() {
+        return Ok(Recall {
+            context: RepoContext::discover(cwd),
+            notes: Vec::new(),
+            skipped: Vec::new(),
+        });
+    }
+    recall_by(vault, Search::Related(text), cwd, limit)
+}
+
+/// How recall finds its candidates in the index.
+enum Search<'a> {
+    /// Notes holding every word of the query.
+    Every(&'a str),
+    /// Notes holding two of the text's content words.
+    Related(&'a str),
+    /// Every note in scope.
+    Unranked,
+}
+
+fn recall_by(
+    vault: &Vault,
+    search: Search<'_>,
+    cwd: &Path,
+    limit: usize,
+) -> Result<Recall, VaultError> {
     let context = RepoContext::discover(cwd);
     let repo_scope = context.key().map(|key| format!("repo:{}", key.as_str()));
     let index = vault.index()?;
@@ -76,14 +119,16 @@ pub fn recall(vault: &Vault, query: &str, cwd: &Path, limit: usize) -> Result<Re
         .saturating_mul(CANDIDATES_PER_NOTE)
         .min(MAX_CANDIDATES)
         .max(limit);
-    let ranked = has_words(query);
+    let ranked = !matches!(search, Search::Unranked);
     // With no words there is nothing to rank by in the index, so every note in
     // scope is read and ordered here; a path order would hand the slots to
     // whichever notes sort first by name.
-    let hits = if ranked {
-        index.search_active(query, repo_scope.as_deref(), candidates)?
-    } else {
-        index.list_active(repo_scope.as_deref(), usize::MAX)?
+    let hits = match search {
+        Search::Every(query) => index.search_active(query, repo_scope.as_deref(), candidates)?,
+        Search::Related(text) => {
+            index.search_active_related(text, repo_scope.as_deref(), candidates)?
+        }
+        Search::Unranked => index.list_active(repo_scope.as_deref(), usize::MAX)?,
     };
     let mut skipped = Vec::new();
     for rel in index.unparsed()? {

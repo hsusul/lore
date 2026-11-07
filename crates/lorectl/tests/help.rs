@@ -103,7 +103,7 @@ fn help_hook_prints_the_hook_page() {
     assert_topic_page(
         "hook",
         "Hooks (lorectl hook <EVENT> [--archive <DIR>]):",
-        &["    session-start "],
+        &["    session-start ", "    prompt ", "    pre-edit "],
     );
 }
 
@@ -120,15 +120,23 @@ Hooks (lorectl hook <EVENT> [--archive <DIR>]):
                       lists. Then `Lore session: <ID>` when the archive
                       holds the hook JSON's `session_id`; pass that ID to
                       propose_memory. Prints nothing when there is none.
-    pre-edit          Before a tool edits `tool_input.file_path`, up to 5
-                      accepted notes anchored to that file, each with its
-                      freshness label, as PreToolUse `additionalContext`
-                      JSON. It never allows or blocks the edit. Prints
-                      nothing when no note is anchored there.
+    prompt            When a person sends `prompt`, up to 3 accepted notes
+                      that share at least two of its content words (or its
+                      only one), each with its freshness label, as
+                      UserPromptSubmit `additionalContext` JSON. Skips notes
+                      the session was already shown. Prints nothing for a
+                      prompt like `yes` or when no note matches.
+    pre-edit          Before a tool edits `tool_input.file_path`, or the
+                      files a Codex `apply_patch` names, up to 5 accepted
+                      notes anchored to them, each with its freshness
+                      label, as PreToolUse `additionalContext` JSON. It
+                      never allows or blocks the edit. Prints nothing when
+                      no note is anchored there.
     Notes are for `cwd` in the hook JSON on stdin, else the current
     directory. LORE_VAULT_DIR names the vault; otherwise ~/Lore.
     Run by an agent, not a person. It never scans, and it writes nothing
-    but the vault's rebuildable index. Every failure, and any other EVENT,
+    but the vault's rebuildable index and, under .lore/shown/, which notes
+    each `session_id` was shown. Every failure, and any other EVENT,
     exits 0 in silence, so a session never stalls on Lore.
 "
     );
