@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use lexopt::prelude::*;
-use lore_core::paths::ARCHIVE_DB_FILENAME;
+use lore_core::paths::{self, ARCHIVE_DB_FILENAME};
 use lore_core::storage;
 use lore_memory::considered::{self, Marked};
 use lore_memory::filing;
@@ -44,6 +44,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let mut parser = lexopt::Parser::from_args(&invocation.rest);
     let (mut limit, mut json) = (DEFAULT_LIMIT, invocation.json);
     let (mut propose, mut ids, mut vault_dir) = (false, Vec::new(), invocation.vault.clone());
+    let mut archive_dir = invocation.archive.clone();
     let mut limits = mine::Limits::default();
     let (mut all, mut new_only, mut replies) = (false, false, false);
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
@@ -69,11 +70,16 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
                 let value = parser.value().map_err(|e| usage(e.to_string()))?;
                 vault_dir = Some(PathBuf::from(value));
             }
+            Long("archive") => {
+                let value = parser.value().map_err(|e| usage(e.to_string()))?;
+                archive_dir = Some(PathBuf::from(value));
+            }
             Value(id) if propose => ids.push(id.to_string_lossy().into_owned()),
             other => return Err(usage(other.unexpected().to_string())),
         }
     }
-    let conn = storage::open_read_only(&invocation.archive_dir()?.join(ARCHIVE_DB_FILENAME))?;
+    let archive = paths::archive_dir(archive_dir.as_deref())?;
+    let conn = storage::open_read_only(&archive.join(ARCHIVE_DB_FILENAME))?;
     let turns = mine::read_turns(&conn).map_err(storage::StorageError::from)?;
     let candidates = mine::corrections_in(&turns, &limits);
     let total = candidates.len();

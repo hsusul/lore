@@ -11,10 +11,10 @@
 //! Tool inputs the archive keeps in a blob are not read.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use lexopt::prelude::*;
-use lore_core::paths::ARCHIVE_DB_FILENAME;
+use lore_core::paths::{self, ARCHIVE_DB_FILENAME};
 use lore_core::storage;
 use lore_memory::enforce::{Rule, Rules, ToolCall};
 use lore_memory::vault::{self, Vault};
@@ -41,6 +41,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let usage = |m: String| CliError::Usage(m);
     let mut parser = lexopt::Parser::from_args(&invocation.rest);
     let (mut vault_dir, mut cwd) = (invocation.vault.clone(), None);
+    let mut archive_dir = invocation.archive.clone();
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
             Short('h') | Long("help") => {
@@ -50,6 +51,10 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
             Long("vault") => {
                 let value = parser.value().map_err(|e| usage(e.to_string()))?;
                 vault_dir = Some(PathBuf::from(value));
+            }
+            Long("archive") => {
+                let value = parser.value().map_err(|e| usage(e.to_string()))?;
+                archive_dir = Some(PathBuf::from(value));
             }
             Long("cwd") => {
                 let value = parser.value().map_err(|e| usage(e.to_string()))?;
@@ -80,7 +85,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     if chosen.is_empty() {
         let _ = writeln!(out, "no active note has an enforce rule");
     } else {
-        let past = history(invocation);
+        let past = history(archive_dir.as_deref());
         if past.is_none() {
             let _ = writeln!(out, "no archive to replay against; listing rules only\n");
         }
@@ -134,8 +139,8 @@ fn report(rule: &Rule, past: Option<&[Past]>) -> String {
 
 /// The archive's tool calls from the last [`DAYS`] days, oldest first, or
 /// `None` when there is no readable archive.
-fn history(invocation: &Invocation) -> Option<Vec<Past>> {
-    let dir = invocation.archive_dir().ok()?;
+fn history(archive: Option<&Path>) -> Option<Vec<Past>> {
+    let dir = paths::archive_dir(archive).ok()?;
     let conn = storage::open_read_only(&dir.join(ARCHIVE_DB_FILENAME)).ok()?;
     let now_ms = time::OffsetDateTime::now_utc().unix_timestamp() * 1000;
     let since = now_ms - DAYS * 86_400_000;

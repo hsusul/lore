@@ -31,6 +31,7 @@ pub const SUBCOMMANDS: [&str; 5] = ["propose", "inbox", "accept", "reject", "ret
 struct Args {
     help: bool,
     vault: Option<PathBuf>,
+    archive: Option<PathBuf>,
     json: bool,
     operand: Option<String>,
     agent: Option<String>,
@@ -73,6 +74,7 @@ fn parse(sub: &str, rest: &[String]) -> Result<Args, CliError> {
         match arg {
             Short('h') | Long("help") => args.help = true,
             Long("vault") => args.vault = Some(PathBuf::from(value(&mut parser)?)),
+            Long("archive") => args.archive = Some(PathBuf::from(value(&mut parser)?)),
             Long("json") if takes(allowed, "json") => args.json = true,
             Long(flag) if takes(allowed, flag) => {
                 let flag = flag.to_string();
@@ -195,7 +197,7 @@ pub fn run(
     rest: &[String],
     json: bool,
     usage_text: &str,
-    archive: Option<PathBuf>,
+    default_archive: Option<&std::path::Path>,
     default_vault: Option<&std::path::Path>,
 ) -> Result<u8, CliError> {
     let mut args = parse(sub, rest)?;
@@ -205,6 +207,9 @@ pub fn run(
     }
     if args.vault.is_none() {
         args.vault = default_vault.map(PathBuf::from);
+    }
+    if args.archive.is_none() {
+        args.archive = default_archive.map(PathBuf::from);
     }
     let json = json || args.json;
     let vault = Vault::open(&vault::resolve_dir(args.vault.as_deref())?)?;
@@ -239,7 +244,8 @@ pub fn run(
                     printable(&skipped.reason)
                 );
             }
-            let archive = Archive::open(archive.as_deref());
+            let archive_dir = lore_core::paths::archive_dir(args.archive.as_deref()).ok();
+            let archive = Archive::open(archive_dir.as_deref());
             let receipt = |p: &Proposal| archive.receipt(p.session.as_str(), &receipt_text(p));
             if json {
                 let items: Vec<Value> = pending
