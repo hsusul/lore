@@ -133,6 +133,7 @@ fn parse_from(
             | "file-history-delta"
             | "file-history-snapshot"
             | "frame-link"
+            | "progress"
             | "relocated"
             | "worktree-state" => continue,
             "user" | "assistant" | "system" | "attachment" | "summary" | "mode" | "pr-link" => {}
@@ -1514,6 +1515,20 @@ mod tests {
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
         assert!(session.notes.is_empty());
+    }
+
+    #[test]
+    fn progress_events_leave_a_session_fully_parsed() {
+        let adapter = ClaudeCodeAdapter::new();
+        let jsonl = concat!(
+            "{\"type\":\"progress\",\"data\":{\"message\":\"Running...\"}}\n",
+            "{\"type\":\"progress\",\"toolUseID\":\"bash-progress-1\",\"data\":{\"type\":\"bash_progress\"}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_prog\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n"
+        );
+        let session = adapter.parse_str(jsonl, "s_prog");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert!(session.notes.is_empty());
+        assert_eq!(session.messages.len(), 1);
     }
 
     #[test]
