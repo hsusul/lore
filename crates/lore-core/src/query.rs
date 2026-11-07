@@ -614,7 +614,7 @@ fn session_file_events(conn: &Connection, session_id: &str) -> Result<Vec<FileEv
     let mut stmt = conn.prepare(
         "SELECT id, path, change_kind, old_path, lines_added, lines_removed, source,
                 patch_blob_id IS NOT NULL
-         FROM file_event WHERE session_id = ?1 ORDER BY id",
+         FROM file_event WHERE session_id = ?1 ORDER BY rowid",
     )?;
     let rows = stmt
         .query_map([session_id], |row| {
@@ -1118,6 +1118,23 @@ mod tests {
         assert!(!detail.file_events[0].has_patch);
 
         assert!(get_session(&conn, "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn get_session_returns_file_events_in_chronological_order() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(dir.path()).unwrap();
+        let parsed = CodexAdapter::new().parse_str(&fixture("codex", "patch_apply.jsonl"), "p");
+        let expected_paths: Vec<String> =
+            parsed.file_events.iter().map(|f| f.path.clone()).collect();
+        assert!(expected_paths.len() > 1);
+
+        let sid = persist_session(&conn, "codex", "Codex", &parsed, &blobs).unwrap();
+        let detail = get_session(&conn, &sid).unwrap().expect("session exists");
+        let returned_paths: Vec<String> = detail.file_events.into_iter().map(|f| f.path).collect();
+
+        assert_eq!(returned_paths, expected_paths);
     }
 
     #[test]
