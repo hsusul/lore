@@ -3,7 +3,10 @@
 //! It is built only from parsed vault files, into a temporary file that is then
 //! renamed over the old one, so it never holds anything the vault lacks and a
 //! reader never sees half of it. Ranking is FTS5 BM25 with the title weighted
-//! above the body, and the `## Timeline` section below both.
+//! above the body, and the `## Timeline` section below both. A `lesson`
+//! column holds the title and the body above its Receipts list again, with
+//! no weight, so a search can ask that a word be in the lesson itself rather
+//! than only in the person's quoted words.
 //!
 //! The index also keeps a stamp (size and mtime) of every markdown file it
 //! read, and a fingerprint of all of them. A person editing, renaming, or
@@ -24,10 +27,10 @@ use crate::note::Note;
 
 pub const INDEX_FILE: &str = "index.db";
 const TEMP_FILE: &str = "index.db.tmp";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const SCHEMA: &str = "CREATE VIRTUAL TABLE notes USING fts5(
     path UNINDEXED, id UNINDEXED, slug UNINDEXED, scope UNINDEXED,
-    note_type UNINDEXED, status UNINDEXED, title, body, timeline,
+    note_type UNINDEXED, status UNINDEXED, title, body, timeline, lesson,
     tokenize = 'porter unicode61'
 );
 CREATE TABLE files (
@@ -267,7 +270,9 @@ impl Index {
         repo: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Hit>, IndexError> {
-        let Some(fts) = fts_related(text) else {
+        let words = related_words(text);
+        let specific = self.specific(&words)?;
+        let Some(fts) = fts_related(&words, &specific) else {
             return Ok(Vec::new());
         };
         let statement = self.conn.prepare_cached(&format!(
@@ -276,6 +281,29 @@ impl Index {
         ))?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         collect_hits(statement, params![fts, limit, repo.unwrap_or("global")])
+    }
+
+    /// The words of `words` that are not generic. A word is generic when
+    /// more than half of the active notes hold it, in any scope, and more
+    /// than [`SPECIFIC_NOTES`] do: a word most lessons share says nothing
+    /// about which one a text is about.
+    fn specific<'w>(&self, words: &'w [String]) -> Result<Vec<&'w str>, IndexError> {
+        let total = self.conn.query_row(
+            "SELECT count(*) FROM notes WHERE status = 'active'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?;
+        let mut held = self.conn.prepare_cached(
+            "SELECT count(*) FROM notes WHERE notes MATCH ?1 AND status = 'active'",
+        )?;
+        let mut out = Vec::new();
+        for word in words {
+            let notes: i64 = held.query_row(params![format!("\"{word}\"")], |r| r.get(0))?;
+            if notes <= SPECIFIC_NOTES || notes * 2 <= total {
+                out.push(word.as_str());
+            }
+        }
+        Ok(out)
     }
 
     /// Active notes that are global or in `repo` (written `repo:<key>`), by
@@ -365,7 +393,7 @@ impl Index {
 
 const SELECT_HITS: &str = "SELECT path, id, slug, scope, note_type, status, title,
         snippet(notes, 7, '', '', '...', 12),
-        bm25(notes, 0, 0, 0, 0, 0, 0, 4.0, 1.0, 0.5) AS score
+        bm25(notes, 0, 0, 0, 0, 0, 0, 4.0, 1.0, 0.5, 0.0) AS score
     FROM notes";
 
 fn collect_hits(
@@ -392,8 +420,8 @@ fn collect_hits(
 }
 
 const INSERT: &str = "INSERT INTO notes
-    (path, id, slug, scope, note_type, status, title, body, timeline)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+    (path, id, slug, scope, note_type, status, title, body, timeline, lesson)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 const STAMP: &str = "INSERT OR REPLACE INTO files (path, size, mtime) VALUES (?1, ?2, ?3)";
 const SET_FINGERPRINT: &str = "INSERT OR REPLACE INTO meta (key, value) VALUES ('fingerprint', ?1)";
 
@@ -411,6 +439,7 @@ fn row<'a>(rel: &'a str, note: &'a Note) -> impl rusqlite::Params + 'a {
     let file = rel.rsplit('/').next().unwrap_or(rel);
     let slug = file.strip_suffix(".md").unwrap_or(file);
     let (statement, timeline) = split_timeline(&note.body);
+    let lesson = format!("{}\n{}", note.title, without_receipts(statement));
     (
         rel,
         note.id.as_str(),
@@ -421,7 +450,23 @@ fn row<'a>(rel: &'a str, note: &'a Note) -> impl rusqlite::Params + 'a {
         note.title.as_str(),
         statement,
         timeline,
+        lesson,
     )
+}
+
+/// `statement` above its `Receipts:` line, the list of the person's quoted
+/// words the lore-lessons skill writes under a lesson. All of it when there
+/// is no such line.
+#[must_use]
+pub fn without_receipts(statement: &str) -> &str {
+    let mut offset = 0;
+    for line in statement.split_inclusive('\n') {
+        if line.trim().eq_ignore_ascii_case("receipts:") {
+            return statement.get(..offset).unwrap_or(statement);
+        }
+        offset += line.len();
+    }
+    statement
 }
 
 /// The body above the `## Timeline` heading, and the timeline itself.
@@ -517,15 +562,33 @@ pub fn related_words(text: &str) -> Vec<String> {
     words
 }
 
-/// An FTS5 query matching a note that holds any two of `text`'s content
-/// words, or its only one. `None` when it has none.
-fn fts_related(text: &str) -> Option<String> {
-    let words: Vec<String> = related_words(text)
-        .iter()
-        .map(|w| format!("\"{w}\""))
-        .collect();
+/// A word held by at most this many notes is never generic, so a small vault
+/// keeps every word.
+const SPECIFIC_NOTES: i64 = 3;
+
+/// An FTS5 query matching a note that holds any two of `words`, or the only
+/// one, with at least one of `specific` in the lesson (the title, or the
+/// body above its Receipts list). The person's quoted words can supply the
+/// second word but never the only one: they are what was said in some other
+/// session, often about something else. A generic word, one most notes
+/// hold, can be the second word but never the only one. `None` when
+/// nothing can match.
+fn fts_related(words: &[String], specific: &[&str]) -> Option<String> {
+    if specific.is_empty() {
+        return None;
+    }
+    let quoted = |w: &str| format!("\"{w}\"");
+    let in_lesson = format!(
+        "lesson : ({})",
+        specific
+            .iter()
+            .map(|w| quoted(w))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    );
+    let words: Vec<String> = words.iter().map(|w| quoted(w)).collect();
     if words.len() < 2 {
-        return words.into_iter().next();
+        return Some(in_lesson);
     }
     let mut pairs = Vec::new();
     for (i, a) in words.iter().enumerate() {
@@ -533,7 +596,7 @@ fn fts_related(text: &str) -> Option<String> {
             pairs.push(format!("({a} AND {b})"));
         }
     }
-    Some(pairs.join(" OR "))
+    Some(format!("({}) AND {in_lesson}", pairs.join(" OR ")))
 }
 
 /// Every word of the query as a quoted FTS5 term, so punctuation in a query is
@@ -561,11 +624,22 @@ mod tests {
         assert!(related_words("ok, continue!").is_empty());
         assert!(related_words("/compact").is_empty());
         assert_eq!(related_words("/review the migration"), ["migration"]);
-        assert_eq!(fts_related("retry").unwrap(), "\"retry\"");
+        let words = |text: &str| related_words(text);
         assert_eq!(
-            fts_related("retry flaky test").unwrap(),
-            "(\"retry\" AND \"flaky\") OR (\"retry\" AND \"test\") OR (\"flaky\" AND \"test\")"
+            fts_related(&words("retry"), &["retry"]).unwrap(),
+            "lesson : (\"retry\")"
         );
+        assert_eq!(
+            fts_related(&words("retry flaky test"), &["retry", "flaky", "test"]).unwrap(),
+            "((\"retry\" AND \"flaky\") OR (\"retry\" AND \"test\") OR (\"flaky\" AND \"test\")) \
+             AND lesson : (\"retry\" OR \"flaky\" OR \"test\")"
+        );
+        // A generic word can be the second word, never the one in the lesson.
+        assert_eq!(
+            fts_related(&words("retry the test"), &["retry"]).unwrap(),
+            "((\"retry\" AND \"test\")) AND lesson : (\"retry\")"
+        );
+        assert!(fts_related(&words("the test"), &[]).is_none());
     }
 
     #[test]
@@ -586,6 +660,6 @@ mod tests {
         );
         assert_eq!(related_words("x y z build"), ["build"]);
         assert!(related_words("don't").is_empty());
-        assert!(fts_related("don't won't can't").is_none());
+        assert!(related_words("don't won't can't").is_empty());
     }
 }
