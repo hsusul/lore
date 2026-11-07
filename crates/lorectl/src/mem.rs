@@ -60,6 +60,11 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     eval              Score a policy for accepting proposals without you
                       against your own accepts and rejects; writes nothing
                       [--policy never|starting-bar, default never] [--json]
+    enforce-check     Each active note's `enforce` rule, and how many of the
+                      archive's tool calls from the last 30 days it would
+                      have denied, with examples; writes nothing. Names
+                      notes whose rule does not parse (exit 7)
+                      [--cwd DIR: only rules in scope there]
     --vault <DIR>     Vault directory. Must be absolute
     Search and show pick up notes edited, renamed, or deleted by hand.
     Exit codes: 2 no vault, 5 vault busy, 7 note refused, 4 other failure.
@@ -178,6 +183,9 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     }
     if sub == "eval" {
         return crate::eval::run(invocation, USAGE);
+    }
+    if sub == "enforce-check" {
+        return crate::enforce_check::run(invocation, USAGE);
     }
     if crate::review::SUBCOMMANDS.contains(&sub) {
         let archive = invocation.archive_dir().ok();

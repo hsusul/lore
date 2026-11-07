@@ -15,6 +15,7 @@
 
 mod cli;
 mod connect;
+mod enforce_check;
 mod eval;
 mod exit;
 mod help;
