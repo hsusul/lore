@@ -11,6 +11,11 @@
 //!   `message_part_full` view (migration 0019), which returns `content_json`
 //!   exactly as ingested however the row is stored. [`dedupe_attachments`]
 //!   converts rows ingested before this existed.
+//! - **One copy per tool output.** A tool result keeps its output in `text`
+//!   and again inside its raw payload. Where the payload holds that output
+//!   exactly once, it is stored with the output replaced by a marker
+//!   ([`slim_tool_output`]) and `message_part_full` (migration 0020) puts it
+//!   back from `text`. [`slim_tool_outputs`] converts older rows.
 //! - **Free pages leave the file.** A forget or a re-ingest frees pages that
 //!   SQLite otherwise keeps inside the file for reuse. With `auto_vacuum =
 //!   INCREMENTAL`, [`reclaim_free_pages`] hands them back. New archives get the
@@ -49,7 +54,8 @@ pub const VACUUM_SETTING: &str = "compact.vacuum";
 pub const FAILED_ROWS_SETTING: &str = "compact.failed_rows";
 
 /// The setting that records why the last [`compact`] failed, content-free:
-/// `{"stage": "backup" | "dedupe" | "vacuum", "sqlite_code": n | null}`,
+/// `{"stage": "backup" | "dedupe" | "slim" | "vacuum" | "reclaim",
+/// "sqlite_code": n | null}`,
 /// or JSON `null` after a run that finished without error.
 pub const ERROR_SETTING: &str = "compact.error";
 
@@ -78,6 +84,85 @@ pub(crate) fn store_body(tx: &Connection, body: &str) -> Result<Option<String>> 
             Ok(row.get_ref(0)?.as_bytes()? == body.as_bytes())
         })?;
     Ok(same.then_some(hash))
+}
+
+/// The part kind whose output is stored once. A tool result keeps its output
+/// in `text` and again inside its raw payload: 778 MB for 389 MB of output on
+/// one archive.
+pub const TOOL_RESULT: &str = "tool_result";
+
+/// Stands for `json_quote(text)` in a slim tool result payload: the output as
+/// a JSON string value. A raw `\x01` never appears in JSON a parser accepts.
+pub const TEXT_QUOTED_MARKER: &str = "\u{1}lore:text:quoted\u{1}";
+
+/// Stands for `text` verbatim in a slim tool result payload: the output held
+/// as raw JSON, as Codex records an array output.
+pub const TEXT_RAW_MARKER: &str = "\u{1}lore:text:raw\u{1}";
+
+/// The setting holding the last `message_part` rowid ingested before migration
+/// 0020. Rows after it were ingested in the slim form already.
+pub const TOOL_OUTPUT_UNTIL_SETTING: &str = "compact.tool_output_until";
+
+/// The setting holding the last rowid [`slim_tool_outputs`] has examined.
+pub const TOOL_OUTPUT_AFTER_SETTING: &str = "compact.tool_output_after";
+
+/// The setting counting tool result rows whose slim form did not read back
+/// byte-equal and were left as they were. A count only.
+pub const TOOL_OUTPUT_FAILED_SETTING: &str = "compact.tool_output_failed_rows";
+
+/// The slim form of a tool result payload, or `None` when the row keeps both
+/// columns as they are.
+///
+/// The rule: `content` holds no `\x01` byte, and holds the output exactly
+/// once, either as a JSON string value (`json_quote(text)`, tried first) or,
+/// when the output is itself a JSON array or object (a Codex array output),
+/// verbatim. That one occurrence is
+/// replaced by [`TEXT_QUOTED_MARKER`] or [`TEXT_RAW_MARKER`], and only when
+/// the marker is shorter than what it replaces. `message_part_full` reverses
+/// it; callers still compare the rebuilt bytes before relying on it.
+#[must_use]
+pub fn slim_tool_output(text: &str, content: &str) -> Option<String> {
+    if content.contains('\u{1}') {
+        return None;
+    }
+    let quoted = serde_json::to_string(text).ok()?;
+    replace_once(content, &quoted, TEXT_QUOTED_MARKER).or_else(|| {
+        let structured =
+            text.starts_with(['[', '{']) && serde_json::from_str::<serde_json::Value>(text).is_ok();
+        structured
+            .then(|| replace_once(content, text, TEXT_RAW_MARKER))
+            .flatten()
+    })
+}
+
+/// `hay` with its one occurrence of `needle` replaced by `marker`; `None` when
+/// `needle` occurs other than exactly once or is no longer than `marker`.
+fn replace_once(hay: &str, needle: &str, marker: &str) -> Option<String> {
+    if needle.len() <= marker.len() {
+        return None;
+    }
+    let at = hay.find(needle)?;
+    let rest = &hay[at + needle.len()..];
+    if rest.contains(needle) {
+        return None;
+    }
+    let mut out = String::with_capacity(hay.len() - needle.len() + marker.len());
+    out.push_str(&hay[..at]);
+    out.push_str(marker);
+    out.push_str(rest);
+    Some(out)
+}
+
+/// Whether `message_part_full` serves `expected` for part `part_id`, byte for
+/// byte. Runs in the caller's transaction.
+pub(crate) fn serves_exactly(tx: &Connection, part_id: &str, expected: &str) -> Result<bool> {
+    Ok(tx
+        .prepare_cached("SELECT content_json FROM message_part_full WHERE id = ?1")?
+        .query_row([part_id], |row| {
+            Ok(row.get_ref(0)?.as_bytes_or_null()? == Some(expected.as_bytes()))
+        })
+        .optional()?
+        .unwrap_or(false))
 }
 
 /// Delete the bodies in `hashes` that no part references any more. Runs in the
@@ -240,6 +325,142 @@ fn convert_row(tx: &Connection, part_id: &str, body: &str) -> Result<Option<bool
     Ok(Some(added))
 }
 
+/// Outcome of [`slim_tool_outputs`]. Counts only, never content.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SlimReport {
+    /// Tool result rows this call stored in the slim form.
+    pub converted: u64,
+    /// Tool result rows this call left as they were because the rule did not
+    /// hold ([`slim_tool_output`]). Not a failure.
+    pub kept: u64,
+    /// Tool result rows whose slim form did not read back byte-equal. Each is
+    /// exactly as it was before the call.
+    pub failed: u64,
+    /// Bytes this call removed from `content_json`.
+    pub bytes_saved: u64,
+    /// Whether rows ingested before migration 0020 are still unexamined: false
+    /// once the conversion is complete, true if it was stopped.
+    pub pending: bool,
+}
+
+fn setting_i64(conn: &Connection, key: &str) -> Result<i64> {
+    Ok(conn
+        .prepare_cached("SELECT value_json FROM setting WHERE key = ?1")?
+        .query_row([key], |row| row.get::<_, String>(0))
+        .optional()?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0))
+}
+
+fn put_setting_i64(tx: &Connection, key: &str, value: i64) -> Result<()> {
+    tx.prepare_cached(
+        "INSERT INTO setting (key, value_json, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json,
+                                        updated_at = excluded.updated_at",
+    )?
+    .execute(params![key, value.to_string(), crate::now_ms()])?;
+    Ok(())
+}
+
+/// Whether tool result rows ingested before migration 0020 are still
+/// unexamined by [`slim_tool_outputs`].
+pub fn tool_outputs_pending(conn: &Connection) -> Result<bool> {
+    let after = setting_i64(conn, TOOL_OUTPUT_AFTER_SETTING)?;
+    let until = setting_i64(conn, TOOL_OUTPUT_UNTIL_SETTING)?;
+    if after >= until {
+        return Ok(false);
+    }
+    Ok(conn
+        .prepare_cached(
+            "SELECT EXISTS(SELECT 1 FROM message_part
+                WHERE rowid > ?1 AND rowid <= ?2 AND kind = ?3)",
+        )?
+        .query_row(params![after, until, TOOL_RESULT], |row| row.get(0))?)
+}
+
+/// Store every tool result ingested before migration 0020 in the slim form
+/// where [`slim_tool_output`]'s rule holds.
+///
+/// The same shape as [`dedupe_attachments`]: batches of `batch` rows, each one
+/// IMMEDIATE transaction under the write lock that also advances the
+/// [`TOOL_OUTPUT_AFTER_SETTING`] cursor, so a crash, an error or a stop loses
+/// at most the batch in flight and a rerun continues after the last committed
+/// one. Rerunning a finished conversion is a no-op.
+///
+/// Verified: each row is rewritten, read back through `message_part_full` and
+/// compared byte for byte with the original payload before the batch commits.
+/// A row that does not compare equal is rolled back to exactly what it was and
+/// counted in [`SlimReport::failed`]. `stop` is checked between batches.
+pub fn slim_tool_outputs(conn: &Connection, batch: usize, stop: &AtomicBool) -> Result<SlimReport> {
+    let mut report = SlimReport::default();
+    let limit = i64::try_from(batch.max(1)).unwrap_or(i64::MAX);
+    while !stop.load(Ordering::Relaxed) {
+        let _write = crate::storage::write_lock();
+        let tx =
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+        let after = setting_i64(&tx, TOOL_OUTPUT_AFTER_SETTING)?;
+        let until = setting_i64(&tx, TOOL_OUTPUT_UNTIL_SETTING)?;
+        if after >= until {
+            break;
+        }
+        // A value that is not UTF-8 text reads as `None` and is left alone,
+        // not an error that would stall the conversion on every launch.
+        let text_of = |v: rusqlite::types::ValueRef<'_>| v.as_str().ok().map(str::to_owned);
+        let rows: Vec<(i64, String, Option<String>, Option<String>)> = tx
+            .prepare_cached(
+                "SELECT rowid, id, text, content_json FROM message_part
+                 WHERE rowid > ?1 AND rowid <= ?2 AND kind = ?3
+                   AND text IS NOT NULL AND content_json IS NOT NULL
+                 ORDER BY rowid LIMIT ?4",
+            )?
+            .query_map(params![after, until, TOOL_RESULT, limit], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    text_of(row.get_ref(2)?),
+                    text_of(row.get_ref(3)?),
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let last = rows.last().map(|r| r.0);
+        let mut failed: i64 = 0;
+        for (_, id, text, content) in &rows {
+            let (Some(text), Some(content)) = (text, content) else {
+                report.kept += 1;
+                continue;
+            };
+            let Some(slim) = slim_tool_output(text, content) else {
+                report.kept += 1;
+                continue;
+            };
+            tx.execute_batch("SAVEPOINT slim_part")?;
+            tx.prepare_cached("UPDATE message_part SET content_json = ?2 WHERE id = ?1")?
+                .execute(params![id, slim])?;
+            if serves_exactly(&tx, id, content)? {
+                tx.execute_batch("RELEASE slim_part")?;
+                report.converted += 1;
+                report.bytes_saved += (content.len() - slim.len()) as u64;
+            } else {
+                tx.execute_batch("ROLLBACK TO slim_part; RELEASE slim_part")?;
+                failed += 1;
+            }
+        }
+        // No rows left in range: the conversion is complete.
+        put_setting_i64(&tx, TOOL_OUTPUT_AFTER_SETTING, last.unwrap_or(until))?;
+        if failed > 0 {
+            let total = setting_i64(&tx, TOOL_OUTPUT_FAILED_SETTING)? + failed;
+            put_setting_i64(&tx, TOOL_OUTPUT_FAILED_SETTING, total)?;
+        }
+        tx.commit()?;
+        report.failed += u64::try_from(failed).unwrap_or(0);
+        if last.is_none() {
+            break;
+        }
+    }
+    report.pending = tool_outputs_pending(conn)?;
+    Ok(report)
+}
+
 /// Attachment rows still stored inline.
 pub fn inline_attachments(conn: &Connection) -> Result<u64> {
     let n: i64 = conn.query_row(
@@ -292,8 +513,9 @@ pub fn reclaim_if_worthwhile(conn: &Connection) {
 pub enum VacuumOutcome {
     /// The archive is already in incremental mode; nothing to do.
     AlreadyIncremental,
-    /// Attachment rows are still inline. The `VACUUM` waits for the
-    /// conversion, so the file is rewritten once, at its smallest.
+    /// Attachment rows are still inline, or tool results still unexamined.
+    /// The `VACUUM` waits for the conversions, so the file is rewritten once,
+    /// at its smallest.
     DedupePending,
     /// No file behind the connection (an in-memory archive).
     NoFile,
@@ -425,7 +647,7 @@ fn decide_vacuum(
     if conn.path().filter(|p| !p.is_empty()).is_none() {
         return Ok(Some(VacuumOutcome::NoFile));
     }
-    if inline_attachments(conn)? > tolerated_inline {
+    if inline_attachments(conn)? > tolerated_inline || tool_outputs_pending(conn)? {
         return Ok(Some(VacuumOutcome::DedupePending));
     }
     let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
@@ -490,10 +712,15 @@ fn sqlite_temp_dir() -> std::path::PathBuf {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompactReport {
     pub dedupe: DedupeReport,
+    pub slim: SlimReport,
     pub vacuum: VacuumOutcome,
+    /// Free pages returned to the file system after the conversions, on an
+    /// archive already in incremental mode.
+    pub reclaimed_pages: i64,
 }
 
-/// Convert inline attachments, then switch the file to incremental mode once.
+/// Convert inline attachments and tool outputs, then switch the file to
+/// incremental mode once, or return the freed pages when it already is.
 /// The desktop worker runs this after its startup scan, at the lowest
 /// priority the worker has: nothing else is queued by then.
 ///
@@ -531,12 +758,28 @@ fn compact_stages(
     let dedupe = dedupe_attachments(conn, DEDUPE_BATCH, stop).map_err(|e| ("dedupe", e))?;
     crate::settings::set(conn, FAILED_ROWS_SETTING, &dedupe.failed.to_string())
         .map_err(|e| ("dedupe", e))?;
+    let slim = slim_tool_outputs(conn, DEDUPE_BATCH, stop).map_err(|e| ("slim", e))?;
     let vacuum = if stop.load(Ordering::Relaxed) {
         VacuumOutcome::DedupePending
     } else {
         vacuum_once(conn, dedupe.failed).map_err(|e| ("vacuum", e))?
     };
-    Ok(CompactReport { dedupe, vacuum })
+    let mut reclaimed_pages = 0;
+    if vacuum == VacuumOutcome::AlreadyIncremental {
+        let reclaim = || -> Result<i64> {
+            let before = freelist_count(conn)?;
+            let _write = crate::storage::write_lock();
+            reclaim_free_pages(conn)?;
+            Ok(before - freelist_count(conn)?)
+        };
+        reclaimed_pages = reclaim().map_err(|e| ("reclaim", e))?;
+    }
+    Ok(CompactReport {
+        dedupe,
+        slim,
+        vacuum,
+        reclaimed_pages,
+    })
 }
 
 /// Back up a file archive that still has rows to convert. Rows the last run
@@ -546,7 +789,7 @@ fn back_up_before_converting(conn: &Connection) -> Result<()> {
     let known_failed = crate::settings::get(conn, FAILED_ROWS_SETTING)?
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
-    if inline_attachments(conn)? <= known_failed {
+    if inline_attachments(conn)? <= known_failed && !tool_outputs_pending(conn)? {
         return Ok(());
     }
     let Some(dir) = crate::backup::backup_dir_for(conn) else {
@@ -604,6 +847,56 @@ mod tests {
             Some((1000, 999)),
             "archive"
         );
+    }
+
+    #[test]
+    fn the_rule_slims_one_occurrence_and_keeps_everything_else() {
+        let q = TEXT_QUOTED_MARKER;
+        let r = TEXT_RAW_MARKER;
+        let out = "a tool output long enough to slim";
+        assert_eq!(
+            slim_tool_output(out, &format!("\"{out}\"")),
+            Some(q.to_owned())
+        );
+        assert_eq!(
+            slim_tool_output(out, &format!("[{{\"type\":\"text\",\"text\":\"{out}\"}}]")),
+            Some(format!("[{{\"type\":\"text\",\"text\":{q}}}]"))
+        );
+        let raw = "[{\"text\":\"Script completed\"}]";
+        assert_eq!(
+            slim_tool_output(raw, &format!("{{\"output\":{raw}}}")),
+            Some(format!("{{\"output\":{r}}}"))
+        );
+        // Twice, absent, too short, or a payload already holding a 0x01 byte.
+        assert_eq!(
+            slim_tool_output(out, &format!("[\"{out}\",\"{out}\"]")),
+            None
+        );
+        assert_eq!(slim_tool_output(out, "\"something else entirely\""), None);
+        assert_eq!(slim_tool_output("ok", "\"ok\""), None);
+        // Verbatim only for an output that is a JSON array or object.
+        assert_eq!(slim_tool_output(out, &format!("\"{out}x\"")), None);
+        assert_eq!(
+            slim_tool_output("[1, 2, 3 and more", "{\"o\":[1, 2, 3 and more}"),
+            None
+        );
+        assert_eq!(slim_tool_output(out, &format!("\"{out}\"\u{1}")), None);
+    }
+
+    /// The view rebuilds a quoted output with SQLite's `json_quote`, and the
+    /// rule finds it with serde_json's quoting: they agree on every character,
+    /// so rows slim instead of failing their read-back.
+    #[test]
+    fn sqlite_and_serde_quote_every_character_alike() {
+        let conn = Connection::open_in_memory().unwrap();
+        let all: String = (0..=0x10_FFFF_u32).filter_map(char::from_u32).collect();
+        for chunk in all.chars().collect::<Vec<_>>().chunks(4096) {
+            let s: String = chunk.iter().collect();
+            let sqlite: String = conn
+                .query_row("SELECT json_quote(?1)", [&s], |r| r.get(0))
+                .unwrap();
+            assert_eq!(sqlite, serde_json::to_string(&s).unwrap());
+        }
     }
 
     #[test]
