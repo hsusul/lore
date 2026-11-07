@@ -154,31 +154,16 @@ pub fn accept_edited(
         return Ok(accepted);
     }
     // A commit already accepted it and only the decision line was lost. The
-    // note may since be retired, updated, or deleted.
-    if let Some((rel, id)) = accepted_commit(vault, &proposal.id)? {
+    // note may since be retired, updated, or deleted, so check before looking
+    // for the target.
+    if accepted_commit(vault, &proposal.id)?.is_some() {
         let _lock = vault.lock()?;
         if let Some(accepted) = decided(vault)? {
             return Ok(accepted);
         }
-        let current = read_optional(vault, &rel)?.and_then(|text| Note::parse(&text).ok());
-        let accepted = Accepted {
-            rel,
-            id,
-            updated: updates,
-            outcome: Added::Unchanged,
-        };
-        record(
-            vault,
-            &proposal.id,
-            &Decision::Accepted {
-                note: accepted.rel.clone(),
-                id: accepted.id.clone(),
-            },
-        )?;
-        if let Some(note) = &current {
-            upsert_index(vault, &accepted.rel, note)?;
+        if let Some(accepted) = recover_locked(vault, &proposal.id, updates)? {
+            return Ok(accepted);
         }
-        return Ok(accepted);
     }
     let target = match &proposal.relation {
         Some(Relation::Updates(target)) => Some(vault.find(target.as_str())?),
@@ -186,6 +171,11 @@ pub fn accept_edited(
     };
     let _lock = vault.lock()?;
     if let Some(accepted) = decided(vault)? {
+        return Ok(accepted);
+    }
+    // Again under the lock: another accept may have committed it since the
+    // check above and been stopped before it recorded the decision.
+    if let Some(accepted) = recover_locked(vault, &proposal.id, updates)? {
         return Ok(accepted);
     }
     let today = NoteDate::today();
@@ -203,6 +193,37 @@ pub fn accept_edited(
     )?;
     upsert_index(vault, &accepted.rel, &note)?;
     Ok(accepted)
+}
+
+/// Record the decision for proposal `id` when a commit already accepted it,
+/// and return that note. `None` when no commit did. Call with the lock held.
+fn recover_locked(
+    vault: &Vault,
+    id: &NoteId,
+    updated: bool,
+) -> Result<Option<Accepted>, ReviewError> {
+    let Some((rel, note_id)) = accepted_commit(vault, id)? else {
+        return Ok(None);
+    };
+    let current = read_optional(vault, &rel)?.and_then(|text| Note::parse(&text).ok());
+    let accepted = Accepted {
+        rel,
+        id: note_id,
+        updated,
+        outcome: Added::Unchanged,
+    };
+    record(
+        vault,
+        id,
+        &Decision::Accepted {
+            note: accepted.rel.clone(),
+            id: accepted.id.clone(),
+        },
+    )?;
+    if let Some(note) = &current {
+        upsert_index(vault, &accepted.rel, note)?;
+    }
+    Ok(Some(accepted))
 }
 
 /// Reject proposal `id`. Writes only the decision log, never the vault's
