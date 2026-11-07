@@ -1,7 +1,7 @@
 //! The provenance files, read from a redacted copy of real ones.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lore_skills::lockfiles;
 use lore_skills::{Roots, Source};
@@ -134,5 +134,35 @@ fn lockfiles_claude_plugins_splits_scoped_plugin_at_last_at_sign() {
                 version: "1.0.0".into(),
             }
         )]
+    );
+}
+
+#[test]
+fn lockfiles_v3_skill_lock_tracks_local_source_type() {
+    let temp = TempHome::new("local-skill");
+    let agents = temp.path().join(".agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join(".skill-lock.json"),
+        serde_json::json!({
+            "version": 3,
+            "skills": {
+                "local-tool": {
+                    "source": "/path/to/tool",
+                    "sourceType": "local"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let roots = Roots::from_home(temp.path());
+    let locks = lockfiles::read(&roots);
+    assert_eq!(
+        locks.tracked.get("local-tool"),
+        Some(&Source::Local {
+            path: PathBuf::from("/path/to/tool"),
+        })
     );
 }
