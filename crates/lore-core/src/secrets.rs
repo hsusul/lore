@@ -419,7 +419,9 @@ fn scan_connection_strings(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
         "mongodb://",
         "mongodb+srv://",
         "redis://",
+        "rediss://",
         "amqp://",
+        "amqps://",
     ];
     for scheme in SCHEMES {
         let mut from = 0;
@@ -427,10 +429,10 @@ fn scan_connection_strings(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
             let start = from + rel;
             from = start + 1;
             let creds_start = start + scheme.len();
-            // Require user:pass@ with non-space, non-@ credentials.
+            // Require [user]:pass@ with non-space, non-@ credentials.
             let user = run_until(bytes, creds_start, |b| b == b':' || b == b'@' || b == b' ');
             let after_user = creds_start + user;
-            if user == 0 || after_user >= bytes.len() || bytes[after_user] != b':' {
+            if after_user >= bytes.len() || bytes[after_user] != b':' {
                 continue;
             }
             let pass = run_until(bytes, after_user + 1, |b| b == b'@' || b == b' ');
@@ -1619,6 +1621,40 @@ mod tests {
         assert!(redacted.contains("«redacted:connection-string»@[2001:db8::1]:5432/mydb"));
         assert!(redacted.contains("«redacted:connection-string»@[::1]/test"));
         assert!(redacted.contains("«redacted:connection-string»@localhost:6379/0"));
+    }
+
+    #[test]
+    fn scan_and_redact_connection_strings_with_empty_user_and_tls_schemes() {
+        let uri1 = "redis://:supersecretpass@redis.internal:6379/0";
+        let uri2 = "rediss://:tlsredispass@rediss.internal:6380/0";
+        let uri3 = "amqps://guest:amqppass@rabbit.internal:5671/%2f";
+        let uri4 = "rediss://admin:tlsadminpass@rediss.internal:6380/0";
+
+        let text =
+            format!("CACHE: {uri1}\nCACHE_TLS: {uri2}\nQUEUE: {uri3}\nCACHE_TLS_USER: {uri4}");
+        let findings = scan_ok(&text);
+        assert_eq!(findings.len(), 4);
+        for f in &findings {
+            assert_eq!(f.rule, "connection-string");
+        }
+
+        let redacted = redact(&text, &findings);
+        assert!(!redacted.contains("supersecretpass"));
+        assert!(!redacted.contains("tlsredispass"));
+        assert!(!redacted.contains("amqppass"));
+        assert!(!redacted.contains("tlsadminpass"));
+        assert!(redacted.contains("CACHE: «redacted:connection-string»@redis.internal:6379/0"));
+        assert!(redacted.contains("CACHE_TLS: «redacted:connection-string»@rediss.internal:6380/0"));
+        assert!(redacted.contains("QUEUE: «redacted:connection-string»@rabbit.internal:5671/%2f"));
+        assert!(redacted
+            .contains("CACHE_TLS_USER: «redacted:connection-string»@rediss.internal:6380/0"));
+
+        // Negative cases: empty passwords or URLs with no credentials must not be flagged
+        assert!(scan_ok("redis://localhost:6379/0").is_empty());
+        assert!(scan_ok("redis://:@localhost:6379/0").is_empty());
+        assert!(scan_ok("redis://user:@localhost:6379/0").is_empty());
+        assert!(scan_ok("rediss://localhost:6380/0").is_empty());
+        assert!(scan_ok("amqps://localhost:5671").is_empty());
     }
 
     #[test]
