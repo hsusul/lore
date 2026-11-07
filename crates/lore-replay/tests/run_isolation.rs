@@ -336,6 +336,7 @@ fn a_replay_is_isolated_and_recorded() {
     assert_eq!(
         keys,
         [
+            "agent",
             "arm",
             "case",
             "cost_usd",

@@ -168,6 +168,7 @@ mod tests {
     fn case(cwd: Option<PathBuf>, prompt_ms: i64) -> Case {
         Case {
             id: "s:1".into(),
+            agent: crate::types::Agent::ClaudeCode,
             lesson: "l".into(),
             session: "s".into(),
             native: "n".into(),

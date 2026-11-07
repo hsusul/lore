@@ -38,7 +38,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::label::{read_labels, read_lines};
-use crate::types::{ArmName, ArmsFile, GradeLine, ScreenLine, ShownLine, Verdict};
+use crate::types::{Agent, ArmName, ArmsFile, GradeLine, ScreenLine, ShownLine, Verdict};
 
 /// The bootstrap's seed unless `--seed` says otherwise: the preregistration
 /// date, so a rerun prints the same intervals.
@@ -148,6 +148,8 @@ pub struct Input {
 /// different things, so a report covers one group.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Settings {
+    /// The agent replayed. Claude Code and Codex runs never share a report.
+    pub agent: Agent,
     pub harness: u32,
     /// `None` when the grade line does not say (graded before it was copied).
     pub model: Option<String>,
@@ -162,6 +164,7 @@ impl Settings {
     #[must_use]
     pub fn of(grade: &GradeLine) -> Self {
         Self {
+            agent: grade.agent,
             harness: grade.harness_version(),
             model: grade.model.clone(),
             trim: grade.trim.unwrap_or(0),
@@ -183,7 +186,8 @@ impl std::fmt::Display for Settings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "harness {}, model {}, trim {}, max turns {}",
+            "agent {}, harness {}, model {}, trim {}, max turns {}",
+            self.agent,
             self.harness,
             self.model_str(),
             self.trim,
@@ -193,10 +197,11 @@ impl std::fmt::Display for Settings {
 }
 
 /// `--settings KEY=VALUE,...`: keep the grades whose settings match every
-/// key given. Keys: `harness`, `model`, `trim`, `max_turns`. A value of
-/// `unrecorded` matches a model or turn cap the grade does not record.
+/// key given. Keys: `agent`, `harness`, `model`, `trim`, `max_turns`. A
+/// value of `unrecorded` matches a model or turn cap the grade does not record.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SettingsPick {
+    pub agent: Option<Agent>,
     pub harness: Option<u32>,
     pub model: Option<String>,
     pub trim: Option<u32>,
@@ -206,7 +211,8 @@ pub struct SettingsPick {
 impl SettingsPick {
     #[must_use]
     pub fn matches(&self, s: &Settings) -> bool {
-        self.harness.is_none_or(|h| h == s.harness)
+        self.agent.is_none_or(|a| a == s.agent)
+            && self.harness.is_none_or(|h| h == s.harness)
             && self.model.as_ref().is_none_or(|m| *m == s.model_str())
             && self.trim.is_none_or(|t| t == s.trim)
             && self
@@ -231,6 +237,7 @@ impl FromStr for SettingsPick {
                     .map_err(|_| format!("{key} must be a number, not `{v}`"))
             };
             match key {
+                "agent" => pick.agent = Some(value.parse()?),
                 "harness" => pick.harness = Some(number(value)?),
                 "model" => pick.model = Some(value.to_owned()),
                 "trim" => pick.trim = Some(number(value)?),
@@ -242,8 +249,8 @@ impl FromStr for SettingsPick {
                 }
                 other => {
                     return Err(format!(
-                        "unknown setting `{other}`; expected harness, model, trim, or max_turns"
-                    ))
+                    "unknown setting `{other}`; expected agent, harness, model, trim, or max_turns"
+                ))
                 }
             }
         }
@@ -842,6 +849,10 @@ pub fn one_group(
             }
         };
         differ(
+            "agents",
+            groups.iter().map(|s| s.agent.to_string()).collect(),
+        );
+        differ(
             "harness versions",
             groups.iter().map(|s| s.harness.to_string()).collect(),
         );
@@ -934,6 +945,7 @@ mod tests {
     fn grade(case: &str, arm: ArmName, trial: u32, verdict: Option<bool>) -> GradeLine {
         GradeLine {
             case: case.into(),
+            agent: Agent::ClaudeCode,
             arm,
             trial,
             grader: Some("judge".into()),

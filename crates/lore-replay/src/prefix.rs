@@ -56,15 +56,7 @@ pub fn tool_output_omitted(chars: usize) -> String {
 #[must_use]
 pub fn build(session_bytes: &[u8], prompt_line: usize, rewrite: &Rewrite<'_>) -> Prefix {
     let scratch = rewrite.scratch.to_string_lossy();
-    let mut replacements: Vec<(String, &str)> = Vec::new();
-    if let Some(top) = rewrite.toplevel {
-        replacements.push((top.to_string_lossy().into_owned(), &scratch));
-        if let Some(rest) = rewrite.home.and_then(|home| top.strip_prefix(home).ok()) {
-            if !rest.as_os_str().is_empty() {
-                replacements.push((format!("~/{}", rest.to_string_lossy()), &scratch));
-            }
-        }
-    }
+    let replacements = rewrite.replacements();
     let mut out = Prefix {
         text: String::new(),
         has_messages: false,
@@ -97,13 +89,37 @@ pub fn build(session_bytes: &[u8], prompt_line: usize, rewrite: &Rewrite<'_>) ->
                 obj.insert("cwd".into(), scratch.as_ref().into());
             }
         }
-        for (from, to) in &replacements {
-            replace_in(&mut entry, from, to);
-        }
+        rewrite.apply(&mut entry, &replacements);
         out.text.push_str(&entry.to_string());
         out.text.push('\n');
     }
     out
+}
+
+impl Rewrite<'_> {
+    /// Each spelling of the original repository's path, paired with the
+    /// scratch path that replaces it: the toplevel, and `~/...` under home.
+    #[must_use]
+    pub fn replacements(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(top) = self.toplevel {
+            out.push(top.to_string_lossy().into_owned());
+            if let Some(rest) = self.home.and_then(|home| top.strip_prefix(home).ok()) {
+                if !rest.as_os_str().is_empty() {
+                    out.push(format!("~/{}", rest.to_string_lossy()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Rewrite every spelling in `replacements` to the scratch path.
+    pub fn apply(&self, entry: &mut Value, replacements: &[String]) {
+        let scratch = self.scratch.to_string_lossy();
+        for from in replacements {
+            replace_in(entry, from, &scratch);
+        }
+    }
 }
 
 /// A user or assistant line: a conversation turn.

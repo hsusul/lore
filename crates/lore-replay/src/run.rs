@@ -33,11 +33,12 @@ use std::time::Instant;
 use serde_json::Value;
 
 use crate::cases::{claude_config_dir, claude_projects_dir};
+use crate::codex;
 use crate::error::{Error, Result};
 use crate::isolation::{self, project_slug};
 use crate::prefix::{self, Rewrite};
 use crate::scratch::{self, Source};
-use crate::types::{Arm, Case, RunRecord, DELIVERY, HARNESS};
+use crate::types::{Agent, Arm, Case, RunRecord, DELIVERY, HARNESS};
 
 /// Overrides the `claude` found on `PATH`.
 pub const CLAUDE_ENV: &str = "LORE_REPLAY_CLAUDE";
@@ -91,7 +92,11 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     remove_if_present(&scratch_root, "remove the old scratch")?;
     std::fs::create_dir_all(&scratch_root).map_err(|e| Error::io("create", &scratch_root, e))?;
     let _scratch = Scratch {
-        paths: vec![scratch_root.clone(), dir.join("claude-project")],
+        paths: vec![
+            scratch_root.clone(),
+            dir.join("claude-project"),
+            dir.join("codex-home"),
+        ],
         keep: opts.keep_scratch,
     };
 
@@ -103,43 +108,227 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
     std::fs::create_dir_all(&wd).map_err(|e| Error::io("create", &wd, e))?;
 
     let session_id = case_session_id(&case.id);
-    let project_real = dir.join("claude-project");
-    std::fs::create_dir_all(&project_real).map_err(|e| Error::io("create", &project_real, e))?;
-    let projects = claude_projects_dir().ok_or(Error::NoHome)?;
-    let link = ProjectLink::create(&projects.join(project_slug(&wd)), &project_real)?;
-
     let session_bytes =
         std::fs::read(&case.file).map_err(|e| Error::io("read session file", &case.file, e))?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let prefix = prefix::build(
-        &session_bytes,
-        case.prompt_line,
-        &Rewrite {
-            session_id: &session_id,
-            scratch: &wd,
-            toplevel: source.toplevel(),
-            home: home.as_deref(),
-            trim: opts.trim as usize,
-        },
-    );
-    let prefix_path = project_real.join(format!("{session_id}.jsonl"));
+    let rewrite = Rewrite {
+        session_id: &session_id,
+        scratch: &wd,
+        toplevel: source.toplevel(),
+        home: home.as_deref(),
+        trim: opts.trim as usize,
+    };
+    let tools = isolation::tool_env(&scratch_root.join("home"), &dir.join("outward.log"))?;
+    let prompt = user_message(arm_context(case.agent, arm, &wd).as_deref(), &case.prompt);
+    let setup = Setup {
+        case,
+        opts,
+        dir: &dir,
+        wd: &wd,
+        scratch_root: &scratch_root,
+        session_id: &session_id,
+        session_bytes: &session_bytes,
+        rewrite: &rewrite,
+        tools: &tools,
+        prompt,
+    };
+    let ran = match case.agent {
+        Agent::ClaudeCode => launch_claude(setup)?,
+        Agent::Codex => launch_codex(setup)?,
+    };
+
+    let record = RunRecord {
+        harness: HARNESS,
+        delivery: Some(DELIVERY.to_owned()),
+        case: case.id.clone(),
+        agent: case.agent,
+        arm: arm.name(),
+        trial: opts.trial,
+        model: requested_model(case.agent, &opts.model),
+        resolved_model: ran.resolved_model,
+        max_turns: Some(opts.max_turns),
+        trim: opts.trim,
+        fidelity: source.fidelity(),
+        foreign_paths: isolation::foreign_paths(&case.actions, source.toplevel()),
+        prefix_lines: case.prompt_line,
+        seconds: ran.seconds,
+        cost_usd: ran.cost_usd,
+        is_error: ran.is_error,
+        capped: ran.capped,
+        stderr: tail(&ran.stderr, STDERR_TAIL),
+        outward: std::fs::read_to_string(&tools.outward_log)
+            .map(|log| log.lines().map(str::to_owned).collect())
+            .unwrap_or_default(),
+        events: ran.events,
+    };
+    let path = dir.join("run.json");
+    let json = serde_json::to_string(&record).map_err(|source| Error::Json {
+        path: path.clone(),
+        source,
+    })?;
+    std::fs::write(&path, json).map_err(|e| Error::io("write", &path, e))?;
+    Ok(record)
+}
+
+/// The model a run asks for and records: `model` when given, else the
+/// agent's default (`sonnet` for Claude Code; Codex's own, recorded as
+/// [`codex::DEFAULT_MODEL`]).
+#[must_use]
+pub fn requested_model(agent: Agent, model: &str) -> String {
+    match (agent, model) {
+        (_, m) if !m.is_empty() => m.to_owned(),
+        (Agent::ClaudeCode, _) => "sonnet".to_owned(),
+        (Agent::Codex, _) => codex::DEFAULT_MODEL.to_owned(),
+    }
+}
+
+/// What both launches need.
+struct Setup<'a> {
+    case: &'a Case,
+    opts: &'a RunOptions,
+    dir: &'a Path,
+    wd: &'a Path,
+    scratch_root: &'a Path,
+    session_id: &'a str,
+    session_bytes: &'a [u8],
+    rewrite: &'a Rewrite<'a>,
+    tools: &'a isolation::ToolEnv,
+    prompt: String,
+}
+
+/// What a launch reports back.
+struct Ran {
+    events: Vec<Value>,
+    stderr: String,
+    seconds: f64,
+    cost_usd: Option<f64>,
+    is_error: Option<bool>,
+    capped: bool,
+    resolved_model: Option<String>,
+}
+
+fn launch_claude(s: Setup<'_>) -> Result<Ran> {
+    let project_real = s.dir.join("claude-project");
+    std::fs::create_dir_all(&project_real).map_err(|e| Error::io("create", &project_real, e))?;
+    let projects = claude_projects_dir().ok_or(Error::NoHome)?;
+    let link = ProjectLink::create(&projects.join(project_slug(s.wd)), &project_real)?;
+
+    let prefix = prefix::build(s.session_bytes, s.case.prompt_line, s.rewrite);
+    let prefix_path = project_real.join(format!("{}.jsonl", s.session_id));
     std::fs::write(&prefix_path, &prefix.text).map_err(|e| Error::io("write", &prefix_path, e))?;
 
-    let tools = isolation::tool_env(&scratch_root.join("home"), &dir.join("outward.log"))?;
-    let args = agent_args(prefix.has_messages.then_some(session_id.as_str()), opts);
-    let prompt = user_message(arm_context(arm, &wd).as_deref(), &case.prompt);
-
+    let args = agent_args(prefix.has_messages.then_some(s.session_id), s.opts);
     let program = std::env::var_os(CLAUDE_ENV).unwrap_or_else(|| "claude".into());
     let mut cmd = Command::new(&program);
     cmd.args(&args)
-        .current_dir(&wd)
+        .current_dir(s.wd)
         .env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1")
         .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
-        .envs(tools.vars.iter().map(|(k, v)| (k, v)))
-        .stdin(Stdio::piped())
+        .envs(s.tools.vars.iter().map(|(k, v)| (k, v)));
+    let out = drive(cmd, &program, s.prompt, |_| false);
+    drop(link);
+    let out = out?;
+
+    let result = result_event(&out.events);
+    let capped = result
+        .and_then(|r| r.get("subtype"))
+        .and_then(Value::as_str)
+        == Some("error_max_turns");
+    Ok(Ran {
+        cost_usd: result
+            .and_then(|r| r.get("total_cost_usd"))
+            .and_then(Value::as_f64),
+        is_error: result
+            .and_then(|r| r.get("is_error"))
+            .and_then(Value::as_bool)
+            .map(|e| e && !capped),
+        capped,
+        resolved_model: None,
+        seconds: out.seconds,
+        stderr: out.stderr,
+        events: out.events,
+    })
+}
+
+/// Codex: the prefix rollout goes into a `CODEX_HOME` of the run's own
+/// (`<run>/codex-home`), where `exec resume` finds it and Lore never looks.
+/// See [`crate::codex`] for the rest of the isolation.
+fn launch_codex(s: Setup<'_>) -> Result<Ran> {
+    let codex_home = s.dir.join("codex-home");
+    std::fs::create_dir_all(&codex_home).map_err(|e| Error::io("create", &codex_home, e))?;
+    let real_home = codex::codex_home().ok_or(Error::NoHome)?;
+    codex::link_auth(&codex_home, &real_home)?;
+
+    let prefix = codex::prefix(s.session_bytes, s.case.prompt_line, s.rewrite);
+    let resume = prefix.has_messages.then_some(s.session_id);
+    if resume.is_some() {
+        let path = codex::rollout_path(&codex_home, s.session_id, s.case.prompt_ms);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| Error::io("create", parent, e))?;
+        }
+        std::fs::write(&path, &prefix.text).map_err(|e| Error::io("write", &path, e))?;
+    }
+
+    let tools_home = s.scratch_root.join("home");
+    let tmp = tools_home.join("tmp");
+    std::fs::create_dir_all(&tmp).map_err(|e| Error::io("create", &tmp, e))?;
+    let log = &s.tools.outward_log;
+    std::fs::write(log, "").map_err(|e| Error::io("write", log, e))?;
+    let profile = codex::profile(&codex::Reach {
+        tools: &tools_home,
+        tmp: &tmp,
+        outward_log: log,
+    });
+    let model = Some(s.opts.model.as_str()).filter(|m| !m.is_empty());
+    let args = codex::args(resume, model, s.wd, &profile);
+    let program = std::env::var_os(codex::CODEX_ENV).unwrap_or_else(|| "codex".into());
+    let mut cmd = Command::new(&program);
+    cmd.args(&args)
+        .current_dir(s.wd)
+        .env("CODEX_HOME", &codex_home)
+        .env("TMPDIR", &tmp)
+        .envs(s.tools.vars.iter().map(|(k, v)| (k, v)));
+    let mut cap = codex::Cap::new(s.opts.max_turns);
+    let out = drive(cmd, &program, s.prompt, |event| cap.reached(event));
+    codex::restore_auth(&codex_home, &real_home);
+    let out = out?;
+
+    let (is_error, _) = codex::outcome(&out.events, out.stopped);
+    Ok(Ran {
+        cost_usd: None,
+        is_error: Some(is_error),
+        capped: out.stopped,
+        resolved_model: codex::model_used(&codex_home),
+        seconds: out.seconds,
+        stderr: out.stderr,
+        events: out.events,
+    })
+}
+
+/// What [`drive`] collected.
+struct Driven {
+    events: Vec<Value>,
+    stderr: String,
+    seconds: f64,
+    /// `stop` asked for the agent to be stopped, and it was.
+    stopped: bool,
+}
+
+/// Start `cmd` with `prompt` on stdin, read its JSON lines from stdout, and
+/// stop it when `stop` says so for an event.
+fn drive(
+    mut cmd: Command,
+    program: &std::ffi::OsStr,
+    prompt: String,
+    mut stop: impl FnMut(&Value) -> bool,
+) -> Result<Driven> {
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
+    // Its own process group, so stopping it stops what it started too: the
+    // `codex` on PATH is a Node wrapper around the real binary.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let started = Instant::now();
     let mut child = cmd.spawn().map_err(|source| Error::Spawn {
         program: program.to_string_lossy().into_owned(),
@@ -159,13 +348,20 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
         })
     });
     let mut events = Vec::new();
+    let mut stopped = false;
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout)
             .split(b'\n')
             .map_while(std::io::Result::ok)
         {
             if let Ok(event) = serde_json::from_slice::<Value>(&line) {
+                let halt = stop(&event);
                 events.push(event);
+                if halt {
+                    stopped = true;
+                    kill_group(&mut child);
+                    break;
+                }
             }
         }
     }
@@ -175,48 +371,13 @@ pub fn run(case: &Case, arm: &Arm, opts: &RunOptions) -> Result<RunRecord> {
         let _ = handle.join();
     }
     let stderr = stderr.and_then(|h| h.join().ok()).unwrap_or_default();
-    drop(link);
-    waited.map_err(|e| Error::io("wait for", Path::new(&program), e))?;
-
-    let result = result_event(&events);
-    let capped = result
-        .and_then(|r| r.get("subtype"))
-        .and_then(Value::as_str)
-        == Some("error_max_turns");
-    let record = RunRecord {
-        harness: HARNESS,
-        delivery: Some(DELIVERY.to_owned()),
-        case: case.id.clone(),
-        arm: arm.name(),
-        trial: opts.trial,
-        model: opts.model.clone(),
-        max_turns: Some(opts.max_turns),
-        trim: opts.trim,
-        fidelity: source.fidelity(),
-        foreign_paths: isolation::foreign_paths(&case.actions, source.toplevel()),
-        prefix_lines: case.prompt_line,
-        seconds,
-        cost_usd: result
-            .and_then(|r| r.get("total_cost_usd"))
-            .and_then(Value::as_f64),
-        is_error: result
-            .and_then(|r| r.get("is_error"))
-            .and_then(Value::as_bool)
-            .map(|e| e && !capped),
-        capped,
-        stderr: tail(&stderr, STDERR_TAIL),
-        outward: std::fs::read_to_string(&tools.outward_log)
-            .map(|log| log.lines().map(str::to_owned).collect())
-            .unwrap_or_default(),
+    waited.map_err(|e| Error::io("wait for", Path::new(program), e))?;
+    Ok(Driven {
         events,
-    };
-    let path = dir.join("run.json");
-    let json = serde_json::to_string(&record).map_err(|source| Error::Json {
-        path: path.clone(),
-        source,
-    })?;
-    std::fs::write(&path, json).map_err(|e| Error::io("write", &path, e))?;
-    Ok(record)
+        stderr,
+        seconds,
+        stopped,
+    })
 }
 
 /// The agent's argv. It depends only on the case (through the session id)
@@ -234,7 +395,7 @@ fn agent_args(resume: Option<&str>, opts: &RunOptions) -> Vec<String> {
     args.extend([
         "--no-session-persistence".into(),
         "--model".into(),
-        opts.model.clone(),
+        requested_model(Agent::ClaudeCode, &opts.model),
         "--output-format".into(),
         "stream-json".into(),
         "--verbose".into(),
@@ -277,6 +438,21 @@ pub fn case_session_id(case_id: &str) -> String {
         .to_string()
 }
 
+/// Stop `child` and every process in its group.
+fn kill_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // `--` so procps `kill` on Linux reads the negative id as a process
+        // group, not as an option; without it only the parent was stopped.
+        let _ = Command::new("kill")
+            .args(["-s", "KILL", "--", &format!("-{}", child.id())])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
 /// The last `result` event of a run.
 #[must_use]
 pub fn result_event(events: &[Value]) -> Option<&Value> {
@@ -292,6 +468,12 @@ pub fn result_event(events: &[Value]) -> Option<&Value> {
 /// kept going would burn through every remaining run the same way.
 #[must_use]
 pub fn usage_limited(record: &RunRecord) -> bool {
+    if record.agent == Agent::Codex {
+        return codex::error_messages(&record.events).any(|m| {
+            let m = m.to_lowercase();
+            m.contains("usage limit") || (m.contains("hit your") && m.contains("limit"))
+        });
+    }
     let result = result_event(&record.events);
     let text = result
         .and_then(|r| r.get("result"))
@@ -319,25 +501,30 @@ pub fn progress(record: &RunRecord) -> String {
 }
 
 /// The text the arm adds before the prompt. `own` reads the person's
-/// CLAUDE.md files now, not when the case was extracted: the arm measures the
-/// instructions they keep today. Claude Code's own loading of those files is
-/// switched off for every arm, so this is the only way they arrive.
-fn arm_context(arm: &Arm, wd: &Path) -> Option<String> {
+/// instruction files now, not when the case was extracted: the arm measures
+/// the instructions they keep today. The agent's own loading of those files
+/// is switched off for every arm, so this is the only way they arrive.
+fn arm_context(agent: Agent, arm: &Arm, wd: &Path) -> Option<String> {
     match arm {
         Arm::None => None,
         Arm::File(text) | Arm::Lore(text) | Arm::Oracle(text) => Some(text.clone()),
-        Arm::Own => Some(own_context(Some(wd))),
+        Arm::Own => Some(own_context(agent, Some(wd))),
     }
 }
 
-/// The `own` arm's text: the person's `CLAUDE.md` in Claude Code's config
-/// folder, then the repository's in `wd` when given, each read now.
+/// The `own` arm's text, each file read now: for Claude Code the person's
+/// `CLAUDE.md` in its config folder, then the repository's in `wd` when
+/// given; for Codex the same with `AGENTS.md` and `$CODEX_HOME`.
 #[must_use]
-pub fn own_context(wd: Option<&Path>) -> String {
-    let files = claude_config_dir()
-        .map(|dir| dir.join("CLAUDE.md"))
+pub fn own_context(agent: Agent, wd: Option<&Path>) -> String {
+    let (dir, name) = match agent {
+        Agent::ClaudeCode => (claude_config_dir(), "CLAUDE.md"),
+        Agent::Codex => (codex::codex_home(), "AGENTS.md"),
+    };
+    let files = dir
+        .map(|dir| dir.join(name))
         .into_iter()
-        .chain(wd.map(|wd| wd.join("CLAUDE.md")));
+        .chain(wd.map(|wd| wd.join(name)));
     let parts: Vec<String> = files
         .filter_map(|path| {
             let text = std::fs::read_to_string(&path).ok()?;
@@ -433,12 +620,12 @@ impl Drop for ProjectLink {
 }
 
 #[cfg(unix)]
-fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+pub(crate) fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
 
 #[cfg(not(unix))]
-fn symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
+pub(crate) fn symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "replays need symlinks",

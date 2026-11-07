@@ -439,6 +439,7 @@ impl Shared<'_> {
             let text = run::result_event(&record.events)
                 .and_then(|r| r.get("result"))
                 .and_then(Value::as_str)
+                .or_else(|| crate::codex::error_messages(&record.events).last())
                 .unwrap_or("an error with no turns and no cost");
             self.halt_with(Halt::Stop(Stop::UsageLimit {
                 run: format!("{} {}-{}", record.case, record.arm, record.trial),
@@ -451,14 +452,14 @@ impl Shared<'_> {
 }
 
 /// A finished run worth keeping: it succeeded, under the current harness and
-/// the same model, trim, and turn cap. A record from before the turn cap was
-/// recorded matches any cap.
+/// the same model (the agent's default when none is given), trim, and turn
+/// cap. A record from before the turn cap was recorded matches any cap.
 fn kept(path: &Path, opts: &RunOptions) -> Option<RunRecord> {
     let text = std::fs::read_to_string(path).ok()?;
     let record: RunRecord = serde_json::from_str(&text).ok()?;
     (record.is_error == Some(false)
         && record.harness == HARNESS
-        && record.model == opts.model
+        && record.model == run::requested_model(record.agent, &opts.model)
         && record.trim == opts.trim
         && record.max_turns.is_none_or(|m| m == opts.max_turns))
     .then_some(record)

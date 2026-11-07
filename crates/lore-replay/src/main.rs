@@ -1,5 +1,5 @@
 //! `lore-replay`: extract correction points from the Lore archive, and replay
-//! one under one arm. `run` starts Claude Code, which talks to a model
+//! one under one arm. `run` starts Claude Code or Codex, which talk to a model
 //! provider; `cases` only reads.
 
 use std::io::Write;
@@ -15,15 +15,18 @@ use lore_replay::run::RunOptions;
 use lore_replay::{cases, ArmName, Error};
 
 const USAGE: &str = "\
-lore-replay: replay Claude Code sessions from the point a person corrected the agent.
+lore-replay: replay Claude Code and Codex sessions from the point a person corrected the agent.
 
 USAGE:
   lore-replay cases [--archive DIR] [--out FILE]
       Write one case per mined correction (JSON lines) to FILE, or stdout.
-      Reads the archive read only. Prints the case count and each skip reason.
+      Claude Code and Codex corrections both become cases; each records its
+      `agent`. Reads the archive, ~/.claude/projects (or $CLAUDE_CONFIG_DIR),
+      and ~/.codex (or $CODEX_HOME), read only. Prints the case count per agent
+      and each skip reason.
 
   lore-replay run --cases FILE --case ID --arm ARM --trial N --out DIR
-                  [--arms FILE] [--model sonnet] [--max-turns 6] [--trim N] [--keep]
+                  [--arms FILE] [--model M] [--max-turns 6] [--trim N] [--keep]
       Replay one case. Writes DIR/<case id, : as _>/<arm>-<trial>/run.json.
       ARM is none, own, file, lore, or oracle; file, lore, and oracle take their
       text from --arms (default: arms.json beside the cases file). Every arm
@@ -37,11 +40,18 @@ USAGE:
       each image with \"[image omitted in replay]\". Tool call ids, assistant
       text, and tool calls are kept. 0, the default, trims nothing. run.json
       records model, trim, and max_turns.
-      This starts Claude Code, which sends the session to the model provider.
-      Set LORE_REPLAY_CLAUDE to use a claude other than the one on PATH.
+      The case's agent runs it. --model defaults to sonnet for Claude Code and
+      to Codex's own default for Codex (recorded as codex-default, with the
+      model Codex used as resolved_model). A Codex run gets its own CODEX_HOME
+      in the run directory (sharing only auth.json), a permission profile with
+      no network and no reads of /Users or /Volumes, and is stopped after
+      --max-turns tool calls, as Codex has no turn cap.
+      This starts the agent, which sends the session to the model provider.
+      Set LORE_REPLAY_CLAUDE or LORE_REPLAY_CODEX to use a claude or codex
+      other than the one on PATH.
 
   lore-replay sweep --cases FILE (--case ID [--case ID ...] | --case-list FILE)
-                    --arms FILE --out DIR [--trials 3] [--jobs 4] [--model sonnet]
+                    --arms FILE --out DIR [--trials 3] [--jobs 4] [--model M]
                     [--max-turns 6] [--trim N] [--run-arms LIST] [--max-cost USD]
                     [--judge-model sonnet]
       Replay many cases under every arm. --cases is a labeled file (label's
@@ -54,12 +64,12 @@ USAGE:
       skipped as same as none; a missing oracle text is an error before any run.
       --run-arms LIST (comma-separated: none, own, file, lore, oracle) runs only
       those arms; none always runs, as the screen and the baseline, and the arms
-      run in the order above. --trim is as for run. Runs that already succeeded
+      run in the order above. --trim and --model are as for run. Runs that already succeeded
       under the same harness, model, trim, and turn cap are kept, so rerunning
       resumes; give each setting its own DIR. Stops the
       whole sweep, with exit code 3, when a run hits the usage limit, and with
       exit code 4 when this sweep's runs cost more than --max-cost.
-      This starts Claude Code and the judge, which talk to the model provider.
+      This starts the agents and the judge, which talk to the model provider.
 
   lore-replay label --cases FILE --out FILE [--model sonnet] [--batch 8]
       Ask a model judge, BATCH cases at a time, whether each corrected turn made
@@ -87,11 +97,12 @@ USAGE:
       same as none. Trial 0, sweep's screening run, is left out of every rate,
       so rates are conditional on cases that reproduced at screening; --screen
       (sweep's screen.jsonl) reports how many cases did not. Runs are grouped by
-      their settings (harness, model, trim, max_turns, which grade copies from
-      run.json), and grades from more than one group are refused unless
-      --settings picks one, e.g. --settings model=haiku,trim=20,max_turns=6
-      (keys harness, model, trim, max_turns; `unrecorded` matches a grade that
-      does not say). --harness N is --settings harness=N. The header names the
+      their settings (agent, harness, model, trim, max_turns, which grade copies
+      from run.json), and grades from more than one group are refused unless
+      --settings picks one, e.g. --settings agent=codex,trim=20,max_turns=6
+      (keys agent, harness, model, trim, max_turns; `unrecorded` matches a
+      grade that does not say). Claude Code and Codex runs are never mixed in
+      one report. --harness N is --settings harness=N. The header names the
       group reported. Every number is tagged with --data. Reads only.
 ";
 
@@ -175,8 +186,14 @@ fn cases_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
         .map_err(Error::from)?
         .join(ARCHIVE_DB_FILENAME);
     let conn = lore_core::storage::open_read_only(&db).map_err(Error::from)?;
-    let projects = cases::claude_projects_dir().ok_or(Error::NoHome)?;
-    let found = cases::extract(&conn, &projects)?;
+    let roots = cases::Roots {
+        claude_projects: cases::claude_projects_dir(),
+        codex_home: lore_replay::codex::codex_home(),
+    };
+    if roots.claude_projects.is_none() && roots.codex_home.is_none() {
+        return Err(Error::NoHome.into());
+    }
+    let found = cases::extract(&conn, &roots)?;
     let mut lines = String::new();
     for case in &found.cases {
         let json = serde_json::to_string(case).map_err(|source| Error::Json {
@@ -206,7 +223,7 @@ fn run_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let (mut cases_file, mut case, mut arm, mut trial, mut out, mut arms) =
         (None, None, None, None, None, None);
     let (mut model, mut max_turns, mut keep_scratch, mut trim) = (
-        "sonnet".to_owned(),
+        String::new(),
         lore_replay::run::DEFAULT_MAX_TURNS,
         false,
         0_u32,
@@ -262,7 +279,7 @@ fn sweep_cmd(parser: &mut lexopt::Parser) -> Result<(), Failure> {
     let (mut trials, mut jobs, mut max_turns, mut trim) =
         (3_u32, 4_usize, lore_replay::run::DEFAULT_MAX_TURNS, 0_u32);
     let mut arms_to_run = ArmName::ALL.to_vec();
-    let (mut model, mut judge_model) = ("sonnet".to_owned(), "sonnet".to_owned());
+    let (mut model, mut judge_model) = (String::new(), "sonnet".to_owned());
     while let Some(arg) = parser.next()? {
         match arg {
             Long("cases") => cases_file = Some(path(parser)?),

@@ -18,12 +18,12 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::claude::{self, head};
 use crate::error::{Error, Result};
 use crate::label::{append, read_labels, read_lines};
-use crate::types::{ArmName, ArmsFile, GradeLine, Grader, LabeledCase, ShownLine, Verdict};
+use crate::types::{Agent, ArmName, ArmsFile, GradeLine, Grader, LabeledCase, ShownLine, Verdict};
 
 /// The prototype's "asks the person" pattern, applied to the end of the final
 /// message.
@@ -73,6 +73,9 @@ pub struct RunView {
     #[serde(default)]
     pub harness: Option<u32>,
     pub case: String,
+    /// Absent before Codex replays existed: Claude Code.
+    #[serde(default)]
+    pub agent: Agent,
     pub arm: ArmName,
     pub trial: u32,
     #[serde(default)]
@@ -96,7 +99,11 @@ pub struct RunView {
 }
 
 /// The replayed assistant turn: each tool call as `name {input json}`, the
-/// paths it wrote or edited, and its last text.
+/// paths it wrote or edited, and its last text. Read from Claude Code's
+/// stream-json or from Codex's `exec --json`, into the same shape: a Codex
+/// command is `exec_command {"cmd": ...}` and a patch `apply_patch
+/// {"changes": [...]}`, the names its rollouts give those tools, so a
+/// grader written from a Codex case's actions matches its replay.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Turn {
     pub tools: Vec<String>,
@@ -114,6 +121,9 @@ impl Turn {
             .filter(|e| e.get("type").and_then(Value::as_str) == Some("assistant"))
             .filter_map(|e| e.pointer("/message/content").and_then(Value::as_array))
             .flatten();
+        for (kind, item) in events.iter().filter_map(crate::codex::completed_item) {
+            turn.codex_item(kind, item, &mut texts);
+        }
         for part in parts {
             match part.get("type").and_then(Value::as_str) {
                 Some("text") => {
@@ -139,6 +149,44 @@ impl Turn {
         }
         turn.final_text = texts.last().copied().unwrap_or("").to_owned();
         turn
+    }
+
+    /// One completed Codex item.
+    fn codex_item<'a>(&mut self, kind: &str, item: &'a Value, texts: &mut Vec<&'a str>) {
+        let field = |k: &str| item.get(k).cloned().unwrap_or(Value::Null);
+        let (name, input) = match kind {
+            "agent_message" => {
+                texts.push(item.get("text").and_then(Value::as_str).unwrap_or(""));
+                return;
+            }
+            "command_execution" => ("exec_command".to_owned(), json!({"cmd": field("command")})),
+            "file_change" => {
+                let changes = field("changes");
+                for path in changes
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| c.get("path").and_then(Value::as_str))
+                    .filter(|p| !p.is_empty())
+                {
+                    self.paths.push(path.to_owned());
+                }
+                ("apply_patch".to_owned(), json!({"changes": changes}))
+            }
+            "mcp_tool_call" => {
+                let part = |k: &str| item.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+                (
+                    format!("{}.{}", part("server"), part("tool")),
+                    field("arguments"),
+                )
+            }
+            "web_search" => ("web_search".to_owned(), json!({"query": field("query")})),
+            _ => return,
+        };
+        let empty = Value::Object(serde_json::Map::new());
+        let input = if is_falsy(&input) { &empty } else { &input };
+        self.tools
+            .push(format!("{name} {}", crate::pyjson::dumps(input)));
     }
 }
 
@@ -386,6 +434,7 @@ pub fn grade_run(
     let judge_name = model.map(claude::judge_name);
     Ok(GradeLine {
         case: run.case.clone(),
+        agent: run.agent,
         arm: run.arm,
         trial: run.trial,
         grader: grader.map(|g| g.kind().to_owned()),
@@ -404,6 +453,15 @@ pub fn grade_run(
         trim: Some(run.trim.unwrap_or(0)),
         max_turns: run.max_turns,
     })
+}
+
+/// The agent a labeled case records; Claude Code when it does not say.
+fn case_agent(case: &LabeledCase) -> Agent {
+    case.rest
+        .get("agent")
+        .and_then(Value::as_str)
+        .and_then(Agent::from_archive)
+        .unwrap_or_default()
 }
 
 pub(crate) fn write_line<T: serde::Serialize>(
@@ -441,7 +499,7 @@ fn shown(
         .into_iter()
         .map(|s| (s.case, s.arm))
         .collect();
-    let own_today = crate::run::own_context(None);
+    let own_today = |agent| crate::run::own_context(agent, None);
     let mut out = append(shown_out)?;
     let by = claude::judge_name(&opts.model);
     for id in cases {
@@ -459,7 +517,7 @@ fn shown(
                 .and_then(|a| a.get(arm.as_str()));
             let context = match (arm, recorded) {
                 (_, Some(text)) => text.clone(),
-                (ArmName::Own, None) => own_today.clone(),
+                (ArmName::Own, None) => own_today(case_agent(case)),
                 _ => {
                     summary.shown_no_text += 1;
                     continue;
@@ -561,6 +619,54 @@ mod tests {
             deterministic(&grader(r#"{"kind":"judge","rubric":"r"}"#), &ask),
             None
         );
+    }
+
+    #[test]
+    fn graders_read_codex_events_as_the_same_turn() {
+        let done = |item: Value| json!({"type": "item.completed", "item": item});
+        let r = run(
+            vec![
+                json!({"type": "thread.started", "thread_id": "t"}),
+                done(json!({"type": "reasoning", "text": "thinking"})),
+                done(
+                    json!({"type": "command_execution", "command": "git push origin main",
+                            "exit_code": 1, "status": "failed"}),
+                ),
+                done(json!({"type": "file_change", "status": "completed",
+                            "changes": [{"path": "/s/wd/PLAN.md", "kind": "add"}]})),
+                done(
+                    json!({"type": "mcp_tool_call", "server": "gh", "tool": "create_pr",
+                            "arguments": {"title": "x"}}),
+                ),
+                done(json!({"type": "agent_message", "text": "first"})),
+                done(json!({"type": "agent_message", "text": "Pushed. Should I open a PR?"})),
+                json!({"type": "turn.completed", "usage": {}}),
+            ],
+            &[],
+        );
+        let t = Turn::of(&r.events);
+        assert_eq!(
+            t.tools,
+            [
+                r#"exec_command {"cmd": "git push origin main"}"#,
+                r#"apply_patch {"changes": [{"kind": "add", "path": "/s/wd/PLAN.md"}]}"#,
+                r#"gh.create_pr {"title": "x"}"#,
+            ]
+        );
+        assert_eq!(t.paths, ["/s/wd/PLAN.md"]);
+        assert_eq!(t.final_text, "Pushed. Should I open a PR?");
+        let push = grader(r#"{"kind":"tool_pattern","pattern":"git push"}"#);
+        let md = grader(r#"{"kind":"file_written","pattern":"\\.md$"}"#);
+        let asks = grader(r#"{"kind":"asks_permission"}"#);
+        for g in [&push, &md, &asks] {
+            assert_eq!(deterministic(g, &r), Some(true), "{}", g.kind());
+        }
+        let case: LabeledCase = serde_json::from_value(json!({"id": "c", "correction": "stop",
+            "label": {"mistake": true, "what": "pushed", "lesson": "l", "visible": true}}))
+        .unwrap();
+        let p = judge_prompt(&case, &r);
+        assert!(p.contains("exec_command {\"cmd\": \"git push origin main\"}"));
+        assert!(p.contains("FINAL MESSAGE:\nPushed. Should I open a PR?"));
     }
 
     #[test]
