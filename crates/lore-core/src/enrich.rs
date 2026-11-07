@@ -57,7 +57,17 @@ pub fn relink_segment_repository(
 
     tx.execute(
         "UPDATE session_segment
-         SET repository_id = ?1, resolution_confidence = 'high'
+         SET repository_id = ?1,
+             worktree_id = (
+                 SELECT id FROM worktree
+                 WHERE repository_id = ?1
+                   AND (path = session_segment.cwd
+                        OR (session_segment.cwd IS NOT NULL
+                            AND substr(session_segment.cwd, 1, length(path) + 1) = path || '/'))
+                 ORDER BY length(path) DESC
+                 LIMIT 1
+             ),
+             resolution_confidence = 'high'
          WHERE id = ?2",
         params![target_repo_id, segment_id],
     )?;
