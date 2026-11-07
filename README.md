@@ -204,7 +204,17 @@ The vault is `~/Lore` by default. For another vault, set `LORE_VAULT_DIR` to an 
 
 - `lorectl hook session-start` when a session starts. Its output becomes context the session starts with: the repository's memory notes with their freshness labels, and a warning about agent work at risk.
 - `lorectl hook prompt` when a person sends a prompt. It adds up to 3 notes that share words with the prompt and that the session has not been shown yet.
-- `lorectl hook pre-edit` before an edit (Claude Code's `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`, and Codex's `apply_patch`). It adds the notes anchored to the files being changed.
+- `lorectl hook pre-tool` before a shell command or an edit (Claude Code's `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`, and Codex's `Bash` and `apply_patch`). When an active note in scope has an `enforce` rule the call matches, it denies the call and names the note. Otherwise it adds the notes anchored to the files being changed.
+
+A note's `enforce` rules are for mechanical lessons whose violation shows in one tool call. Each has a `tool` (`bash` for a shell command, `write` for text written to a file, `path` for the path written), a `pattern` regex, and an optional `unless` regex that exempts a call it also matches:
+
+```yaml
+enforce:
+  - tool: bash
+    pattern: '(?i)co-authored-by:\s*(claude|codex)'
+```
+
+A rule that does not parse (a pattern that does not compile, matches empty text, or is too long) is dropped and blocks nothing, but its note stays valid and is still recalled. `lorectl mem add` and `lorectl mem reindex` name the note and the bad rule. `lorectl mem enforce-check` lists each rule and how many of the last 30 days' archived tool calls it would have denied, and names any invalid rule (exit 7).
 
 Each plugin also registers `lorectl mcp` as the `lore` MCP server, with `LORE_AGENT` set to that agent, so installing a plugin wires both the hooks and the tools. `lorectl` must be on `PATH`. To use another vault or archive, set `LORE_VAULT_DIR` or `LORE_ARCHIVE_DIR` in the environment the agent starts in.
 

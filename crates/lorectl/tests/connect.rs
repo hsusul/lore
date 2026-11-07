@@ -69,15 +69,15 @@ To connect Claude Code's MCP server, run:
   claude mcp add --scope user lore -- <lorectl> mcp
 ";
 
-/// Claude Code's prompt and edit hook fixes, for settings in `<tmp>/<dir>`.
+/// Claude Code's prompt and tool hook fixes, for settings in `<tmp>/<dir>`.
 fn claude_hook_fixes(dir: &str) -> String {
     format!(
         "
 To connect Claude Code's prompt hook, merge this into <tmp>/{dir}/settings.json:
   {{\"hooks\": {{\"UserPromptSubmit\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"<lorectl> hook prompt\", \"timeout\": 5}}]}}]}}}}
 
-To connect Claude Code's edit hook, merge this into <tmp>/{dir}/settings.json:
-  {{\"hooks\": {{\"PreToolUse\": [{{\"matcher\": \"Edit|Write|MultiEdit|NotebookEdit\", \"hooks\": [{{\"type\": \"command\", \"command\": \"<lorectl> hook pre-edit\", \"timeout\": 5}}]}}]}}}}
+To connect Claude Code's tool hook, merge this into <tmp>/{dir}/settings.json:
+  {{\"hooks\": {{\"PreToolUse\": [{{\"matcher\": \"Bash|Write|Edit|MultiEdit|NotebookEdit\", \"hooks\": [{{\"type\": \"command\", \"command\": \"<lorectl> hook pre-tool\", \"timeout\": 5}}]}}]}}}}
 "
     )
 }
@@ -101,19 +101,19 @@ To connect Codex's prompt hook, add this to <tmp>/codex/config.toml:
   command = \"<lorectl> hook prompt\"
   timeout = 5
 
-To connect Codex's edit hook, add this to <tmp>/codex/config.toml:
+To connect Codex's tool hook, add this to <tmp>/codex/config.toml:
   [[hooks.PreToolUse]]
-  matcher = \"apply_patch\"
+  matcher = \"Bash|apply_patch\"
   [[hooks.PreToolUse.hooks]]
   type = \"command\"
-  command = \"<lorectl> hook pre-edit\"
+  command = \"<lorectl> hook pre-tool\"
   timeout = 5
 ";
 
 /// One agent's four rows, all with `status`.
 fn rows(status: &str) -> String {
     format!(
-        "  MCP server    {status}\n  Session hook  {status}\n  Prompt hook   {status}\n  Edit hook     {status}\n"
+        "  MCP server    {status}\n  Session hook  {status}\n  Prompt hook   {status}\n  Tool hook     {status}\n"
     )
 }
 
@@ -204,7 +204,7 @@ fn the_printed_snippets_connect_once_pasted() {
     };
     // Each Claude Code snippet is a whole settings object; merge their hooks.
     let mut settings = serde_json::json!({ "hooks": {} });
-    for hook in ["session", "prompt", "edit"] {
+    for hook in ["session", "prompt", "tool"] {
         let text = snippet(&format!("To connect Claude Code's {hook} hook"));
         let piece: serde_json::Value = serde_json::from_str(&text).unwrap();
         for (event, groups) in piece["hooks"].as_object().unwrap() {
@@ -216,7 +216,7 @@ fn the_printed_snippets_connect_once_pasted() {
         settings.to_string(),
     )
     .unwrap();
-    let codex: String = ["MCP server", "session hook", "prompt hook", "edit hook"]
+    let codex: String = ["MCP server", "session hook", "prompt hook", "tool hook"]
         .iter()
         .map(|piece| snippet(&format!("To connect Codex's {piece}")))
         .collect();
@@ -229,12 +229,12 @@ fn the_printed_snippets_connect_once_pasted() {
             "  MCP server    not connected",
             "  Session hook  connected (<tmp>/claude/settings.json, hooks.SessionStart)",
             "  Prompt hook   connected (<tmp>/claude/settings.json, hooks.UserPromptSubmit)",
-            "  Edit hook     connected (<tmp>/claude/settings.json, hooks.PreToolUse)",
+            "  Tool hook     connected (<tmp>/claude/settings.json, hooks.PreToolUse)",
             "Codex  <tmp>/codex",
             "  MCP server    connected (<tmp>/codex/config.toml, mcp_servers.lore)",
             "  Session hook  connected (<tmp>/codex/config.toml, hooks.SessionStart)",
             "  Prompt hook   connected (<tmp>/codex/config.toml, hooks.UserPromptSubmit)",
-            "  Edit hook     connected (<tmp>/codex/config.toml, hooks.PreToolUse)",
+            "  Tool hook     connected (<tmp>/codex/config.toml, hooks.PreToolUse)",
         ]
     );
 }
@@ -254,7 +254,7 @@ fn claude_code_connected_through_user_mcp_servers_and_a_session_start_hook() {
             "SessionStart": [{"matcher": "startup", "hooks": [{"type": "command", "command": "'/opt/lore bin/lorectl' hook session-start"}]}],
             "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "lorectl hook prompt"}]}],
             "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "other"}]},
-                {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "lorectl hook pre-edit"}]}]
+                {"matcher": "Bash|Edit|Write", "hooks": [{"type": "command", "command": "lorectl hook pre-tool"}]}]
         }}"#,
     )
     .unwrap();
@@ -266,7 +266,7 @@ Claude Code  <tmp>/claude
   MCP server    connected (<tmp>/claude/.claude.json, mcpServers.lore)
   Session hook  connected (<tmp>/claude/settings.json, hooks.SessionStart)
   Prompt hook   connected (<tmp>/claude/settings.json, hooks.UserPromptSubmit)
-  Edit hook     connected (<tmp>/claude/settings.json, hooks.PreToolUse)
+  Tool hook     connected (<tmp>/claude/settings.json, hooks.PreToolUse)
 Codex  <tmp>/codex
 {}",
             rows("agent not found")
@@ -319,10 +319,10 @@ type = \"command\"
 command = \"lorectl hook prompt\"
 
 [[hooks.PreToolUse]]
-matcher = \"apply_patch\"
+matcher = \"Bash|apply_patch\"
 [[hooks.PreToolUse.hooks]]
 type = \"command\"
-command = \"lorectl hook pre-edit\"
+command = \"lorectl hook pre-tool\"
 ",
     )
     .unwrap();
@@ -336,11 +336,32 @@ Codex  <tmp>/codex
   MCP server    connected (<tmp>/codex/config.toml, mcp_servers.memory)
   Session hook  connected (<tmp>/codex/config.toml, hooks.SessionStart)
   Prompt hook   connected (<tmp>/codex/config.toml, hooks.UserPromptSubmit)
-  Edit hook     connected (<tmp>/codex/config.toml, hooks.PreToolUse)
+  Tool hook     connected (<tmp>/codex/config.toml, hooks.PreToolUse)
 ",
             rows("agent not found")
         )
     );
+}
+
+#[test]
+fn a_pre_edit_hook_is_reported_as_outdated() {
+    // A config from before `pre-tool` shows notes before an edit but
+    // enforces none, so it is not connected, and the fix replaces it.
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("claude")).unwrap();
+    fs::write(
+        tmp.path().join("claude/settings.json"),
+        r#"{"hooks": {"PreToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "lorectl hook pre-edit"}]}]}}"#,
+    )
+    .unwrap();
+    let out = connect(tmp.path(), |_| {});
+    assert!(
+        out.contains(
+            "  Tool hook     outdated (<tmp>/claude/settings.json, hooks.PreToolUse; runs `hook pre-edit`, replace it with the entry below)\n"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("To connect Claude Code's tool hook"), "{out}");
 }
 
 #[test]
@@ -378,7 +399,7 @@ Claude Code  <tmp>/home/.claude
   MCP server    unreadable (<tmp>/home/.claude.json, EOF while parsing an object at line 1 column 1)
   Session hook  not connected
   Prompt hook   not connected
-  Edit hook     not connected
+  Tool hook     not connected
 Codex  <tmp>/home/.codex
 {}\
 {CLAUDE_MCP_FIX}

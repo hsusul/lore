@@ -1211,6 +1211,26 @@ fn propose_memory_rejects_bad_arguments_with_a_code_and_a_fix() {
             "updates",
             "must be a note id",
         ),
+        (
+            with("enforce", json!([{ "tool": "bash", "pattern": "(" }])),
+            "enforce[0].pattern",
+            "`(` is not a valid regex: error: unclosed group",
+        ),
+        (
+            with("enforce", json!([{ "tool": "bash", "pattern": ".*" }])),
+            "enforce[0].pattern",
+            "`.*` matches empty text, so it would deny every call",
+        ),
+        (
+            with("enforce", json!([{ "tool": "Bash", "pattern": "x" }])),
+            "enforce[0].tool",
+            "expected bash, write, or path, got `Bash`",
+        ),
+        (
+            with("enforce", json!("bash")),
+            "enforce",
+            "must be a list",
+        ),
     ];
     for (arguments, field, problem) in cases {
         let replies = session(
@@ -1232,6 +1252,98 @@ fn propose_memory_rejects_bad_arguments_with_a_code_and_a_fix() {
         );
     }
     assert_eq!(inbox_files(&vault), Vec::<String>::new());
+}
+
+#[test]
+fn propose_memory_with_enforce_round_trips_through_accept_into_the_note() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let arguments = json!({
+        "title": "Never add an AI co-author line",
+        "body": "Commit messages carry no AI co-author trailer.\n",
+        "type": "convention",
+        "scope": "global",
+        "enforce": [{ "tool": "bash", "pattern": r"(?i)co-authored-by:\s*claude", "unless": "it's fine" }],
+    });
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[propose(1, arguments)],
+    );
+    let id = structured(&replies[0])["proposal_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // The person sees the rule before accepting it.
+    let listed = mem(home.path(), &["inbox"]);
+    assert!(
+        listed.contains(r"  enforce bash '(?i)co-authored-by:\s*claude' unless 'it's fine'"),
+        "{listed}"
+    );
+    let accepted = mem(home.path(), &["accept", &id]);
+    let rel = accepted.split_whitespace().nth(1).unwrap();
+    let text = std::fs::read_to_string(vault.join(rel)).unwrap();
+    assert!(
+        text.contains(
+            "enforce:\n  - tool: bash\n    pattern: '(?i)co-authored-by:\\s*claude'\n    unless: 'it''s fine'\n---\n"
+        ),
+        "{text}"
+    );
+
+    // An update can add a rule to a note that had none.
+    let plain = json!({
+        "title": "Never commit planning docs",
+        "body": "Planning docs stay out of commits.\n",
+        "type": "convention",
+        "scope": "global",
+    });
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[propose(1, plain)],
+    );
+    let first = structured(&replies[0])["proposal_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let accepted = mem(home.path(), &["accept", &first]);
+    let (rel, note_id) = {
+        let mut words = accepted.split_whitespace().skip(1);
+        (
+            words.next().unwrap().to_owned(),
+            words.next().unwrap().to_owned(),
+        )
+    };
+    let update = json!({
+        "title": "Never commit planning docs",
+        "body": "Planning docs stay out of commits; write them outside the repo.\n",
+        "type": "convention",
+        "scope": "global",
+        "updates": note_id,
+        "enforce": [{ "tool": "path", "pattern": r"(^|/)PLAN\.md$" }],
+    });
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[propose(1, update)],
+    );
+    let second = structured(&replies[0])["proposal_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    mem(home.path(), &["accept", &second]);
+    let text = std::fs::read_to_string(vault.join(&rel)).unwrap();
+    assert!(
+        text.contains("enforce:\n  - tool: path\n    pattern: '(^|/)PLAN\\.md$'\n"),
+        "{text}"
+    );
 }
 
 #[test]

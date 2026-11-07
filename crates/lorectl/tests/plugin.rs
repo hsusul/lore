@@ -111,10 +111,13 @@ fn each_plugin_runs_the_session_start_hook() {
 }
 
 #[test]
-fn each_plugin_runs_the_prompt_and_pre_edit_hooks() {
+fn each_plugin_runs_the_prompt_and_pre_tool_hooks() {
     for (dir, edit_tools) in [
-        ("plugins/claude-code", "Edit|Write|MultiEdit|NotebookEdit"),
-        ("plugins/codex", "apply_patch"),
+        (
+            "plugins/claude-code",
+            "Bash|Write|Edit|MultiEdit|NotebookEdit",
+        ),
+        ("plugins/codex", "Bash|apply_patch"),
     ] {
         let hooks = read_json(&repo_root().join(dir).join("hooks/hooks.json"));
         let prompt = &hooks["hooks"]["UserPromptSubmit"][0];
@@ -125,7 +128,7 @@ fn each_plugin_runs_the_prompt_and_pre_edit_hooks() {
         let edit = &hooks["hooks"]["PreToolUse"][0];
         assert_eq!(edit["matcher"], edit_tools, "{dir}");
         assert_eq!(
-            edit["hooks"][0]["command"], "lorectl hook pre-edit",
+            edit["hooks"][0]["command"], "lorectl hook pre-tool",
             "{dir}"
         );
         for hook in [prompt, edit] {

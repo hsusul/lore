@@ -476,6 +476,7 @@ pub(crate) mod tests {
             body: "The agent pushed unformatted code.\n".to_owned(),
             anchors: Vec::new(),
             relation: None,
+            enforce: Vec::new(),
             proposed_at: time::OffsetDateTime::from_unix_timestamp(1_785_000_000).unwrap(),
         }
     }

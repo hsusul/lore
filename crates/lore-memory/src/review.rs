@@ -317,7 +317,8 @@ fn create_locked(
 }
 
 /// The target with the proposal's statement in place of its own, the
-/// proposal's anchors when it has any, its source added, and a Timeline line.
+/// proposal's anchors and `enforce` rules when it has any, its source added,
+/// and a Timeline line.
 /// Title, type, path, relations, unknown keys, and the Timeline so far stay.
 fn apply_update(target: Note, proposal: &Proposal, date: NoteDate) -> Note {
     let mut note = target;
@@ -338,6 +339,10 @@ fn apply_update(target: Note, proposal: &Proposal, date: NoteDate) -> Note {
     note.body = append_timeline(&body, &proposal.timeline_line(date));
     if !proposal.anchors.is_empty() {
         note.anchors = proposal.anchors.clone();
+    }
+    if !proposal.enforce.is_empty() {
+        note.enforce = proposal.enforce.clone();
+        note.enforce_errors = Vec::new();
     }
     let source = proposal.source();
     if !note.sources.contains(&source) {

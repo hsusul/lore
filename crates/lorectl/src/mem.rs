@@ -34,7 +34,9 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
                       gone, or unanchored; all of them with no QUERY
                       [--limit N] [--json]
     reindex           Rebuild the index from the vault files alone, and name
-                      any id that two files share (exit 7)
+                      any id that two files share (exit 7) and any
+                      `enforce` rule that does not parse (it blocks nothing;
+                      its note is still recalled)
     propose           File an agent proposal; the body is read from stdin.
                       --agent, --session, --type, --title [--scope S]
                       [--anchor PATH[:LINES]]... [--updates|--extends|--derives ID]
@@ -60,6 +62,11 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
     eval              Score a policy for accepting proposals without you
                       against your own accepts and rejects; writes nothing
                       [--policy never|starting-bar, default never] [--json]
+    enforce-check     Each active note's `enforce` rule, and how many of the
+                      archive's tool calls from the last 30 days it would
+                      have denied, with examples; writes nothing. Names
+                      notes whose rule does not parse (exit 7)
+                      [--cwd DIR: only rules in scope there]
     --vault <DIR>     Vault directory. Must be absolute
     Search and show pick up notes edited, renamed, or deleted by hand.
     Exit codes: 2 no vault, 5 vault busy, 7 note refused, 4 other failure.
@@ -179,6 +186,9 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     if sub == "eval" {
         return crate::eval::run(invocation, USAGE);
     }
+    if sub == "enforce-check" {
+        return crate::enforce_check::run(invocation, USAGE);
+    }
     if crate::review::SUBCOMMANDS.contains(&sub) {
         let archive = invocation.archive_dir().ok();
         return crate::review::run(
@@ -237,6 +247,12 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
                 Added::Committed => "added",
                 Added::Unchanged => "unchanged",
             };
+            for error in &note.enforce_errors {
+                eprintln!(
+                    "lorectl: {}: rule {error}; the rule blocks nothing",
+                    note.rel_path()
+                );
+            }
             let _ = writeln!(out, "{verb} {} {}", note.rel_path(), note.id.as_str());
         }
         Sub::Show(key) => {
@@ -309,6 +325,9 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
             let report = vault.reindex()?;
             for (rel, error) in &report.skipped {
                 eprintln!("lorectl: skipped {rel}: {error}");
+            }
+            for (rel, error) in &report.bad_rules {
+                eprintln!("lorectl: {rel}: rule {error}; the rule blocks nothing");
             }
             for duplicate in &report.duplicates {
                 eprintln!(

@@ -63,6 +63,7 @@ fn proposal(id: &str, agent: AgentKind, session: &str, body: &str) -> Proposal {
         body: body.into(),
         anchors: Vec::new(),
         relation: None,
+        enforce: Vec::new(),
         proposed_at: OffsetDateTime::from_unix_timestamp(1_793_534_400).unwrap(),
     }
 }

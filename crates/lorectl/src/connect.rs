@@ -1,6 +1,8 @@
 //! `lorectl connect`: whether Claude Code and Codex run Lore's MCP server and
-//! its three hooks (session start, prompt, and pre-edit), and the exact
-//! command or config to add each one missing.
+//! its three hooks (session start, prompt, and pre-tool), and the exact
+//! command or config to add each one missing. A `pre-edit` hook from before
+//! `pre-tool` existed is reported as outdated: it shows notes before an edit
+//! but enforces none.
 //!
 //! Read only. It never writes an agent's config and never runs `claude` or
 //! `codex`. Locations follow each agent's documentation. Claude Code keeps MCP
@@ -24,14 +26,16 @@ const LABELS: [(&str, &str); 4] = [
     ("MCP server", "MCP server"),
     ("Session hook", "session hook"),
     ("Prompt hook", "prompt hook"),
-    ("Edit hook", "edit hook"),
+    ("Tool hook", "tool hook"),
 ];
 /// Each hook's agent event and `lorectl hook` event, in [`LABELS`] order.
 const HOOKS: [(&str, &str); 3] = [
     ("SessionStart", "session-start"),
     ("UserPromptSubmit", "prompt"),
-    ("PreToolUse", "pre-edit"),
+    ("PreToolUse", "pre-tool"),
 ];
+/// The `lorectl hook` event the tool hook ran before `pre-tool`.
+const OLD_TOOL_HOOK: &str = "pre-edit";
 
 /// Print the report for the running binary. Always exit 0.
 pub fn run() -> u8 {
@@ -49,7 +53,7 @@ const CLAUDE_HOOKS: [&str; 3] = [
     r#"merge this into {file}:
   {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": {hook}, "timeout": 5}]}]}}"#,
     r#"merge this into {file}:
-  {"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": {hook}, "timeout": 5}]}]}}"#,
+  {"hooks": {"PreToolUse": [{"matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": {hook}, "timeout": 5}]}]}}"#,
 ];
 const CODEX_MCP: &str = r#"add this to {file}:
   [mcp_servers.lore]
@@ -69,7 +73,7 @@ const CODEX_HOOKS: [&str; 3] = [
   timeout = 5"#,
     r#"add this to {file}:
   [[hooks.PreToolUse]]
-  matcher = "apply_patch"
+  matcher = "Bash|apply_patch"
   [[hooks.PreToolUse.hooks]]
   type = "command"
   command = {hook}
@@ -94,7 +98,11 @@ fn report(exe: &str) -> String {
         let hook = |i: usize| {
             let (event, sub) = HOOKS[i];
             let fix = fill(CLAUDE_HOOKS[i], &settings[0].0, sub);
-            check(&settings, &|root| hook_entry(root, event, sub), fix)
+            outdated(
+                i,
+                &settings,
+                check(&settings, &|root| hook_entry(root, event, sub), fix),
+            )
         };
         let mcp_fix = fill(CLAUDE_MCP, &mcp, "");
         [
@@ -110,7 +118,11 @@ fn report(exe: &str) -> String {
         let hook = |i: usize| {
             let (event, sub) = HOOKS[i];
             let fix = fill(CODEX_HOOKS[i], &config, sub);
-            check(&files, &|root| hook_entry(root, event, sub), fix)
+            outdated(
+                i,
+                &files,
+                check(&files, &|root| hook_entry(root, event, sub), fix),
+            )
         };
         [
             check(&files[..1], &codex_mcp, fill(CODEX_MCP, &config, "")),
@@ -152,6 +164,30 @@ fn report(exe: &str) -> String {
         );
     }
     out + &fixes
+}
+
+/// `piece` for hook `i`, reported as outdated when it is the tool hook, it is
+/// not connected, and one of `files` still runs the `pre-edit` hook.
+fn outdated(i: usize, files: &[(PathBuf, bool)], piece: Piece) -> Piece {
+    let (event, _) = HOOKS[2];
+    if i != 2 || piece.1.is_none() {
+        return piece;
+    }
+    let old = check(
+        files,
+        &|root| hook_entry(root, event, OLD_TOOL_HOOK),
+        String::new(),
+    );
+    match old.0.strip_prefix("connected (") {
+        Some(at) => (
+            format!(
+                "outdated ({}; runs `hook pre-edit`, replace it with the entry below)",
+                at.trim_end_matches(')')
+            ),
+            piece.1,
+        ),
+        None => piece,
+    }
 }
 
 /// The first file (JSON, or TOML when flagged) where `find` names an entry.

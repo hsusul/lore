@@ -22,6 +22,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use thiserror::Error;
 
 use crate::anchor::PinError;
+use crate::enforce::RuleError;
 use crate::index::{fingerprint, FileStamp, Hit, Index, IndexError};
 use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
 
@@ -128,6 +129,9 @@ pub struct Reindexed {
     pub indexed: usize,
     /// Markdown files that are not valid notes, with the reason.
     pub skipped: Vec<(String, NoteError)>,
+    /// `enforce` rules that did not parse, with their note's path. The note
+    /// is still indexed; only the rule blocks nothing.
+    pub bad_rules: Vec<(String, RuleError)>,
     /// Ids that more than one file carries. Every such file is still indexed.
     pub duplicates: Vec<DuplicateId>,
 }
@@ -375,6 +379,14 @@ impl Vault {
             })
             .collect();
         duplicates.sort_by(|a, b| a.id.cmp(&b.id));
+        let bad_rules = notes
+            .iter()
+            .flat_map(|(rel, note)| {
+                note.enforce_errors
+                    .iter()
+                    .map(|error| ((*rel).to_string(), error.clone()))
+            })
+            .collect();
         let indexed = Index::build(
             &self.lore_dir(),
             notes.iter().map(|(rel, note)| (*rel, note)),
@@ -383,6 +395,7 @@ impl Vault {
         Ok(Reindexed {
             indexed,
             skipped,
+            bad_rules,
             duplicates,
         })
     }
@@ -456,7 +469,7 @@ impl Vault {
 
     /// A stamp for every `.md` file in the vault outside `.lore`, `.git`,
     /// other dot directories, and `_inbox`, sorted by path.
-    fn stamps(&self) -> Result<Vec<FileStamp>, VaultError> {
+    pub(crate) fn stamps(&self) -> Result<Vec<FileStamp>, VaultError> {
         let mut stamps = Vec::new();
         collect_markdown(&self.root, &self.root, &mut stamps)?;
         stamps.sort_by(|a, b| a.path.cmp(&b.path));

@@ -19,6 +19,7 @@ use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use crate::enforce::Enforcement;
 use crate::note::{
     AgentKind, Anchor, CommitId, Frontmatter, LineHash, LineRange, Note, NoteDate, NoteId,
     NoteType, RelPath, Relation, Scope, SessionId, SourceRef, Status,
@@ -48,6 +49,9 @@ pub struct Proposal {
     pub body: String,
     pub anchors: Vec<Anchor>,
     pub relation: Option<Relation>,
+    /// Rules the note would enforce once accepted. An update with rules
+    /// replaces the target's; one without leaves them.
+    pub enforce: Vec<Enforcement>,
     pub proposed_at: OffsetDateTime,
 }
 
@@ -148,6 +152,8 @@ impl Proposal {
             sources: vec![self.source()],
             created: date,
             forget_after: None,
+            enforce: self.enforce.clone(),
+            enforce_errors: Vec::new(),
             body: append_timeline(&self.body, &self.timeline_line(date)),
             extra: Frontmatter::default(),
         }
@@ -167,6 +173,18 @@ impl Proposal {
             let path = redact(anchor.path.as_str())?;
             anchor.path =
                 RelPath::parse(&path).map_err(|e| field(format!("anchors[{i}].path"), e))?;
+        }
+        // Masking a pattern would change what it matches, so one the scanner
+        // flags is refused.
+        for (i, rule) in self.enforce.iter().enumerate() {
+            let patterns = std::iter::once(("pattern", &rule.pattern))
+                .chain(rule.unless.as_ref().map(|u| ("unless", u)));
+            for (key, pattern) in patterns {
+                let found = secrets::scan(pattern.as_str()).map_err(|_| InboxError::ScanFailed)?;
+                if !found.is_empty() {
+                    return Err(field(format!("enforce[{i}].{key}"), "looks like a secret"));
+                }
+            }
         }
         Ok(self)
     }
@@ -188,6 +206,10 @@ impl Proposal {
         }
         if self.relation.as_ref().map(Relation::target) == Some(&self.id) {
             return Err(field("relation", "a proposal cannot relate to itself"));
+        }
+        if self.enforce.len() > crate::enforce::MAX_RULES {
+            let most = format!("at most {} rules", crate::enforce::MAX_RULES);
+            return Err(field("enforce", most));
         }
         let note = self.note(self.id.clone(), NoteDate::today());
         let parsed = Note::parse(&note.render()).map_err(|e| field("note", e))?;
@@ -223,6 +245,10 @@ impl Proposal {
                 "relation".into(),
                 json!({ relation.kind(): relation.target().as_str() }),
             );
+        }
+        if let (false, Some(map)) = (self.enforce.is_empty(), line.as_object_mut()) {
+            let rules: Vec<Value> = self.enforce.iter().map(Enforcement::to_json).collect();
+            map.insert("enforce".into(), Value::Array(rules));
         }
         line.to_string()
     }
@@ -261,6 +287,24 @@ impl Proposal {
             }
             Some(_) => return Err(field("relation", "expected one `kind: id` pair")),
         };
+        let enforce = match map.get("enforce") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(items)) => items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    Enforcement::from_json(item).map_err(|(key, problem)| {
+                        let at = if key.is_empty() {
+                            format!("enforce[{i}]")
+                        } else {
+                            format!("enforce[{i}].{key}")
+                        };
+                        field(at, problem)
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+            Some(_) => return Err(field("enforce", "expected a list")),
+        };
         Ok(Self {
             id: NoteId::parse(text("id")?).map_err(|e| field("id", e))?,
             agent: AgentKind::parse(text("agent")?).map_err(|e| field("agent", e))?,
@@ -276,6 +320,7 @@ impl Proposal {
             body: text("body")?.to_string(),
             anchors,
             relation,
+            enforce,
             proposed_at: OffsetDateTime::parse(text("proposed_at")?, &Rfc3339)
                 .map_err(|e| field("proposed_at", e))?,
         })

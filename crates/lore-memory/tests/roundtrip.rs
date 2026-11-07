@@ -226,11 +226,78 @@ fn roundtrip_refuses_malformed_files_without_panicking() {
         (&with("sources:\n  - slack:abc"), "claude-code or codex"),
         (&with("just words"), "not `key: value`"),
         (&with("forget_after: soon"), "`forget_after`"),
+        (&with("enforce: bash"), "`enforce`: write the list"),
     ];
     for (text, expected) in cases {
         let error = parse_error(text).to_string();
         assert!(error.contains(expected), "{text:?} gave {error}");
     }
+}
+
+#[test]
+fn an_enforce_rule_round_trips_and_compiles_once() {
+    let text = with(
+        "enforce:\n  - tool: bash\n    pattern: '(?i)co-authored-by:\\s*claude'\n    unless: 'it''s ok'\n  - tool: path\n    pattern: '(^|/)PLAN\\.md$'",
+    );
+    let note = Note::parse(&text).unwrap();
+    assert_eq!(note.render(), text);
+    let rule = &note.enforce[0];
+    assert_eq!(rule.pattern.as_str(), r"(?i)co-authored-by:\s*claude");
+    assert_eq!(rule.unless.as_ref().unwrap().as_str(), "it's ok");
+    assert_eq!(
+        rule.pattern.find("x Co-Authored-By: Claude"),
+        Some("Co-Authored-By: Claude")
+    );
+    // A plain pattern parses too, and renders single-quoted.
+    let plain = Note::parse(&with("enforce:\n  - tool: write\n    pattern: XXX")).unwrap();
+    assert!(plain.render().contains("    pattern: 'XXX'\n"));
+}
+
+#[test]
+fn a_bad_enforce_rule_is_dropped_and_the_note_stays_valid() {
+    let long = "a".repeat(lore_memory::enforce::PATTERN_MAX_LEN + 1);
+    let cases = [
+        (
+            "tool: bash\n    pattern: '(unclosed'".to_string(),
+            "`enforce[0].pattern`: `(unclosed` is not a valid regex",
+        ),
+        (
+            "tool: bash\n    pattern: 'a*'".to_string(),
+            "matches empty text",
+        ),
+        (
+            format!("tool: bash\n    pattern: '{long}'"),
+            "`enforce[0].pattern`: the pattern is longer than",
+        ),
+        (
+            "tool: shell\n    pattern: x".to_string(),
+            "`enforce[0].tool`: expected bash, write, or path",
+        ),
+        ("pattern: x".to_string(), "`enforce[0]`: needs a `tool`"),
+    ];
+    for (rule, expected) in cases {
+        let text = with(&format!(
+            "enforce:\n  - {rule}\n  - tool: path\n    pattern: 'PLAN'"
+        ));
+        let note = Note::parse(&text).unwrap_or_else(|e| panic!("{rule}: {e}"));
+        assert_eq!(note.enforce.len(), 1, "{rule}");
+        assert_eq!(note.enforce[0].pattern.as_str(), "PLAN");
+        assert_eq!(note.enforce_errors.len(), 1, "{rule}");
+        assert_eq!(note.enforce_errors[0].index, 0);
+        let error = note.enforce_errors[0].to_string();
+        assert!(error.contains(expected), "{rule}: {error}");
+        // The bad rule is kept as written, in place, for a person to fix.
+        assert_eq!(note.render(), text, "{rule}");
+    }
+
+    // Rules past the limit are dropped the same way.
+    let rules: String = (0..=lore_memory::enforce::MAX_RULES)
+        .map(|i| format!("\n  - tool: bash\n    pattern: 'x{i}'"))
+        .collect();
+    let note = Note::parse(&with(&format!("enforce:{rules}"))).unwrap();
+    assert_eq!(note.enforce.len(), lore_memory::enforce::MAX_RULES);
+    let error = note.enforce_errors[0].to_string();
+    assert!(error.contains("at most 8 rules"), "{error}");
 }
 
 const BASE: &str = "---\nid: 01JC9V6Q4M8K2T7X3N5R0B1H6D\ntype: fact\ntitle: T\nscope: global\nstatus: active\ncreated: 2026-11-01\n";
