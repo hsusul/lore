@@ -69,14 +69,21 @@ pub fn forget_session(
         }
         tx.commit()?;
         merge_search_index(conn)?;
-        // Hand the freed pages back to the file system. A no-op until the
-        // archive is in incremental mode.
-        crate::compact::reclaim_free_pages(conn)?;
         orphans
     };
 
     for (_, relpath) in &orphans {
         blobs.remove(relpath)?;
+    }
+
+    // Hand the freed pages back to the file system: a no-op until the archive
+    // is in incremental mode. Best-effort and last, like the checkpoint below:
+    // the forget has committed and its blobs are gone, so a failure here is a
+    // missed optimization the next forget or ingest pass makes up, never an
+    // error for a forget that succeeded.
+    {
+        let _write = crate::storage::write_lock();
+        let _ = crate::compact::reclaim_free_pages(conn);
     }
 
     // Best-effort: fold the WAL back so the zeroed pages replace the old ones
