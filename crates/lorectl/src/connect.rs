@@ -11,6 +11,16 @@
 //! otherwise `.claude.json` sits beside `~/.claude`. Codex keeps MCP servers in
 //! `$CODEX_HOME/config.toml` and hooks there or in `hooks.json`. A broken file
 //! is reported on its line, and the command always exits 0.
+//!
+//! An enabled plugin that runs a piece counts too, reported as
+//! `connected (plugin <name>)` with no fix, since adding the piece by hand as
+//! well would run it twice. Claude Code records enabled plugins in
+//! `settings.json` `enabledPlugins` and where each is installed in
+//! `plugins/installed_plugins.json`; Codex records them as
+//! `[plugins."<name>@<marketplace>"]` in `config.toml`, installed under
+//! `plugins/cache/<marketplace>/<name>/<version>`. A plugin's hooks are in
+//! `hooks/hooks.json` and its MCP servers in `.mcp.json`, unless its manifest
+//! names other files.
 
 use std::path::{Path, PathBuf};
 
@@ -95,18 +105,18 @@ fn report(exe: &str) -> String {
             None => dir.with_file_name(".claude.json"),
         };
         let settings = [(dir.join("settings.json"), false)];
+        let plugins = claude_plugins(dir);
         let hook = |i: usize| {
             let (event, sub) = HOOKS[i];
             let fix = fill(CLAUDE_HOOKS[i], &settings[0].0, sub);
-            outdated(
-                i,
-                &settings,
-                check(&settings, &|root| hook_entry(root, event, sub), fix),
-            )
+            let find = |root: &Value| hook_entry(root, event, sub);
+            let piece = check(&settings, &find, fix);
+            outdated(i, &settings, by_plugin(piece, &plugins, false, &find))
         };
         let mcp_fix = fill(CLAUDE_MCP, &mcp, "");
+        let piece = check(&[(mcp, false)], &claude_mcp, mcp_fix);
         [
-            check(&[(mcp, false)], &claude_mcp, mcp_fix),
+            by_plugin(piece, &plugins, true, &plugin_mcp),
             hook(0),
             hook(1),
             hook(2),
@@ -115,17 +125,17 @@ fn report(exe: &str) -> String {
     let codex = |dir: &Path| {
         let config = dir.join("config.toml");
         let files = [(config.clone(), true), (dir.join("hooks.json"), false)];
+        let plugins = codex_plugins(dir);
         let hook = |i: usize| {
             let (event, sub) = HOOKS[i];
             let fix = fill(CODEX_HOOKS[i], &config, sub);
-            outdated(
-                i,
-                &files,
-                check(&files, &|root| hook_entry(root, event, sub), fix),
-            )
+            let find = |root: &Value| hook_entry(root, event, sub);
+            let piece = check(&files, &find, fix);
+            outdated(i, &files, by_plugin(piece, &plugins, false, &find))
         };
+        let piece = check(&files[..1], &codex_mcp, fill(CODEX_MCP, &config, ""));
         [
-            check(&files[..1], &codex_mcp, fill(CODEX_MCP, &config, "")),
+            by_plugin(piece, &plugins, true, &plugin_mcp),
             hook(0),
             hook(1),
             hook(2),
@@ -207,6 +217,118 @@ fn check(files: &[(PathBuf, bool)], find: &dyn Fn(&Value) -> Option<String>, fix
         }
     }
     (status, Some(fix))
+}
+
+/// An enabled plugin: its name, and its MCP server and hooks files.
+struct Plugin {
+    name: String,
+    mcp: PathBuf,
+    hooks: PathBuf,
+}
+
+/// `piece`, or connected through the first plugin whose MCP servers (when
+/// `mcp`) or hooks file `find` names an entry in, when `piece` is not
+/// connected itself.
+fn by_plugin(
+    piece: Piece,
+    plugins: &[Plugin],
+    mcp: bool,
+    find: &dyn Fn(&Value) -> Option<String>,
+) -> Piece {
+    if piece.1.is_none() {
+        return piece;
+    }
+    let provides = |plugin: &&Plugin| {
+        let file = if mcp { &plugin.mcp } else { &plugin.hooks };
+        read_json(file).is_some_and(|root| find(&root).is_some())
+    };
+    match plugins.iter().find(provides) {
+        Some(plugin) => (format!("connected (plugin {})", plugin.name), None),
+        None => piece,
+    }
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// A plugin's `.mcp.json`: servers under `mcpServers`, or the servers alone.
+fn plugin_mcp(root: &Value) -> Option<String> {
+    let servers = root.get("mcpServers").unwrap_or(root);
+    mcp_entry(Some(servers), "mcpServers")
+}
+
+/// The plugin `key` (`<name>@<marketplace>`) installed at `dir`, with its
+/// files named by the manifest in `dir/<manifest>/plugin.json`, if any.
+fn plugin(key: &str, dir: &Path, manifest: &str) -> Plugin {
+    let manifest = read_json(&dir.join(manifest).join("plugin.json"));
+    let file = |field: &str, default: &str| {
+        let named = manifest.as_ref().and_then(|m| m[field].as_str());
+        dir.join(named.unwrap_or(default))
+    };
+    Plugin {
+        name: key.split('@').next().unwrap_or(key).to_string(),
+        mcp: file("mcpServers", ".mcp.json"),
+        hooks: file("hooks", "hooks/hooks.json"),
+    }
+}
+
+/// Claude Code's plugins enabled in `settings.json`, where
+/// `plugins/installed_plugins.json` says each is installed.
+fn claude_plugins(dir: &Path) -> Vec<Plugin> {
+    let (Some(settings), Some(installed)) = (
+        read_json(&dir.join("settings.json")),
+        read_json(&dir.join("plugins/installed_plugins.json")),
+    ) else {
+        return Vec::new();
+    };
+    let Some(enabled) = settings["enabledPlugins"].as_object() else {
+        return Vec::new();
+    };
+    let enabled = enabled.iter().filter(|(_, on)| on.as_bool() == Some(true));
+    enabled
+        .flat_map(|(key, _)| {
+            // Version 2 keeps a list of installs per plugin; version 1 one.
+            let installs = &installed["plugins"][key];
+            let installs = installs
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![installs.clone()]);
+            installs.into_iter().filter_map(move |install| {
+                let path = install["installPath"].as_str()?;
+                Some(plugin(key, Path::new(path), ".claude-plugin"))
+            })
+        })
+        .collect()
+}
+
+/// Codex's plugins enabled in `config.toml`, each at its most recently
+/// written version under `plugins/cache/<marketplace>/<name>`.
+fn codex_plugins(dir: &Path) -> Vec<Plugin> {
+    let Some(config) = std::fs::read_to_string(dir.join("config.toml"))
+        .ok()
+        .and_then(|text| toml::from_str::<Value>(&text).ok())
+    else {
+        return Vec::new();
+    };
+    let Some(plugins) = config["plugins"].as_object() else {
+        return Vec::new();
+    };
+    let enabled = plugins
+        .iter()
+        .filter(|(_, p)| p["enabled"].as_bool() != Some(false));
+    enabled
+        .filter_map(|(key, _)| {
+            let (name, market) = key.split_once('@')?;
+            let versions = std::fs::read_dir(dir.join("plugins/cache").join(market).join(name));
+            let newest = versions
+                .ok()?
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().is_dir())
+                .max_by_key(|entry| entry.metadata().and_then(|m| m.modified()).ok())?;
+            Some(plugin(key, &newest.path(), ".codex-plugin"))
+        })
+        .collect()
 }
 
 fn claude_mcp(root: &Value) -> Option<String> {
