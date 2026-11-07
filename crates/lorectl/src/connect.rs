@@ -24,6 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
+use lore_core::paths::env_dir;
 use serde_json::Value;
 
 /// A piece's status, and how to add it when it is not connected.
@@ -100,7 +101,7 @@ fn report(exe: &str) -> String {
             .replace("{file}", &file.to_string_lossy())
     };
     let claude = |dir: &Path| {
-        let mcp = match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        let mcp = match env_dir("CLAUDE_CONFIG_DIR") {
             Some(_) => dir.join(".claude.json"),
             None => dir.with_file_name(".claude.json"),
         };
@@ -149,14 +150,7 @@ fn report(exe: &str) -> String {
     let (mut out, mut fixes, mut found) = (String::new(), String::new(), false);
     for (name, var, home_sub, pieces) in agents {
         // `$VAR`, else `$HOME/<home_sub>`, the way the scanner resolves it.
-        let dir = std::env::var_os(var)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .filter(|v| !v.is_empty())
-                    .map(|home| PathBuf::from(home).join(home_sub))
-            });
+        let dir = env_dir(var).or_else(|| env_dir("HOME").map(|home| home.join(home_sub)));
         out.push_str(name);
         if let Some(dir) = &dir {
             out.push_str(&format!("  {}", dir.display()));

@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::paths::env_dir;
+
 use super::common::{
     bounded, epoch_ms, finish_parse, non_negative_int_field, resolve_file_event_segments,
     resume_session, sanitize_path, str_field, unified_diff_line_counts, ParseEnd, ParseRun,
@@ -43,9 +45,7 @@ impl CodexAdapter {
     }
 
     fn default_roots() -> Vec<PathBuf> {
-        let base = std::env::var_os("CODEX_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")));
+        let base = env_dir("CODEX_HOME").or_else(|| env_dir("HOME").map(|h| h.join(".codex")));
         let Some(base) = base else {
             return Vec::new();
         };
@@ -896,10 +896,10 @@ impl AgentAdapter for CodexAdapter {
 
     fn protected_paths(&self, overrides: &DiscoveryRoots) -> Vec<PathBuf> {
         let mut paths = Self::effective_roots(overrides);
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if let Some(home) = env_dir("HOME") {
             paths.push(home.join(".codex"));
         }
-        if let Some(codex_dir) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
+        if let Some(codex_dir) = env_dir("CODEX_HOME") {
             paths.push(codex_dir);
         }
         paths

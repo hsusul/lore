@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::paths::env_dir;
+
 use super::common::{
     bounded, epoch_ms, finish_parse, json_field, resume_session, sanitize_path, str_field,
     ParseEnd, ParseRun,
@@ -41,9 +43,8 @@ impl ClaudeCodeAdapter {
     /// The default session root: `$CLAUDE_CONFIG_DIR/projects` or
     /// `$HOME/.claude/projects`.
     fn default_root() -> Option<PathBuf> {
-        let base = std::env::var_os("CLAUDE_CONFIG_DIR")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")));
+        let base =
+            env_dir("CLAUDE_CONFIG_DIR").or_else(|| env_dir("HOME").map(|h| h.join(".claude")));
         base.map(|b| b.join("projects"))
     }
 
@@ -595,10 +596,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
 
     fn protected_paths(&self, overrides: &DiscoveryRoots) -> Vec<PathBuf> {
         let mut paths = Self::effective_roots(overrides);
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if let Some(home) = env_dir("HOME") {
             paths.push(home.join(".claude"));
         }
-        if let Some(claude_dir) = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+        if let Some(claude_dir) = env_dir("CLAUDE_CONFIG_DIR") {
             paths.push(claude_dir);
         }
         paths

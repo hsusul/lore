@@ -665,3 +665,35 @@ fn doctor_flags_comment_only_or_empty_frontmatter_as_bad_frontmatter() {
         ]
     );
 }
+
+#[test]
+fn empty_agent_root_variables_mean_the_home_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let skill = |name: &str| format!("---\nname: {name}\ndescription: d\n---\nBody.\n");
+    write(&home.join(".claude/skills/alpha/SKILL.md"), &skill("alpha"));
+    write(&home.join(".codex/skills/gamma/SKILL.md"), &skill("gamma"));
+    let output = command(&home, &["--json", "skills", "ls"])
+        .current_dir(dir.path())
+        .env("CLAUDE_CONFIG_DIR", "")
+        .env("CODEX_HOME", "")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let got: Vec<(String, String)> = json(&output)
+        .iter()
+        .map(|r| {
+            (
+                r["name"].as_str().unwrap().to_string(),
+                r["installs"][0]["location"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("alpha".into(), "claude".into()),
+            ("gamma".into(), "codex".into())
+        ]
+    );
+}
