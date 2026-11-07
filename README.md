@@ -60,6 +60,7 @@ lorectl scan
 lorectl search "retry agent:codex"
 lorectl inspect <SESSION_ID> --patch
 lorectl status
+lorectl report
 ```
 
 The query is one argument, so quote it. Plain words are searched as text. Filters narrow the search.
@@ -166,6 +167,24 @@ echo "Run cargo with CARGO_BUILD_JOBS=4 on this host." | \
 ```
 
 `--scope`, `--anchor PATH[:LINES]`, and one of `--updates`, `--extends`, or `--derives <ID>` are optional.
+
+### Report
+
+`lorectl report` answers the question Lore exists for, over a window. It shows the corrections you gave agents, how many became lessons, whether the lessons were shown to agents, and how many mistakes you corrected again after a note about them was accepted. It has five sections, and each count names its source:
+
+- Activity: sessions and user turns by agent, and the top repositories, from the archive.
+- Corrections: what `lorectl mem mine` finds in the window, rule-flagged and reply candidates, and how many a finished Find lessons run already read.
+- Lessons: proposals filed, accepted, and rejected in the window, proposals pending now, and active notes.
+- Delivery: sessions a hook showed a note to, and the notes shown most. The hooks keep these records for 7 days.
+- Repeats: corrections that share at least two content words with an active note accepted before them. It is an estimate from word overlap.
+
+```bash
+lorectl report                 # the last 7 days, every repository
+lorectl report --since 30d     # or 12h, 90m, or a start date like 2026-11-01
+lorectl report --cwd . --json  # one repository, as JSON
+```
+
+It reads the archive and the vault and writes to neither. With no archive or no vault yet, it says so and exits 0.
 
 ## Skills
 

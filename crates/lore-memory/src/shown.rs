@@ -85,6 +85,34 @@ impl Shown {
     }
 }
 
+/// Every session's record in `vault`: when a hook last wrote to it, and the
+/// note ids in it. Read only; a record that cannot be read is left out. The
+/// records hold a hash of the session id, so they cannot be joined to an
+/// archived session, and records older than [`MAX_AGE`] have been pruned.
+#[must_use]
+pub fn records(vault: &Vault) -> Vec<(SystemTime, Vec<String>)> {
+    let Ok(entries) = fs::read_dir(vault.lore_dir().join(DIR)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(modified) = entry.metadata().and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        let Ok(text) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let mut ids: Vec<String> = Vec::new();
+        for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if !ids.iter().any(|id| id == line) {
+                ids.push(line.to_owned());
+            }
+        }
+        out.push((modified, ids));
+    }
+    out
+}
+
 /// Delete the records in `dir` older than [`MAX_AGE`].
 fn prune(dir: &std::path::Path) {
     let Ok(entries) = fs::read_dir(dir) else {

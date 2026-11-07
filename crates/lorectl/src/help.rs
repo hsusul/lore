@@ -21,6 +21,7 @@ pub fn usage_for(topic: Option<Command>) -> String {
         Some(Command::Mcp) => MCP_USAGE.to_string(),
         Some(Command::Hook) => HOOK_USAGE.to_string(),
         Some(Command::Connect) => CONNECT_USAGE.to_string(),
+        Some(Command::Report) => crate::report::USAGE.to_string(),
         _ => usage(),
     }
 }
@@ -169,7 +170,8 @@ Options:
     --patch           With `inspect`: also print each recorded patch.
     --since <DUR>     With `scan`: only sources modified in the last DUR,
                       such as 30d, 12h, or 90m, newest first. With `init`:
-                      the window to scan, default 30d.
+                      the window to scan, default 30d. With `report`: the
+                      window, or a start date; default 7d.
     --limit <N>       With `init`: lessons to show, default 5.
     --scan-seconds <N> With `init`: stop scanning after N seconds, newest
                       files first, and show lessons; default 60. The rest
@@ -177,7 +179,7 @@ Options:
     --review          With `init`: offer each lesson to keep, skip, or edit.
                       On by default when stdin is a terminal; `--no-review`
                       turns it off.
-    --vault <DIR>     With `init` and `mem`: the vault directory.
+    --vault <DIR>     With `init`, `mem`, and `report`: the vault directory.
     -h, --help        Print this help.
     -V, --version     Print the version.
 

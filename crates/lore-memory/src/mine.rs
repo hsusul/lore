@@ -208,7 +208,12 @@ pub struct Candidate {
     pub signal: Signal,
 }
 
-const TURNS: &str = "SELECT m.session_id, s.agent_id, m.seq, m.role, m.ts, sd.redacted_text,
+/// Every user and assistant text part, in session then turn order, given a
+/// filter on `m` to put in the `WHERE` clause.
+macro_rules! turns_query {
+    ($filter:literal) => {
+        concat!(
+            "SELECT m.session_id, s.agent_id, m.seq, m.role, m.ts, sd.redacted_text,
         r.display_name, r.primary_path
     FROM message m
     CROSS JOIN agent_session s ON s.id = m.session_id
@@ -217,8 +222,18 @@ const TURNS: &str = "SELECT m.session_id, s.agent_id, m.seq, m.role, m.ts, sd.re
         AND sd.source_kind = 'message_part' AND sd.source_id = p.id
     LEFT JOIN session_segment seg ON seg.id = m.segment_id
     LEFT JOIN repository r ON r.id = seg.repository_id
-    WHERE m.role IN ('user', 'assistant') AND m.is_sidechain = 0
-    ORDER BY m.session_id, m.seq, p.ordinal";
+    WHERE m.role IN ('user', 'assistant') AND m.is_sidechain = 0",
+            $filter,
+            "
+    ORDER BY m.session_id, m.seq, p.ordinal"
+        )
+    };
+}
+
+const TURNS: &str = turns_query!("");
+/// [`TURNS`] for the sessions with a message at or after `?1`.
+const TURNS_SINCE: &str =
+    turns_query!(" AND m.session_id IN (SELECT session_id FROM message WHERE ts >= ?1)");
 
 /// One message: its parts' text joined.
 pub(crate) struct Turn {
@@ -463,8 +478,21 @@ pub fn reply_lessons(replies: Vec<Candidate>) -> Vec<Lesson> {
 /// Every user and assistant message in the archive, its parts' text joined,
 /// in session then turn order.
 pub fn read_turns(conn: &Connection) -> rusqlite::Result<Turns> {
-    let mut statement = conn.prepare(TURNS)?;
-    let mut rows = statement.query([])?;
+    collect_turns(&mut conn.prepare(TURNS)?, [])
+}
+
+/// [`read_turns`] for only the sessions with a message at or after
+/// `since_ms`, each whole, so a window costs what its sessions cost and not
+/// what the archive costs.
+pub fn read_turns_since(conn: &Connection, since_ms: i64) -> rusqlite::Result<Turns> {
+    collect_turns(&mut conn.prepare(TURNS_SINCE)?, [since_ms])
+}
+
+fn collect_turns(
+    statement: &mut rusqlite::Statement<'_>,
+    params: impl rusqlite::Params,
+) -> rusqlite::Result<Turns> {
+    let mut rows = statement.query(params)?;
     let mut turns: Vec<Turn> = Vec::new();
     while let Some(row) = rows.next()? {
         let (session, seq): (String, i64) = (row.get(0)?, row.get(2)?);

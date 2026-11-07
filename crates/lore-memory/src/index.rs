@@ -142,6 +142,24 @@ impl Index {
         Ok(count)
     }
 
+    /// An index held in memory with exactly `notes`, for a reader that must
+    /// not write to the vault. It has no stamps and no fingerprint.
+    pub fn in_memory<'a>(
+        notes: impl IntoIterator<Item = (&'a str, &'a Note)>,
+    ) -> Result<Self, IndexError> {
+        let mut conn = Connection::open_in_memory()?;
+        conn.execute_batch(SCHEMA)?;
+        let tx = conn.transaction()?;
+        {
+            let mut insert = tx.prepare(INSERT)?;
+            for (rel, note) in notes {
+                insert.execute(row(rel, note))?;
+            }
+        }
+        tx.commit()?;
+        Ok(Self { conn })
+    }
+
     /// Put one note in the index, replacing whatever it held for that path.
     pub fn upsert(&self, rel: &str, note: &Note) -> Result<(), IndexError> {
         self.conn
