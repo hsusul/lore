@@ -666,7 +666,7 @@ fn a_windowed_scan_says_when_and_how_far_back_it_looked() {
 }
 
 #[test]
-fn a_windowed_scan_after_a_full_scan_says_when_and_how_far_back_it_looked() {
+fn a_windowed_scan_after_a_full_scan_claims_no_rest_to_read() {
     let parent = tempfile::tempdir().unwrap();
     let repo = parent.path().join("プロジェクト-日本");
     std::fs::create_dir_all(&repo).unwrap();
@@ -709,14 +709,7 @@ fn a_windowed_scan_after_a_full_scan_says_when_and_how_far_back_it_looked() {
         &["status"],
     ));
     assert!(text.contains("repository  プロジェクト-日本"), "{text}");
+    // The full scan already read every file, so there is no rest to read.
     let line = text.lines().find(|l| l.starts_with("last scan")).unwrap();
-    let masked: String = line
-        .chars()
-        .map(|c| if c.is_ascii_digit() { 'N' } else { c })
-        .collect();
-    assert_eq!(
-        masked,
-        "last scan   less than a minute ago, of files modified since NNNN-NN-NN only; \
-         `lorectl scan` reads the rest"
-    );
+    assert_eq!(line, "last scan   less than a minute ago");
 }
