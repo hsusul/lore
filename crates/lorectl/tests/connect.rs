@@ -411,3 +411,82 @@ To connect Claude Code's session hook, merge this into <tmp>/home/.claude/settin
         )
     );
 }
+
+/// Copy the repository's `plugins/<name>` into `to`, as an agent installs it.
+fn install_plugin(name: &str, to: &Path) {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugins")
+        .join(name);
+    for file in [
+        "hooks/hooks.json",
+        ".mcp.json",
+        ".claude-plugin/plugin.json",
+        ".codex-plugin/plugin.json",
+    ] {
+        if from.join(file).exists() {
+            fs::create_dir_all(to.join(file).parent().unwrap()).unwrap();
+            fs::copy(from.join(file), to.join(file)).unwrap();
+        }
+    }
+}
+
+/// Install and enable the Lore plugin the way each agent records it: Claude
+/// Code in `plugins/installed_plugins.json` and `settings.json`
+/// `enabledPlugins`, Codex under `plugins/cache/<marketplace>/<name>/<version>`
+/// and `[plugins."<name>@<marketplace>"]` in `config.toml`.
+fn install_both_plugins(tmp: &Path, enabled: bool) {
+    let claude_install = tmp.join("claude/plugins/cache/lore/lore/0.1.0");
+    install_plugin("claude-code", &claude_install);
+    fs::write(
+        tmp.join("claude/plugins/installed_plugins.json"),
+        serde_json::json!({
+            "version": 2,
+            "plugins": {"lore@lore": [{
+                "scope": "user",
+                "installPath": claude_install,
+                "version": "0.1.0",
+                "installedAt": "2026-11-01T00:00:00.000Z",
+                "lastUpdated": "2026-11-01T00:00:00.000Z"
+            }]}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        tmp.join("claude/settings.json"),
+        serde_json::json!({
+            "enabledPlugins": {"lore@lore": enabled},
+            "extraKnownMarketplaces": {"lore": {"source": {"source": "github", "repo": "hsusul/lore"}}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    install_plugin("codex", &tmp.join("codex/plugins/cache/lore/lore/0.1.0"));
+    fs::write(
+        tmp.join("codex/config.toml"),
+        format!("model = \"o3\"\n\n[plugins.\"lore@lore\"]\nenabled = {enabled}\n"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_enabled_lore_plugin_connects_every_piece_without_a_fix() {
+    let tmp = tempfile::tempdir().unwrap();
+    install_both_plugins(tmp.path(), true);
+    assert_eq!(
+        connect(tmp.path(), |_| {}),
+        format!(
+            "Claude Code  <tmp>/claude\n{all}Codex  <tmp>/codex\n{all}",
+            all = rows("connected (plugin lore)")
+        )
+    );
+}
+
+#[test]
+fn a_disabled_lore_plugin_connects_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    install_both_plugins(tmp.path(), false);
+    let out = connect(tmp.path(), |_| {});
+    assert!(!out.contains("plugin"), "{out}");
+    assert_eq!(out.matches("not connected").count(), 8, "{out}");
+}

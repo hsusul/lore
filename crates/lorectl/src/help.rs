@@ -104,9 +104,11 @@ Connect (lorectl connect):
     Whether Claude Code and Codex run `lorectl mcp` and the `lorectl hook`
     events session-start, prompt, and pre-tool, and the exact command or
     config to add each one missing. A pre-edit hook is reported as
-    outdated, since it enforces no note.
+    outdated, since it enforces no note. A piece an enabled plugin runs
+    is connected (plugin <name>), with nothing to add.
     Reads .claude.json and settings.json, and Codex's config.toml and
-    hooks.json. CLAUDE_CONFIG_DIR and CODEX_HOME set where it looks;
+    hooks.json, and the plugins each records as installed and enabled.
+    CLAUDE_CONFIG_DIR and CODEX_HOME set where it looks;
     otherwise ~/.claude and ~/.codex.
     Never writes any agent config and never runs claude or codex. Exits 0.
 ";
