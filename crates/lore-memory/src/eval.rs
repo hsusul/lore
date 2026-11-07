@@ -12,6 +12,8 @@
 //! A policy never rejects. Holding is its only alternative to accepting, so a
 //! policy can only ever take work away from a person, never overrule them.
 
+use std::collections::HashSet;
+
 use crate::inbox::{self, Proposal};
 use crate::review::{self, Decision, ReviewError};
 use crate::vault::Vault;
@@ -187,14 +189,25 @@ pub fn score(policy: &dyn Policy, cases: &[Case]) -> Report {
 pub fn cases(vault: &Vault) -> Result<Vec<Case>, ReviewError> {
     let (proposals, _) = inbox::proposals(vault)?;
     let decisions = review::decisions(vault)?;
+    let any_unrecorded = proposals.iter().any(|p| !decisions.contains_key(&p.id));
+    let committed: HashSet<_> = if any_unrecorded {
+        review::proposal_commits(vault, None)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    } else {
+        HashSet::new()
+    };
     Ok(proposals
         .into_iter()
         .filter_map(|proposal| {
-            let label = match decisions.get(&proposal.id)? {
-                Decision::Accepted { .. } => Label::Accept,
-                Decision::Rejected { .. } => Label::Reject,
+            let label = match decisions.get(&proposal.id) {
+                Some(Decision::Accepted { .. }) => Some(Label::Accept),
+                Some(Decision::Rejected { .. }) => Some(Label::Reject),
+                None if committed.contains(&proposal.id) => Some(Label::Accept),
+                None => None,
             };
-            Some(Case { proposal, label })
+            label.map(|label| Case { proposal, label })
         })
         .collect())
 }
