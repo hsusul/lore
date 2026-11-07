@@ -439,6 +439,83 @@ fn compaction_converts_nothing_without_a_backup() {
     );
 }
 
+/// Fill and drop a table, leaving about `pages` pages on the freelist.
+fn free_some_pages(conn: &Connection, pages: i64) {
+    conn.execute_batch(&format!(
+        "CREATE TABLE filler (x BLOB);
+         WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {pages})
+         INSERT INTO filler SELECT randomblob(4000) FROM n;
+         DROP TABLE filler;"
+    ))
+    .unwrap();
+}
+
+fn reclaim(conn: &Connection) {
+    let _write = lore_core::storage::write_lock();
+    compact::reclaim_free_pages(conn).unwrap();
+}
+
+/// On a real file in WAL mode, the shape the desktop app runs: the one-time
+/// VACUUM switches `auto_vacuum` to INCREMENTAL, and from then on
+/// `incremental_vacuum` empties the freelist and the file gets smaller.
+#[test]
+fn in_wal_mode_the_vacuum_makes_the_archive_incremental_and_reclaim_shrinks_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lore.db");
+    {
+        let raw = Connection::open(&path).unwrap();
+        raw.execute_batch("PRAGMA auto_vacuum = NONE; CREATE TABLE early (x INTEGER);")
+            .unwrap();
+    }
+    let (conn, blobs) = file_archive(dir.path());
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+    assert_eq!(count(&conn, "PRAGMA auto_vacuum"), 0, "NONE before");
+    two_sessions(&conn, &blobs);
+
+    // Before the switch, reclaiming does nothing.
+    free_some_pages(&conn, 1000);
+    let stuck = compact::freelist_count(&conn).unwrap();
+    assert!(stuck >= 1000, "{stuck}");
+    reclaim(&conn);
+    assert_eq!(compact::freelist_count(&conn).unwrap(), stuck);
+
+    let outcome = compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX), 0).unwrap();
+    assert!(
+        matches!(outcome, VacuumOutcome::Vacuumed { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(count(&conn, "PRAGMA auto_vacuum"), 2, "INCREMENTAL after");
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal", "still WAL");
+
+    // After it, reclaiming empties the freelist and the file shrinks.
+    free_some_pages(&conn, 1000);
+    lore_core::storage::checkpoint(&conn);
+    let freed = compact::freelist_count(&conn).unwrap();
+    let pages = count(&conn, "PRAGMA page_count");
+    let bytes = std::fs::metadata(&path).unwrap().len();
+    assert!(freed >= 1000, "{freed}");
+    reclaim(&conn);
+    lore_core::storage::checkpoint(&conn);
+    assert_eq!(compact::freelist_count(&conn).unwrap(), 0);
+    // At least the freed pages go; pointer-map pages that only tracked them
+    // can go with them.
+    assert!(count(&conn, "PRAGMA page_count") <= pages - freed);
+    assert!(
+        std::fs::metadata(&path).unwrap().len() < bytes,
+        "the file shrank"
+    );
+    let ok: String = conn
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(ok, "ok");
+}
+
 #[test]
 fn a_new_archive_is_incremental_and_forget_returns_its_pages() {
     let dir = tempfile::tempdir().unwrap();
