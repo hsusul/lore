@@ -197,26 +197,34 @@ fn a_stop_request_leaves_the_rest_for_the_next_run() {
     assert_eq!(served_attachments(&conn), before);
 }
 
+/// A damaged part_body row: it claims the second attachment row's hash but
+/// holds other bytes, so that row must never be pointed at it. Returns the
+/// victim's id and original body.
+fn damage_second_body(conn: &Connection) -> (String, String) {
+    let (victim_id, victim_body) = served_attachments(conn)[1].clone();
+    conn.execute(
+        "INSERT INTO part_body (hash, body) VALUES (?1, 'not the original bytes')",
+        [compact::body_hash(&victim_body)],
+    )
+    .unwrap();
+    (victim_id, victim_body)
+}
+
 #[test]
-fn a_mismatch_stops_the_migration_and_leaves_that_row_intact() {
+fn a_mismatch_is_skipped_and_counted_and_leaves_that_row_intact() {
     let conn = lore_core::storage::open_in_memory().unwrap();
     let (_bd, blobs) = store();
     two_sessions(&conn, &blobs);
     make_legacy(&conn);
     let before = served_attachments(&conn);
+    let (victim_id, victim_body) = damage_second_body(&conn);
 
-    // A damaged part_body row: it claims the second row's hash but holds
-    // other bytes. The second row must not be pointed at it.
-    let (victim_id, victim_body) = before[1].clone();
-    let victim_hash = compact::body_hash(&victim_body);
-    conn.execute(
-        "INSERT INTO part_body (hash, body) VALUES (?1, 'not the original bytes')",
-        [&victim_hash],
-    )
-    .unwrap();
-
-    let err = compact::dedupe_attachments(&conn, 10, &AtomicBool::new(false)).unwrap_err();
-    assert!(err.to_string().contains(&victim_id), "{err}");
+    let report = compact::dedupe_attachments(&conn, 10, &AtomicBool::new(false)).unwrap();
+    assert_eq!(
+        (report.converted, report.failed, report.remaining),
+        (3, 1, 1),
+        "the rows after it were converted too"
+    );
 
     // The victim is exactly as it was: inline, unpointed, same bytes.
     let (inline, hash): (Option<String>, Option<String>) = conn
@@ -228,13 +236,58 @@ fn a_mismatch_stops_the_migration_and_leaves_that_row_intact() {
         .unwrap();
     assert_eq!(inline.as_deref(), Some(victim_body.as_str()));
     assert_eq!(hash, None);
-    // The row before it was converted and committed; nothing after it was.
-    assert_eq!(compact::inline_attachments(&conn).unwrap(), 3);
+    assert_eq!(compact::inline_attachments(&conn).unwrap(), 1);
     assert_eq!(
         served_attachments(&conn),
         before,
         "no reader sees a changed byte"
     );
+
+    // A rerun tries it again, and leaves it again.
+    let again = compact::dedupe_attachments(&conn, 10, &AtomicBool::new(false)).unwrap();
+    assert_eq!((again.converted, again.failed, again.remaining), (0, 1, 1));
+}
+
+#[test]
+fn a_failed_row_does_not_block_the_vacuum_or_repeat_the_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lore.db");
+    {
+        let raw = Connection::open(&path).unwrap();
+        raw.execute_batch("PRAGMA auto_vacuum = NONE; CREATE TABLE early (x INTEGER);")
+            .unwrap();
+    }
+    let (conn, blobs) = file_archive(dir.path());
+    two_sessions(&conn, &blobs);
+    make_legacy(&conn);
+    let before = served_attachments(&conn);
+    damage_second_body(&conn);
+
+    let report = compact::compact(&conn, &AtomicBool::new(false)).unwrap();
+    assert_eq!((report.dedupe.failed, report.dedupe.remaining), (1, 1));
+    assert!(
+        matches!(report.vacuum, VacuumOutcome::Vacuumed { .. }),
+        "{:?}",
+        report.vacuum
+    );
+    assert!(compact::is_incremental(&conn).unwrap());
+    assert_eq!(
+        lore_core::settings::get(&conn, compact::FAILED_ROWS_SETTING)
+            .unwrap()
+            .as_deref(),
+        Some("1")
+    );
+    assert_eq!(served_attachments(&conn), before);
+    assert_eq!(backups(dir.path()).len(), 1);
+
+    // The next launch: the failed row is still inline, and is not a reason
+    // to back up again.
+    for taken in backups(dir.path()) {
+        std::fs::remove_file(taken).unwrap();
+    }
+    let rerun = compact::compact(&conn, &AtomicBool::new(false)).unwrap();
+    assert_eq!(rerun.vacuum, VacuumOutcome::AlreadyIncremental);
+    assert!(backups(dir.path()).is_empty());
 }
 
 #[test]
@@ -430,13 +483,13 @@ fn an_old_archive_is_vacuumed_once_and_only_with_room() {
     let view_before = reader_view(&conn, &[&a, &b]);
 
     assert_eq!(
-        compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX)).unwrap(),
+        compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX), 0).unwrap(),
         VacuumOutcome::DedupePending,
         "the file is rewritten once, after the conversion"
     );
     compact::dedupe_attachments(&conn, 100, &AtomicBool::new(false)).unwrap();
 
-    let skipped = compact::vacuum_once_with(&conn, VacuumSpace::one_volume(1024)).unwrap();
+    let skipped = compact::vacuum_once_with(&conn, VacuumSpace::one_volume(1024), 0).unwrap();
     assert!(matches!(
         skipped,
         VacuumOutcome::LowSpace {
@@ -452,7 +505,7 @@ fn an_old_archive_is_vacuumed_once_and_only_with_room() {
         Some("\"skipped_low_space\"")
     );
 
-    let done = compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX)).unwrap();
+    let done = compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX), 0).unwrap();
     assert!(matches!(done, VacuumOutcome::Vacuumed { .. }), "{done:?}");
     assert!(compact::is_incremental(&conn).unwrap());
     assert_eq!(
@@ -461,7 +514,7 @@ fn an_old_archive_is_vacuumed_once_and_only_with_room() {
         "back to MEMORY after the VACUUM wrote its copy to a file"
     );
     assert_eq!(
-        compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX)).unwrap(),
+        compact::vacuum_once_with(&conn, VacuumSpace::one_volume(u64::MAX), 0).unwrap(),
         VacuumOutcome::AlreadyIncremental
     );
     let ok: String = conn

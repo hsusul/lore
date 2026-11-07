@@ -18,8 +18,9 @@
 //!   ([`vacuum_once`]), which runs only when the volume has room for it.
 //!
 //! Lossless is checked, not assumed: a row's old column is cleared only after
-//! its body reads back byte-equal through the view, and the conversion stops
-//! at the first row that does not, leaving that row as it was.
+//! its body reads back byte-equal through the view. A row that does not is
+//! left exactly as it was, counted, and skipped, so one bad row neither loses
+//! data nor stalls the rest of the archive.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -42,6 +43,10 @@ pub const RECLAIM_MIN_FREE_PAGES: i64 = 2048;
 
 /// The setting that records the one-time `VACUUM`'s outcome, content-free.
 pub const VACUUM_SETTING: &str = "compact.vacuum";
+
+/// The setting that records how many attachment rows the last [`compact`]
+/// could not verify and left inline ([`DedupeReport::failed`]). A count only.
+pub const FAILED_ROWS_SETTING: &str = "compact.failed_rows";
 
 /// The setting that records why the last [`compact`] failed, content-free:
 /// `{"stage": "backup" | "dedupe" | "vacuum", "sqlite_code": n | null}`,
@@ -121,8 +126,11 @@ pub struct DedupeReport {
     /// Distinct bodies this call added to `part_body`.
     pub bodies_added: u64,
     /// Attachment rows still stored inline afterwards: zero once the
-    /// conversion is complete, nonzero if it was stopped.
+    /// conversion is complete, nonzero if it was stopped or rows failed.
     pub remaining: u64,
+    /// Attachment rows this call left inline because their body did not read
+    /// back byte-equal. Each is exactly as it was before the call.
+    pub failed: u64,
 }
 
 /// Convert every attachment row still stored inline to the one-copy form.
@@ -134,9 +142,10 @@ pub struct DedupeReport {
 ///
 /// Verified: for each row the body is stored, the row is pointed at it, and
 /// the body read back through `message_part_full` is compared byte for byte
-/// with the old column. Only then is the old column cleared. The first row
-/// that does not compare equal is left exactly as it was, the rows before it
-/// are committed, and the conversion stops with an error naming that part.
+/// with the old column. Only then is the old column cleared. A row that does
+/// not compare equal is rolled back to exactly what it was, counted in
+/// [`DedupeReport::failed`], and skipped; the conversion carries on with the
+/// next row. A rerun tries the failed rows again.
 ///
 /// `stop` is checked between batches.
 pub fn dedupe_attachments(
@@ -180,11 +189,7 @@ pub fn dedupe_attachments(
                 }
                 None => {
                     tx.execute_batch("ROLLBACK TO dedupe_part; RELEASE dedupe_part")?;
-                    tx.commit()?;
-                    return Err(StorageError::Migration(format!(
-                        "attachment body of part {id} did not read back byte-equal; \
-                         the conversion stopped and left that part as it was"
-                    )));
+                    report.failed += 1;
                 }
             }
         }
@@ -355,23 +360,30 @@ impl VacuumSpace {
 /// Switch an existing archive to `auto_vacuum = INCREMENTAL` with the one
 /// full `VACUUM` that takes, after the attachment conversion has finished and
 /// only when there is room for it ([`VacuumSpace`]). Otherwise it skips, and a
-/// later launch tries again.
+/// later launch tries again. `tolerated_inline` is how many attachment rows
+/// may still be inline: the rows the conversion could not verify and left as
+/// they were ([`DedupeReport::failed`]), which would otherwise block it
+/// forever.
 ///
 /// The outcome is recorded under [`VACUUM_SETTING`] so a skip is visible
 /// afterwards. The `VACUUM` holds the write lock for its duration (seconds on
 /// a multi-gigabyte archive), once.
-pub fn vacuum_once(conn: &Connection) -> Result<VacuumOutcome> {
+pub fn vacuum_once(conn: &Connection, tolerated_inline: u64) -> Result<VacuumOutcome> {
     let space = match conn.path().filter(|p| !p.is_empty()) {
         Some(path) => vacuum_space(std::path::Path::new(path))?,
         None => VacuumSpace::one_volume(0),
     };
-    vacuum_once_with(conn, space)
+    vacuum_once_with(conn, space, tolerated_inline)
 }
 
 /// [`vacuum_once`] with the free space given, so the space rule can be tested
 /// without filling a disk.
-pub fn vacuum_once_with(conn: &Connection, space: VacuumSpace) -> Result<VacuumOutcome> {
-    let outcome = decide_vacuum(conn, space)?;
+pub fn vacuum_once_with(
+    conn: &Connection,
+    space: VacuumSpace,
+    tolerated_inline: u64,
+) -> Result<VacuumOutcome> {
+    let outcome = decide_vacuum(conn, space, tolerated_inline)?;
     let outcome = match outcome {
         Some(outcome) => outcome,
         None => {
@@ -402,14 +414,18 @@ pub fn vacuum_once_with(conn: &Connection, space: VacuumSpace) -> Result<VacuumO
 }
 
 /// `Some(outcome)` when the `VACUUM` should not run, `None` when it should.
-fn decide_vacuum(conn: &Connection, space: VacuumSpace) -> Result<Option<VacuumOutcome>> {
+fn decide_vacuum(
+    conn: &Connection,
+    space: VacuumSpace,
+    tolerated_inline: u64,
+) -> Result<Option<VacuumOutcome>> {
     if is_incremental(conn)? {
         return Ok(Some(VacuumOutcome::AlreadyIncremental));
     }
     if conn.path().filter(|p| !p.is_empty()).is_none() {
         return Ok(Some(VacuumOutcome::NoFile));
     }
-    if inline_attachments(conn)? > 0 {
+    if inline_attachments(conn)? > tolerated_inline {
         return Ok(Some(VacuumOutcome::DedupePending));
     }
     let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
@@ -513,17 +529,24 @@ fn compact_stages(
 ) -> std::result::Result<CompactReport, (&'static str, StorageError)> {
     back_up_before_converting(conn).map_err(|e| ("backup", e))?;
     let dedupe = dedupe_attachments(conn, DEDUPE_BATCH, stop).map_err(|e| ("dedupe", e))?;
+    crate::settings::set(conn, FAILED_ROWS_SETTING, &dedupe.failed.to_string())
+        .map_err(|e| ("dedupe", e))?;
     let vacuum = if stop.load(Ordering::Relaxed) {
         VacuumOutcome::DedupePending
     } else {
-        vacuum_once(conn).map_err(|e| ("vacuum", e))?
+        vacuum_once(conn, dedupe.failed).map_err(|e| ("vacuum", e))?
     };
     Ok(CompactReport { dedupe, vacuum })
 }
 
-/// Back up a file archive that still has rows to convert.
+/// Back up a file archive that still has rows to convert. Rows the last run
+/// could not verify do not count: they are left as they were, and backing up
+/// on every launch for them would only fill the disk.
 fn back_up_before_converting(conn: &Connection) -> Result<()> {
-    if inline_attachments(conn)? == 0 {
+    let known_failed = crate::settings::get(conn, FAILED_ROWS_SETTING)?
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    if inline_attachments(conn)? <= known_failed {
         return Ok(());
     }
     let Some(dir) = crate::backup::backup_dir_for(conn) else {
