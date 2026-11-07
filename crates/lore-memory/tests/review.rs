@@ -566,7 +566,20 @@ fn an_update_committed_by_a_stopped_accept_is_not_applied_again() {
         );
         fs::write(dir.path().join(&rel), &updated).unwrap();
         let message = format!("mem: update worktrees-share-refs\n\nLore-Proposal: {P2}");
-        git(dir.path(), &["commit", "-q", "-am", &message]);
+        // The test isolates git config, so the commit names its own author.
+        git(
+            dir.path(),
+            &[
+                "-c",
+                "user.name=Lore test",
+                "-c",
+                "user.email=test@lore.invalid",
+                "commit",
+                "-q",
+                "-am",
+                &message,
+            ],
+        );
         drop(lock);
         let again = second.join().unwrap();
         assert_eq!((again.outcome, again.updated), (Added::Unchanged, true));
