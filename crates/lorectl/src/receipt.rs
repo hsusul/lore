@@ -1,6 +1,9 @@
 //! A proposal's receipt: the archived session it came from, and the passage
-//! of that session that shares the most words with what it proposes,
-//! preferring what the person said over what the agent said.
+//! of that session it came from. That is the person's turn the proposal
+//! quotes, else the person's turn sharing the most words with it, else their
+//! first turn, and only then what the agent said. Text the harness wrote in
+//! the person's place, such as a continued session's summary or a loaded
+//! skill, is never the passage.
 //!
 //! Only the redacted search projection is read, the same text `search` and
 //! the MCP tools return, so a receipt never shows a span the secret scan
@@ -11,6 +14,7 @@ use std::path::Path;
 
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::{query, search, storage};
+use lore_memory::mine;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -20,6 +24,8 @@ const EXCERPT_CHARS: usize = 160;
 /// Documents read from one session, so a huge session stays bounded.
 const MAX_DOCUMENTS: usize = 2_000;
 const PAGE: i64 = 200;
+/// A quoted span shorter than this many bytes is too common to name a turn.
+const MIN_QUOTE: usize = 16;
 
 /// Where a proposal's session was found, if anywhere.
 pub enum Receipt {
@@ -56,7 +62,7 @@ impl Archive {
             .flatten()
             .and_then(|s| s.summary.started_at)
             .and_then(date);
-        let excerpt = best_passage(conn, &owner.archive_id, &words(text));
+        let excerpt = best_passage(conn, &owner.archive_id, &words(text), &quotes(text));
         Receipt::Found {
             session: owner.archive_id,
             agent: owner.agent_id,
@@ -117,12 +123,39 @@ fn words(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The session text, title aside, sharing the most of `wanted`; the earliest
-/// on a tie. The person's own turns come first: an agent turn is quoted only
-/// when no user turn shares a word. `None` when no passage shares a word.
-fn best_passage(conn: &Connection, session: &str, wanted: &BTreeSet<String>) -> Option<String> {
+/// The spans of `text` between double quotes, on one line, that are long
+/// enough to name a turn. A mined proposal's body quotes each receipt.
+fn quotes(text: &str) -> Vec<String> {
+    let text = text.replace(['\u{201c}', '\u{201d}'], "\"");
+    (text.split('"').skip(1).step_by(2))
+        .map(one_line)
+        .filter(|q| q.len() >= MIN_QUOTE)
+        .collect()
+}
+
+/// The quote `turn` (already on one line) is, holds, or is part of.
+fn quoted_in<'q>(turn: &str, quotes: &'q [String]) -> Option<&'q str> {
+    quotes
+        .iter()
+        .find(|q| turn.contains(q.as_str()) || (turn.len() >= MIN_QUOTE && q.contains(turn)))
+        .map(String::as_str)
+}
+
+/// The session's passage for a proposal, title aside, in this order: the
+/// first of the person's turns one of `quotes` names; the person's turn
+/// sharing the most of `wanted`, the earliest on a tie; the person's first
+/// turn; the other turn sharing the most of `wanted`. Turns the harness
+/// wrote in the person's place are skipped ([`mine::is_harness_text`]).
+/// `None` when the session has no such turn.
+fn best_passage(
+    conn: &Connection,
+    session: &str,
+    wanted: &BTreeSet<String>,
+    quotes: &[String],
+) -> Option<String> {
     // Index 0 is the best user turn, 1 the best of any other role.
     let mut best: [(usize, Option<String>); 2] = [(0, None), (0, None)];
+    let mut first_user: Option<String> = None;
     let (mut after, mut read) = (None, 0);
     while read < MAX_DOCUMENTS {
         let page = search::session_documents_page(conn, session, after, PAGE).ok()?;
@@ -130,15 +163,39 @@ fn best_passage(conn: &Connection, session: &str, wanted: &BTreeSet<String>) -> 
         after = Some(last.id);
         read += page.len();
         for document in page.iter().filter(|d| d.label != "title") {
+            let user = document.label == "user";
+            if user {
+                if mine::is_harness_text(&document.text) {
+                    continue;
+                }
+                let flat = one_line(&document.text);
+                if let Some(quote) = quoted_in(&flat, quotes) {
+                    return Some(quoted_excerpt(&flat, quote));
+                }
+                first_user.get_or_insert_with(|| document.text.clone());
+            }
             let score = words(&document.text).intersection(wanted).count();
-            let slot = &mut best[usize::from(document.label != "user")];
+            let slot = &mut best[usize::from(!user)];
             if score > slot.0 {
                 *slot = (score, Some(document.text.clone()));
             }
         }
     }
     let [(_, user), (_, other)] = best;
-    user.or(other).map(|text| excerpt(&text, wanted))
+    (user.or(first_user).or(other)).map(|text| excerpt(&text, wanted))
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `turn` from where `quote` starts in it, or whole when it is part of
+/// `quote`, cut to [`EXCERPT_CHARS`].
+fn quoted_excerpt(turn: &str, quote: &str) -> String {
+    match turn.find(quote) {
+        Some(at) if at > 0 => clip("...", &turn[at..]),
+        _ => clip("", turn),
+    }
 }
 
 /// `text` on one line, from a few words before its first wanted word, cut to
@@ -151,7 +208,13 @@ fn excerpt(text: &str, wanted: &BTreeSet<String>) -> String {
         .unwrap_or(0);
     let start = first.saturating_sub(4);
     let lead = if start > 0 { "..." } else { "" };
-    let rest = flat[start..].join(" ").replace('"', "'");
+    clip(lead, &flat[start..].join(" "))
+}
+
+/// `lead`, then `rest` with double quotes made single, cut to
+/// [`EXCERPT_CHARS`].
+fn clip(lead: &str, rest: &str) -> String {
+    let rest = rest.replace('"', "'");
     let cut: String = rest.chars().take(EXCERPT_CHARS).collect();
     let tail = if cut.len() < rest.len() { "..." } else { "" };
     format!("{lead}{cut}{tail}")
@@ -193,6 +256,34 @@ mod tests {
         let text = "First step is here and now we must run the migration before starting.";
         let got = excerpt(text, &wanted);
         assert_eq!(got, "...we must run the migration before starting.");
+    }
+
+    #[test]
+    fn quotes_are_the_long_quoted_spans_and_name_a_turn_either_way() {
+        let body = "Rule.\n- day agent s: \"pin the schema   version first\", after \"ok\"\n\
+                    - day agent s: \u{201c}keep the changelog to one line\u{201d}\n";
+        let quotes = quotes(body);
+        assert_eq!(
+            quotes,
+            [
+                "pin the schema version first",
+                "keep the changelog to one line"
+            ]
+        );
+        let turn = "No, pin the schema version first, then retry.";
+        assert_eq!(
+            quoted_in(turn, &quotes),
+            Some("pin the schema version first")
+        );
+        assert_eq!(
+            quoted_in("keep the changelog", &quotes),
+            Some("keep the changelog to one line")
+        );
+        assert_eq!(quoted_in("one line", &quotes), None);
+        assert_eq!(
+            quoted_excerpt(turn, "pin the schema version first"),
+            "...pin the schema version first, then retry."
+        );
     }
 
     #[test]

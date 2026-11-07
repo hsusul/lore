@@ -182,9 +182,27 @@ pub const REPLY_WINDOW_MS: i64 = 48 * 60 * 60 * 1000;
 const CONTINUED: &str = "This session is being continued";
 
 /// How user turns open that the harness wrote, not the person: an interrupt
-/// notice, an image with no words, and the text of a skill being loaded. A
-/// lessons run would read each one and drop it.
-const NOT_THE_PERSON: &[&str] = &["[Request interrupted", "Base directory for this skill"];
+/// notice, the text of a skill being loaded, and a message relayed from
+/// another agent session. A lessons run would read each one and drop it.
+const NOT_THE_PERSON: &[&str] = &[
+    "[Request interrupted",
+    "Base directory for this skill",
+    "Another Claude session sent a message",
+];
+
+/// Whether a user turn is text the harness wrote, not the person: a
+/// continued session's summary, a loaded or re-invoked skill, an interrupt
+/// notice, a relayed message, an image with no words, or a `<...>` block
+/// such as pasted content or a system reminder.
+#[must_use]
+pub fn is_harness_text(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with('<')
+        || text.starts_with(REINVOKED)
+        || text.starts_with(CONTINUED)
+        || NOT_THE_PERSON.iter().any(|p| text.starts_with(p))
+        || is_bare_image(text)
+}
 
 /// A user turn that corrects the agent, with where it was said.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,14 +418,7 @@ pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidat
             continue;
         };
         let text = one_line(&turn.text);
-        if text.is_empty()
-            || text.starts_with('<')
-            || text.starts_with(REINVOKED)
-            || text.starts_with(CONTINUED)
-            || NOT_THE_PERSON.iter().any(|p| text.starts_with(p))
-            || is_bare_image(&text)
-            || is_invocation(&text)
-        {
+        if text.is_empty() || is_harness_text(&text) || is_invocation(&text) {
             continue;
         }
         found.push(Candidate {

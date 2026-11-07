@@ -7,7 +7,25 @@
 #[path = "common/archive.rs"]
 mod archive;
 
-use lore_memory::mine::{corrections, find_conflicts, lessons, read_turns};
+use lore_memory::mine::{corrections, find_conflicts, is_harness_text, lessons, read_turns};
+
+#[test]
+fn is_harness_text_names_what_the_harness_wrote_in_a_user_turn() {
+    for text in [
+        "This session is being continued from a previous conversation.",
+        "Base directory for this skill: /skills/example",
+        "[Request interrupted by user]",
+        "Another Claude session sent a message: hello",
+        "(Re-invocation of /review)",
+        "[Image #1] [Image #2]",
+        "  <pasted-content>notes</pasted-content>",
+    ] {
+        assert!(is_harness_text(text), "{text}");
+    }
+    for text in ["pin the schema version first", "[Image #1] like this", ""] {
+        assert!(!is_harness_text(text), "{text}");
+    }
+}
 
 fn sid(n: u32) -> String {
     format!("cccccccc-0000-4000-8000-{n:012x}")
