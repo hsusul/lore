@@ -1,6 +1,8 @@
 //! Filing a mined lesson: the proposal it becomes, and keeping it in one step.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use lore_memory::filing;
 use lore_memory::inbox;
 use lore_memory::mine::{Candidate, Lesson, Signal};
@@ -71,4 +73,35 @@ fn keeping_a_lesson_files_and_accepts_it_once() {
             .count(),
         1
     );
+}
+
+#[test]
+fn a_lesson_from_one_repository_is_anchored_to_the_files_its_receipts_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    common::repo(&root, Some("https://github.com/example/proj.git"));
+    common::commit(&root, "src/gen.rs", "pub fn generated() {}\n", "init");
+    let head = common::git(&root, &["rev-parse", "--short=12", "HEAD"]);
+    let mut lesson = lesson();
+    for receipt in &mut lesson.receipts {
+        receipt.repo_path = Some(root.to_str().unwrap().to_owned());
+        receipt.text = "stop editing the generated files".to_owned();
+    }
+    lesson.receipts[0].preceding = Some(format!(
+        "I'll edit `src/gen.rs:1`, {}/src/gen.rs and docs/missing.md.",
+        root.display()
+    ));
+
+    let proposal = filing::proposal(&lesson).unwrap();
+    assert!(matches!(proposal.scope, Scope::Repo(_)));
+    let anchors: Vec<_> = (proposal.anchors.iter())
+        .map(|a| {
+            (
+                a.path.as_str(),
+                a.lines,
+                a.commit.as_ref().map(|c| c.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(anchors, [("src/gen.rs", None, Some(head.as_str()))]);
 }
