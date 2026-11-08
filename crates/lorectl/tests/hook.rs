@@ -381,6 +381,7 @@ fn session_start_lists_the_notes_for_the_repo_named_on_stdin() {
         "Lore memory for this repo:\n\
          - [unanchored] Pin the toolchain (01JD0000000000000000000002)\n\
          - [fresh] Retry the migration (01JD0000000000000000000001)\n\
+         Lore memory for all repos:\n\
          - [unanchored] Migrations are global (01JD0000000000000000000003)\n"
     );
 }
