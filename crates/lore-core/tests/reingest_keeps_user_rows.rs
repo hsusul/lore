@@ -230,6 +230,25 @@ fn a_forgotten_session_stays_gone_after_its_log_changes() {
     assert_eq!(archive.source_state(), "forgotten");
 }
 
+/// Forgetting everything forgets each source as forgetting its session does.
+#[test]
+fn forgetting_everything_stays_forgotten_after_its_logs_change() {
+    let archive = Archive::new();
+    lore_core::forget::forget_all(&archive.conn, &archive.blobs).unwrap();
+    assert_eq!(archive.source_state(), "forgotten");
+
+    archive.append("u3");
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.derived_rows(), (0, 0, 0), "an append restored rows");
+    archive.rewrite();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    archive.age_parser_version();
+    assert!(matches!(archive.ingest(), IngestOutcome::Skipped));
+    assert_eq!(archive.session_id(), None, "a forgotten session came back");
+    assert_eq!(archive.derived_rows(), (0, 0, 0));
+    assert_eq!(archive.source_state(), "forgotten");
+}
+
 /// The same for a source an older Lore left `ok` with no session.
 #[test]
 fn a_session_forgotten_by_an_older_lore_stays_gone_after_its_log_changes() {
