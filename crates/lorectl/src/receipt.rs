@@ -1,9 +1,11 @@
 //! A proposal's receipt: the archived session it came from, and the passage
 //! of that session it came from. That is the person's turn the proposal
-//! quotes, else the person's turn sharing the most words with it, else their
-//! first turn, and only then what the agent said. Text the harness wrote in
-//! the person's place, such as a continued session's summary or a loaded
-//! skill, is never the passage.
+//! quotes, else the person's turn that best matches it, else their first
+//! turn, and only then what the agent said. Only what the person typed is
+//! their turn, read as the miner reads it ([`mine::persons_words`]): the
+//! words after a slash command, never a tool's output in their turn (a file
+//! the agent read, a command's result) or text the harness wrote in their
+//! place, such as a continued session's summary or a loaded skill.
 //!
 //! Only the redacted search projection is read, the same text `search` and
 //! the MCP tools return, so a receipt never shows a span the secret scan
@@ -14,6 +16,7 @@ use std::path::Path;
 
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::{query, search, storage};
+use lore_memory::index::{related_words, stem};
 use lore_memory::mine;
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -62,7 +65,12 @@ impl Archive {
             .flatten()
             .and_then(|s| s.summary.started_at)
             .and_then(date);
-        let excerpt = best_passage(conn, &owner.archive_id, &words(text), &quotes(text));
+        let wanted = Wanted {
+            words: words(text),
+            lesson: stems(text),
+            quotes: quotes(text),
+        };
+        let excerpt = best_passage(conn, &owner.archive_id, &wanted);
         Receipt::Found {
             session: owner.archive_id,
             agent: owner.agent_id,
@@ -123,6 +131,44 @@ fn words(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// The content words of `text` ([`related_words`], a line at a time, since it
+/// keeps at most a dozen of a text) with their endings folded ([`stem`]).
+fn stems(text: &str) -> BTreeSet<String> {
+    text.lines()
+        .flat_map(related_words)
+        .map(|w| stem(&w))
+        .collect()
+}
+
+/// What a passage should match: a proposal's title and body read three ways.
+struct Wanted {
+    /// Its [`words`], which place an excerpt and rank the agent's turns.
+    words: BTreeSet<String>,
+    /// Its [`stems`], which rank the person's turns.
+    lesson: BTreeSet<String>,
+    /// Its [`quotes`], which name a turn outright.
+    quotes: Vec<String>,
+}
+
+/// How well one of the person's turns matches the lesson: how many of its
+/// [`stems`] the lesson holds, out of how many it has.
+#[derive(Clone, Copy, Default)]
+struct Match {
+    shared: usize,
+    of: usize,
+}
+
+impl Match {
+    /// Whether this turn matches better than `than`: a larger share of its
+    /// words are the lesson's, or the same share and more of them. A long
+    /// request shares a word or two with most lessons by chance; the
+    /// correction a lesson came from is mostly about the lesson.
+    fn beats(self, than: Self) -> bool {
+        let (a, b) = (self.shared * than.of, than.shared * self.of);
+        a > b || (a == b && self.shared > than.shared)
+    }
+}
+
 /// The spans of `text` between double quotes, on one line, that are long
 /// enough to name a turn. A mined proposal's body quotes each receipt.
 fn quotes(text: &str) -> Vec<String> {
@@ -141,20 +187,18 @@ fn quoted_in<'q>(turn: &str, quotes: &'q [String]) -> Option<&'q str> {
         .map(String::as_str)
 }
 
-/// The session's passage for a proposal, title aside, in this order: the
-/// first of the person's turns one of `quotes` names; the person's turn
-/// sharing the most of `wanted`, the earliest on a tie; the person's first
-/// turn; the other turn sharing the most of `wanted`. Turns the harness
-/// wrote in the person's place are skipped ([`mine::is_harness_text`]).
-/// `None` when the session has no such turn.
-fn best_passage(
-    conn: &Connection,
-    session: &str,
-    wanted: &BTreeSet<String>,
-    quotes: &[String],
-) -> Option<String> {
-    // Index 0 is the best user turn, 1 the best of any other role.
-    let mut best: [(usize, Option<String>); 2] = [(0, None), (0, None)];
+/// The session's passage for a proposal, in this order: the first of the
+/// person's turns one of `wanted.quotes` names; the person's turn that best
+/// matches the lesson ([`Match::beats`]), the earliest on a tie, passing
+/// over a go-ahead such as "Yes, merge them" ([`mine::is_approval`]); the
+/// person's first turn; the agent's turn sharing the most of `wanted.words`.
+/// A person's turn is the words they typed ([`mine::persons_words`]): the
+/// text after a slash command, and never a tool's output, a loaded skill, or
+/// other text the harness wrote in their place. `None` when the session has
+/// no such turn.
+fn best_passage(conn: &Connection, session: &str, wanted: &Wanted) -> Option<String> {
+    let mut user: (Match, Option<String>) = (Match::default(), None);
+    let mut agent: (usize, Option<String>) = (0, None);
     let mut first_user: Option<String> = None;
     let (mut after, mut read) = (None, 0);
     while read < MAX_DOCUMENTS {
@@ -162,27 +206,37 @@ fn best_passage(
         let Some(last) = page.last() else { break };
         after = Some(last.id);
         read += page.len();
-        for document in page.iter().filter(|d| d.label != "title") {
-            let user = document.label == "user";
-            if user {
-                if mine::is_harness_text(&document.text) {
-                    continue;
+        // A title, a patch, or a tool's output is no one's turn.
+        for document in page.iter().filter(|d| d.part.as_deref() == Some("text")) {
+            if document.label != "user" {
+                let score = words(&document.text).intersection(&wanted.words).count();
+                if score > agent.0 {
+                    agent = (score, Some(document.text.clone()));
                 }
-                let flat = one_line(&document.text);
-                if let Some(quote) = quoted_in(&flat, quotes) {
-                    return Some(quoted_excerpt(&flat, quote));
-                }
-                first_user.get_or_insert_with(|| document.text.clone());
+                continue;
             }
-            let score = words(&document.text).intersection(wanted).count();
-            let slot = &mut best[usize::from(!user)];
-            if score > slot.0 {
-                *slot = (score, Some(document.text.clone()));
+            let Some(said) = mine::persons_words(&document.text) else {
+                continue;
+            };
+            let flat = one_line(&said);
+            if let Some(quote) = quoted_in(&flat, &wanted.quotes) {
+                return Some(quoted_excerpt(&flat, quote));
+            }
+            first_user.get_or_insert_with(|| said.clone());
+            if mine::is_approval(&flat) {
+                continue;
+            }
+            let theirs = stems(&said);
+            let score = Match {
+                shared: theirs.intersection(&wanted.lesson).count(),
+                of: theirs.len(),
+            };
+            if score.shared > 0 && score.beats(user.0) {
+                user = (score, Some(said));
             }
         }
     }
-    let [(_, user), (_, other)] = best;
-    (user.or(first_user).or(other)).map(|text| excerpt(&text, wanted))
+    (user.1.or(first_user).or(agent.1)).map(|text| excerpt(&text, &wanted.words))
 }
 
 fn one_line(text: &str) -> String {

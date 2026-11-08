@@ -328,6 +328,7 @@ fn session_documents_read_back_redacted_text_in_order() {
     let docs = session_documents_page(&conn, &sid, None, 50).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].label, "user");
+    assert_eq!(docs[0].part.as_deref(), Some("text"));
     assert!(docs[0].text.starts_with("deploy with token "));
     assert!(docs[0].text.ends_with(" now"));
     assert!(!docs[0]
