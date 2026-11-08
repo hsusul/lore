@@ -1,10 +1,12 @@
 //! The scratch repository a replay runs in.
 //!
 //! A replay must see the repository as it was when the prompt was given, and
-//! must never write to the person's real one. So it clones, then checks out
-//! the commit HEAD pointed at then (from the reflog, via
-//! [`lore_core::git::head_at`]). The clone is a plain one, not `--shared`: a
-//! shared clone borrows the original's object store, which the sandbox hides.
+//! must never write to the person's real one. So it fetches the commit HEAD
+//! pointed at then (from the reflog, via [`lore_core::git::head_at`]) into a
+//! new repository and checks it out. It fetches that commit alone, not a
+//! clone: a clone brings every branch, tag, and object, so the agent could
+//! read the later fix it is being graded against. Nor is it `--shared`: that
+//! borrows the original's object store, which the sandbox hides.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -81,31 +83,25 @@ fn toplevel(cwd: &Path) -> Option<PathBuf> {
     (!top.is_empty()).then(|| PathBuf::from(top))
 }
 
-/// Clone `toplevel` into `dest` (which must not exist) and check out
-/// `commit`, on `branch` when the clone has that branch. The clone keeps
-/// every local branch and no remote, so the agent cannot push anywhere.
+/// Make `dest` (which must not exist) a repository holding only `commit` and
+/// its history, and check it out, on `branch` when `toplevel` has that
+/// branch. The repository has no remote, so the agent cannot push anywhere.
 pub fn clone_at(toplevel: &Path, commit: &str, branch: Option<&str>, dest: &Path) -> Result<()> {
+    git(None, &[os("init"), os("-q"), dest.into()])?;
+    // Protocol v2 serves any commit by its id; v0 refuses one no ref points
+    // at, which is most of them once the branch has moved on.
     git(
-        None,
+        Some(dest),
         &[
-            os("clone"),
+            os("-c"),
+            os("protocol.version=2"),
+            os("fetch"),
             os("-q"),
-            os("--no-checkout"),
+            os("--no-tags"),
             toplevel.into(),
-            dest.into(),
+            os(commit),
         ],
     )?;
-    let fetch = [
-        os("fetch"),
-        os("-q"),
-        os("--update-head-ok"),
-        toplevel.into(),
-        os("+refs/heads/*:refs/heads/*"),
-    ];
-    // Best effort, as a clone already brought the default branch: a failure
-    // here only loses other branches.
-    let _ = run(Some(dest), &fetch);
-    git(Some(dest), &[os("remote"), os("remove"), os("origin")])?;
     git(
         Some(dest),
         &[os("checkout"), os("-q"), os("--detach"), os(commit)],
@@ -113,7 +109,7 @@ pub fn clone_at(toplevel: &Path, commit: &str, branch: Option<&str>, dest: &Path
     if let Some(branch) = branch {
         let reference = format!("refs/heads/{branch}");
         let exists = run(
-            Some(dest),
+            Some(toplevel),
             &[os("rev-parse"), os("-q"), os("--verify"), os(&reference)],
         )
         .is_ok_and(|o| o.status.success());
