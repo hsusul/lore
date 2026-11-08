@@ -517,7 +517,7 @@ export function createMockHandlers(
       total: 1,
       note_cap: 10,
       char_cap: 2000,
-      text: "Lore memory for this repo:\n- [unanchored] Never push to main (01JD0000000000000000000001)\n",
+      text: "Lore memory:\n- [unanchored] Never push to main (01JD0000000000000000000001)\n",
     }),
 
     accept_lesson: () => "global/use-pnpm-not-npm.md",

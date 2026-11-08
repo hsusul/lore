@@ -43,7 +43,7 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
         .and_then(|index| index.count_active(scope.as_deref()).ok())
         .unwrap_or(0)
         .max(found.notes.len());
-    let (text, shown) = render(found.notes.iter().map(line), total);
+    let (text, shown) = render(&found.context, found.notes.iter().map(line), total);
     Ok(Some(SessionStart {
         context: found.context,
         notes: found.notes,
@@ -74,8 +74,16 @@ pub fn title(text: &str) -> String {
 /// A heading, one line per note while the section stays under [`CHAR_CAP`],
 /// then a line saying how many of `total` were left out and where they are.
 /// Returns the section and how many note lines it holds.
-fn render(lines: impl IntoIterator<Item = String>, total: usize) -> (String, usize) {
-    let mut out = String::from("Lore memory for this repo:\n");
+fn render(
+    context: &RepoContext,
+    lines: impl IntoIterator<Item = String>,
+    total: usize,
+) -> (String, usize) {
+    let header = match context {
+        RepoContext::NoRepo => "Lore memory:\n",
+        RepoContext::Repo { .. } | RepoContext::NoRemote { .. } => "Lore memory for this repo:\n",
+    };
+    let mut out = String::from(header);
     let mut shown = 0;
     for line in lines {
         if out.len() + line.len() + 1 > CHAR_CAP {
@@ -100,16 +108,23 @@ mod tests {
 
     #[test]
     fn the_notes_section_stops_near_two_thousand_bytes() {
+        let repo = RepoContext::NoRemote {
+            root: std::path::PathBuf::from("/repo"),
+        };
         let line = format!("- [fresh] {} (01JD0000000000000000000001)", "t".repeat(400));
-        let out = render(std::iter::repeat_n(line.clone(), 10), 10);
+        let out = render(&repo, std::iter::repeat_n(line.clone(), 10), 10);
         let expected = format!(
             "Lore memory for this repo:\n{line}\n{line}\n{line}\n{line}\n\
              - 6 more not shown. The recall_memory tool lists them.\n"
         );
         assert_eq!(out, (expected, 4));
         assert_eq!(
-            render(["- [gone] a (b)".to_owned()], 1),
+            render(&repo, ["- [gone] a (b)".to_owned()], 1),
             ("Lore memory for this repo:\n- [gone] a (b)\n".to_owned(), 1)
+        );
+        assert_eq!(
+            render(&RepoContext::NoRepo, ["- [gone] a (b)".to_owned()], 1),
+            ("Lore memory:\n- [gone] a (b)\n".to_owned(), 1)
         );
     }
 
