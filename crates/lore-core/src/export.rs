@@ -162,7 +162,9 @@ fn intern_rule(rule: &str) -> &'static str {
     match rule {
         "private-key-block" => "private-key-block",
         "aws-access-key-id" => "aws-access-key-id",
+        "aws-secret-key" => "aws-secret-key",
         "gcp-api-key" => "gcp-api-key",
+        "gcp-sa-key" => "gcp-sa-key",
         "github-token" => "github-token",
         "github-fine-grained-pat" => "github-fine-grained-pat",
         "gitlab-pat" => "gitlab-pat",
@@ -178,6 +180,7 @@ fn intern_rule(rule: &str) -> &'static str {
         "slack-webhook" => "slack-webhook",
         "discord-webhook" => "discord-webhook",
         "high-entropy" => "high-entropy",
+        "generic-assignment" => "generic-assignment",
         _ => "secret",
     }
 }
@@ -482,7 +485,9 @@ mod tests {
     fn intern_rule_and_markdown_fence_behavior() {
         assert_eq!(intern_rule("private-key-block"), "private-key-block");
         assert_eq!(intern_rule("aws-access-key-id"), "aws-access-key-id");
+        assert_eq!(intern_rule("aws-secret-key"), "aws-secret-key");
         assert_eq!(intern_rule("gcp-api-key"), "gcp-api-key");
+        assert_eq!(intern_rule("gcp-sa-key"), "gcp-sa-key");
         assert_eq!(intern_rule("github-token"), "github-token");
         assert_eq!(
             intern_rule("github-fine-grained-pat"),
@@ -501,6 +506,7 @@ mod tests {
         assert_eq!(intern_rule("slack-webhook"), "slack-webhook");
         assert_eq!(intern_rule("discord-webhook"), "discord-webhook");
         assert_eq!(intern_rule("high-entropy"), "high-entropy");
+        assert_eq!(intern_rule("generic-assignment"), "generic-assignment");
         assert_eq!(intern_rule("unknown-rule"), "secret");
 
         assert_eq!(parse_severity("critical"), secrets::Severity::Critical);
@@ -584,6 +590,42 @@ mod tests {
         assert!(
             md.contains("msg_250"),
             "messages beyond initial limit must be included in export"
+        );
+    }
+
+    #[test]
+    fn export_masks_secrets_with_specific_rule_names() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let aws_key = concat!("wJalrXUtnFEMI", "/K7MDENG/bPxRfiCYzzzKEY1234");
+        let gcp_key = concat!(
+            "{\"type\": \"service_account\", \"project_id\": \"p\", ",
+            "\"private_key\": \"-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADAN\\n-----END PRIVATE KEY-----\\n\"}"
+        );
+        let generic_val = "9f3Kd0Lq7v";
+        let gcp_escaped = gcp_key.replace('"', "\\\"").replace('\n', "\\n");
+        let jsonl = format!(
+            "{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"e_rules\",\"cwd\":\"/p\",\"message\":{{\"role\":\"user\",\"content\":\"aws_secret_access_key = {aws_key}\\npassword = {generic_val}\\n{gcp_escaped}\"}}}}\n"
+        );
+        let sid = persist(&conn, &jsonl);
+
+        let masked = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .expect("session must export");
+        assert!(
+            masked.contains("«redacted:aws-secret-key»"),
+            "aws secret key must be masked with rule name, got:\n{masked}"
+        );
+        assert!(
+            masked.contains("«redacted:gcp-sa-key»"),
+            "gcp service account key must be masked with rule name, got:\n{masked}"
+        );
+        assert!(
+            masked.contains("«redacted:generic-assignment»"),
+            "generic assignment must be masked with rule name, got:\n{masked}"
+        );
+        assert!(
+            !masked.contains("«redacted:secret»"),
+            "must not fall back to generic secret mask, got:\n{masked}"
         );
     }
 }
