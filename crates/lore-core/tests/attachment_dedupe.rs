@@ -388,7 +388,10 @@ fn compaction_backs_up_before_its_first_batch() {
     assert_eq!(report.dedupe.converted, 4);
     let taken = backups(dir.path());
     assert_eq!(taken.len(), 1, "backed up first");
-    let old = Connection::open(&taken[0]).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let copy = scratch.path().join("restored.db");
+    lore_core::backup::restore_backup(&taken[0], &copy).unwrap();
+    let old = Connection::open(&copy).unwrap();
     assert_eq!(
         count(&old, "SELECT count(*) FROM message_part WHERE content_json IS NOT NULL AND kind = 'attachment'"),
         4,

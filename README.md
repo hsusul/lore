@@ -65,7 +65,7 @@ A large history takes a while to scan the first time. `lorectl scan --since 30d`
 
 The archive is a SQLite database named `lore.db` with `blobs` beside it. It lives in the platform data directory under `dev.lore.app`. `LORE_ARCHIVE_DIR` or `--archive <DIR>` moves it. The path must be absolute.
 
-A newer build upgrades an older archive on its first scan, and commands that only read refuse it until then (exit 4). Before an upgrade that older builds cannot read back, it backs the archive up into `backups/` beside it. Lore stores each attachment body and tool output once. New sessions are stored that way. The desktop app converts sessions an older build stored, in the background after its startup scan; `lorectl` does not.
+A newer build upgrades an older archive on its first scan, and commands that only read refuse it until then (exit 4). Before an upgrade that older builds cannot read back, it backs the archive up into `backups/` beside it. Backups are integrity-checked, then stored zstd-compressed as `lore-<time>-<n>.db.zst` (about 2.2x smaller); plain `.db` backups from earlier builds still restore and age out under the same retention (newest 7 by default). Taking a backup needs free space for one uncompressed copy of the archive plus the compressed file. Lore stores each attachment body and tool output once. New sessions are stored that way. The desktop app converts sessions an older build stored, in the background after its startup scan; `lorectl` does not.
 
 ```bash
 lorectl scan
