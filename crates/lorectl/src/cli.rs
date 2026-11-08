@@ -330,6 +330,11 @@ where
                             .into(),
                     ));
                 }
+                if patch && command != Command::Inspect {
+                    return Err(CliError::Usage(
+                        "--patch works only with `lorectl inspect`".into(),
+                    ));
+                }
                 Action::Run(command)
             }
             None => Action::NoCommand,
@@ -492,6 +497,34 @@ mod tests {
         assert!(!parsed(&["inspect", "sid"]).patch);
         assert!(parsed(&["inspect", "--patch", "sid"]).patch);
         assert!(parsed(&["--patch", "inspect", "sid"]).patch);
+        assert!(parsed(&["inspect", "sid", "--patch"]).patch);
+    }
+
+    #[test]
+    fn patch_flag_refused_on_unsupported_commands() {
+        let own_rest_after =
+            |c: &Command| matches!(*c, Command::Init | Command::Report | Command::Mem);
+        for command in COMMANDS.iter().filter(|c| **c != Command::Inspect) {
+            // Flag before command always reaches cli parser
+            let args_before: Vec<&str> = match command.operand() {
+                Some(_) => vec!["--patch", command.name(), "operand"],
+                None => vec!["--patch", command.name()],
+            };
+            let err = parse(args_before).unwrap_err();
+            assert_eq!(exit::exit_code(&err), USAGE);
+            assert_eq!(err.to_string(), "--patch works only with `lorectl inspect`");
+
+            // Flag after command reaches cli parser for commands that do not delegate rest
+            if !own_rest_after(command) {
+                let args_after: Vec<&str> = match command.operand() {
+                    Some(_) => vec![command.name(), "operand", "--patch"],
+                    None => vec![command.name(), "--patch"],
+                };
+                let err = parse(args_after).unwrap_err();
+                assert_eq!(exit::exit_code(&err), USAGE);
+                assert_eq!(err.to_string(), "--patch works only with `lorectl inspect`");
+            }
+        }
     }
 
     #[test]
