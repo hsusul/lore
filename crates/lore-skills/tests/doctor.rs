@@ -200,3 +200,38 @@ fn broken_reference_in_markdown_code_span_is_reported() {
         "expected BrokenRef for target-skill, got: {findings:?}"
     );
 }
+
+#[test]
+fn codex_budget_largest_skill_targets_codex_path_when_shared_with_claude() {
+    let tmp =
+        std::env::temp_dir().join(format!("lore-skills-shared-budget-{}", std::process::id()));
+    let claude_dir = tmp.join(".claude/skills/shared-heavy");
+    let codex_dir = tmp.join(".codex/skills/shared-heavy");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::create_dir_all(&codex_dir).unwrap();
+
+    let desc = "a".repeat(8100);
+    let content = format!("---\nname: shared-heavy\ndescription: {desc}\n---\nbody\n");
+    std::fs::write(claude_dir.join("SKILL.md"), &content).unwrap();
+    std::fs::write(codex_dir.join("SKILL.md"), &content).unwrap();
+
+    let roots = Roots::from_home(&tmp);
+    let inventory = lore_skills::inventory(&roots);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let findings = lore_skills::doctor(&inventory);
+    let budget = findings
+        .iter()
+        .find(|f| matches!(f, Finding::CodexBudget { .. }))
+        .expect("CodexBudget finding");
+
+    match budget {
+        Finding::CodexBudget { largest, .. } => {
+            assert_eq!(
+                largest, &codex_dir,
+                "largest skill in Codex budget should point to Codex path, not Claude path"
+            );
+        }
+        _ => unreachable!(),
+    }
+}

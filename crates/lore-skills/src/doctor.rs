@@ -216,10 +216,16 @@ fn codex_budget(by_name: &BTreeMap<&str, Vec<&SkillRecord>>) -> Option<Finding> 
     let mut skills = 0;
     let mut largest: Option<(usize, PathBuf)> = None;
     for records in by_name.values() {
-        let loaded = records
-            .iter()
-            .find(|r| r.installs.iter().any(|i| i.agents.contains(&Agent::Codex)));
-        let Some(record) = loaded else { continue };
+        let loaded = records.iter().find_map(|r| {
+            let install = r
+                .installs
+                .iter()
+                .find(|i| i.agents.contains(&Agent::Codex))?;
+            Some((*r, &install.path))
+        });
+        let Some((record, path)) = loaded else {
+            continue;
+        };
         let name = record.declared_name.as_deref().unwrap_or(&record.name);
         let size = name.chars().count()
             + record
@@ -229,7 +235,7 @@ fn codex_budget(by_name: &BTreeMap<&str, Vec<&SkillRecord>>) -> Option<Finding> 
         chars += size;
         skills += 1;
         if largest.as_ref().is_none_or(|(most, _)| size > *most) {
-            largest = Some((size, first_path(record)));
+            largest = Some((size, path.clone()));
         }
     }
     let (_, largest) = largest?;
