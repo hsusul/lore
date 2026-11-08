@@ -373,6 +373,121 @@ fn agent_before<'t>(turns: &'t [Turn], bare: &BTreeSet<(&str, i64)>, i: usize) -
     None
 }
 
+/// The agent turn that answers the user turn at `i`: the first agent turn
+/// after it in the same session, past any more of the person's own words
+/// sent before the agent replied. Harness text, a bare command, or an
+/// invocation ends the search, as in [`agent_before`], since the agent's next
+/// words then answer that and not this turn; so does the end of the session.
+/// Only turns with text are read, so an agent turn that was nothing but tool
+/// calls is passed over, here and in [`agent_before`].
+fn agent_after<'t>(turns: &'t [Turn], bare: &BTreeSet<(&str, i64)>, i: usize) -> Option<&'t Turn> {
+    let session = &turns.get(i)?.session;
+    for after in turns.get(i + 1..)? {
+        if &after.session != session {
+            return None;
+        }
+        if !after.user {
+            return Some(after);
+        }
+        let text = one_line(&after.text);
+        if is_harness_text(&text)
+            || is_invocation(&text)
+            || bare.contains(&(after.session.as_str(), after.seq))
+        {
+            return None;
+        }
+    }
+    None
+}
+
+/// A reply longer than this many words is never read as a go-ahead.
+const MAX_APPROVAL_WORDS: usize = 6;
+
+/// Words a go-ahead opens with: the person agrees, or tells the agent to
+/// carry on with what it proposed, or to leave it for now.
+const APPROVALS: &[&str] = &[
+    "yes",
+    "yeah",
+    "yep",
+    "yup",
+    "ok",
+    "okay",
+    "sure",
+    "go ahead",
+    "go for it",
+    "do it",
+    "push",
+    "merge",
+    "commit",
+    "continue",
+    "proceed",
+    "try again",
+    "not now",
+    "sounds good",
+    "lgtm",
+    "thanks",
+    "thank you",
+];
+
+/// Words that, after a go-ahead's opening, make it more than one: the person
+/// qualifies it ("yes but", "merge, not squash"), or asks for something else
+/// first.
+const HEDGES: &[&str] = &[
+    "but",
+    "not",
+    "no",
+    "don't",
+    "dont",
+    "never",
+    "instead",
+    "without",
+    "except",
+    "only",
+    "rather",
+    "wait",
+    "actually",
+    "first",
+    "also",
+    "why",
+    "with",
+    "using",
+    "back",
+    "other",
+    "different",
+    "revert",
+    "undo",
+];
+
+/// Whether a reply is only a go-ahead, such as "Yes, merge them", "Push and
+/// reply", "Try again", or "Not now": at most [`MAX_APPROVAL_WORDS`] words,
+/// opening with one of [`APPROVALS`], with no question, no [`HEDGES`] after
+/// the opening, and nothing the rule miner reads as a correction or a rule.
+/// "yes but don't push" is not one. A go-ahead corrects nothing, so a lessons
+/// run is not paid to read it.
+#[must_use]
+pub fn is_approval(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+    let words = tokens(&lower);
+    if words.is_empty()
+        || words.len() > MAX_APPROVAL_WORDS
+        || lower.contains('?')
+        || corrects(&lower)
+        || has_rule_phrase(&lower)
+    {
+        return false;
+    }
+    if words == ["go"] {
+        return true;
+    }
+    let Some(rest) = APPROVALS.iter().find_map(|approval| {
+        let opening: Vec<&str> = approval.split(' ').collect();
+        words.starts_with(&opening).then(|| &words[opening.len()..])
+    }) else {
+        return false;
+    };
+    !rest.iter().any(|w| HEDGES.contains(w))
+}
+
 /// [`corrections_in`], each with the index of its turn in `turns.0`.
 pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Candidate)> {
     let bare = bare_commands(turns);
@@ -424,9 +539,7 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
                     at_ms: turn.at_ms,
                     preceding: agent
                         .map(|b| one_line(&b.text).chars().take(PRECEDING_CHARS).collect()),
-                    following: turns
-                        .get(i + 1)
-                        .filter(|a| a.session == turn.session && !a.user)
+                    following: agent_after(turns, &bare, i)
                         .map(|a| one_line(&a.text).chars().take(FOLLOWING_CHARS).collect()),
                     text,
                     signal,
@@ -459,8 +572,10 @@ fn is_bare_image(text: &str) -> bool {
 /// session, or later in a run of the person's turns right after one (see
 /// [`agent_before`]), that does not invoke a skill or slash command, is not a
 /// continued session's summary or other text the harness wrote (an
-/// interrupt notice, a bare image, a loaded skill), and does not open with
-/// leftover markup.
+/// interrupt notice, a bare image, a loaded skill), does not open with
+/// leftover markup, and is not only a go-ahead ([`is_approval`]). Its
+/// `preceding` is the last agent text before it and its `following` the
+/// first agent text after it ([`agent_after`]), both from its own session.
 /// Its text is kept whole; whoever shows it cuts it short. A resume or fork
 /// copy of a reply is kept once, the earliest session's, as in [`lessons`].
 /// Most replies correct nothing: they are for an agent to judge, not rules.
@@ -485,7 +600,7 @@ pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidat
             continue;
         };
         let text = one_line(&turn.text);
-        if text.is_empty() || is_harness_text(&text) || is_invocation(&text) {
+        if text.is_empty() || is_harness_text(&text) || is_invocation(&text) || is_approval(&text) {
             continue;
         }
         found.push(Candidate {
@@ -500,9 +615,7 @@ pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidat
                     .take(PRECEDING_CHARS)
                     .collect(),
             ),
-            following: turns
-                .get(i + 1)
-                .filter(|a| a.session == turn.session && !a.user)
+            following: agent_after(turns, &invoked, i)
                 .map(|a| one_line(&a.text).chars().take(FOLLOWING_CHARS).collect()),
             text,
             signal: Signal::Reply,
