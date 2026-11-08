@@ -99,3 +99,43 @@ fn a_correction_long_after_the_skill_is_not_held_against_it() {
     );
     assert_eq!(usage(&conn), [("verify-build".to_owned(), 1, 1, vec![])]);
 }
+
+#[test]
+fn invocations_without_timestamps_are_not_deduped_across_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = claude_archive(
+        dir.path(),
+        &[
+            (
+                A,
+                &[
+                    (
+                        "user",
+                        "<command-name>/poteto-mode</command-name>",
+                        "2026-09-01T10:00:00Z",
+                    ),
+                    ("assistant", "Built it.", "2026-09-01T10:01:00Z"),
+                    (
+                        "user",
+                        "<command-name>/poteto-mode</command-name>",
+                        "2026-09-01T10:02:00Z",
+                    ),
+                    ("assistant", "Built it again.", "2026-09-01T10:03:00Z"),
+                ],
+            ),
+            (
+                B,
+                &[
+                    (
+                        "user",
+                        "<command-name>/poteto-mode</command-name>",
+                        "2026-09-02T10:00:00Z",
+                    ),
+                    ("assistant", "Built it.", "2026-09-02T10:01:00Z"),
+                ],
+            ),
+        ],
+    );
+    conn.execute("UPDATE message SET ts = NULL", []).unwrap();
+    assert_eq!(usage(&conn), [("poteto-mode".to_owned(), 3, 2, vec![])]);
+}

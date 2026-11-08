@@ -43,7 +43,8 @@ pub struct SkillUsage {
 /// The distinct times one name ran, the sessions, and the newest time.
 #[derive(Default)]
 struct Seen<'a> {
-    times: BTreeSet<Option<i64>>,
+    times: BTreeSet<i64>,
+    uses: usize,
     sessions: BTreeSet<&'a str>,
     last_ms: Option<i64>,
 }
@@ -116,7 +117,11 @@ pub fn skill_usage(
     let mut by_name: BTreeMap<&str, Seen<'_>> = BTreeMap::new();
     for u in &uses {
         let seen = by_name.entry(&u.name).or_default();
-        if seen.times.insert(u.at_ms) {
+        if match u.at_ms {
+            Some(ts) => seen.times.insert(ts),
+            None => true,
+        } {
+            seen.uses += 1;
             seen.sessions.insert(&u.session);
         }
         seen.last_ms = seen.last_ms.max(u.at_ms);
@@ -135,7 +140,7 @@ pub fn skill_usage(
             reprompts.sort_by_key(|c| std::cmp::Reverse(c.at_ms));
             SkillUsage {
                 skill: name.to_owned(),
-                uses: seen.times.len(),
+                uses: seen.uses,
                 sessions: seen.sessions.len(),
                 last_ms: seen.last_ms,
                 reprompts,
