@@ -1,11 +1,13 @@
 //! Ingest reads a source's state, parses the file, and only then takes the
 //! write lock to store what it parsed. A forget that commits in between, from
 //! the UI's connection while the worker parses, must win: the ingest in flight
-//! stores nothing and the source stays forgotten.
+//! stores nothing, leaves none of the files it staged, and the source stays
+//! forgotten.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use lore_core::adapters::claude_code::ClaudeCodeAdapter;
@@ -19,6 +21,7 @@ use lore_core::storage::blob::BlobStore;
 use rusqlite::Connection;
 
 const SESSION: &str = "14141414-0000-4000-8000-000000000001";
+const OTHER: &str = "15151515-0000-4000-8000-000000000002";
 
 type Forget = fn(&Connection, &BlobStore);
 
@@ -27,6 +30,7 @@ type Forget = fn(&Connection, &BlobStore);
 struct ForgetsWhileParsing {
     inner: ClaudeCodeAdapter,
     pending: Mutex<Option<(PathBuf, Forget)>>,
+    parses: AtomicUsize,
 }
 
 impl ForgetsWhileParsing {
@@ -34,10 +38,12 @@ impl ForgetsWhileParsing {
         Self {
             inner: ClaudeCodeAdapter::new(),
             pending: Mutex::new(Some((archive_dir.to_path_buf(), forget))),
+            parses: AtomicUsize::new(0),
         }
     }
 
     fn forget_now(&self) {
+        self.parses.fetch_add(1, Ordering::SeqCst);
         if let Some((dir, forget)) = self.pending.lock().unwrap().take() {
             let conn = lore_core::storage::open(&dir.join("lore.db")).unwrap();
             forget(&conn, &BlobStore::open(dir.join("blobs")).unwrap());
@@ -99,9 +105,33 @@ fn line(uuid: &str, role: &str, text: &str) -> String {
     ) + "\n"
 }
 
+/// A user line carrying a screenshot, which ingest stages as a blob file.
+fn screenshot(uuid: &str) -> String {
+    let data = "QUJD".repeat(2048);
+    format!(
+        r#"{{"type":"user","uuid":"{uuid}","sessionId":"{SESSION}","timestamp":"2026-10-31T18:00:00.000Z","cwd":"/nonexistent/lore-test","message":{{"role":"user","content":[{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"{data}"}}}},{{"type":"text","text":"see screenshot"}}]}}}}"#
+    ) + "\n"
+}
+
+fn blob_files(dir: &Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |entries| {
+        entries
+            .flatten()
+            .map(|e| match e.path() {
+                p if p.is_dir() => blob_files(&p),
+                _ => 1,
+            })
+            .sum()
+    })
+}
+
 fn forget_the_session(conn: &Connection, blobs: &BlobStore) {
     let id: String = conn
-        .query_row("SELECT id FROM agent_session", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM agent_session WHERE native_session_id = ?1",
+            [SESSION],
+            |r| r.get(0),
+        )
         .unwrap();
     lore_core::forget::forget_session(conn, blobs, &id).unwrap();
 }
@@ -110,10 +140,17 @@ fn forget_everything(conn: &Connection, blobs: &BlobStore) {
     lore_core::forget::forget_all(conn, blobs).unwrap();
 }
 
+struct Raced {
+    outcome: IngestOutcome,
+    sessions: i64,
+    state: String,
+    blob_files: usize,
+    parses: usize,
+}
+
 /// Archive one transcript, change it with `change`, then ingest it again while
-/// `forget` commits mid-parse. Returns the outcome, the sessions left, and the
-/// source's state.
-fn ingest_racing(change: fn(&Path), forget: Forget) -> (IngestOutcome, i64, String) {
+/// `forget` commits mid-parse.
+fn ingest_racing(change: fn(&Path), forget: Forget) -> Raced {
     let dir = tempfile::tempdir().unwrap();
     let conn = lore_core::storage::open(&dir.path().join("lore.db")).unwrap();
     let blobs = BlobStore::open(dir.path().join("blobs")).unwrap();
@@ -137,13 +174,32 @@ fn ingest_racing(change: fn(&Path), forget: Forget) -> (IngestOutcome, i64, Stri
     let state = conn
         .query_row("SELECT state FROM ingest_state", [], |r| r.get(0))
         .unwrap();
-    (outcome, sessions, state)
+    Raced {
+        outcome,
+        sessions,
+        state,
+        blob_files: blob_files(blobs.root()),
+        parses: racing.parses.load(Ordering::SeqCst),
+    }
 }
 
 fn append(path: &Path) {
     let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
     file.write_all(line("u3", "user", "one more line").as_bytes())
         .unwrap();
+}
+
+fn append_screenshot(path: &Path) {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(screenshot("u3").as_bytes()).unwrap();
+}
+
+fn rewrite_with_screenshot(path: &Path) {
+    std::fs::write(
+        path,
+        screenshot("u1") + &line("u2", "assistant", "answer names the larch"),
+    )
+    .unwrap();
 }
 
 fn rewrite(path: &Path) {
@@ -157,19 +213,64 @@ fn rewrite(path: &Path) {
 #[test]
 fn a_forget_during_a_reparse_is_not_undone_by_it() {
     for forget in [forget_the_session as Forget, forget_everything] {
-        let (outcome, sessions, state) = ingest_racing(rewrite, forget);
-        assert_eq!(sessions, 0, "the ingest in flight restored the session");
-        assert_eq!(state, "forgotten");
-        assert!(matches!(outcome, IngestOutcome::Skipped));
+        let raced = ingest_racing(rewrite, forget);
+        assert_eq!(
+            raced.sessions, 0,
+            "the ingest in flight restored the session"
+        );
+        assert_eq!(raced.state, "forgotten");
+        assert!(matches!(raced.outcome, IngestOutcome::Skipped));
     }
 }
 
 #[test]
 fn a_forget_during_an_append_is_not_undone_by_it() {
     for forget in [forget_the_session as Forget, forget_everything] {
-        let (outcome, sessions, state) = ingest_racing(append, forget);
-        assert_eq!(sessions, 0, "the ingest in flight restored the session");
-        assert_eq!(state, "forgotten");
-        assert!(matches!(outcome, IngestOutcome::Skipped));
+        let raced = ingest_racing(append, forget);
+        assert_eq!(
+            raced.sessions, 0,
+            "the ingest in flight restored the session"
+        );
+        assert_eq!(raced.state, "forgotten");
+        assert!(matches!(raced.outcome, IngestOutcome::Skipped));
     }
+}
+
+#[test]
+fn a_forget_during_an_ingest_leaves_none_of_its_files() {
+    for change in [append_screenshot as fn(&Path), rewrite_with_screenshot] {
+        for forget in [forget_the_session as Forget, forget_everything] {
+            let raced = ingest_racing(change, forget);
+            assert!(matches!(raced.outcome, IngestOutcome::Skipped));
+            assert_eq!(raced.blob_files, 0, "a forgotten screenshot stayed on disk");
+            assert_eq!(raced.parses, 1, "the forgotten source was parsed again");
+        }
+    }
+}
+
+#[test]
+fn a_forget_during_an_ingest_keeps_a_file_another_session_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open(&dir.path().join("lore.db")).unwrap();
+    let blobs = BlobStore::open(dir.path().join("blobs")).unwrap();
+    let other = dir.path().join(format!("{OTHER}.jsonl"));
+    std::fs::write(&other, screenshot("o1").replace(SESSION, OTHER)).unwrap();
+    ingest_file(&conn, &ClaudeCodeAdapter::new(), &other, &blobs).unwrap();
+    let path = dir.path().join(format!("{SESSION}.jsonl"));
+    std::fs::write(&path, line("u1", "user", "question")).unwrap();
+    ingest_file(&conn, &ClaudeCodeAdapter::new(), &path, &blobs).unwrap();
+
+    append_screenshot(&path);
+    let racing = ForgetsWhileParsing::new(dir.path(), forget_the_session);
+    let outcome = ingest_file(&conn, &racing, &path, &blobs).unwrap();
+    assert!(racing.forgot(), "the forget ran during the parse");
+    assert!(matches!(outcome, IngestOutcome::Skipped));
+
+    let relpath: String = conn
+        .query_row("SELECT storage_relpath FROM blob", [], |r| r.get(0))
+        .unwrap();
+    assert!(
+        blobs.read(&relpath).is_ok(),
+        "the other session lost its screenshot"
+    );
 }
