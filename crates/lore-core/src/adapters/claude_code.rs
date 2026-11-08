@@ -505,7 +505,7 @@ fn parts_from_content(content: &Value, session: &mut ParsedSession) -> Vec<Parse
             },
             "tool_use" => raw_part(ordinal, PartKind::ToolUse, block),
             // Its base64 moves to the blob store at ingest (`payloads`).
-            "image" => raw_part(ordinal, PartKind::Attachment, block),
+            "image" | "document" => raw_part(ordinal, PartKind::Attachment, block),
             "tool_result" => {
                 let text = tool_result_text(block);
                 ParsedPart {
@@ -1646,6 +1646,23 @@ mod tests {
             )
         );
         assert_eq!(parts[1].text.as_deref(), Some("see this"));
+    }
+
+    #[test]
+    fn a_document_block_is_an_attachment() {
+        let jsonl = "{\"type\":\"user\",\"sessionId\":\"s_doc\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"document\",\"source\":{\"type\":\"base64\",\"media_type\":\"application/pdf\",\"data\":\"JVBERi0xLjc=\"}},{\"type\":\"text\",\"text\":\"summarize this pdf\"}]}}\n";
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "s_doc");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        assert!(session.notes.is_empty());
+        let parts = &session.messages[0].parts;
+        assert_eq!(parts[0].kind, PartKind::Attachment);
+        assert_eq!(
+            parts[0].content_json.as_deref(),
+            Some(
+                r#"{"source":{"data":"JVBERi0xLjc=","media_type":"application/pdf","type":"base64"},"type":"document"}"#
+            )
+        );
+        assert_eq!(parts[1].text.as_deref(), Some("summarize this pdf"));
     }
 
     #[test]
