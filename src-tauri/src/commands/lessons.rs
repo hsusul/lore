@@ -44,6 +44,16 @@ const TOOLS: [&str; 3] = [
     "mcp__lore__propose_memory",
 ];
 
+/// Codex's tools that reach past Lore, turned off: its shell reads any file
+/// even in the read-only sandbox, and the others view images, start
+/// subagents, and search the web.
+const CODEX_OFF: [&str; 4] = [
+    "features.shell_tool=false",
+    "features.view_image=false",
+    "features.multi_agent=false",
+    "web_search=\"disabled\"",
+];
+
 /// A run reads every candidate and may take a while; past this it is stopped.
 const LIMIT: Duration = Duration::from_secs(20 * 60);
 /// How long a run's processes have to exit on SIGTERM before SIGKILL.
@@ -148,8 +158,11 @@ impl Agent {
                     "--ephemeral",
                     "-s",
                     "read-only",
-                    "-o",
                 ]);
+                for config in CODEX_OFF {
+                    args.extend(["-c".to_owned(), config.to_owned()]);
+                }
+                args.push("-o".to_owned());
                 args.push(last.display().to_string());
                 args.push("-".to_owned());
                 args
@@ -165,7 +178,12 @@ impl Agent {
             Agent::Claude => {
                 let mut args = owned(&["-p", "--mcp-config"]);
                 args.push(scratch.join("find-lessons.mcp.json").display().to_string());
-                args.extend(owned(&["--strict-mcp-config", "--allowedTools"]));
+                args.extend(owned(&[
+                    "--strict-mcp-config",
+                    "--tools",
+                    "",
+                    "--allowedTools",
+                ]));
                 args.extend(owned(&TOOLS));
                 args.extend(owned(&["--output-format", "json"]));
                 args
@@ -181,7 +199,7 @@ impl Agent {
                     "-s",
                     "read-only",
                 ]);
-                for config in [
+                for config in CODEX_OFF.map(str::to_owned).into_iter().chain([
                     "approval_policy=\"never\"".to_owned(),
                     "mcp_servers.lore.default_tools_approval_mode=\"approve\"".to_owned(),
                     format!("mcp_servers.lore.command={}", quoted(lorectl)),
@@ -193,7 +211,7 @@ impl Agent {
                         "mcp_servers.lore.env={{LORE_AGENT=\"codex\",{PINNED_ENV}={}}}",
                         quoted(&scratch.join(PINNED_FILE))
                     ),
-                ] {
+                ]) {
                     args.push("-c".to_owned());
                     args.push(config);
                 }
