@@ -331,3 +331,21 @@ fn an_arm_empty_across_all_cases_is_reported_as_same_as_none() {
     assert!(text.contains("same as none for 4 case(s) whose lore context is empty"));
     assert!(text.contains("lore 3/3=none"));
 }
+
+#[test]
+fn missing_labels_file_fails_with_io_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    fixture(tmp.path());
+    std::fs::remove_file(tmp.path().join("labeled.jsonl")).unwrap();
+    let out = report_output(tmp.path(), &[]);
+    assert!(
+        !out.status.success(),
+        "expected failure on missing labels file, got: {:?}",
+        out
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("could not read labeled.jsonl"),
+        "stderr: {stderr}"
+    );
+}
