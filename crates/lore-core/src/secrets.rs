@@ -1425,6 +1425,26 @@ mod tests {
     }
 
     #[test]
+    fn generic_assignment_flags_keywords_inside_env_var_names() {
+        for (text, value) in [
+            ("DB_PASSWORD=Kd0Lq7vN8wR1", "Kd0Lq7vN8wR1"),
+            ("GITHUB_TOKEN=Zq4vN8wR1tB6", "Zq4vN8wR1tB6"),
+            ("export STRIPE_SECRET_KEY=aB3xY7pQ2m9X", "aB3xY7pQ2m9X"),
+            ("SLACK_BOT_TOKEN=\"Kd0Lq7vN8wR1\"", "Kd0Lq7vN8wR1"),
+            ("my-service-api-key: 9f3Kd0Lq7vXz", "9f3Kd0Lq7vXz"),
+            ("GITHUB_ACCESS_TOKEN=Zq4vN8wR1tB6", "Zq4vN8wR1tB6"),
+        ] {
+            let hits: Vec<_> = scan_ok(text)
+                .into_iter()
+                .filter(|f| f.rule == "generic-assignment")
+                .collect();
+            assert_eq!(hits.len(), 1, "expected one finding in {text:?}");
+            assert_eq!(&text[hits[0].start..hits[0].end], value);
+        }
+        assert!(!rules_in("secretary = Kd0Lq7vN8wR1").contains(&"generic-assignment"));
+    }
+
+    #[test]
     fn generic_assignment_defers_to_a_specific_rule() {
         // A provider-shaped token in an assignment keeps its own specific,
         // higher-severity rule; the fallback never displaces it.
