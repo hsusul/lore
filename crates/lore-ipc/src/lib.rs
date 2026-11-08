@@ -473,7 +473,8 @@ pub struct AgentsReadDto {
     pub repo_name: Option<String>,
     /// The notes chosen, best first, at most `note_cap`.
     pub notes: Vec<ReadNoteDto>,
-    /// Every active note that applies in this directory, chosen or not.
+    /// Every distinct active note that applies in this directory, chosen or
+    /// not; a near-duplicate of a chosen note is not counted.
     #[ts(type = "number")]
     pub total: i64,
     #[ts(type = "number")]

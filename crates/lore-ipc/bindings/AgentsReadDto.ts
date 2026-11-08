@@ -15,7 +15,8 @@ repo_key: string | null, repo_name: string | null,
  */
 notes: Array<ReadNoteDto>, 
 /**
- * Every active note that applies in this directory, chosen or not.
+ * Every distinct active note that applies in this directory, chosen or
+ * not; a near-duplicate of a chosen note is not counted.
  */
 total: number, note_cap: number, char_cap: number, 
 /**

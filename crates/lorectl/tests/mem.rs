@@ -225,6 +225,51 @@ fn mem_reindex_names_both_paths_of_a_duplicate_id_and_exits_7() {
 }
 
 #[test]
+fn mem_reindex_names_notes_with_near_identical_titles_and_changes_nothing() {
+    let (dir, vault) = init();
+    let notes = [
+        (
+            "a.md",
+            "List follow-up items in chat; don't file them to a team tracker",
+        ),
+        (
+            "b.md",
+            "List follow-up items in chat instead of filing them to a team tracker",
+        ),
+        (
+            "c.md",
+            "Resolve Greptile threads you fix; reply then resolve the ones you decline",
+        ),
+        (
+            "d.md",
+            "Resolve review threads once addressed; reply, then resolve, the ones you decline",
+        ),
+    ];
+    for (name, title) in notes {
+        let text = format!("---\ntype: fact\ntitle: \"{title}\"\n---\nBody.\n");
+        let out = lorectl(&vault, &["add", &note_file(dir.path(), name, &text)]);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+    }
+    let commits = log(&vault).len();
+    let out = lorectl(&vault, &["reindex"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "indexed 4 notes, skipped 0 files\n");
+    let err = stderr(&out);
+    assert_eq!(err.matches("near-identical titles").count(), 1, "{err}");
+    assert!(
+        err.contains("global/list-follow-up-items-in-chat-don-t-file-them-to-a-team-tracker.md")
+            && err.contains(
+                "global/list-follow-up-items-in-chat-instead-of-filing-them-to-a-team-tr.md"
+            )
+            && !err.contains("resolve"),
+        "{err}"
+    );
+    assert!(err.contains("lorectl mem retire"), "{err}");
+    assert_eq!(log(&vault).len(), commits);
+    assert_eq!(status(&vault), "");
+}
+
+#[test]
 fn mem_show_finds_note_by_filename_and_path_without_extension() {
     let (dir, vault) = init();
     let note = "---\nid: 01JD0000000000000000000099\ntype: fact\ntitle: 日本 Note\n---\nBody.\n";
