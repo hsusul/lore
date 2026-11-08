@@ -195,13 +195,21 @@ fn no_ingest_path_leaves_an_ok_source_without_a_session() {
 
     lore_core::forget::forget_all(&archive.conn, &archive.blobs).unwrap();
     assert_eq!(archive.native_ids(), Vec::<String>::new());
-    assert_eq!(archive.unlinked(), vec![], "after forgetting everything");
-
-    assert_eq!(archive.ingest_all(), vec![Some(New); 3]);
-    assert_eq!(archive.native_ids(), vec![KEPT, FORGOTTEN, SECOND_KEY]);
+    let all_forgotten: Vec<(String, String)> = [KEPT, FORGOTTEN, MOVED]
+        .iter()
+        .map(|name| (format!("{name}.jsonl"), "forgotten".to_string()))
+        .collect();
     assert_eq!(
         archive.unlinked(),
-        vec![],
-        "after a fresh ingest that follows forgetting everything"
+        all_forgotten,
+        "after forgetting everything"
+    );
+
+    assert_eq!(archive.ingest_all(), vec![None; 3]);
+    assert_eq!(archive.native_ids(), Vec::<String>::new());
+    assert_eq!(
+        archive.unlinked(),
+        all_forgotten,
+        "after a scan that follows forgetting everything"
     );
 }

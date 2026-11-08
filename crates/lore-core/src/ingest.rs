@@ -1362,6 +1362,9 @@ pub fn ingest_file(
     // parse and blob staging so file I/O stays outside the lock.
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
+    if forgotten_since_read(&tx, &artifact_id)? {
+        return Ok(IngestOutcome::Skipped);
+    }
     let target_session_id = session_id_for(agent_id, &parsed);
     let left_folder = if prev.is_some() {
         save_left_captures(&tx, &artifact_id, &target_session_id)?;
@@ -1484,6 +1487,10 @@ fn ingest_append(
     let patch_blobs = stage_blobs(blobs, &mut append.session)?;
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
+    // The whole-file path skips a source forgotten since it was read.
+    if forgotten_since_read(&tx, &row.id)? {
+        return Ok(None);
+    }
     append_rows(
         &tx,
         &session_id,
@@ -1522,6 +1529,20 @@ fn sole_session(
     } else {
         None
     })
+}
+
+/// Whether a forget marked the source after ingest read its state. That read
+/// and the parse run outside the write lock, so a forget can commit between
+/// them and the write that would bring the session back.
+fn forgotten_since_read(tx: &Connection, source_artifact_id: &str) -> Result<bool> {
+    let state: Option<String> = tx
+        .query_row(
+            "SELECT state FROM ingest_state WHERE source_artifact_id = ?1",
+            [source_artifact_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(state.as_deref() == Some(FORGOTTEN))
 }
 
 /// A checkpoint is only resumable at a line boundary: a partial last line is

@@ -112,9 +112,9 @@ pub fn forget_session(state: State<'_, AppState>, id: String) -> Result<ForgetRe
     })
 }
 
-/// Forget everything: wipe all archive content (sessions, repos, sources,
-/// projections, findings, blobs) while keeping the database file open. Settings
-/// and the job queue are preserved.
+/// Forget everything: wipe all archive content (sessions, repos, projections,
+/// findings, blobs) while keeping the database file open, and mark every source
+/// forgotten so a later scan skips it. Settings and the job queue are preserved.
 #[tauri::command]
 pub fn forget_everything(state: State<'_, AppState>) -> Result<ForgetReport, String> {
     // Wipe the live database rows and blobs…
