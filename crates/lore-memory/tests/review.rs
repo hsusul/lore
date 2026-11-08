@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use lore_memory::eval;
 use lore_memory::inbox::{self, Proposal};
 use lore_memory::note::{
     AgentKind, Anchor, LineRange, NoteDate, NoteId, NoteType, RelPath, Relation, Scope, SessionId,
@@ -952,4 +953,16 @@ fn an_edit_is_redacted_and_validated_like_a_proposal() {
     let accepted = review::accept_edited(&vault, P1, None, &secret).unwrap();
     let note = vault.read(&accepted.rel).unwrap();
     assert!(!note.contains("ghp_0123456789"), "{note}");
+}
+
+#[test]
+fn eval_cases_recovers_accepted_proposals_when_decisions_log_is_lost() {
+    let (dir, vault) = new_vault();
+    inbox::propose(&vault, proposal(P1, AgentKind::ClaudeCode, "s1", BODY)).unwrap();
+    review::accept(&vault, P1, None).unwrap();
+    lose_decisions(dir.path());
+    let cases = eval::cases(&vault).unwrap();
+    assert_eq!(cases.len(), 1);
+    assert_eq!(cases[0].proposal.id, NoteId::parse(P1).unwrap());
+    assert_eq!(cases[0].label, eval::Label::Accept);
 }

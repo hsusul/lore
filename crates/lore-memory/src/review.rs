@@ -455,7 +455,7 @@ fn commit(vault: &Vault, rel: &str, message: &str) -> Result<(), VaultError> {
 
 /// Each commit whose message carries a `Lore-Proposal:` trailer, oldest first:
 /// the proposal id and the commit. Only proposal `id` when it is given.
-fn proposal_commits(
+pub(crate) fn proposal_commits(
     vault: &Vault,
     id: Option<&NoteId>,
 ) -> Result<Vec<(NoteId, String)>, VaultError> {
