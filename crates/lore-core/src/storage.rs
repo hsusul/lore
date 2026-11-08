@@ -85,19 +85,41 @@ pub fn create_private_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Create the database file 0600 before SQLite does, or tighten one an older
-/// build left 0644, matching backups. SQLite gives `-wal` and `-shm` the
-/// database file's mode when it creates them, so this covers them too.
+/// Create the database file 0600 before SQLite does, matching backups. SQLite
+/// gives new `-wal` and `-shm` files the database file's mode, but reuses ones
+/// an older build left behind after a crash, so those are tightened here too.
+/// An existing file is only chmodded, never opened, so a read-only database
+/// stays read-only and SQLite reports it as such.
 #[cfg(unix)]
 fn make_private_file(path: &Path) -> Result<()> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    use std::os::unix::fs::OpenOptionsExt;
+    if !path.exists() {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)?;
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        drop_group_and_other_access(Path::new(&file))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn drop_group_and_other_access(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = match std::fs::metadata(path) {
+        Ok(meta) => meta.permissions().mode(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    if mode & 0o077 != 0 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o700))?;
+    }
     Ok(())
 }
 

@@ -67,3 +67,35 @@ fn an_existing_archive_is_tightened_when_a_writer_opens_it() {
     assert_eq!(mode(&db), "600", "lore.db");
     assert_eq!(mode(&root), "700", "blobs/");
 }
+
+#[test]
+fn sidecars_an_older_build_left_behind_are_tightened_when_a_writer_opens_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lore.db");
+    drop(storage::open(&db).unwrap());
+    // A crash under an older build leaves non-empty sidecars at 0644. SQLite
+    // only gives an empty sidecar lore.db's mode, so it would keep these.
+    for suffix in ["-wal", "-shm"] {
+        let path = sidecar(&db, suffix);
+        std::fs::write(&path, [0u8; 64]).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let _conn = storage::open(&db).unwrap();
+
+    assert_eq!(mode(&sidecar(&db, "-wal")), "600", "lore.db-wal");
+    assert_eq!(mode(&sidecar(&db, "-shm")), "600", "lore.db-shm");
+}
+
+#[test]
+fn a_read_only_database_is_reported_as_read_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lore.db");
+    drop(storage::open(&db).unwrap());
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+    let err = storage::open(&db).unwrap_err().to_string();
+
+    assert!(err.contains("readonly"), "{err}");
+    assert_eq!(mode(&db), "400", "lore.db stays read-only");
+}
