@@ -557,7 +557,7 @@ pub(crate) mod tests {
         let id = &read.notes[0].id;
         assert_eq!(
             read.text,
-            format!("Lore memory for this repo:\n- [unanchored] Never push to main ({id})\n")
+            format!("Lore memory:\n- [unanchored] Never push to main ({id})\n")
         );
         assert_eq!(
             (
