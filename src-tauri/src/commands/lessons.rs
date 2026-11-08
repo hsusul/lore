@@ -46,7 +46,9 @@ const TOOLS: [&str; 3] = [
 
 /// Codex's tools that reach past Lore, turned off: its shell reads any file
 /// even in the read-only sandbox, and the others view images, start
-/// subagents, and search the web.
+/// subagents, and search the web. Runs pass `--ignore-user-config`, so the
+/// person's own MCP servers do not load, and `--strict-config`, so a Codex
+/// that does not know one of these keys stops instead of leaving it on.
 const CODEX_OFF: [&str; 4] = [
     "features.shell_tool=false",
     "features.view_image=false",
@@ -158,6 +160,8 @@ impl Agent {
                     "--ephemeral",
                     "-s",
                     "read-only",
+                    "--ignore-user-config",
+                    "--strict-config",
                 ]);
                 for config in CODEX_OFF {
                     args.extend(["-c".to_owned(), config.to_owned()]);
@@ -198,6 +202,8 @@ impl Agent {
                     "--ephemeral",
                     "-s",
                     "read-only",
+                    "--ignore-user-config",
+                    "--strict-config",
                 ]);
                 for config in CODEX_OFF.map(str::to_owned).into_iter().chain([
                     "approval_policy=\"never\"".to_owned(),
@@ -793,6 +799,8 @@ mod tests {
                 "--ephemeral",
                 "-s",
                 "read-only",
+                "--ignore-user-config",
+                "--strict-config",
                 "-c",
                 "features.shell_tool=false",
                 "-c",
@@ -1082,6 +1090,8 @@ mod tests {
                 "--ephemeral",
                 "-s",
                 "read-only",
+                "--ignore-user-config",
+                "--strict-config",
                 "-c",
                 "features.shell_tool=false",
                 "-c",
