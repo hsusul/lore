@@ -230,4 +230,56 @@ mod tests {
         };
         assert_eq!(commit.len(), 40);
     }
+
+    fn out(dir: &Path, args: &[&str]) -> Output {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    fn stdout(dir: &Path, args: &[&str]) -> String {
+        let o = out(dir, args);
+        assert!(o.status.success(), "git {args:?}");
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    }
+
+    #[test]
+    fn the_clone_holds_no_history_after_the_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "then"]);
+        let then = stdout(&repo, &["rev-parse", "HEAD"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "later"]);
+        sh(&repo, &["tag", "v2"]);
+        sh(&repo, &["checkout", "-q", "-b", "fix"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "the fix"]);
+        let later = stdout(&repo, &["rev-list", "--all"]);
+
+        let dest = tmp.path().join("clone");
+        clone_at(&repo, &then, Some("main"), &dest).unwrap();
+
+        assert_eq!(stdout(&dest, &["rev-parse", "HEAD"]), then);
+        assert_eq!(stdout(&dest, &["symbolic-ref", "HEAD"]), "refs/heads/main");
+        assert_eq!(
+            stdout(&dest, &["for-each-ref", "--format=%(refname)"]),
+            "refs/heads/main"
+        );
+        assert_eq!(
+            stdout(&dest, &["rev-list", "--all", "--reflog"]),
+            then,
+            "a ref or reflog reaches past the commit"
+        );
+        for sha in later.lines().filter(|sha| *sha != then) {
+            assert!(
+                !out(&dest, &["cat-file", "-e", sha]).status.success(),
+                "{sha} from after the commit is in the clone"
+            );
+        }
+        assert_eq!(stdout(&dest, &["remote"]), "");
+    }
 }
