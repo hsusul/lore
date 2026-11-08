@@ -259,6 +259,7 @@ export function MapHome({
   const [session, setSession] = useState<string | null>(null);
   const [focusSearch, setFocusSearch] = useState(0);
   const [finding, setFinding] = useState<string | null>(null);
+  const [homeKey, setHomeKey] = useState(0);
 
   const [skills, setSkills] = useState<{
     usage: SkillUsageDto[];
@@ -421,6 +422,7 @@ export function MapHome({
           onDeselect={() => setOpen(null)}
           inset={cardShown ? 540 : 0}
           onSelect={select}
+          homeKey={homeKey}
           label={`Map of ${model.dots.length} lessons and notes in ${model.clusters.length} areas`}
         />
       )}
@@ -441,7 +443,10 @@ export function MapHome({
           type="button"
           className="mist-home"
           aria-label="Today"
-          onClick={() => go("today")}
+          onClick={() => {
+            setHomeKey((n) => n + 1);
+            go("today");
+          }}
         >
           <Mark />
         </button>
