@@ -375,6 +375,59 @@ fn repeats_need_an_earlier_note_with_the_same_lesson() {
     assert_eq!(repeated, [(FMT, "2026-08-02")], "{json}");
 }
 
+/// Filler is not a shared word: a correction that shares one lesson word
+/// with a note, plus a contraction typed without its apostrophe that the
+/// receipt also says, does not repeat it. One sharing two real lesson words
+/// does.
+#[test]
+fn repeats_ignore_filler_shared_with_a_receipt() {
+    const SNIPPET: &str = "01JD0000000000000000000021";
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            (
+                "Updated the links.",
+                "no, i dont know why you make the links so long, keep them short",
+            ),
+            (
+                "I wrote the snippet to snippet.txt.",
+                "no, paste the snippet inline in the reply",
+            ),
+        ],
+    );
+    ok(&lorectl(home, &["mem", "init"], ""));
+    let path = home.join("snippet.md");
+    std::fs::write(
+        &path,
+        format!(
+            "---\nid: {SNIPPET}\ntype: convention\n\
+             title: Paste the snippet inline; don't make a file for it\n\
+             created: 2026-07-01\n---\n\
+             Put ready-to-copy text in the reply.\n\nReceipts:\n\
+             - codex s1 2026-06-30: \"dont make a file for it just paste the snippet\"\n"
+        ),
+    )
+    .unwrap();
+    ok(&lorectl(home, &["mem", "add", path.to_str().unwrap()], ""));
+
+    let json: serde_json::Value = serde_json::from_str(&ok(&lorectl(
+        home,
+        &["report", "--since", "2026-08-01", "--json"],
+        "",
+    )))
+    .unwrap();
+    assert_eq!(json["repeats"]["checked"], 2, "{json}");
+    let repeated: Vec<&str> = json["repeats"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["date"].as_str().unwrap())
+        .collect();
+    assert_eq!(repeated, ["2026-08-02"], "{json}");
+}
+
 #[test]
 fn bad_arguments_are_usage_errors() {
     let dir = tempfile::tempdir().unwrap();
