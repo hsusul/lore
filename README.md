@@ -26,7 +26,7 @@
 </p>
 
 Lore keeps a local, searchable archive of your Claude Code and Codex sessions.
-It finds the times you corrected an agent ("no, use pnpm not npm"), turns them into lessons, and, once you accept one, shows it to every agent from the next session on.
+It finds the times you corrected an agent ("no, use pnpm not npm"), turns them into lessons, and, once you accept one, shows it to every connected agent from the next session on.
 It also checks the skill folders your agents load for duplicates, drift, and broken references.
 
 Three rules hold the design together.
