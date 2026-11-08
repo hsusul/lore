@@ -505,9 +505,16 @@ impl Vault {
         let stripped_key: std::borrow::Cow<'_, str> = if Path::new(trimmed).is_absolute() {
             if let Ok(rel) = Path::new(trimmed).strip_prefix(&self.root) {
                 rel.to_str().map(Into::into)
-            } else if let (Ok(canon_root), Ok(canon_path)) =
-                (fs::canonicalize(&self.root), fs::canonicalize(trimmed))
-            {
+            } else if let (Ok(canon_root), Ok(canon_path)) = (
+                fs::canonicalize(&self.root),
+                fs::canonicalize(trimmed).or_else(|e| {
+                    if trimmed.ends_with(".md") {
+                        Err(e)
+                    } else {
+                        fs::canonicalize(format!("{trimmed}.md"))
+                    }
+                }),
+            ) {
                 canon_path
                     .strip_prefix(&canon_root)
                     .ok()
