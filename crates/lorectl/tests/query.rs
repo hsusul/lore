@@ -296,6 +296,54 @@ fn inspect_patch_runs_against_a_session_with_no_recorded_patches() {
         stdout(&patched).starts_with(stdout(&plain).trim_end()),
         "--patch changed the session header"
     );
+
+    let json_plain = lorectl(archive.path(), homes.path(), &["--json", "inspect", &sid]);
+    let json_patched = lorectl(
+        archive.path(),
+        homes.path(),
+        &["--json", "inspect", "--patch", &sid],
+    );
+    assert_eq!(code(&json_plain), 0);
+    assert_eq!(code(&json_patched), 0);
+    let plain_val: serde_json::Value = serde_json::from_str(stdout(&json_plain).trim()).unwrap();
+    let patched_val: serde_json::Value =
+        serde_json::from_str(stdout(&json_patched).trim()).unwrap();
+    assert_eq!(plain_val.get("patches"), None);
+    assert_eq!(patched_val["patches"], serde_json::json!([]));
+}
+
+#[test]
+fn inspect_with_json_and_patch_outputs_valid_json() {
+    let archive = tempfile::tempdir().unwrap();
+    let homes = tempfile::tempdir().unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../lore-core/fixtures/codex/patch_apply.jsonl");
+    let day = homes.path().join("codex/sessions/2026/08/11");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::copy(fixture, day.join("rollout-000000000003.jsonl")).unwrap();
+    assert_eq!(code(&lorectl(archive.path(), homes.path(), &["scan"])), 0);
+
+    let sid = a_session_id(archive.path());
+    let out = lorectl(
+        archive.path(),
+        homes.path(),
+        &["--json", "inspect", "--patch", &sid],
+    );
+    assert_eq!(
+        code(&out),
+        0,
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let raw = stdout(&out);
+    let value: serde_json::Value =
+        serde_json::from_str(raw.trim()).expect("stdout must be valid JSON");
+    assert_eq!(value["session_id"], sid);
+    let patches = value["patches"].as_array().expect("patches array");
+    assert!(!patches.is_empty(), "must include recorded patches");
+    assert!(patches.iter().any(|p| p["path"] == "src/edit.ts"
+        && p["change_kind"] == "edit"
+        && p["patch"].as_str().unwrap().contains("--- a/src/edit.ts")));
 }
 
 #[test]
