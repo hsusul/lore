@@ -138,6 +138,7 @@ impl Turn {
                     let writes = matches!(name, "Write" | "Edit" | "MultiEdit" | "NotebookEdit");
                     if let Some(path) = input
                         .get("file_path")
+                        .or_else(|| input.get("notebook_path"))
                         .and_then(Value::as_str)
                         .filter(|p| writes && !p.is_empty())
                     {
@@ -618,6 +619,22 @@ mod tests {
             deterministic(&grader(r#"{"kind":"judge","rubric":"r"}"#), &ask),
             None
         );
+    }
+
+    #[test]
+    fn file_written_grader_detects_notebook_edit() {
+        let nb = run(
+            vec![assistant(json!([{
+                "type": "tool_use",
+                "name": "NotebookEdit",
+                "input": {"notebook_path": "/r/analysis.ipynb"}
+            }]))],
+            &[],
+        );
+        let t = Turn::of(&nb.events);
+        assert_eq!(t.paths, ["/r/analysis.ipynb"]);
+        let ipynb = grader(r#"{"kind":"file_written","pattern":"\\.ipynb$"}"#);
+        assert_eq!(deterministic(&ipynb, &nb), Some(true));
     }
 
     #[test]
