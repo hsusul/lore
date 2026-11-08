@@ -59,7 +59,11 @@
 //! `pre-tool` runs before any tool call the plugins route to it (shell
 //! commands and file writes). It first checks the `enforce` rules of the
 //! active notes in scope, global and the repository at `cwd`
-//! (`lore_memory::enforce`). The first rule the call matches makes it print a
+//! (`lore_memory::enforce`). A `write` rule looks only at the lines a call
+//! adds: for a `Write`, the lines of its content the file on disk (a path
+//! relative to `cwd`, at most 2 MB, read only) does not already hold; for an
+//! `Edit`, the lines of `new_string` not in `old_string`. The first rule the
+//! call matches makes it print a
 //! PreToolUse `deny` naming the note, and nothing else. When no rule matches,
 //! it prints what `pre-edit` would for the same input, so one hook carries
 //! both and an edit starts one process, not two. Reading the rules reads only
@@ -199,8 +203,7 @@ struct HookInput {
 fn denial(json: &serde_json::Value, input: &HookInput) -> Option<String> {
     let name = json.get("tool_name").and_then(serde_json::Value::as_str)?;
     let tool_input = json.get("tool_input").cloned().unwrap_or_default();
-    let call = ToolCall::from_tool(name, &tool_input);
-    if call.is_empty() {
+    if ToolCall::from_tool(name, &tool_input).is_empty() {
         return None;
     }
     let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
@@ -209,6 +212,18 @@ fn denial(json: &serde_json::Value, input: &HookInput) -> Option<String> {
         return None;
     }
     let cwd = input.cwd.clone().or_else(|| std::env::current_dir().ok())?;
+    // A `Write` matches only the lines the file does not already hold, so
+    // rewriting a file never trips on text that was there before.
+    let existing = (name == "Write")
+        .then(|| {
+            tool_input
+                .get("file_path")
+                .and_then(serde_json::Value::as_str)
+        })
+        .flatten()
+        .filter(|path| !path.is_empty())
+        .and_then(|path| enforce::read_existing(&cwd.join(path)));
+    let call = ToolCall::from_tool_over(name, &tool_input, existing.as_deref());
     let (rule, found) = enforce::first_denial(&rules.in_scope(&cwd), &call)?;
     Some(enforce::deny_reason(rule, found))
 }

@@ -25,6 +25,9 @@ use crate::vault::{Vault, VaultError};
 
 /// The longest pattern a rule may have, in bytes.
 pub const PATTERN_MAX_LEN: usize = 500;
+/// The largest file [`read_existing`] reads, in bytes. A hook must stay fast,
+/// so a larger file is not read and every line written to it counts as new.
+pub const EXISTING_MAX_LEN: u64 = 2 << 20;
 /// The compiled size a pattern may reach. Far above any narrow rule, and far
 /// below what would make a hook slow.
 const COMPILED_SIZE_LIMIT: usize = 1 << 20;
@@ -36,8 +39,11 @@ pub const MAX_RULES: usize = 8;
 pub enum EnforceTool {
     /// A shell command: Claude Code's `Bash`, Codex's `Bash` and `exec`.
     Bash,
-    /// The text a tool writes: `Write` content, `Edit` and `MultiEdit` new
-    /// strings, `NotebookEdit` source, and the lines an `apply_patch` adds.
+    /// The lines a tool adds: those of `Write` content not already in the
+    /// file, those of each `Edit` and `MultiEdit` new string not in its old
+    /// string, `NotebookEdit` source, and the `+` lines of an `apply_patch`.
+    /// A line the file or old string already holds is not matched, so
+    /// rewriting text that is already there is never denied.
     Write,
     /// The path of a file a tool writes, as the agent wrote it.
     Path,
@@ -280,8 +286,18 @@ pub struct ToolCall {
 impl ToolCall {
     /// Read a call from an agent's tool name and input, the shape both Claude
     /// Code's and Codex's hook JSON and the archive's `tool_call` rows use.
+    /// A `Write` is read as if its file did not exist, so all its lines count
+    /// as added; see [`ToolCall::from_tool_over`].
     #[must_use]
     pub fn from_tool(name: &str, input: &Value) -> Self {
+        Self::from_tool_over(name, input, None)
+    }
+
+    /// [`ToolCall::from_tool`], with `existing` the text of the file a `Write`
+    /// replaces, when it could be read: only the lines of `content` that
+    /// `existing` does not hold count as written.
+    #[must_use]
+    pub fn from_tool_over(name: &str, input: &Value, existing: Option<&str>) -> Self {
         let text = |key: &str| input.get(key).and_then(Value::as_str);
         let owned = |s: Option<&str>| s.filter(|s| !s.is_empty()).map(str::to_owned);
         let mut call = Self::default();
@@ -302,21 +318,21 @@ impl ToolCall {
             }
             "Write" => {
                 call.paths.extend(owned(text("file_path")));
-                call.writes.extend(owned(text("content")));
+                let content = text("content").unwrap_or_default();
+                call.writes.extend(owned(Some(&added_lines(
+                    existing.unwrap_or_default(),
+                    content,
+                ))));
             }
             "Edit" => {
                 call.paths.extend(owned(text("file_path")));
-                call.writes.extend(owned(text("new_string")));
+                call.writes.extend(edit_added(input));
             }
             "MultiEdit" => {
                 call.paths.extend(owned(text("file_path")));
                 let edits = input.get("edits").and_then(Value::as_array);
-                call.writes.extend(
-                    edits
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|e| owned(e.get("new_string").and_then(Value::as_str))),
-                );
+                call.writes
+                    .extend(edits.into_iter().flatten().filter_map(edit_added));
             }
             "NotebookEdit" => {
                 call.paths.extend(owned(text("notebook_path")));
@@ -344,6 +360,43 @@ impl ToolCall {
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty() && self.writes.is_empty() && self.paths.is_empty()
     }
+}
+
+/// The lines of `new` that `old` does not hold, joined by newlines, in order.
+/// A line is compared whole, so one that only moved or repeats one already
+/// there is not added.
+#[must_use]
+pub fn added_lines(old: &str, new: &str) -> String {
+    let old: std::collections::HashSet<&str> = old.lines().collect();
+    let added: Vec<&str> = new.lines().filter(|l| !old.contains(l)).collect();
+    added.join("\n")
+}
+
+/// The lines one `Edit` (or one `MultiEdit` edit) adds: those of its
+/// `new_string` not in its `old_string`.
+fn edit_added(edit: &Value) -> Option<String> {
+    let text = |key: &str| edit.get(key).and_then(Value::as_str).unwrap_or_default();
+    Some(added_lines(text("old_string"), text("new_string"))).filter(|s| !s.is_empty())
+}
+
+/// The text of the file at `path`, for [`ToolCall::from_tool_over`], or
+/// `None` when it cannot be read, is not UTF-8, or is larger than
+/// [`EXISTING_MAX_LEN`]: then every line written counts as new. Reads only.
+#[must_use]
+pub fn read_existing(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(EXISTING_MAX_LEN + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > EXISTING_MAX_LEN {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Every file a Codex `apply_patch` patch adds, updates, deletes, or moves to,
@@ -557,6 +610,50 @@ mod tests {
         );
         assert_eq!((multi.paths.len(), multi.writes.len()), (1, 2));
         assert!(ToolCall::from_tool("Read", &json!({ "file_path": "/r/a" })).is_empty());
+    }
+
+    #[test]
+    fn a_write_rule_sees_only_added_lines() {
+        let r = rule("write", r"XXX\(", None);
+        let file = "fn a() {}\n// XXX(kept)\n";
+        let write = |content: &str, existing: Option<&str>| {
+            let input = json!({ "file_path": "a.rs", "content": content });
+            ToolCall::from_tool_over("Write", &input, existing)
+        };
+        let rewrite = "fn a() {}\nfn b() {}\n// XXX(kept)\n";
+        assert_eq!(r.check(&write(rewrite, Some(file))), None);
+        assert_eq!(write(rewrite, Some(file)).writes, ["fn b() {}"]);
+        assert_eq!(r.check(&write(rewrite, None)), Some("XXX("));
+        let adding = format!("{rewrite}// XXX(new)\n");
+        assert_eq!(r.check(&write(&adding, Some(file))), Some("XXX("));
+        // Archived calls have no old file: the whole content counts.
+        let input = json!({ "file_path": "a.rs", "content": rewrite });
+        assert!(r.check(&ToolCall::from_tool("Write", &input)).is_some());
+
+        let edit = |old: &str, new: &str| {
+            let input = json!({ "file_path": "a.rs", "old_string": old, "new_string": new });
+            ToolCall::from_tool("Edit", &input)
+        };
+        assert_eq!(
+            r.check(&edit("// XXX(kept)", "fn c() {}\n// XXX(kept)")),
+            None
+        );
+        assert!(r.check(&edit("fn a() {}", "// XXX(kept)")).is_some());
+        assert!(edit("same", "same").writes.is_empty());
+        assert_eq!(added_lines("a\nb", "b\nc\na\nd"), "c\nd");
+    }
+
+    #[test]
+    fn existing_files_are_read_up_to_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let small = dir.path().join("small.txt");
+        std::fs::write(&small, "x\n").unwrap();
+        assert_eq!(read_existing(&small).as_deref(), Some("x\n"));
+        let big = dir.path().join("big.txt");
+        std::fs::write(&big, vec![b'a'; EXISTING_MAX_LEN as usize + 1]).unwrap();
+        assert_eq!(read_existing(&big), None);
+        assert_eq!(read_existing(&dir.path().join("missing")), None);
+        assert_eq!(read_existing(dir.path()), None);
     }
 
     #[test]

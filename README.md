@@ -288,7 +288,7 @@ The vault is `~/Lore` by default. For another vault, set `LORE_VAULT_DIR` to an 
 
 The hooks never scan and always exit 0. They write nothing but the vault's index and, under `.lore/shown/`, which notes each session was shown. `lorectl help hook` has the details.
 
-A note's `enforce` rules are for mechanical lessons whose violation shows in one tool call. Each has a `tool` (`bash` for a shell command, `write` for text written to a file, `path` for the path written), a `pattern` regex, and an optional `unless` regex that exempts a call it also matches:
+A note's `enforce` rules are for mechanical lessons whose violation shows in one tool call. Each has a `tool` (`bash` for a shell command, `write` for text written to a file, `path` for the path written), a `pattern` regex, and an optional `unless` regex that exempts a call it also matches. A `write` rule looks only at the lines a call adds: the lines of a `Write` that the file on disk does not already hold, the lines of an `Edit`'s `new_string` not in its `old_string`, and the `+` lines of an `apply_patch`, so rewriting text that is already in a file is never denied:
 
 ```yaml
 enforce:
