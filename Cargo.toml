@@ -7,7 +7,7 @@ resolver = "2"
 members = ["crates/lore-core", "crates/lore-ipc", "crates/lore-memory", "crates/lore-replay", "crates/lore-skills", "crates/lorectl", "src-tauri"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 rust-version = "1.90"
 license = "Apache-2.0"
