@@ -1,9 +1,10 @@
 //! `lorectl mem propose|inbox|accept|reject|retire`: the agent write path.
 //!
 //! `propose` is how a test or an agent without MCP files a proposal; the body
-//! is read from stdin. The rest is a person reviewing the inbox.
+//! is read from stdin. The rest is a person reviewing the inbox; `accept` and
+//! `retire` refuse to run without a terminal on stdin.
 
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 use lexopt::prelude::*;
@@ -204,6 +205,18 @@ pub fn run(
     if args.help {
         print!("{usage_text}");
         return Ok(exit::OK);
+    }
+    // A note reaches every later session only by a person's decision. An
+    // agent's shell tool gives the command no terminal on stdin.
+    let person_only = match sub {
+        "accept" => Some("mem accept"),
+        "retire" => Some("mem retire"),
+        _ => None,
+    };
+    if let Some(command) = person_only {
+        if !std::io::stdin().is_terminal() {
+            return Err(CliError::NotATerminal(command));
+        }
     }
     if args.vault.is_none() {
         args.vault = default_vault.map(PathBuf::from);

@@ -27,7 +27,8 @@ use lore_memory::vault::VaultError;
 /// The command did what it was asked to do.
 pub const OK: u8 = 0;
 /// The invocation was wrong: unknown flag or command, a relative `--archive`,
-/// or a command this build does not implement.
+/// a command this build does not implement, or a command only a person may
+/// run, run without a terminal.
 pub const USAGE: u8 = 1;
 /// No archive exists at the resolved location. Recoverable by scanning.
 pub const NO_ARCHIVE: u8 = 2;
@@ -93,6 +94,10 @@ pub enum CliError {
     /// one.
     #[error("not inside a Git repository")]
     NotARepository,
+    /// A command only a person may run had no terminal on its stdin, as under
+    /// an agent's shell tool.
+    #[error("`lorectl {0}` needs a person at a terminal")]
+    NotATerminal(&'static str),
     /// A `mem` command failed.
     #[error(transparent)]
     Memory(#[from] VaultError),
@@ -124,6 +129,9 @@ impl CliError {
                 Some("wait for the other process to finish, then run it again")
             }
             CliError::NotARepository => Some("run it from inside a Git repository"),
+            CliError::NotATerminal(_) => Some(
+                "agents propose notes and a person decides; ask the person to run it in their own terminal",
+            ),
             CliError::Memory(error) => vault_advice(error),
             CliError::Review(ReviewError::Dirty(_)) => {
                 Some("commit or discard your edit to that note, then run it again")
@@ -180,7 +188,10 @@ pub fn exit_code(error: &CliError) -> u8 {
     match error {
         // A relative `--archive` is a mistyped flag, not a broken archive: the
         // user asked for a location that cannot mean one thing, so it is usage.
-        CliError::Usage(_) | CliError::NotImplemented(_) | CliError::Path(_) => USAGE,
+        CliError::Usage(_)
+        | CliError::NotImplemented(_)
+        | CliError::Path(_)
+        | CliError::NotATerminal(_) => USAGE,
         CliError::Storage(error) => storage_exit_code(error),
         CliError::Lock(error) => lock_exit_code(error),
         CliError::Scan(_) => SCAN_FAILED,

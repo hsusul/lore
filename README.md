@@ -204,6 +204,8 @@ lorectl mem reject <ID> --reason "<TEXT>"  # decline; the vault is untouched
 lorectl mem retire <NOTE> --reason "<TEXT>"
 ```
 
+`mem accept`, `mem retire`, and `lorectl init --review` run only with a terminal on stdin. An agent's shell tool, such as Claude Code's, runs a command without one, so there they exit 1 and write nothing.
+
 Under each proposal, `mem inbox` prints its receipt: the archived session it came from, that session's date, and a short redacted excerpt of the passage that shares the most words with the proposal. With no archive, or a session the archive does not hold, it says so in one line. `--json` carries the same as `receipt`.
 
 `mem inbox` marks each proposal's source `(verified)` when the archive held that agent's session at the time the proposal was filed, and `(unverified)` otherwise. Proposals filed with `mem propose`, or before Lore recorded this, are unverified.

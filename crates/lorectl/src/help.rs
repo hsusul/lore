@@ -190,7 +190,7 @@ Options:
                       waits for the next scan.
     --review          With `init`: offer each lesson to keep, skip, or edit.
                       On by default when stdin is a terminal; `--no-review`
-                      turns it off.
+                      turns it off. Refused without a terminal.
     --vault <DIR>     With `init`, `mem`, and `report`: the vault directory.
     -h, --help        Print this help.
     -V, --version     Print the version.
@@ -214,8 +214,9 @@ Environment:
 
 Exit codes:
     {ok}  ok
-    {usage}  usage: unknown flag or command, a relative --archive, or a command
-       this build does not implement
+    {usage}  usage: unknown flag or command, a relative --archive, a command
+       this build does not implement, or `mem accept`, `mem retire`, or
+       `init --review` without a person at a terminal
     {no_archive}  no archive at that location (run `lorectl init`, or `lorectl scan`); for
        `mem`, no vault there (run `lorectl mem init`)
     {not_a_repo}  not inside a Git repository
