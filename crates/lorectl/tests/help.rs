@@ -120,9 +120,12 @@ fn help_hook_describes_the_memory_block_the_session_and_the_hook_json() {
 Hooks (lorectl hook <EVENT> [--archive <DIR>]):
     session-start     One line when files agents wrote in this repository are
                       staged and not committed. Then up to 10 accepted
-                      memory notes for the repository, each with its
-                      freshness label, and how many more recall_memory
-                      lists. Then `Lore session: <ID>` when the archive
+                      memory notes, each with its freshness label, and
+                      how many more recall_memory lists. In a repository,
+                      its notes and global notes share the 10, with at
+                      least 4 for global notes when there are that many.
+                      Of two notes with near-identical titles, only one
+                      is shown. Then `Lore session: <ID>` when the archive
                       holds the hook JSON's `session_id`; pass that ID to
                       propose_memory. Prints nothing when there is none.
     prompt            When a person sends `prompt`, up to 3 accepted notes

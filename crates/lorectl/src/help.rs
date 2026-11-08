@@ -67,9 +67,12 @@ const HOOK_USAGE: &str = "\
 Hooks (lorectl hook <EVENT> [--archive <DIR>]):
     session-start     One line when files agents wrote in this repository are
                       staged and not committed. Then up to 10 accepted
-                      memory notes for the repository, each with its
-                      freshness label, and how many more recall_memory
-                      lists. Then `Lore session: <ID>` when the archive
+                      memory notes, each with its freshness label, and
+                      how many more recall_memory lists. In a repository,
+                      its notes and global notes share the 10, with at
+                      least 4 for global notes when there are that many.
+                      Of two notes with near-identical titles, only one
+                      is shown. Then `Lore session: <ID>` when the archive
                       holds the hook JSON's `session_id`; pass that ID to
                       propose_memory. Prints nothing when there is none.
     prompt            When a person sends `prompt`, up to 3 accepted notes
@@ -178,8 +181,9 @@ Options:
                       window, or a start date; default 7d.
     --no-compact      With `scan`: skip compacting the archive afterwards.
                       Otherwise a scan that finished stores old attachment
-                      and tool rows once, after a backup, and runs the
-                      one-time VACUUM when there is room for it.
+                      and tool rows once and compresses message bodies
+                      (zstd), after a backup, and runs the one-time VACUUM
+                      when there is room for it.
     --limit <N>       With `init`: lessons to show, default 5.
     --scan-seconds <N> With `init`: stop scanning after N seconds, newest
                       files first, and show lessons; default 60. The rest

@@ -18,7 +18,7 @@
 //!
 //! In `--json`, each receipt's `before` is the agent text the person
 //! answered and `after` the agent's reply to it, as `mine_candidates` names
-//! them.
+//! them. The text output labels the newest receipt's the same way.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -199,8 +199,13 @@ fn lessons_text(lessons: &[Marked], total: usize, left_out: usize) -> String {
                 day(receipt),
                 receipt.text
             ));
-            if let Some(after) = receipt.preceding.as_ref().filter(|_| i == 0) {
-                out.push_str(&format!("      after: \"{after}\"\n"));
+            if i == 0 {
+                if let Some(before) = &receipt.preceding {
+                    out.push_str(&format!("      before: \"{before}\"\n"));
+                }
+                if let Some(after) = &receipt.following {
+                    out.push_str(&format!("      after: \"{after}\"\n"));
+                }
             }
         }
         let more = lesson.receipts.len().saturating_sub(SHOWN_RECEIPTS);

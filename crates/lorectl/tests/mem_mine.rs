@@ -32,7 +32,17 @@ fn ok(o: &Output) -> String {
 /// Codex sessions on 2026-08-01, -02, ... each `(assistant, user)` pair
 /// after an opening request, scanned into `home/archive`.
 fn scanned(home: &Path, sessions: &[(&str, &str)]) {
-    for (i, (assistant, user)) in sessions.iter().enumerate() {
+    let turns: Vec<Vec<(&str, &str)>> = sessions
+        .iter()
+        .map(|&(assistant, user)| vec![("assistant", assistant), ("user", user)])
+        .collect();
+    scanned_turns(home, &turns);
+}
+
+/// Codex sessions on 2026-08-01, -02, ... each its `(role, text)` turns
+/// after an opening request, scanned into `home/archive`.
+fn scanned_turns(home: &Path, sessions: &[Vec<(&str, &str)>]) {
+    for (i, turns) in sessions.iter().enumerate() {
         let day = home.join(format!("codex/sessions/2026/08/{:02}", i + 1));
         std::fs::create_dir_all(&day).unwrap();
         let ts = |s: usize| format!("2026-08-{:02}T10:00:{s:02}.000Z", i + 1);
@@ -40,14 +50,20 @@ fn scanned(home: &Path, sessions: &[(&str, &str)]) {
             serde_json::json!({"type": "response_item", "timestamp": ts(s), "payload": {
                 "type": "message", "role": role, "content": [{"type": kind, "text": text}]}})
         };
-        let lines = [
+        let mut lines = vec![
             serde_json::json!({"type": "session_meta", "timestamp": ts(0), "payload": {
                 "id": format!("019e0000-0000-7000-8000-{:012x}", i + 1), "cwd": "/proj",
                 "cli_version": "0.133.0", "model_provider": "openai"}}),
             item(1, "user", "input_text", "add the dependency"),
-            item(2, "assistant", "output_text", assistant),
-            item(3, "user", "input_text", user),
         ];
+        for (n, &(role, text)) in turns.iter().enumerate() {
+            let kind = if role == "user" {
+                "input_text"
+            } else {
+                "output_text"
+            };
+            lines.push(item(n + 2, role, kind, text));
+        }
         let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
         std::fs::write(day.join(format!("rollout-{:012x}.jsonl", i + 1)), body).unwrap();
     }
@@ -108,14 +124,14 @@ fn mine_prints_each_lesson_with_its_receipts_and_writes_nothing() {
              \x20   \"I told you, pnpm not npm\"\n\
              \x20   suggested: Pnpm not npm\n\
              \x20   - codex {s5} 2026-08-05: \"I told you, pnpm not npm\"\n\
-             \x20     after: \"npm install dayjs done.\"\n\
+             \x20     before: \"npm install dayjs done.\"\n\
              \x20   - codex {s3} 2026-08-03: \"wrong tool, use pnpm instead of npm\"\n\
              \x20   - codex {s1} 2026-08-01: \"no, use pnpm not npm\"\n\
              {second}  2 conversations, latest 2026-08-04\n\
              \x20   \"stop editing the generated files\"\n\
              \x20   suggested: Stop editing the generated files\n\
              \x20   - codex {s4} 2026-08-04: \"stop editing the generated files\"\n\
-             \x20     after: \"Edited src/gen.rs.\"\n\
+             \x20     before: \"Edited src/gen.rs.\"\n\
              \x20   - codex {s2} 2026-08-02: \"don't edit the generated files\"\n",
             s5 = s(5),
             s4 = s(4),
@@ -171,12 +187,44 @@ fn mine_suggests_a_rule_in_the_persons_own_words() {
              \x20   \"{said}\"\n\
              \x20   suggested: Docs are never tracked\n\
              \x20   - codex {s1} 2026-08-01: \"{said}\"\n\
-             \x20     after: \"Committed docs/ too.\"\n"
+             \x20     before: \"Committed docs/ too.\"\n"
         )
     );
     let json: serde_json::Value =
         serde_json::from_str(&ok(&lorectl(home, &["mem", "mine", "--json"]))).unwrap();
     assert_eq!(json[0]["suggested_rule"], "Docs are never tracked");
+}
+
+#[test]
+fn mine_text_labels_the_agent_text_before_and_after_the_persons_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned_turns(
+        home,
+        &[vec![
+            ("assistant", "Running npm install axios."),
+            ("user", "no, use pnpm not npm"),
+            ("assistant", "Switched to pnpm add axios."),
+        ]],
+    );
+    let s1 = session(home, 1);
+    let out = ok(&lorectl(home, &["mem", "mine"]));
+    let receipt = format!(
+        "    - codex {s1} 2026-08-01: \"no, use pnpm not npm\"\n\
+         \x20     before: \"Running npm install axios.\"\n\
+         \x20     after: \"Switched to pnpm add axios.\"\n"
+    );
+    assert!(out.contains(&receipt), "{out}");
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&lorectl(home, &["mem", "mine", "--json"]))).unwrap();
+    assert_eq!(
+        json[0]["receipts"][0]["before"],
+        "Running npm install axios."
+    );
+    assert_eq!(
+        json[0]["receipts"][0]["after"],
+        "Switched to pnpm add axios."
+    );
 }
 
 #[test]
@@ -347,7 +395,7 @@ fn mine_lists_later_turns_that_may_conflict_with_a_lesson() {
              \x20   \"dont make a pr just push to main\"\n\
              \x20   suggested: Don't make a pr just push to main\n\
              \x20   - codex {s1} 2026-08-01: \"dont make a pr just push to main\"\n\
-             \x20     after: \"Opened a PR.\"\n\
+             \x20     before: \"Opened a PR.\"\n\
              \x20   - may conflict with codex {s2} 2026-08-02: \"please open a PR for the exif branch\"\n"
         )
     );
