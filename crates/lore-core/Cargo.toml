@@ -44,8 +44,9 @@ serde_json = "1"
 # Bundles libzstd through `cc`, the way rusqlite bundles SQLite. Pure
 # in-memory (de)compression: no I/O, no network. Of the default features only
 # `zdict_builder` (dictionary training) is used; the legacy-format decoder
-# and `arrays` are left out.
-zstd = { version = "0.14", default-features = false, features = ["zdict_builder"] }
+# and `arrays` are left out. Backups are stream-compressed with it too:
+# `zstdmt` builds libzstd's own pthread-based multithreading, no new crate.
+zstd = { version = "0.14", default-features = false, features = ["zdict_builder", "zstdmt"] }
 # Substring search for the secret scanner's prefix rules. Already in the graph
 # via gix (bstr), same version; pure byte search, no I/O.
 memchr = "2"

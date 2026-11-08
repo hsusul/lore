@@ -11,6 +11,13 @@
 //! bounds the number of copies on disk. Original agent logs and user-chosen
 //! exports are never part of a backup — only Lore-owned archive data.
 //!
+//! A backup is stored zstd-compressed (`lore-<ts>-<n>.db.zst`, level 3, with
+//! a content checksum): the online copy lands in a hidden temporary file, is
+//! integrity-checked, then stream-compressed to a second temporary file that
+//! is fsynced and renamed into place, and the uncompressed copy is deleted.
+//! Backups taken by earlier builds are plain `.db` files; listing, retention
+//! and restore accept both, so those age out under the same retention.
+//!
 //! Naming is intentionally lexicographically sortable (zero-padded timestamp +
 //! per-process counter) so retention can prune "the newest N" without reading
 //! file metadata, and names carry no source content.
@@ -20,8 +27,13 @@
 //! the online copy), then re-verified. Restore never needs the original agent
 //! logs — a backup contains the entire archive. The caller closes connections
 //! to the destination first (the recovery flow "closes the active DB"), because
-//! restore replaces the destination's content in place.
+//! restore replaces the destination's content in place. A compressed backup
+//! is first decompressed to a temporary file beside the destination and
+//! integrity-checked; a damaged or truncated one is reported as
+//! [`BackupError::Broken`].
 
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -30,8 +42,23 @@ use rusqlite::{backup::Backup, Connection, DatabaseName};
 
 /// Name prefix for Lore-owned backup files.
 const BACKUP_PREFIX: &str = "lore-";
-/// Extension of Lore-owned backup files.
+/// Extension of uncompressed Lore-owned backup files (earlier builds).
 const BACKUP_EXT: &str = "db";
+/// Extension of compressed Lore-owned backup files.
+const COMPRESSED_EXT: &str = "db.zst";
+/// Suffix of the hidden temporary files a backup or restore writes. Their
+/// names start with `.`, so they never look like a backup.
+const PARTIAL_EXT: &str = "partial";
+/// Temporary files older than this are left over from an interrupted backup
+/// and are deleted by the next one. Long enough that a concurrent backup by
+/// another process is never cut short.
+const STALE_PARTIAL_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// zstd level for backups: 2.2x on a real 2 GB archive in about 6 s on one
+/// core, where level 19 gains another 16% for 25 times the time.
+const ZSTD_LEVEL: i32 = 3;
+/// Upper bound on zstd compression threads, so a backup taken while the app
+/// is in use does not take every core.
+const MAX_ZSTD_WORKERS: usize = 4;
 /// Upper bound on pages copied per backup step and the pause between steps.
 /// 4 MiB per step at the default page size: the pause still lets a concurrent
 /// writer in between steps, and a 4 GB archive spends about 10 s paused
@@ -64,6 +91,14 @@ pub enum BackupError {
     Sqlite(#[from] rusqlite::Error),
     #[error("io error while creating or pruning backup")]
     Io,
+    /// Too little free space beside the backups for the temporary
+    /// uncompressed copy plus the compressed backup.
+    #[error("not enough free space for a backup: {needed} bytes needed, {available} available")]
+    LowSpace { needed: u64, available: u64 },
+    /// The backup file is damaged: it does not decompress, or what it
+    /// decompresses to fails `PRAGMA integrity_check`.
+    #[error("backup file is damaged")]
+    Broken,
     #[error(transparent)]
     Settings(#[from] crate::storage::StorageError),
 }
@@ -86,36 +121,158 @@ pub type Result<T> = std::result::Result<T, BackupError>;
 /// the function returns. Creating the backup never takes a write lock that
 /// blocks the worker or UI connections beyond SQLite's own short read-lock
 /// window.
+///
+/// The backup is refused with [`BackupError::LowSpace`] unless the volume
+/// holding `backup_dir` has room for the temporary uncompressed copy and the
+/// compressed backup together ([`backup_space_needed`]).
 pub fn create_backup(conn: &Connection, backup_dir: &Path, keep: usize) -> Result<BackupInfo> {
-    std::fs::create_dir_all(backup_dir)?;
-    let path = backup_path(backup_dir);
+    create_backup_with(conn, backup_dir, keep, &|dir| {
+        crate::compact::free_bytes(dir)
+            .map(|(bytes, _)| bytes)
+            .map_err(|_| BackupError::Io)
+    })
+}
 
-    let copy_res = (|| -> Result<()> {
-        let mut dst = Connection::open(&path).map_err(|_| BackupError::Io)?;
-        let backup = Backup::new(conn, &mut dst)?;
-        // Online copy with retry on BUSY/LOCKED so a concurrent writer (e.g. the
-        // background worker) never aborts the backup.
-        backup.run_to_completion(PAGES_PER_STEP, PAUSE_BETWEEN_STEPS, None)?;
+/// [`create_backup`] with the free-space probe supplied, so the refusal is
+/// testable.
+fn create_backup_with(
+    conn: &Connection,
+    backup_dir: &Path,
+    keep: usize,
+    free_bytes: &dyn Fn(&Path) -> Result<u64>,
+) -> Result<BackupInfo> {
+    std::fs::create_dir_all(backup_dir)?;
+    remove_stale_partials(backup_dir);
+
+    let needed = backup_space_needed(conn)?;
+    let available = free_bytes(backup_dir)?;
+    if available < needed {
+        return Err(BackupError::LowSpace { needed, available });
+    }
+
+    let path = backup_path(backup_dir);
+    let raw = partial_path(&path, "raw");
+    let packed = partial_path(&path, "zst");
+    let res = (|| -> Result<()> {
+        copy_online(conn, &raw)?;
+        set_private(&raw)?;
+        verify(&raw)?;
+        compress(&raw, &packed)?;
+        std::fs::rename(&packed, &path)?;
+        sync_dir(backup_dir);
         Ok(())
     })();
-
-    if let Err(e) = copy_res {
-        let _ = std::fs::remove_file(&path);
-        return Err(e);
-    }
-
-    if let Err(e) = set_private(&path) {
-        let _ = std::fs::remove_file(&path);
-        return Err(e);
-    }
-    if let Err(e) = verify(&path) {
-        let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&raw);
+    if let Err(e) = res {
+        let _ = std::fs::remove_file(&packed);
         return Err(e);
     }
     prune(backup_dir, keep)?;
 
     let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     Ok(BackupInfo { path, size_bytes })
+}
+
+/// Bytes a backup of `conn` needs free beside the backups at its peak: the
+/// whole uncompressed copy, plus the compressed backup written while that
+/// copy still exists, allowed half its size (backups compress 2.2x on a real
+/// archive). A backup that still runs out fails cleanly and leaves nothing.
+pub fn backup_space_needed(conn: &Connection) -> Result<u64> {
+    let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+    let page_count: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+    let size = u64::try_from(page_size.saturating_mul(page_count)).unwrap_or(u64::MAX);
+    Ok(size.saturating_add(size / 2))
+}
+
+/// Copy the live archive `conn` into a new database file at `dst_path`.
+fn copy_online(conn: &Connection, dst_path: &Path) -> Result<()> {
+    let mut dst = Connection::open(dst_path).map_err(|_| BackupError::Io)?;
+    let backup = Backup::new(conn, &mut dst)?;
+    // Online copy with retry on BUSY/LOCKED so a concurrent writer (e.g. the
+    // background worker) never aborts the backup.
+    backup.run_to_completion(PAGES_PER_STEP, PAUSE_BETWEEN_STEPS, None)?;
+    Ok(())
+}
+
+/// Stream-compress `src` into a new private file at `dst`, fsynced.
+fn compress(src: &Path, dst: &Path) -> Result<()> {
+    let input = File::open(src)?;
+    let len = input.metadata()?.len();
+    let out = File::options().write(true).create_new(true).open(dst)?;
+    set_private(dst)?;
+    let mut encoder = zstd::stream::write::Encoder::new(out, ZSTD_LEVEL)?;
+    encoder.include_checksum(true)?;
+    encoder.set_pledged_src_size(Some(len))?;
+    encoder.multithread(zstd_workers())?;
+    std::io::copy(&mut BufReader::with_capacity(1 << 20, input), &mut encoder)?;
+    encoder.finish()?.sync_all()?;
+    Ok(())
+}
+
+/// Stream-decompress the backup `src` into a new private file at `dst`,
+/// fsynced. A stream that does not decode — corrupt, truncated, or failing
+/// its checksum — is [`BackupError::Broken`]; a failed write is `Io`.
+fn decompress(src: &Path, dst: &Path) -> Result<()> {
+    let input = File::open(src)?;
+    let out = File::options().write(true).create_new(true).open(dst)?;
+    set_private(dst)?;
+    let mut decoder = zstd::stream::read::Decoder::new(input).map_err(|_| BackupError::Broken)?;
+    let mut writer = BufWriter::with_capacity(1 << 20, out);
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = decoder.read(&mut buf).map_err(|_| BackupError::Broken)?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n])?;
+    }
+    writer
+        .into_inner()
+        .map_err(|_| BackupError::Io)?
+        .sync_all()?;
+    Ok(())
+}
+
+fn zstd_workers() -> u32 {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    u32::try_from(cores.min(MAX_ZSTD_WORKERS)).unwrap_or(1)
+}
+
+/// The hidden temporary file `tag` for the backup at `path`, in its directory.
+fn partial_path(path: &Path, tag: &str) -> PathBuf {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("lore");
+    path.with_file_name(format!(".{name}.{tag}.{PARTIAL_EXT}"))
+}
+
+/// Delete temporary files an interrupted backup left in `backup_dir`.
+/// Best-effort: a file that cannot be read or removed is left alone.
+fn remove_stale_partials(backup_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(backup_dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let ours = path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+            n.starts_with(&format!(".{BACKUP_PREFIX}")) && n.ends_with(&format!(".{PARTIAL_EXT}"))
+        });
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= STALE_PARTIAL_AGE);
+        if ours && stale && path.is_file() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+/// Make a rename in `dir` durable. Best-effort: the backup is already
+/// complete and fsynced.
+fn sync_dir(dir: &Path) {
+    if let Ok(d) = File::open(dir) {
+        let _ = d.sync_all();
+    }
 }
 
 // ── Automatic-backup schedule ──────────────────────────────────────────────
@@ -296,7 +453,9 @@ fn backup_path(backup_dir: &Path) -> PathBuf {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let seq = BACKUP_SEQ.fetch_add(1, Ordering::Relaxed);
-    backup_dir.join(format!("{BACKUP_PREFIX}{stamp:020}-{seq:04}.{BACKUP_EXT}"))
+    backup_dir.join(format!(
+        "{BACKUP_PREFIX}{stamp:020}-{seq:04}.{COMPRESSED_EXT}"
+    ))
 }
 
 /// Refuse to keep a backup that does not open cleanly or fails an integrity
@@ -312,8 +471,9 @@ fn verify(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Keep only the newest `keep` Lore-owned backups, deleting older copies.
-/// Names are lexicographically sorted, which is chronological by construction.
+/// Keep only the newest `keep` Lore-owned backups, compressed or not,
+/// deleting older copies. Names are lexicographically sorted, which is
+/// chronological by construction.
 fn prune(backup_dir: &Path, keep: usize) -> Result<()> {
     let backups = list_backups(backup_dir)?;
     if backups.len() <= keep {
@@ -327,7 +487,8 @@ fn prune(backup_dir: &Path, keep: usize) -> Result<()> {
 }
 
 /// List the Lore-owned backups under `backup_dir`, oldest first (names are
-/// lexicographically chronological). Content-free: only Lore-owned paths are
+/// lexicographically chronological), both compressed `.db.zst` and the plain
+/// `.db` earlier builds wrote. Content-free: only Lore-owned paths are
 /// returned, never archive data. Enables the recovery flow to offer a restore
 /// from the newest local backup (SECURITY.md §6).
 pub fn list_backups(backup_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -351,15 +512,46 @@ pub fn list_backups(backup_dir: &Path) -> Result<Vec<PathBuf>> {
 /// ensure no other connection to `dst_db_path` is open — the recovery flow
 /// closes the active DB first (SECURITY.md §6). Original agent logs are never
 /// needed: a backup contains the entire archive. Content-free on failure.
+///
+/// A compressed backup is decompressed to a hidden temporary file beside
+/// `dst_db_path` and integrity-checked first; one that fails either is
+/// [`BackupError::Broken`] and the destination is left untouched.
 pub fn restore_backup(backup_path: &Path, dst_db_path: &Path) -> Result<()> {
     if !backup_path.is_file() {
         return Err(BackupError::Io);
     }
+    if !is_compressed(backup_path) {
+        return restore_db(backup_path, dst_db_path);
+    }
+    let tmp = partial_path(
+        dst_db_path,
+        &format!("restore-{}", BACKUP_SEQ.fetch_add(1, Ordering::Relaxed)),
+    );
+    let res = decompress(backup_path, &tmp)
+        .and_then(|()| {
+            // An empty or headerless file opens as an empty database and
+            // passes `integrity_check`; a backup is never that.
+            let mut header = [0u8; 16];
+            File::open(&tmp)?
+                .read_exact(&mut header)
+                .map_err(|_| BackupError::Broken)?;
+            if &header != b"SQLite format 3\0" {
+                return Err(BackupError::Broken);
+            }
+            verify(&tmp).map_err(|_| BackupError::Broken)
+        })
+        .and_then(|()| restore_db(&tmp, dst_db_path));
+    let _ = std::fs::remove_file(&tmp);
+    res
+}
+
+/// Restore the uncompressed database `src` into `dst_db_path`.
+fn restore_db(src: &Path, dst_db_path: &Path) -> Result<()> {
     let restore_res = (|| -> Result<()> {
         let mut dst = Connection::open(dst_db_path).map_err(|_| BackupError::Io)?;
         dst.restore(
             DatabaseName::Main,
-            backup_path,
+            src,
             None::<fn(rusqlite::backup::Progress)>,
         )?;
         drop(dst);
@@ -379,8 +571,16 @@ fn is_backup_file(path: &Path) -> bool {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| {
-                name.starts_with(BACKUP_PREFIX) && name.ends_with(&format!(".{BACKUP_EXT}"))
+                name.starts_with(BACKUP_PREFIX)
+                    && (name.ends_with(&format!(".{BACKUP_EXT}"))
+                        || name.ends_with(&format!(".{COMPRESSED_EXT}")))
             })
+}
+
+fn is_compressed(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(&format!(".{COMPRESSED_EXT}")))
 }
 
 /// Backup files inherit the app's private-file posture (SECURITY.md §2).
@@ -431,6 +631,60 @@ mod tests {
             backup_dir_for(&crate::storage::open_in_memory().unwrap()),
             None
         );
+    }
+
+    #[test]
+    fn a_backup_is_refused_without_room_for_the_uncompressed_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::storage::open(&dir.path().join("lore.db")).unwrap();
+        let backup_dir = dir.path().join("backups");
+        let size = std::fs::metadata(dir.path().join("lore.db")).unwrap().len();
+        let needed = backup_space_needed(&conn).unwrap();
+        assert!(needed >= size, "the temporary copy is the whole archive");
+
+        let seen = std::cell::Cell::new(None);
+        let short = |d: &Path| {
+            seen.set(Some(d.to_path_buf()));
+            Ok(needed - 1)
+        };
+        match create_backup_with(&conn, &backup_dir, 7, &short) {
+            Err(BackupError::LowSpace {
+                needed: n,
+                available,
+            }) => {
+                assert_eq!((n, available), (needed, needed - 1));
+            }
+            other => panic!("expected LowSpace, got {other:?}"),
+        }
+        assert_eq!(seen.take().as_deref(), Some(backup_dir.as_path()));
+        assert_eq!(std::fs::read_dir(&backup_dir).unwrap().count(), 0);
+
+        create_backup_with(&conn, &backup_dir, 7, &|_| Ok(needed)).unwrap();
+        assert_eq!(list_backups(&backup_dir).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn stale_temporary_files_are_removed_and_fresh_ones_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join(".lore-1-0000.db.zst.raw.partial");
+        let fresh = dir.path().join(".lore-2-0000.db.zst.raw.partial");
+        let other = dir.path().join(".other.partial");
+        for p in [&stale, &fresh, &other] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        let old = SystemTime::now() - STALE_PARTIAL_AGE - Duration::from_secs(60);
+        for p in [&stale, &other] {
+            File::options()
+                .write(true)
+                .open(p)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        remove_stale_partials(dir.path());
+        assert!(!stale.exists());
+        assert!(fresh.exists(), "maybe another process's backup in progress");
+        assert!(other.exists(), "not Lore's");
     }
 
     #[test]

@@ -636,6 +636,13 @@ mod tests {
             .len()
     }
 
+    /// Open a copy of the (compressed) backup at `backup`, restored into `dir`.
+    fn open_backup(backup: &std::path::Path, dir: &std::path::Path) -> Connection {
+        let copy = dir.join("restored.db");
+        crate::backup::restore_backup(backup, &copy).unwrap();
+        Connection::open(copy).unwrap()
+    }
+
     #[test]
     fn the_one_way_migration_backs_up_an_archive_with_data_first() {
         let dir = tempfile::tempdir().unwrap();
@@ -646,7 +653,8 @@ mod tests {
 
         // The backup is the archive as it was: schema 18, the part inline.
         let backup = &crate::backup::list_backups(&dir.path().join("backups")).unwrap()[0];
-        let old = Connection::open(backup).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let old = open_backup(backup, scratch.path());
         let (version, body): (i64, String) = old
             .query_row(
                 "SELECT (SELECT max(version) FROM schema_migrations),
@@ -759,8 +767,8 @@ mod tests {
         assert_eq!(compatibility(&conn).unwrap(), Compatibility::Ok);
         assert_eq!(backups(dir.path()), 1, "backed up before migrating to 20");
         let backup = &crate::backup::list_backups(&dir.path().join("backups")).unwrap()[0];
-        let version: i64 = Connection::open(backup)
-            .unwrap()
+        let scratch = tempfile::tempdir().unwrap();
+        let version: i64 = open_backup(backup, scratch.path())
             .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
                 r.get(0)
             })

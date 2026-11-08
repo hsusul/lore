@@ -104,9 +104,14 @@ fn backup_is_a_standalone_copy_of_the_archive() {
     assert_eq!(expected.3, 1, "one secret finding from the planted token");
     assert_eq!(expected.4, 2, "one content-addressed blob per patch");
 
-    // The backup is a standalone database: openable at the current schema with
-    // all committed content, including the settings row and job-queue table.
-    let backup = lore_core::storage::open(&info.path).unwrap();
+    // The backup is a zstd stream that decompresses to a standalone database:
+    // openable at the current schema with all committed content, including
+    // the settings row and job-queue table.
+    assert!(info.path.to_string_lossy().ends_with(".db.zst"));
+    let head = std::fs::read(&info.path).unwrap();
+    assert_eq!(&head[..4], &[0x28, 0xB5, 0x2F, 0xFD], "zstd magic");
+    let scratch = tempfile::tempdir().unwrap();
+    let backup = open_backup(&info.path, scratch.path());
     assert_eq!(counts(&backup), expected, "backup must mirror the source");
     let jobs: i64 = backup
         .query_row("SELECT count(*) FROM job", [], |r| r.get(0))
@@ -127,7 +132,8 @@ fn backup_includes_uncheckpointed_wal_content() {
     assert_eq!(before.0, 2, "sessions committed but not checkpointed");
 
     let info = create_backup(&conn, &dir.path().join("backups"), DEFAULT_BACKUP_RETENTION).unwrap();
-    let backup = lore_core::storage::open(&info.path).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let backup = open_backup(&info.path, scratch.path());
     assert_eq!(
         counts(&backup),
         before,
@@ -247,6 +253,145 @@ fn backup_file_is_private() {
         mode, 0o600,
         "backup files must inherit the app's private permissions"
     );
+}
+
+/// Restore the backup at `backup` into a fresh file under `dir`, the way
+/// recovery does, run `integrity_check` on it and open it.
+fn open_backup(backup: &Path, dir: &Path) -> rusqlite::Connection {
+    let copy = dir.join("restored.db");
+    lore_core::backup::restore_backup(backup, &copy).unwrap();
+    let conn = lore_core::storage::open(&copy).unwrap();
+    let check: String = conn
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(check, "ok");
+    conn
+}
+
+#[test]
+fn backup_leaves_only_the_compressed_file_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, blobs) = archive(dir.path());
+    populate(&conn, &blobs);
+    let backups = dir.path().join("backups");
+    let info = create_backup(&conn, &backups, DEFAULT_BACKUP_RETENTION).unwrap();
+    assert_eq!(
+        list_backups(&backups),
+        vec![info.path.clone()],
+        "no temporary uncompressed copy is left"
+    );
+    let db_size: u64 = conn
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count, pragma_page_size",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(info.size_bytes < db_size, "compressed is smaller");
+}
+
+#[test]
+fn retention_keeps_the_newest_across_plain_and_compressed_backups() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, _blobs) = archive(dir.path());
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    // Plain backups an earlier build wrote, older than anything taken now.
+    let old: Vec<_> = (1..=3)
+        .map(|i| {
+            let p = backups.join(format!("lore-{i:020}-0000.db"));
+            std::fs::write(&p, b"old").unwrap();
+            p
+        })
+        .collect();
+
+    let a = create_backup(&conn, &backups, 4).unwrap();
+    assert_eq!(
+        lore_core::backup::list_backups(&backups).unwrap(),
+        vec![
+            old[0].clone(),
+            old[1].clone(),
+            old[2].clone(),
+            a.path.clone()
+        ],
+        "both kinds are listed, oldest first"
+    );
+    let b = create_backup(&conn, &backups, 4).unwrap();
+    let c = create_backup(&conn, &backups, 4).unwrap();
+    assert_eq!(
+        lore_core::backup::list_backups(&backups).unwrap(),
+        vec![old[2].clone(), a.path, b.path, c.path],
+        "the oldest plain backups aged out first"
+    );
+}
+
+#[test]
+fn restore_accepts_a_plain_backup_from_an_earlier_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, blobs) = archive(dir.path());
+    populate(&conn, &blobs);
+    let expected = counts(&conn);
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    let plain = backups.join("lore-00000000000000000001-0000.db");
+    conn.execute("VACUUM INTO ?1", [plain.to_str().unwrap()])
+        .unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    assert_eq!(counts(&open_backup(&plain, scratch.path())), expected);
+}
+
+#[test]
+fn a_truncated_compressed_backup_is_reported_broken_and_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (conn, blobs) = archive(dir.path());
+    populate(&conn, &blobs);
+    let backups = dir.path().join("backups");
+    let info = create_backup(&conn, &backups, DEFAULT_BACKUP_RETENTION).unwrap();
+    let bytes = std::fs::read(&info.path).unwrap();
+
+    let out = dir.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    for cut in [bytes.len() - 1, bytes.len() / 2, 8, 0] {
+        let broken = backups.join("lore-99999999999999999999-0000.db.zst");
+        std::fs::write(&broken, &bytes[..cut]).unwrap();
+        let dst = out.join("lore.db");
+        let err = lore_core::backup::restore_backup(&broken, &dst).unwrap_err();
+        assert!(
+            matches!(err, lore_core::backup::BackupError::Broken),
+            "cut at {cut}: {err}"
+        );
+        assert!(!dst.exists(), "destination untouched");
+        assert_eq!(
+            std::fs::read_dir(&out).unwrap().count(),
+            0,
+            "no temporary file left"
+        );
+    }
+
+    // A flipped byte fails the content checksum or the decode.
+    let mut flipped = bytes.clone();
+    let mid = flipped.len() / 2;
+    flipped[mid] ^= 0xFF;
+    let broken = backups.join("lore-99999999999999999999-0000.db.zst");
+    std::fs::write(&broken, &flipped).unwrap();
+    assert!(lore_core::backup::restore_backup(&broken, &out.join("lore.db")).is_err());
+
+    // Recovery skips the broken newest backup for the intact one.
+    std::fs::write(&broken, &bytes[..bytes.len() / 2]).unwrap();
+    let expected = counts(&conn);
+    drop(conn);
+    drop(blobs);
+    std::fs::write(dir.path().join("lore.db"), b"corrupted main db").unwrap();
+    let _ = std::fs::remove_file(dir.path().join("lore.db-wal"));
+    let _ = std::fs::remove_file(dir.path().join("lore.db-shm"));
+    match lore_core::recovery::recover_archive(dir.path(), &backups).unwrap() {
+        lore_core::recovery::RecoveryOutcome::Restored { backup_path, .. } => {
+            assert_eq!(backup_path, info.path);
+        }
+        other => panic!("expected Restored, got {other:?}"),
+    }
+    let (restored, _) = archive(dir.path());
+    assert_eq!(counts(&restored), expected);
 }
 
 fn list_backups(dir: &Path) -> Vec<std::path::PathBuf> {
