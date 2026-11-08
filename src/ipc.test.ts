@@ -459,12 +459,13 @@ describe("browser sample-data mock", () => {
     expect(result.discovered).toBeGreaterThan(0);
   });
 
-  it("restores the sample sessions on rescan after forget everything", async () => {
+  it("keeps the sample sessions forgotten on rescan after forget everything", async () => {
     const { call } = makeMock();
     await call("forget_everything");
     expect((await call("list_sessions_page", { limit: 10, cursor: null })).sessions).toEqual([]);
     const result = await call("rescan");
-    expect(result.ingested).toBe(result.discovered);
-    expect((await call("list_sessions_page", { limit: 10, cursor: null })).sessions).toHaveLength(10);
+    expect(result.ingested).toBe(0);
+    expect(result.skipped).toBe(result.discovered);
+    expect((await call("list_sessions_page", { limit: 10, cursor: null })).sessions).toEqual([]);
   });
 });
