@@ -34,9 +34,11 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
                       gone, or unanchored; all of them with no QUERY
                       [--limit N] [--json]
     reindex           Rebuild the index from the vault files alone, and name
-                      any id that two files share (exit 7) and any
+                      any id that two files share (exit 7), any
                       `enforce` rule that does not parse (it blocks nothing;
-                      its note is still recalled)
+                      its note is still recalled), and any two active notes
+                      with near-identical titles (session start shows one;
+                      retire the other yourself)
     propose           File an agent proposal; the body is read from stdin.
                       --agent, --session, --type, --title [--scope S]
                       [--anchor PATH[:LINES]]... [--updates|--extends|--derives ID]
@@ -339,6 +341,15 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
                     duplicate.id.as_str(),
                     duplicate.paths.join(", ")
                 );
+            }
+            for pair in &report.near_duplicates {
+                eprintln!(
+                    "lorectl: near-identical titles, so agents are shown only one: {} (\"{}\") and {} (\"{}\")",
+                    pair.paths[0], pair.titles[0], pair.paths[1], pair.titles[1]
+                );
+            }
+            if !report.near_duplicates.is_empty() {
+                eprintln!("  retire the one you no longer want with `lorectl mem retire <NOTE> --reason <TEXT>`");
             }
             let _ = writeln!(
                 out,

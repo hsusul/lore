@@ -22,6 +22,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use thiserror::Error;
 
 use crate::anchor::PinError;
+use crate::duplicates::{near_duplicates, NearDuplicate};
 use crate::enforce::RuleError;
 use crate::index::{fingerprint, FileStamp, Hit, Index, IndexError};
 use crate::note::{Note, NoteDate, NoteError, NoteId, RelPath};
@@ -134,6 +135,9 @@ pub struct Reindexed {
     pub bad_rules: Vec<(String, RuleError)>,
     /// Ids that more than one file carries. Every such file is still indexed.
     pub duplicates: Vec<DuplicateId>,
+    /// Active notes whose titles are near-identical, so a person can retire
+    /// one; see [`crate::duplicates`]. Both stay indexed and active.
+    pub near_duplicates: Vec<NearDuplicate>,
 }
 
 /// One id carried by several note files.
@@ -392,11 +396,13 @@ impl Vault {
             notes.iter().map(|(rel, note)| (*rel, note)),
             &stamps,
         )?;
+        let near_duplicates = near_duplicates(notes.iter().map(|(rel, note)| (*rel, note)));
         Ok(Reindexed {
             indexed,
             skipped,
             bad_rules,
             duplicates,
+            near_duplicates,
         })
     }
 

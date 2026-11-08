@@ -572,6 +572,22 @@ pub(crate) mod tests {
         assert_eq!((read.note_cap, read.char_cap), (10, 2_000));
     }
 
+    #[test]
+    fn agents_read_shows_a_lesson_written_twice_once_as_the_hook_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = vault(dir.path());
+        vault
+            .add("---\ntype: convention\ntitle: Never push to the main\n---\nAgain.\n")
+            .unwrap();
+        let plain = dir.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        let read = agents_read_in(&vault, &plain).unwrap();
+        let titles: Vec<&str> = read.notes.iter().map(|n| n.title.as_str()).collect();
+        assert_eq!(titles.len(), 1, "{titles:?}");
+        assert_eq!(read.total, 1);
+        assert!(!read.text.contains("more not shown"), "{}", read.text);
+    }
+
     fn id_of(vault: &Vault, rel: &str) -> String {
         Note::parse(&vault.read(rel).unwrap())
             .unwrap()

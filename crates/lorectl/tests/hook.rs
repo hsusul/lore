@@ -429,6 +429,103 @@ fn session_start_shows_ten_notes_and_says_how_many_it_left_out() {
     assert_eq!(stdout(&out), expected);
 }
 
+/// A note with id number `n`, `title`, and this project's repository scope,
+/// or global scope when `repo` is false.
+fn titled(n: usize, title: &str, repo: bool) -> String {
+    let scope = if repo {
+        "scope: repo:81444c90f1ff44ac\n"
+    } else {
+        ""
+    };
+    format!("---\nid: 01JD{n:022}\ntype: fact\ntitle: {title}\n{scope}---\nBody {n}.\n")
+}
+
+/// The titles of a notes section, in order, without the trailing line.
+fn titles_in(section: &str) -> Vec<String> {
+    section
+        .lines()
+        .filter_map(|l| l.strip_prefix("- ["))
+        .filter_map(|l| l.split_once("] "))
+        .map(|(_, rest)| rest.rsplit_once(" (").map_or(rest, |(t, _)| t).to_owned())
+        .collect()
+}
+
+#[test]
+fn session_start_keeps_slots_for_global_notes_in_a_repo_with_many_notes() {
+    let (home, vault, repo) = memory_home();
+    let mut notes: Vec<String> = (1..=12)
+        .map(|i| titled(200 + i, &format!("Repo lesson {i:02}"), true))
+        .collect();
+    notes.extend((1..=6).map(|i| titled(300 + i, &format!("Global rule {i:02}"), false)));
+    // The same global rule written twice is one note, counted once.
+    notes.push(titled(399, "The global rule 01", false));
+    let notes: Vec<&str> = notes.iter().map(String::as_str).collect();
+    add_notes(home.path(), &vault, &repo, &notes);
+
+    let out = stdout(&session_start(&repo, home.path(), &vault, ""));
+    let titles = titles_in(&out);
+    let repo_shown = titles.iter().filter(|t| t.starts_with("Repo")).count();
+    let global_shown = titles.iter().filter(|t| t.contains("lobal rule")).count();
+    assert_eq!((repo_shown, global_shown), (6, 4), "{out}");
+    assert!(
+        out.ends_with("- 8 more not shown. The recall_memory tool lists them.\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn session_start_in_a_repo_with_only_its_own_notes_shows_ten_of_them() {
+    let (home, vault, repo) = memory_home();
+    let notes: Vec<String> = (1..=12)
+        .map(|i| titled(200 + i, &format!("Repo lesson {i:02}"), true))
+        .collect();
+    let notes: Vec<&str> = notes.iter().map(String::as_str).collect();
+    add_notes(home.path(), &vault, &repo, &notes);
+
+    let out = stdout(&session_start(&repo, home.path(), &vault, ""));
+    let expected: Vec<String> = (1..=10).map(|i| format!("Repo lesson {i:02}")).collect();
+    assert_eq!(titles_in(&out), expected, "{out}");
+    assert!(out.ends_with("- 2 more not shown. The recall_memory tool lists them.\n"));
+}
+
+#[test]
+fn session_start_shows_a_lesson_written_twice_once() {
+    let (home, vault, repo) = memory_home();
+    let follow_up = [
+        "List follow-up items in chat; don't file them to a team tracker",
+        "List follow-up items in chat instead of filing them to a team tracker",
+    ];
+    let threads = [
+        "Resolve Greptile threads you fix; reply then resolve the ones you decline",
+        "Resolve review threads once addressed; reply, then resolve, the ones you decline",
+    ];
+    let notes = [
+        titled(401, follow_up[0], true),
+        titled(402, follow_up[1], true),
+        titled(403, threads[0], true),
+        titled(404, threads[1], true),
+        titled(405, "Never add AI attribution", false),
+    ];
+    let notes: Vec<&str> = notes.iter().map(String::as_str).collect();
+    add_notes(home.path(), &vault, &repo, &notes);
+
+    let out = stdout(&session_start(&repo, home.path(), &vault, ""));
+    let titles = titles_in(&out);
+    let follow_ups = titles.iter().filter(|t| follow_up.contains(&t.as_str()));
+    assert_eq!(follow_ups.count(), 1, "{out}");
+    // Related but distinct lessons both show.
+    assert!(
+        threads.iter().all(|t| titles.iter().any(|s| s == t)),
+        "{out}"
+    );
+    assert!(
+        titles.iter().any(|t| t == "Never add AI attribution"),
+        "{out}"
+    );
+    assert_eq!(titles.len(), 4, "{out}");
+    assert!(!out.contains("more not shown"), "{out}");
+}
+
 #[test]
 fn session_start_adds_nothing_without_a_vault_or_a_matching_note() {
     let (home, vault, repo) = memory_home();

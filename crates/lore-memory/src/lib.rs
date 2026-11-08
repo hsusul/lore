@@ -22,6 +22,7 @@
 
 pub mod anchor;
 pub mod considered;
+pub mod duplicates;
 pub mod enforce;
 pub mod eval;
 pub mod filing;

@@ -1,11 +1,25 @@
 //! What an agent is given at session start: the notes that apply where it
 //! runs, as the section `lorectl hook session-start` prints, and the same view
 //! for the desktop app's "What agents read".
+//!
+//! The notes are recall's, in recall's order, with two changes before the
+//! cap. A note whose title is near-identical to one ranked above it is left
+//! out, so one lesson written twice takes one slot; recall ranks the fresher
+//! note first, then the repository's, then the one with more sources, then
+//! the newer, so that is the one kept (see [`crate::duplicates`];
+//! `lorectl mem reindex` names the pair so a person can retire one). And
+//! when the repository's notes and global notes are both in scope, the cap is
+//! shared: global notes get at least [`GLOBAL_SHARE`] slots, the
+//! repository's notes the rest, and either side may use slots the other
+//! leaves empty, so a person's general rules still reach an agent in a repo
+//! with many notes of its own.
 
 use std::path::Path;
 
+use crate::duplicates::near_identical;
 use crate::inbox;
 use crate::index::Index;
+use crate::note::Scope;
 use crate::recall::{self, Recalled};
 use crate::repo::RepoContext;
 use crate::vault::{Vault, VaultError};
@@ -15,15 +29,24 @@ use crate::vault::{Vault, VaultError};
 pub const NOTE_CAP: usize = 10;
 /// The notes section stops adding note lines past this many bytes.
 pub const CHAR_CAP: usize = 2_000;
+/// When both kinds are in scope, global notes get at least this many of the
+/// [`NOTE_CAP`] slots, if there are that many.
+pub const GLOBAL_SHARE: usize = 4;
+/// How many of recall's notes are considered for the slots. Recall checks
+/// each one's anchors, so the set is bounded rather than the whole scope.
+const POOL: usize = 200;
 
 /// The notes section for one working directory.
 #[derive(Debug)]
 pub struct SessionStart {
     pub context: RepoContext,
-    /// The notes recall chose, best first. The first `shown` fit the section.
+    /// The notes chosen for the section, best first. The first `shown` fit
+    /// the section.
     pub notes: Vec<Recalled>,
     pub shown: usize,
-    /// Every active note that applies in this directory, chosen or not.
+    /// Every distinct active note that applies in this directory, chosen or
+    /// not: a note left out as a near-duplicate of a chosen one is not
+    /// counted.
     pub total: usize,
     /// The section exactly as an agent reads it.
     pub text: String,
@@ -31,26 +54,69 @@ pub struct SessionStart {
 
 /// The notes section for `cwd`, or `None` when no note applies there.
 pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, VaultError> {
-    let found = recall::recall(vault, "", cwd, NOTE_CAP)?;
+    let found = recall::recall(vault, "", cwd, POOL)?;
     if found.notes.is_empty() {
         return Ok(None);
     }
     // Recall left the index fresh, so counting what it capped is one query.
     let scope = found.context.key().map(|k| format!("repo:{}", k.as_str()));
-    let total = Index::open(&vault.lore_dir())
+    let in_scope = Index::open(&vault.lore_dir())
         .ok()
         .flatten()
         .and_then(|index| index.count_active(scope.as_deref()).ok())
         .unwrap_or(0)
         .max(found.notes.len());
-    let (text, shown) = render(&found.context, found.notes.iter().map(line), total);
+    let (distinct, collapsed) = collapse(found.notes, |r| &r.note.title);
+    let total = in_scope.saturating_sub(collapsed);
+    let notes = share(distinct, NOTE_CAP, |r| r.note.scope == Scope::Global);
+    let (text, shown) = render(&found.context, notes.iter().map(line), total);
     Ok(Some(SessionStart {
         context: found.context,
-        notes: found.notes,
+        notes,
         shown,
         total,
         text,
     }))
+}
+
+/// `notes` without any whose title is near-identical to one before it, and
+/// how many were left out.
+fn collapse<T>(notes: Vec<T>, title: impl Fn(&T) -> &str) -> (Vec<T>, usize) {
+    let mut kept: Vec<T> = Vec::with_capacity(notes.len());
+    let mut collapsed = 0;
+    for note in notes {
+        if kept.iter().any(|k| near_identical(title(k), title(&note))) {
+            collapsed += 1;
+        } else {
+            kept.push(note);
+        }
+    }
+    (kept, collapsed)
+}
+
+/// At most `cap` of `notes`, in their order. When both global and other
+/// notes are present, global ones get at least [`GLOBAL_SHARE`] of the
+/// slots, if there are that many, the others the rest; slots one side cannot
+/// fill go to the other.
+fn share<T>(notes: Vec<T>, cap: usize, global: impl Fn(&T) -> bool) -> Vec<T> {
+    let globals = notes.iter().filter(|n| global(n)).count();
+    let others = notes.len() - globals;
+    let global_slots = globals.min(GLOBAL_SHARE.min(cap).max(cap - others.min(cap)));
+    let other_slots = others.min(cap - global_slots);
+    let (mut global_left, mut other_left) = (global_slots, other_slots);
+    notes
+        .into_iter()
+        .filter(|n| {
+            let left = if global(n) {
+                &mut global_left
+            } else {
+                &mut other_left
+            };
+            let take = *left > 0;
+            *left = left.saturating_sub(1);
+            take
+        })
+        .collect()
 }
 
 /// One note as an agent reads it: its freshness label, its title, and its id.
@@ -126,6 +192,41 @@ mod tests {
             render(&RepoContext::NoRepo, ["- [gone] a (b)".to_owned()], 1),
             ("Lore memory:\n- [gone] a (b)\n".to_owned(), 1)
         );
+    }
+
+    /// `share` over `repo` repository notes then `global` global ones, as
+    /// recall orders them; returns how many of each it kept.
+    fn shared(repo: usize, global: usize) -> (usize, usize) {
+        let notes: Vec<bool> = std::iter::repeat_n(false, repo)
+            .chain(std::iter::repeat_n(true, global))
+            .collect();
+        let kept = share(notes, NOTE_CAP, |g| *g);
+        let globals = kept.iter().filter(|g| **g).count();
+        (kept.len() - globals, globals)
+    }
+
+    #[test]
+    fn the_cap_is_shared_between_repository_and_global_notes() {
+        assert_eq!(shared(12, 10), (6, 4));
+        assert_eq!(shared(12, 2), (8, 2));
+        assert_eq!(shared(3, 10), (3, 7));
+        assert_eq!(shared(0, 12), (0, 10));
+        assert_eq!(shared(12, 0), (10, 0));
+        assert_eq!(shared(4, 3), (4, 3));
+        assert_eq!(shared(0, 0), (0, 0));
+    }
+
+    #[test]
+    fn a_near_identical_title_after_another_is_left_out() {
+        let titles = vec![
+            "List follow-up items in chat; don't file them to a team tracker",
+            "Resolve Greptile threads you fix; reply then resolve the ones you decline",
+            "List follow-up items in chat instead of filing them to a team tracker",
+            "Resolve review threads once addressed; reply, then resolve, the ones you decline",
+        ];
+        let (kept, collapsed) = collapse(titles.clone(), |t| t);
+        assert_eq!(kept, vec![titles[0], titles[1], titles[3]]);
+        assert_eq!(collapsed, 1);
     }
 
     #[test]
