@@ -732,6 +732,39 @@ fn prompt_is_silent_without_matching_words() {
     assert_eq!((code(&out), stdout(&out)), (0, String::new()));
 }
 
+/// A background task's result, as Claude Code injects it as a user turn.
+/// Its words match RETRY, so only the skip keeps it silent.
+const TASK_NOTIFICATION: &str = "<task-notification>\n<task-id>a1b2</task-id>\n\
+     <status>completed</status>\n<summary>Retry the migration agent finished</summary>\n\
+     <result>Why did the migration fail? Retry it.</result>\n</task-notification>";
+
+#[test]
+fn prompt_is_silent_for_a_turn_the_host_wrote() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[RETRY, PIN, GLOBAL]);
+    for prompt in [
+        TASK_NOTIFICATION.to_owned(),
+        format!("  {TASK_NOTIFICATION}\n<system-reminder>retry the migration</system-reminder>\n"),
+        "I hit my usage limit while you were working; retry the migration now.".to_owned(),
+    ] {
+        let stdin = prompt_json(&repo, "s-1", &prompt);
+        let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+        assert_eq!(code(&out), 0, "{prompt}");
+        assert_eq!(stdout(&out), "", "{prompt}");
+    }
+}
+
+#[test]
+fn prompt_recalls_on_the_typed_words_beside_a_notification() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[RETRY, PIN, GLOBAL]);
+    let typed = format!("{TASK_NOTIFICATION}\nWhy did the migration fail? Retry it.");
+    let stdin = prompt_json(&repo, "s-1", &typed);
+    let out = hook("prompt", &repo, home.path(), &vault, &stdin);
+    assert_eq!(code(&out), 0);
+    assert_eq!(stdout(&out), prompt_reply(RETRY_FOR_PROMPT));
+}
+
 const PLANNING: &str = "---\nid: 01JD0000000000000000000005\ntype: convention\ntitle: Keep planning docs local\n---\nDon't commit planning docs. They aren't for the repo.\n";
 
 const PLANNING_FOR_PROMPT: &str = "Lore notes for this request:\n\
