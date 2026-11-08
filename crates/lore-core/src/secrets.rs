@@ -615,6 +615,12 @@ const ASSIGN_MIN_ENTROPY: f64 = 3.0;
 /// alone would not be enough — an equal span at equal severity would be decided by
 /// detector order rather than by specificity.
 fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
+    // Only spans present before this detector ran count as "already covered":
+    // one of this detector's own spans may still be allowlisted (a template
+    // hole such as `${TOKEN:-…}`) and must not hide an overlapping value.
+    // Equal spans from two keywords (`token` in `access_token`) are merged by
+    // `de_overlap`.
+    let already = out.len();
     const KEYWORDS: &[&str] = &[
         "password",
         "passwd",
@@ -646,7 +652,10 @@ fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
             if i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
                 continue;
             }
-            if i < bytes.len() && matches!(bytes[i], b'_' | b'-') {
+            // The name goes on past the keyword (`AUTH_TOKEN_EXPIRES_AT`), so
+            // the value may describe the secret rather than be it.
+            let name_continues = i < bytes.len() && matches!(bytes[i], b'_' | b'-');
+            if name_continues {
                 i += run_len(bytes, i, |b| {
                     b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')
                 });
@@ -737,7 +746,14 @@ fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
             if shannon_per_char(value.as_bytes()) < ASSIGN_MIN_ENTROPY {
                 continue;
             }
-            let covered = out
+            // Only after a continued name (a match this rule never made before
+            // it accepted one), a timestamp or plain number is metadata such as
+            // an expiry or TTL, never a credential. Names that end in the
+            // keyword (`DB_PASSWORD=48213957`) keep every value.
+            if name_continues && (is_iso8601(value) || is_plain_number(value)) {
+                continue;
+            }
+            let covered = out[..already]
                 .iter()
                 .any(|f| f.start < value_end && value_start < f.end);
             if covered {
@@ -872,6 +888,78 @@ fn is_allowlisted(value: &str) -> bool {
     }
     let after_underscore = value.rsplit('_').next().unwrap_or(value);
     after_underscore.chars().all(|c| c == 'x' || c == 'X') && after_underscore.len() >= 8
+}
+
+/// An ISO-8601 date (`2026-11-08`) or date-time (`2026-11-08T13:03:50Z`,
+/// `2026-11-08T13:03:50.123+02:00`), checked field by field so nothing but
+/// digits in calendar ranges and the fixed separators gets through.
+fn is_iso8601(value: &str) -> bool {
+    fn num(b: &[u8], at: usize, len: usize, max: u32) -> Option<u32> {
+        let digits = b.get(at..at + len)?;
+        if !digits.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        let n = digits.iter().fold(0, |n, d| n * 10 + u32::from(d - b'0'));
+        (n <= max).then_some(n)
+    }
+    let b = value.as_bytes();
+    let date = num(b, 0, 4, 9999).is_some()
+        && b.get(4) == Some(&b'-')
+        && num(b, 5, 2, 12).is_some_and(|m| m >= 1)
+        && b.get(7) == Some(&b'-')
+        && num(b, 8, 2, 31).is_some_and(|d| d >= 1);
+    if !date {
+        return false;
+    }
+    if b.len() == 10 {
+        return true;
+    }
+    if !matches!(b.get(10), Some(b'T' | b't'))
+        || num(b, 11, 2, 23).is_none()
+        || b.get(13) != Some(&b':')
+        || num(b, 14, 2, 59).is_none()
+    {
+        return false;
+    }
+    let mut i = 16;
+    if b.get(i) == Some(&b':') {
+        if num(b, i + 1, 2, 60).is_none() {
+            return false;
+        }
+        i += 3;
+        if b.get(i) == Some(&b'.') {
+            let frac = run_len(b, i + 1, |c| c.is_ascii_digit());
+            if frac == 0 || frac > 9 {
+                return false;
+            }
+            i += 1 + frac;
+        }
+    }
+    match &b[i..] {
+        [] | [b'Z' | b'z'] => true,
+        [b'+' | b'-', ..] => {
+            let zone = &b[i + 1..];
+            num(zone, 0, 2, 14).is_some()
+                && match zone.len() {
+                    2 => true,
+                    4 => num(zone, 2, 2, 59).is_some(),
+                    5 => zone[2] == b':' && num(zone, 3, 2, 59).is_some(),
+                    _ => false,
+                }
+        }
+        _ => false,
+    }
+}
+
+/// A plain decimal number (`3600`, `-1`, `0.5`): digits, at most one leading
+/// sign and one decimal point.
+fn is_plain_number(value: &str) -> bool {
+    let digits = value.strip_prefix(['-', '+']).unwrap_or(value);
+    let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
+    !int.is_empty()
+        && int.bytes().all(|b| b.is_ascii_digit())
+        && frac.bytes().all(|b| b.is_ascii_digit())
+        && !digits.ends_with('.')
 }
 
 fn is_word_byte(b: u8) -> bool {
@@ -1447,6 +1535,87 @@ mod tests {
             assert_eq!(&text[hits[0].start..hits[0].end], value);
         }
         assert!(!rules_in("secretary = Kd0Lq7vN8wR1").contains(&"generic-assignment"));
+    }
+
+    /// Whether redacting `text` leaves `value` nowhere in the output.
+    fn masks(text: &str, value: &str) -> bool {
+        !redact(text, &scan_ok(text)).contains(value)
+    }
+
+    #[test]
+    fn an_allowlisted_assignment_does_not_hide_an_overlapping_one() {
+        // The outer value is allowlisted (a template hole, an `example` URL);
+        // the inner `TOKEN`/`token` assignment is a real value and stays masked.
+        for text in [
+            "password: ${TOKEN:-Kd0Lq7vN8wR1}",
+            "secret=example.com/cb?token=Kd0Lq7vN8wR1",
+        ] {
+            assert!(masks(text, "Kd0Lq7vN8wR1"), "left clear in {text:?}");
+        }
+    }
+
+    #[test]
+    fn generic_assignment_skips_timestamps_and_numbers_after_a_continued_name() {
+        for text in [
+            "auth_token_expires_at: 2026-11-08T13:03:50Z",
+            "\"access_token_issued_at\": \"2026-11-08T13:03:50.123+02:00\"",
+            "SECRET_ROTATED_ON=2026-11-08",
+            "session_token_ttl: 8173925640",
+        ] {
+            assert!(
+                !rules_in(text).contains(&"generic-assignment"),
+                "flagged {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_assignment_keeps_secret_shaped_values_after_a_continued_name() {
+        for (text, value) in [
+            // A name that ends in the keyword: the value is the secret.
+            ("DB_PASSWORD=8173925640", "8173925640"),
+            ("password: 2026-11-08T13:03:50Z", "2026-11-08T13:03:50Z"),
+            ("TOKEN_SECRET=8173925640", "8173925640"),
+            // Continued names keep anything that is not exactly a timestamp
+            // or a number.
+            ("auth_token_expires_at: Kd0Lq7vN8wR1", "Kd0Lq7vN8wR1"),
+            ("auth_token_expires_at: 2026-11-08T13:03:50Zq7vN", "Zq7vN"),
+            ("session_token_id=8173925640abcdef", "8173925640abcdef"),
+            ("secret_name: prod-postgres-creds", "prod-postgres-creds"),
+        ] {
+            assert!(masks(text, value), "left clear in {text:?}");
+        }
+    }
+
+    #[test]
+    fn iso8601_and_plain_number_shapes_are_exact() {
+        for ok in [
+            "2026-11-08",
+            "2026-11-08T13:03",
+            "2026-11-08T13:03:50Z",
+            "2026-11-08t13:03:50.123456789-0530",
+            "2026-11-08T13:03:50+02",
+        ] {
+            assert!(is_iso8601(ok), "{ok}");
+        }
+        for bad in [
+            "2026-13-08",
+            "2026-11-00",
+            "2026-11-08T24:00:00Z",
+            "2026-11-08T13:03:50Zx",
+            "2026-11-08T13:03:50.Z",
+            "2026-11-08T13:03:50+0",
+            "2026-11-08Kd0Lq7vN8wR1",
+            "20261108",
+        ] {
+            assert!(!is_iso8601(bad), "{bad}");
+        }
+        for ok in ["0", "3600", "-1", "+42", "0.5", "1793451230"] {
+            assert!(is_plain_number(ok), "{ok}");
+        }
+        for bad in ["", "-", ".", "1.", ".5", "1.2.3", "1e9", "0x1f", "12_34"] {
+            assert!(!is_plain_number(bad), "{bad}");
+        }
     }
 
     #[test]
