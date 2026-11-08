@@ -321,8 +321,43 @@ pub fn corrections_in(turns: &Turns, limits: &Limits) -> Vec<Candidate> {
         .collect()
 }
 
+/// The user turns that invoked a skill or slash command with nothing typed
+/// after it, by session and seq.
+fn bare_commands(turns: &Turns) -> BTreeSet<(&str, i64)> {
+    (turns.1.iter())
+        .filter(|i| !i.typed)
+        .map(|i| (i.session.as_str(), i.seq))
+        .collect()
+}
+
+/// The agent turn the user turn at `i` answers: the turn before it, or,
+/// when the person sent several messages in a row while the agent worked,
+/// the agent turn before that run. Only the person's own words make a run:
+/// harness text, a bare command, or a message relayed from another agent
+/// ends it, and so does the start of the session.
+fn agent_before<'t>(turns: &'t [Turn], bare: &BTreeSet<(&str, i64)>, i: usize) -> Option<&'t Turn> {
+    let session = &turns.get(i)?.session;
+    for before in turns[..i].iter().rev() {
+        if &before.session != session {
+            return None;
+        }
+        if !before.user {
+            return Some(before);
+        }
+        let text = one_line(&before.text);
+        if is_harness_text(&text)
+            || is_invocation(&text)
+            || bare.contains(&(before.session.as_str(), before.seq))
+        {
+            return None;
+        }
+    }
+    None
+}
+
 /// [`corrections_in`], each with the index of its turn in `turns.0`.
 pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Candidate)> {
+    let bare = bare_commands(turns);
     let turns = &turns.0;
     let mut found = Vec::new();
     let mut earlier: Vec<BTreeSet<String>> = Vec::new();
@@ -337,6 +372,7 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
         if !turn.user {
             continue;
         }
+        let agent = agent_before(turns, &bare, i);
         let text = one_line(&turn.text);
         let words = content_words(&text);
         let question = is_question(&text);
@@ -346,7 +382,7 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
             || is_invocation(&text)
         {
             None
-        } else if before.is_some_and(|b| !b.user) && (question || corrects(&text)) {
+        } else if agent.is_some() && (question || corrects(&text)) {
             Some(Signal::Correction)
         } else if has_rule_phrase(&text) {
             Some(Signal::Rule)
@@ -368,8 +404,7 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
                     repo: turn.repo.clone(),
                     repo_path: turn.repo_path.clone(),
                     at_ms: turn.at_ms,
-                    preceding: before
-                        .filter(|b| !b.user)
+                    preceding: agent
                         .map(|b| one_line(&b.text).chars().take(PRECEDING_CHARS).collect()),
                     following: turns
                         .get(i + 1)
@@ -403,7 +438,8 @@ fn is_bare_image(text: &str) -> bool {
 /// The person's ordinary replies to the agent at or after `since_ms` that
 /// [`corrections_at`] did not pick, as [`Signal::Reply`] candidates, oldest
 /// first. A reply is a user turn right after an assistant turn in the same
-/// session that does not invoke a skill or slash command, is not a
+/// session, or later in a run of the person's turns right after one (see
+/// [`agent_before`]), that does not invoke a skill or slash command, is not a
 /// continued session's summary or other text the harness wrote (an
 /// interrupt notice, a bare image, a loaded skill), and does not open with
 /// leftover markup.
@@ -416,10 +452,7 @@ pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidat
         .into_iter()
         .map(|(i, _)| i)
         .collect();
-    let invoked: BTreeSet<(&str, i64)> = (turns.1.iter())
-        .filter(|i| !i.typed)
-        .map(|i| (i.session.as_str(), i.seq))
-        .collect();
+    let invoked = bare_commands(turns);
     let turns = &turns.0;
     let mut found: Vec<Candidate> = Vec::new();
     for (i, turn) in turns.iter().enumerate() {
@@ -430,11 +463,7 @@ pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidat
         {
             continue;
         }
-        let Some(before) = i
-            .checked_sub(1)
-            .map(|j| &turns[j])
-            .filter(|b| b.session == turn.session && !b.user)
-        else {
+        let Some(before) = agent_before(turns, &invoked, i) else {
             continue;
         };
         let text = one_line(&turn.text);
