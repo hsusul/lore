@@ -7,6 +7,7 @@
 //! marker with the lesson id, so one lesson is filed once. A lesson from one
 //! repository is anchored to the files of it that its receipts name.
 
+use std::fs;
 use std::path::Path;
 
 use time::OffsetDateTime;
@@ -15,12 +16,14 @@ use crate::anchor::WorkTree;
 use crate::inbox::{self, Proposal};
 use crate::mine::{Candidate, Lesson};
 use crate::note::{AgentKind, Anchor, InvalidValue, NoteId, NoteType, RelPath, Scope, SessionId};
-use crate::repo::RepoContext;
+use crate::repo::{git, RepoContext};
 use crate::review::{self, ReviewError};
 use crate::vault::Vault;
 
 /// Receipts written into a proposed lesson's body.
 const PROPOSED_RECEIPTS: usize = 10;
+/// Most files a proposed lesson is anchored to.
+const MAX_ANCHORS: usize = 3;
 /// The longest title a proposal gets, as over MCP.
 pub const TITLE_CHARS: usize = 120;
 
@@ -132,23 +135,49 @@ fn repo(lesson: &Lesson) -> RepoContext {
     }
 }
 
-/// A whole-file anchor, pinned to `HEAD`, for each file in the working tree at
-/// `root` that a proposed receipt names: in the person's words, or in the
-/// agent turns before and after them. A name that is not a file there is
-/// left out.
+/// A whole-file anchor, pinned to `HEAD`, for up to [`MAX_ANCHORS`] files
+/// that git tracks in the working tree at `root`: first the files the person's
+/// words name, then the files two or more proposed receipts name, counting the
+/// agent turns before and after them. A file only one agent turn names is left
+/// out, since agents list many files a lesson is not about.
 fn anchors(lesson: &Lesson, root: &Path) -> Vec<Anchor> {
+    let mut said: Vec<RelPath> = Vec::new();
+    let mut named: Vec<(RelPath, usize)> = Vec::new();
+    for receipt in lesson.receipts.iter().take(PROPOSED_RECEIPTS) {
+        let mut in_receipt: Vec<RelPath> = Vec::new();
+        let texts = [
+            (Some(&receipt.text), true),
+            (receipt.preceding.as_ref(), false),
+            (receipt.following.as_ref(), false),
+        ];
+        for (text, by_person) in texts {
+            for path in text.into_iter().flat_map(|text| named_paths(text, root)) {
+                if by_person && !said.contains(&path) {
+                    said.push(path.clone());
+                }
+                if !in_receipt.contains(&path) {
+                    in_receipt.push(path);
+                }
+            }
+        }
+        for path in in_receipt {
+            match named.iter_mut().find(|(named, _)| *named == path) {
+                Some((_, receipts)) => *receipts += 1,
+                None => named.push((path, 1)),
+            }
+        }
+    }
+    let recurring = named
+        .into_iter()
+        .filter(|(_, receipts)| *receipts >= 2)
+        .map(|(path, _)| path);
     let tree = WorkTree::new(root);
-    let texts = lesson
-        .receipts
-        .iter()
-        .take(PROPOSED_RECEIPTS)
-        .flat_map(|r| [Some(&r.text), r.preceding.as_ref(), r.following.as_ref()])
-        .flatten();
-    let words = texts
-        .flat_map(|text| text.split(|c: char| c.is_whitespace() || "`'\"()[]{}<>,;".contains(c)));
     let mut anchors: Vec<Anchor> = Vec::new();
-    for path in words.filter_map(|word| named_path(word, root)) {
-        if anchors.iter().any(|a| a.path == path) {
+    for path in said.into_iter().chain(recurring) {
+        if anchors.len() == MAX_ANCHORS {
+            break;
+        }
+        if anchors.iter().any(|a| a.path == path) || !tracked(root, &path) {
             continue;
         }
         let anchor = Anchor {
@@ -164,22 +193,36 @@ fn anchors(lesson: &Lesson, root: &Path) -> Vec<Anchor> {
     anchors
 }
 
-/// `word` as a path inside `root`, when it reads like one: it has a `/` or a
-/// `.`. Trailing sentence punctuation and a line number such as `:12` are
-/// dropped, and an absolute path under `root` is made relative.
+/// The files inside `root` that `text` names, in order.
+fn named_paths<'a>(text: &'a str, root: &'a Path) -> impl Iterator<Item = RelPath> + 'a {
+    text.split(|c: char| c.is_whitespace() || "`'\"()[]{}<>,;".contains(c))
+        .filter_map(|word| named_path(word, root))
+}
+
+/// `word` as a file inside the canonical `root`, when it reads like a path: it
+/// has a `/` or a `.`. Trailing sentence punctuation and a line number such as
+/// `:12` are dropped, and the path is resolved, so an absolute path spelled
+/// through a symlink still lands inside `root`.
 fn named_path(word: &str, root: &Path) -> Option<RelPath> {
     let word = word.trim_end_matches(['.', ':', '!', '?']);
     let word = match word.split_once(':') {
         Some((path, at)) if at.bytes().all(|b| b.is_ascii_digit() || b"-:".contains(&b)) => path,
         _ => word,
     };
-    let word = match Path::new(word).strip_prefix(root) {
-        Ok(inside) => inside.to_str()?,
-        Err(_) => word,
-    };
-    let word = word.strip_prefix("./").unwrap_or(word);
     if !word.contains(['/', '.']) {
         return None;
     }
-    RelPath::parse(word).ok()
+    let file = fs::canonicalize(root.join(word))
+        .ok()
+        .filter(|file| file.is_file())?;
+    RelPath::parse(file.strip_prefix(root).ok()?.to_str()?).ok()
+}
+
+/// Whether git tracks `path` under exactly that name.
+fn tracked(root: &Path, path: &RelPath) -> bool {
+    git(
+        root,
+        ["--literal-pathspecs", "ls-files", "-z", "--", path.as_str()],
+    )
+    .is_some_and(|out| out.split('\0').any(|tracked| tracked == path.as_str()))
 }
