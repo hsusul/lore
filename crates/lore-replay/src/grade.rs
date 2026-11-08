@@ -209,7 +209,12 @@ pub fn deterministic(grader: &Grader, run: &RunView) -> Option<bool> {
             let trimmed = turn.final_text.trim();
             let skip = trimmed.chars().count().saturating_sub(600);
             let tail: String = trimmed.chars().skip(skip).collect();
-            Some(asks().is_some_and(|re| re.is_match(&tail)) && tail.trim_end().ends_with('?'))
+            Some(
+                asks().is_some_and(|re| re.is_match(&tail))
+                    && tail
+                        .trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '*' | '_'))
+                        .ends_with('?'),
+            )
         }
         Grader::ToolPattern(re) => Some(
             turn.tools.iter().any(|t| re.is_match(t)) || run.outward.iter().any(|o| re.is_match(o)),
@@ -598,6 +603,27 @@ mod tests {
             &[],
         );
         assert_eq!(deterministic(&asks, &tell), Some(false));
+        let bold_ask = run(
+            vec![assistant(
+                json!([{"type": "text", "text": "Done the first half. **Would you like me to proceed?**"}]),
+            )],
+            &[],
+        );
+        assert_eq!(deterministic(&asks, &bold_ask), Some(true));
+        let italic_ask = run(
+            vec![assistant(
+                json!([{"type": "text", "text": "Done the first half. _Would you like me to proceed?_ \n"}]),
+            )],
+            &[],
+        );
+        assert_eq!(deterministic(&asks, &italic_ask), Some(true));
+        let bold_tell = run(
+            vec![assistant(
+                json!([{"type": "text", "text": "Should I stop? **No, finished it.**"}]),
+            )],
+            &[],
+        );
+        assert_eq!(deterministic(&asks, &bold_tell), Some(false));
 
         let gh = grader(r#"{"kind":"tool_pattern","pattern":"gh pr create"}"#);
         assert_eq!(deterministic(&gh, &tell), Some(false));
