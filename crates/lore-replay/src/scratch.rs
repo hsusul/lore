@@ -87,9 +87,24 @@ fn toplevel(cwd: &Path) -> Option<PathBuf> {
 /// its history, and check it out, on `branch` when `toplevel` has that
 /// branch. The repository has no remote, so the agent cannot push anywhere.
 pub fn clone_at(toplevel: &Path, commit: &str, branch: Option<&str>, dest: &Path) -> Result<()> {
-    git(None, &[os("init"), os("-q"), dest.into()])?;
+    // A fresh init is SHA-1, which cannot fetch from a SHA-256 repository.
+    let mut init = vec![os("init"), os("-q")];
+    if let Some(format) = run(
+        Some(toplevel),
+        &[os("rev-parse"), os("--show-object-format")],
+    )
+    .ok()
+    .filter(|o| o.status.success())
+    .and_then(|o| String::from_utf8(o.stdout).ok())
+    {
+        init.push(os(&format!("--object-format={}", format.trim())));
+    }
+    init.push(dest.into());
+    git(None, &init)?;
     // Protocol v2 serves any commit by its id; v0 refuses one no ref points
-    // at, which is most of them once the branch has moved on.
+    // at, which is most of them once the branch has moved on. Without
+    // --update-shallow, a shallow source's commit arrives with no shallow
+    // boundary and `git log` dies on the missing parents.
     git(
         Some(dest),
         &[
@@ -98,6 +113,7 @@ pub fn clone_at(toplevel: &Path, commit: &str, branch: Option<&str>, dest: &Path
             os("fetch"),
             os("-q"),
             os("--no-tags"),
+            os("--update-shallow"),
             toplevel.into(),
             os(commit),
         ],
@@ -277,5 +293,50 @@ mod tests {
             );
         }
         assert_eq!(stdout(&dest, &["remote"]), "");
+    }
+
+    #[test]
+    fn a_shallow_source_gives_a_shallow_clone_whose_log_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        for m in ["one", "two", "three"] {
+            sh(&repo, &["commit", "-q", "--allow-empty", "-m", m]);
+        }
+        let url = format!("file://{}", repo.display());
+        sh(
+            tmp.path(),
+            &["clone", "-q", "--depth", "2", &url, "shallow"],
+        );
+        let shallow = tmp.path().join("shallow");
+        let head = stdout(&shallow, &["rev-parse", "HEAD"]);
+
+        let dest = tmp.path().join("clone");
+        clone_at(&shallow, &head, Some("main"), &dest).unwrap();
+
+        assert_eq!(stdout(&dest, &["log", "--format=%s"]), "three\ntwo");
+        assert_eq!(
+            stdout(&dest, &["rev-parse", "--is-shallow-repository"]),
+            "true"
+        );
+    }
+
+    #[test]
+    fn a_sha256_source_clones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sh(
+            &repo,
+            &["init", "-q", "-b", "main", "--object-format=sha256"],
+        );
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let head = stdout(&repo, &["rev-parse", "HEAD"]);
+
+        let dest = tmp.path().join("clone");
+        clone_at(&repo, &head, Some("main"), &dest).unwrap();
+
+        assert_eq!(stdout(&dest, &["rev-parse", "HEAD"]), head);
     }
 }
