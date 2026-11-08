@@ -5,9 +5,13 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use lore_core::paths::ARCHIVE_DB_FILENAME;
-use lore_ipc::{AgentsReadDto, LessonDto, NoteDto, ProposalDto, ReadNoteDto, ReceiptDto};
+use lore_ipc::{
+    AgentsReadDto, DroppedRuleDto, EnforceRuleDto, LessonDto, NoteDto, ProposalDto, ReadNoteDto,
+    ReceiptDto,
+};
+use lore_memory::enforce::{Enforcement, Rules};
 use lore_memory::mine::{self, Candidate, Lesson, Limits};
-use lore_memory::note::Note;
+use lore_memory::note::{Note, Relation};
 use lore_memory::session_start::{self, CHAR_CAP, NOTE_CAP};
 use lore_memory::vault::{self, Vault, VaultError};
 use lore_memory::{filing, inbox, index, review};
@@ -174,11 +178,47 @@ pub async fn reject_proposal(id: String, reason: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn rule_dto(rule: &Enforcement) -> EnforceRuleDto {
+    EnforceRuleDto {
+        tool: rule.tool.as_str().to_owned(),
+        pattern: rule.pattern.as_str().to_owned(),
+        unless: rule.unless.as_ref().map(|u| u.as_str().to_owned()),
+    }
+}
+
+/// The rules the active note `id` enforces now.
+fn rules_of(rules: &Rules, id: &str) -> Vec<EnforceRuleDto> {
+    rules
+        .rules
+        .iter()
+        .filter(|r| r.id.as_str() == id)
+        .map(|r| rule_dto(&r.enforcement))
+        .collect()
+}
+
 fn proposals(vault: &Vault, conn: &Connection) -> Result<Vec<ProposalDto>, review::ReviewError> {
-    Ok(review::inbox(vault)?
-        .proposals
+    let pending = review::inbox(vault)?.proposals;
+    // The vault's rules are only read when an update could change some.
+    let rules = if pending
+        .iter()
+        .any(|p| matches!(p.relation, Some(Relation::Updates(_))))
+    {
+        Rules::load(vault)?
+    } else {
+        Rules::default()
+    };
+    Ok(pending
         .into_iter()
         .map(|p| ProposalDto {
+            updates: match &p.relation {
+                Some(Relation::Updates(target)) => Some(target.as_str().to_owned()),
+                _ => None,
+            },
+            target_enforce: match &p.relation {
+                Some(Relation::Updates(target)) => rules_of(&rules, target.as_str()),
+                _ => Vec::new(),
+            },
+            enforce: p.enforce.iter().map(rule_dto).collect(),
             repo_name: session_repo(conn, p.session.as_str()),
             id: p.id.as_str().to_owned(),
             title: p.title,
@@ -199,6 +239,7 @@ fn open_vault() -> Option<Vault> {
 
 fn notes(vault: &Vault, conn: &Connection) -> Result<Vec<NoteDto>, VaultError> {
     let hits = vault.index()?.list_every_active()?;
+    let rules = Rules::load(vault)?;
     // A scope is one repository, so the first note that names it names all.
     let mut names: HashMap<String, String> = HashMap::new();
     Ok(hits
@@ -215,6 +256,16 @@ fn notes(vault: &Vault, conn: &Connection) -> Result<Vec<NoteDto>, VaultError> {
                 None
             };
             NoteDto {
+                enforce: rules_of(&rules, &h.id),
+                dropped_rules: rules
+                    .dropped
+                    .iter()
+                    .filter(|d| d.id.as_str() == h.id)
+                    .map(|d| DroppedRuleDto {
+                        written: d.error.written(),
+                        error: d.error.to_string(),
+                    })
+                    .collect(),
                 id: h.id,
                 path: h.path,
                 title: h.title,
@@ -594,6 +645,59 @@ pub(crate) mod tests {
             .id
             .as_str()
             .to_owned()
+    }
+
+    #[test]
+    fn rules_reach_the_app_on_notes_and_update_proposals() {
+        use lore_memory::note::{NoteId, Relation};
+        let dir = tempfile::tempdir().unwrap();
+        let conn = archive(dir.path(), &[&[("user", "hello")]]);
+        let session = session_id(&conn, 1);
+        let (vault, _) = Vault::init(&dir.path().join("vault")).unwrap();
+        let (added, _) = vault
+            .add(
+                "---\ntype: pitfall\ntitle: Do not frobnicate everything\nenforce:\n  - tool: bash\n    pattern: 'frobnicate --all'\n    unless: '--dry-run'\n  - tool: bash\n    pattern: '('\n---\nOne widget at a time.\n",
+            )
+            .unwrap();
+        let target = added.id.as_str().to_owned();
+
+        let listed = notes(&vault, &conn).unwrap();
+        let rule = EnforceRuleDto {
+            tool: "bash".to_owned(),
+            pattern: "frobnicate --all".to_owned(),
+            unless: Some("--dry-run".to_owned()),
+        };
+        assert_eq!(listed[0].enforce, std::slice::from_ref(&rule));
+        assert_eq!(listed[0].dropped_rules.len(), 1);
+        assert_eq!(
+            listed[0].dropped_rules[0].written,
+            "tool: bash\npattern: '('"
+        );
+        assert!(
+            listed[0].dropped_rules[0]
+                .error
+                .contains("enforce[1].pattern"),
+            "{:?}",
+            listed[0].dropped_rules
+        );
+
+        let mut update = agent_proposal(
+            "01JD0000000000000000000021",
+            &session,
+            "Do not frobnicate anything",
+        );
+        update.relation = Some(Relation::Updates(NoteId::parse(&target).unwrap()));
+        update.enforce = vec![
+            Enforcement::parse("bash", "frobnicate --all", Some("--dry-run")).unwrap(),
+            Enforcement::parse("path", "^widgets/", None).unwrap(),
+        ];
+        lore_memory::inbox::propose(&vault, update).unwrap();
+        let filed = proposals(&vault, &conn).unwrap();
+        assert_eq!(filed[0].updates.as_deref(), Some(target.as_str()));
+        assert_eq!(filed[0].target_enforce, std::slice::from_ref(&rule));
+        assert_eq!(filed[0].enforce.len(), 2);
+        assert_eq!(filed[0].enforce[1].tool, "path");
+        assert_eq!(filed[0].enforce[1].unless, None);
     }
 
     #[test]

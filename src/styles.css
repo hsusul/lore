@@ -1504,6 +1504,55 @@ textarea.mist-ed:focus {
   background: var(--mist-ac);
 }
 
+.mist-blocks {
+  margin-top: 32px;
+}
+
+.mist-blocks ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mist-blocks li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--mist-t2);
+}
+
+.mist-blocks code {
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--mist-well);
+  color: var(--mist-t1);
+  font: 400 12px / 1.6 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mist-blocks .gone code {
+  color: var(--mist-t2);
+  text-decoration: line-through;
+}
+
+.mist-tag {
+  color: var(--mist-ac);
+}
+
+.mist-blocks .gone .mist-tag {
+  color: var(--mist-t2);
+}
+
+.mist-err {
+  flex-basis: 100%;
+}
+
 .mist-acts {
   display: flex;
   align-items: center;

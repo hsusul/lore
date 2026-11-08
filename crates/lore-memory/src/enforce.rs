@@ -162,6 +162,15 @@ pub struct RuleError {
     pub(crate) written: String,
 }
 
+impl RuleError {
+    /// The rule as written, one line per key, without its list indentation.
+    #[must_use]
+    pub fn written(&self) -> String {
+        let lines: Vec<&str> = self.written.lines().map(str::trim).collect();
+        lines.join("\n")
+    }
+}
+
 impl fmt::Display for RuleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.error)

@@ -31,6 +31,8 @@ import type { AutoLessonsDto } from "../crates/lore-ipc/bindings/AutoLessonsDto"
 import type { LessonDto } from "../crates/lore-ipc/bindings/LessonDto";
 import type { ReceiptDto } from "../crates/lore-ipc/bindings/ReceiptDto";
 import type { NoteDto } from "../crates/lore-ipc/bindings/NoteDto";
+import type { EnforceRuleDto } from "../crates/lore-ipc/bindings/EnforceRuleDto";
+import type { DroppedRuleDto } from "../crates/lore-ipc/bindings/DroppedRuleDto";
 import type { ProposalDto } from "../crates/lore-ipc/bindings/ProposalDto";
 import type { ReadNoteDto } from "../crates/lore-ipc/bindings/ReadNoteDto";
 import type { AgentsReadDto } from "../crates/lore-ipc/bindings/AgentsReadDto";
@@ -115,6 +117,8 @@ export type {
   LessonDto,
   ReceiptDto,
   NoteDto,
+  EnforceRuleDto,
+  DroppedRuleDto,
   ProposalDto,
   ReadNoteDto,
   AgentsReadDto,

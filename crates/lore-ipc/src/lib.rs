@@ -391,6 +391,33 @@ pub struct NoteDto {
     /// For a repo-scoped note, the repository's name in the archive, from the
     /// sessions it was learned in; `None` when none of them is linked to one.
     pub repo_name: Option<String>,
+    /// The rules `lorectl hook pre-tool` denies matching tool calls with.
+    pub enforce: Vec<EnforceRuleDto>,
+    /// The note's rules that did not parse, so they block nothing.
+    pub dropped_rules: Vec<DroppedRuleDto>,
+}
+
+/// An `enforce` rule: deny a tool call when `pattern` matches the part of it
+/// `tool` names, unless `unless` matches that same text. Element of
+/// [`NoteDto::enforce`] and [`ProposalDto::enforce`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct EnforceRuleDto {
+    /// `bash`, `write`, or `path`.
+    pub tool: String,
+    pub pattern: String,
+    pub unless: Option<String>,
+}
+
+/// An `enforce` rule on a note that did not parse. Element of
+/// [`NoteDto::dropped_rules`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DroppedRuleDto {
+    /// The rule as written in the note, one line per key.
+    pub written: String,
+    /// What is wrong, naming the field, as in `enforce[0].pattern`.
+    pub error: String,
 }
 
 /// A lesson an agent wrote and filed for review: a proposal in the vault's
@@ -414,6 +441,13 @@ pub struct ProposalDto {
     /// Epoch milliseconds.
     #[ts(type = "number")]
     pub proposed_ms: i64,
+    /// The rules the note would enforce once accepted. An update with rules
+    /// replaces the target note's; one without leaves them.
+    pub enforce: Vec<EnforceRuleDto>,
+    /// For `relation: updates`, the id of the note it rewrites.
+    pub updates: Option<String>,
+    /// For an update, the rules the target note enforces now.
+    pub target_enforce: Vec<EnforceRuleDto>,
 }
 
 /// An agent that can write lessons from the app. Element of the payload of
@@ -706,6 +740,60 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<RepositorySummary>(&repo_json).unwrap(),
             repo
+        );
+    }
+
+    #[test]
+    fn enforce_rules_round_trip_on_notes_and_proposals() {
+        let rule = EnforceRuleDto {
+            tool: "bash".into(),
+            pattern: r"\bfrobnicate --all\b".into(),
+            unless: Some("--dry-run".into()),
+        };
+        let note = NoteDto {
+            id: "N1".into(),
+            path: "global/no-frobnicate.md".into(),
+            title: "Do not frobnicate everything".into(),
+            scope: "global".into(),
+            note_type: "pitfall".into(),
+            excerpt: "Frobnicate one widget at a time.".into(),
+            repo_name: None,
+            enforce: vec![rule.clone()],
+            dropped_rules: vec![DroppedRuleDto {
+                written: "tool: bash\npattern: (".into(),
+                error: "`enforce[1].pattern`: `(` is not a valid regex".into(),
+            }],
+        };
+        let json = serde_json::to_value(&note).unwrap();
+        assert_eq!(json["enforce"][0]["unless"], "--dry-run");
+        assert_eq!(serde_json::from_value::<NoteDto>(json).unwrap(), note);
+
+        let proposal = ProposalDto {
+            id: "P1".into(),
+            title: "Never frobnicate everything".into(),
+            body: "It frobnicated prod.\n".into(),
+            scope: "global".into(),
+            note_type: "pitfall".into(),
+            agent_id: "codex".into(),
+            session_id: "s1".into(),
+            repo_name: None,
+            proposed_ms: 1_700_000_000_000,
+            enforce: vec![
+                rule.clone(),
+                EnforceRuleDto {
+                    tool: "path".into(),
+                    pattern: r"^widgets/".into(),
+                    unless: None,
+                },
+            ],
+            updates: Some("N1".into()),
+            target_enforce: vec![rule],
+        };
+        let json = serde_json::to_value(&proposal).unwrap();
+        assert!(json["enforce"][1]["unless"].is_null());
+        assert_eq!(
+            serde_json::from_value::<ProposalDto>(json).unwrap(),
+            proposal
         );
     }
 }

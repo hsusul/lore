@@ -532,7 +532,17 @@ export function createMockHandlers(
       const path = `${folder}/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`;
       notes = [
         ...notes,
-        { id: proposal.id, path, title, scope: proposal.scope, note_type: proposal.note_type, excerpt: "", repo_name: proposal.repo_name },
+        {
+          id: proposal.id,
+          path,
+          title,
+          scope: proposal.scope,
+          note_type: proposal.note_type,
+          excerpt: "",
+          repo_name: proposal.repo_name,
+          enforce: proposal.enforce,
+          dropped_rules: [],
+        },
       ];
       return path;
     },

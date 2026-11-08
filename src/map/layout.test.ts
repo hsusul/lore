@@ -15,6 +15,9 @@ const lesson = (id: string, repo: string | null, n = 1): ProposalDto => ({
   session_id: "s0",
   repo_name: repo,
   proposed_ms: 0,
+  enforce: [],
+  updates: null,
+  target_enforce: [],
 });
 
 const note = (
@@ -29,6 +32,8 @@ const note = (
   note_type: "fact",
   excerpt: "",
   repo_name,
+  enforce: [],
+  dropped_rules: [],
 });
 
 describe("areasOf", () => {
