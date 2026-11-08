@@ -397,8 +397,9 @@ fn session_start_labels_a_note_whose_anchored_lines_changed() {
     assert_eq!(
         stdout(&out),
         "Lore memory for this repo:\n\
-         - [unanchored] Migrations are global (01JD0000000000000000000003)\n\
-         - [changed] Retry the migration (01JD0000000000000000000001)\n"
+         - [changed] Retry the migration (01JD0000000000000000000001)\n\
+         Lore memory for all repos:\n\
+         - [unanchored] Migrations are global (01JD0000000000000000000003)\n"
     );
 }
 
@@ -419,7 +420,7 @@ fn session_start_shows_ten_notes_and_says_how_many_it_left_out() {
     // No hook JSON at all, so the process directory is the repository.
     let out = session_start(&repo, home.path(), &vault, "");
     assert_eq!(code(&out), 0);
-    let mut expected = String::from("Lore memory for this repo:\n");
+    let mut expected = String::from("Lore memory for all repos:\n");
     for i in 1..=10 {
         expected.push_str(&format!(
             "- [unanchored] Note {i:02} (01JD{:022})\n",
@@ -635,7 +636,7 @@ fn session_start_names_the_archived_session_from_stdin() {
         assert_eq!(
             stdout(&out),
             format!(
-                "Lore memory for this repo:\n\
+                "Lore memory for all repos:\n\
                  - [unanchored] Migrations are global (01JD0000000000000000000003)\n\
                  Lore session: {archive_id}\n"
             ),
@@ -666,7 +667,7 @@ fn session_start_says_nothing_of_a_session_the_archive_lacks() {
     assert_eq!(code(&out), 0);
     assert_eq!(
         stdout(&out),
-        "Lore memory for this repo:\n\
+        "Lore memory for all repos:\n\
          - [unanchored] Migrations are global (01JD0000000000000000000003)\n"
     );
 }
