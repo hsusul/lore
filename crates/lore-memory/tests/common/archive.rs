@@ -98,6 +98,16 @@ pub fn claude_archive(dir: &Path, sessions: &[(&str, &[Turn<'_>])]) -> Connectio
     ingest(dir, "claude-code", dir.join("claude/projects"))
 }
 
+/// One Claude Code transcript `sid` written line for line from `lines`,
+/// ingested into an in-memory archive.
+pub fn claude_raw_archive(dir: &Path, sid: &str, lines: &[serde_json::Value]) -> Connection {
+    let project = dir.join("claude/projects/-repo-app");
+    std::fs::create_dir_all(&project).unwrap();
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(project.join(format!("{sid}.jsonl")), body).unwrap();
+    ingest(dir, "claude-code", dir.join("claude/projects"))
+}
+
 /// The archive id of the Claude Code session `uuid`.
 pub fn claude_session_id(conn: &Connection, uuid: &str) -> String {
     conn.query_row(

@@ -7,7 +7,7 @@
 //! tolerant: an unparseable or truncated line degrades the session to
 //! `partial` with a bounded, content-free note — never a panic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -84,6 +84,8 @@ fn parse_from(
         archived,
         earlier_results: Vec::new(),
     };
+    // Queued messages already stored, so a delivery recorded twice is one turn.
+    let mut delivered: HashSet<String> = HashSet::new();
 
     for line in content.split_inclusive('\n') {
         let line_start = offset;
@@ -144,7 +146,18 @@ fn parse_from(
             }
         }
 
-        let msg = build_message(&obj, event_type, seq, line_start, &mut session);
+        let queued = queued_prompt(&obj);
+        if let Some((key, _)) = &queued {
+            if !delivered.insert(key.clone()) {
+                continue;
+            }
+        }
+        let mut msg = build_message(&obj, event_type, seq, line_start, &mut session);
+        if let Some((_, prompt)) = queued {
+            msg.role = Role::User;
+            msg.event_kind = EventKind::Message;
+            msg.parts = parts_from_content(prompt, &mut session);
+        }
         extract_tool_calls(&obj, seq, &mut session, &mut calls);
         contexts.push((str_field(&obj, "cwd"), str_field(&obj, "gitBranch")));
         if let Some(ts) = msg.ts {
@@ -169,6 +182,45 @@ fn parse_from(
         restates_session: false,
     };
     finish_parse(from, session, end, archived)
+}
+
+/// What the person typed while Claude was busy, and a key naming its delivery.
+///
+/// Claude Code queues such a message (`queue-operation` `enqueue`, whose
+/// `content` is a bookkeeping copy) and, when it hands the message to the model
+/// mid-turn, writes an `attachment` of type `queued_command` whose `prompt` is
+/// the typed text, a string or content blocks (text and images). Only a
+/// `human` origin is the person: `peer`, `coordinator` and task-notification
+/// prompts are agents' messages wrapped in tags.
+fn queued_prompt(obj: &Value) -> Option<(String, &Value)> {
+    let a = obj.get("attachment")?;
+    if str_field(a, "type").as_deref() != Some("queued_command")
+        || a.get("origin")
+            .and_then(|o| o.get("kind"))
+            .and_then(Value::as_str)
+            != Some("human")
+        || !matches!(
+            str_field(a, "commandMode").as_deref(),
+            None | Some("prompt")
+        )
+    {
+        return None;
+    }
+    let prompt = a.get("prompt")?;
+    let typed = match prompt {
+        Value::String(s) => !s.trim().is_empty(),
+        Value::Array(blocks) => !blocks.is_empty(),
+        _ => false,
+    };
+    if !typed {
+        return None;
+    }
+    let key = ["delivery_id", "source_uuid"]
+        .iter()
+        .find_map(|k| str_field(a, k))
+        .or_else(|| str_field(obj, "uuid"))
+        .unwrap_or_else(|| prompt.to_string());
+    Some((key, prompt))
 }
 
 /// The session id a transcript's file name gives it. Ingest replaces a session
@@ -1425,6 +1477,111 @@ mod tests {
         let session = adapter.parse_str(jsonl, "s_ignore");
         assert_eq!(session.status, crate::model::ParseStatus::Ok);
         assert_eq!(session.messages.len(), 1);
+    }
+
+    /// A message typed while Claude was busy, as Claude Code 2.x records it:
+    /// enqueued, delivered mid-turn as a `queued_command` attachment after a
+    /// tool result, then removed from the queue.
+    fn queued_transcript(prompt: &serde_json::Value, origin: &str) -> String {
+        let lines = [
+            serde_json::json!({"type": "user", "uuid": "u1", "sessionId": "s_q",
+                "timestamp": "2026-08-01T10:00:00.000Z",
+                "message": {"role": "user", "content": "tidy the build scripts"}}),
+            serde_json::json!({"type": "assistant", "uuid": "a1", "parentUuid": "u1",
+                "sessionId": "s_q", "timestamp": "2026-08-01T10:00:01.000Z",
+                "message": {"role": "assistant", "content": [{"type": "tool_use",
+                    "id": "toolu_q1", "name": "Bash", "input": {"command": "ls"}}]}}),
+            serde_json::json!({"type": "queue-operation", "operation": "enqueue",
+                "timestamp": "2026-08-01T10:00:02.000Z", "sessionId": "s_q",
+                "content": prompt}),
+            serde_json::json!({"type": "user", "uuid": "r1", "parentUuid": "a1",
+                "sessionId": "s_q", "timestamp": "2026-08-01T10:00:03.000Z",
+                "message": {"role": "user", "content": [{"type": "tool_result",
+                    "tool_use_id": "toolu_q1", "content": "Makefile"}]}}),
+            serde_json::json!({"type": "attachment", "uuid": "q1", "parentUuid": "r1",
+                "sessionId": "s_q", "timestamp": "2026-08-01T10:00:02.000Z",
+                "attachment": {"type": "queued_command", "prompt": prompt,
+                    "source_uuid": "11111111-0000-4000-8000-000000000001",
+                    "delivery_id": "22222222-0000-4000-8000-000000000002",
+                    "commandMode": "prompt", "origin": {"kind": origin},
+                    "timestamp": "2026-08-01T10:00:02.000Z", "humanTurn": true},
+                "rendered": [{"content": "<system-reminder>The user sent a new message</system-reminder>"}],
+                "renderedRole": "system"}),
+            serde_json::json!({"type": "queue-operation", "operation": "remove",
+                "timestamp": "2026-08-01T10:00:04.000Z", "sessionId": "s_q",
+                "content": prompt, "reason": "absorbed_mid_turn"}),
+        ];
+        lines.iter().map(|l| format!("{l}\n")).collect()
+    }
+
+    fn user_texts(session: &ParsedSession) -> Vec<String> {
+        session
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::User)
+            .flat_map(|m| m.parts.iter().filter_map(|p| p.text.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_queued_message_is_one_user_turn_with_its_text() {
+        let typed = serde_json::json!("leave the vendored scripts alone, revert that");
+        let session =
+            ClaudeCodeAdapter::new().parse_str(&queued_transcript(&typed, "human"), "s_q");
+        assert_eq!(session.status, crate::model::ParseStatus::Ok);
+        // The prompt, the tool call, its result, then the queued message.
+        assert_eq!(session.messages.len(), 4);
+        let m = &session.messages[3];
+        assert_eq!(m.role, Role::User);
+        assert_eq!(m.event_kind, EventKind::Message);
+        assert_eq!(m.ts, epoch_ms("2026-08-01T10:00:02.000Z"));
+        assert_eq!(m.parts.len(), 1);
+        assert_eq!(m.parts[0].kind, PartKind::Text);
+        assert!(m.parts[0].searchable);
+
+        let texts = user_texts(&session);
+        let hits = texts
+            .iter()
+            .filter(|t| t.contains("vendored scripts"))
+            .count();
+        assert_eq!(hits, 1, "the enqueue and remove copies are not turns");
+    }
+
+    #[test]
+    fn a_queued_message_recorded_twice_is_one_turn() {
+        let typed = serde_json::json!("stop, use the staging bucket");
+        let body = queued_transcript(&typed, "human");
+        let attachment = body.lines().nth(4).unwrap_or_default();
+        let echoed = format!("{body}{attachment}\n");
+        let session = ClaudeCodeAdapter::new().parse_str(&echoed, "s_q");
+        let hits = user_texts(&session)
+            .iter()
+            .filter(|t| t.contains("staging bucket"))
+            .count();
+        assert_eq!(hits, 1);
+    }
+
+    #[test]
+    fn a_queued_message_with_an_image_keeps_both_parts() {
+        let typed = serde_json::json!([
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBO"}},
+            {"type": "text", "text": "this button is wrong"}
+        ]);
+        let session =
+            ClaudeCodeAdapter::new().parse_str(&queued_transcript(&typed, "human"), "s_q");
+        let kinds: Vec<PartKind> = session.messages[3].parts.iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, [PartKind::Attachment, PartKind::Text]);
+    }
+
+    #[test]
+    fn an_agents_queued_message_stays_an_attachment() {
+        for origin in ["peer", "coordinator", "task-notification"] {
+            let typed = serde_json::json!("<teammate-message>done</teammate-message>");
+            let session =
+                ClaudeCodeAdapter::new().parse_str(&queued_transcript(&typed, origin), "s_q");
+            assert!(!user_texts(&session).iter().any(|t| t.contains("teammate")));
+            assert_eq!(session.messages[3].event_kind, EventKind::Attachment);
+        }
     }
 
     #[test]
