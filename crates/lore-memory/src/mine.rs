@@ -7,7 +7,9 @@
 //! Y", "I told you"), or a user turn that repeats an instruction the person
 //! already gave earlier in the same session. A question is neither unless it
 //! insists ("why do you always ...", "... i dont want that?"), and nor is a
-//! turn that starts by invoking a skill or a slash command. [`lessons`] groups candidates
+//! turn that starts by invoking a skill or a slash command, though the words
+//! typed after a Claude Code command are read as a turn of their own.
+//! [`lessons`] groups candidates
 //! that say the same thing across sessions. It writes nothing.
 
 use std::collections::BTreeSet;
@@ -273,6 +275,9 @@ pub(crate) struct Invoked {
     pub(crate) seq: i64,
     pub(crate) at_ms: Option<i64>,
     pub(crate) name: String,
+    /// Whether the person typed words after the command, which the turn's
+    /// text then holds: see [`command_args`].
+    pub(crate) typed: bool,
 }
 
 /// Every user and assistant turn in the archive, read once so the miner's
@@ -335,8 +340,7 @@ pub(crate) fn corrections_at(turns: &Turns, limits: &Limits) -> Vec<(usize, Cand
         let text = one_line(&turn.text);
         let words = content_words(&text);
         let question = is_question(&text);
-        let signal = if text.starts_with('<')
-            || text.starts_with(REINVOKED)
+        let signal = if is_harness_text(&text)
             || text.chars().count() > limits.max_chars
             || (question && !insists(&text))
             || is_invocation(&text)
@@ -413,6 +417,7 @@ pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidat
         .map(|(i, _)| i)
         .collect();
     let invoked: BTreeSet<(&str, i64)> = (turns.1.iter())
+        .filter(|i| !i.typed)
         .map(|i| (i.session.as_str(), i.seq))
         .collect();
     let turns = &turns.0;
@@ -527,15 +532,17 @@ fn collect_turns(
     }
     let mut invoked = Vec::new();
     for turn in &mut turns {
+        let args = turn.user.then(|| command_args(&turn.text)).flatten();
         if let Some(name) = turn.user.then(|| invoked_name(&turn.text)).flatten() {
             invoked.push(Invoked {
                 session: turn.session.clone(),
                 seq: turn.seq,
                 at_ms: turn.at_ms,
                 name,
+                typed: args.is_some(),
             });
         }
-        turn.text = strip_harness(&turn.text);
+        turn.text = args.unwrap_or_else(|| strip_harness(&turn.text));
     }
     turns.retain(|t| !t.text.trim().is_empty());
     Ok(Turns(turns, invoked))
@@ -575,6 +582,22 @@ fn strip_harness(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// The words the person typed after a slash command or skill in Claude Code,
+/// which stores `/name some words` as a `<command-message>` echo, a
+/// `<command-name>`, and the words in `<command-args>`. Only those words are
+/// the person's: the echo, the name, and anything the harness put in the
+/// same turn after them, such as a loaded skill's text, are not. `None` when
+/// the turn is not a command or the command had no words after it.
+fn command_args(raw: &str) -> Option<String> {
+    if !raw.contains("<command-name>") {
+        return None;
+    }
+    let (_, after) = raw.split_once("<command-args>")?;
+    let (args, _) = after.split_once("</command-args>")?;
+    let args = args.trim();
+    (!args.is_empty()).then(|| args.to_owned())
 }
 
 fn find_close_tag(haystack: &str, name: &str) -> Option<usize> {
