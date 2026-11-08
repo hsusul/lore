@@ -9,6 +9,13 @@
 //! The replay covers every archived call, whatever repository it ran in, so a
 //! repository's rule may count calls the hook would never have seen there.
 //! Tool inputs the archive keeps in a blob are not read.
+//!
+//! A `write` rule matches the lines a call adds, as in the hook: an `Edit`'s
+//! lines of `new_string` not in `old_string`, an `apply_patch`'s `+` lines.
+//! The archive does not keep the file an archived `Write` replaced, and the
+//! file on disk today is not what it was then, so every line of a `Write`'s
+//! content counts as added: the replay may count a rewrite the hook allows,
+//! never miss one it denies.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

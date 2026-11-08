@@ -1225,6 +1225,56 @@ fn pre_tool_denies_what_a_patch_or_a_write_adds() {
 }
 
 #[test]
+fn a_write_rule_matches_only_the_lines_a_call_adds() {
+    let (home, vault, repo) = memory_home();
+    add_notes(home.path(), &vault, &repo, &[NO_TODO_MARKERS]);
+    std::fs::write(repo.join("src/old.rs"), "fn a() {}\n// XXX(kept) fixture\n").unwrap();
+    let run = |tool: &str, input: serde_json::Value| {
+        let out = hook(
+            "pre-tool",
+            &repo,
+            home.path(),
+            &vault,
+            &tool_json(&repo, tool, input),
+        );
+        assert_eq!(code(&out), 0);
+        deny_reason(&out)
+    };
+
+    // Rewriting a file that already holds the line is allowed, whether the
+    // path is absolute or relative to the hook's cwd.
+    let rewrite = "fn a() {}\nfn b() {}\n// XXX(kept) fixture\n";
+    for path in [repo.join("src/old.rs"), PathBuf::from("src/old.rs")] {
+        let input = serde_json::json!({ "file_path": path, "content": rewrite });
+        assert_eq!(run("Write", input), None);
+    }
+    // Adding a new matching line to it is denied.
+    let adding = format!("{rewrite}// XXX(new)\n");
+    let input = serde_json::json!({ "file_path": "src/old.rs", "content": adding });
+    assert!(run("Write", input).is_some());
+    // A new file holding the line is denied: every line of it is added.
+    let input = serde_json::json!({ "file_path": repo.join("src/new.rs"), "content": rewrite });
+    assert!(run("Write", input).is_some());
+
+    // An Edit that keeps a line of its old_string is allowed; one that adds
+    // the line is denied. A MultiEdit is read edit by edit.
+    let keep = serde_json::json!({ "file_path": "src/old.rs",
+        "old_string": "// XXX(kept) fixture", "new_string": "fn c() {}\n// XXX(kept) fixture" });
+    assert_eq!(run("Edit", keep.clone()), None);
+    let add = serde_json::json!({ "file_path": "src/old.rs",
+        "old_string": "fn a() {}", "new_string": "fn a() {}\n// XXX(kept) fixture" });
+    assert!(run("Edit", add.clone()).is_some());
+    let multi = |edits: serde_json::Value| {
+        run(
+            "MultiEdit",
+            serde_json::json!({ "file_path": "src/old.rs", "edits": edits }),
+        )
+    };
+    assert_eq!(multi(serde_json::json!([keep.clone(), keep.clone()])), None);
+    assert!(multi(serde_json::json!([keep, add])).is_some());
+}
+
+#[test]
 fn pre_tool_shows_anchored_notes_when_no_rule_matches() {
     let (home, vault, repo) = memory_home();
     add_notes(home.path(), &vault, &repo, &[RETRY, NO_TODO_MARKERS]);
