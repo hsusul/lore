@@ -47,6 +47,9 @@ rusqlite = "0.32"
 time = "0.3"
 # `connect` reads Codex's config.toml. Already in the graph at this version.
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+# `connect` checks a Codex hook's approval, which Codex keys by a SHA-256 of
+# the hook. Already in the graph at this version; hashing only, no IO.
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

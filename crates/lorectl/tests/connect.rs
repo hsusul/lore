@@ -232,9 +232,10 @@ fn the_printed_snippets_connect_once_pasted() {
             "  Tool hook     connected (<tmp>/claude/settings.json, hooks.PreToolUse)",
             "Codex  <tmp>/codex",
             "  MCP server    connected (<tmp>/codex/config.toml, mcp_servers.lore)",
-            "  Session hook  connected (<tmp>/codex/config.toml, hooks.SessionStart)",
-            "  Prompt hook   connected (<tmp>/codex/config.toml, hooks.UserPromptSubmit)",
-            "  Tool hook     connected (<tmp>/codex/config.toml, hooks.PreToolUse)",
+            // Pasted but not yet approved in Codex, which skips it until then.
+            "  Session hook  configured but not approved (Codex skips it; <tmp>/codex/config.toml, hooks.SessionStart)",
+            "  Prompt hook   configured but not approved (Codex skips it; <tmp>/codex/config.toml, hooks.UserPromptSubmit)",
+            "  Tool hook     configured but not approved (Codex skips it; <tmp>/codex/config.toml, hooks.PreToolUse)",
         ]
     );
 }
@@ -293,12 +294,38 @@ fn claude_code_project_mcp_servers_count_too() {
 }
 
 #[test]
-fn codex_connected_through_config_toml() {
+fn codex_connected_through_config_toml_once_approved() {
     let tmp = tempfile::tempdir().unwrap();
     fs::create_dir_all(tmp.path().join("codex")).unwrap();
+    let config = tmp.path().join("codex/config.toml");
+    // Codex's own approvals for these three hooks: the hashes it records,
+    // computed independently of lorectl (and checked against real Codex
+    // approvals) by the scheme in `codex_hook_hash`.
+    let approvals = [
+        (
+            "session_start",
+            "ddf274727b327e42383cf897feaede99e2d5eafe353a82873fe293759a795852",
+        ),
+        (
+            "user_prompt_submit",
+            "972630c620ab59207c40254e0a8bad0280d6aaf5e60c5b984d8ea538c92ded08",
+        ),
+        (
+            "pre_tool_use",
+            "da7d8020b5cef74096679d984b0d22e605fdd6140bb99d0a65f569211696237e",
+        ),
+    ]
+    .map(|(event, hash)| {
+        format!(
+            "[hooks.state.\"{}:{event}:0:0\"]\ntrusted_hash = \"sha256:{hash}\"\n\n",
+            config.display()
+        )
+    })
+    .concat();
     fs::write(
-        tmp.path().join("codex/config.toml"),
-        "\
+        &config,
+        approvals
+            + "\
 [mcp_servers.other]
 command = \"node\"
 
@@ -365,7 +392,7 @@ fn a_pre_edit_hook_is_reported_as_outdated() {
 }
 
 #[test]
-fn a_codex_hooks_json_counts_as_connected() {
+fn a_codex_hooks_json_without_approval_is_not_connected() {
     let tmp = tempfile::tempdir().unwrap();
     fs::create_dir_all(tmp.path().join("codex")).unwrap();
     fs::write(
@@ -375,8 +402,76 @@ fn a_codex_hooks_json_counts_as_connected() {
     .unwrap();
     let out = connect(tmp.path(), |_| {});
     assert!(
-        out.contains("  Session hook  connected (<tmp>/codex/hooks.json, hooks.SessionStart)\n"),
+        out.contains("  Session hook  configured but not approved (Codex skips it; <tmp>/codex/hooks.json, hooks.SessionStart)\n"),
         "{out}"
+    );
+    assert!(out.contains(CODEX_APPROVE_FIX), "{out}");
+}
+
+const CODEX_APPROVE_FIX: &str = "
+To connect Codex's session hook, approve it in Codex: start `codex` in a terminal and, at \"Hooks need review\", choose \"Trust all and continue\" (or \"Review hooks\" to trust each one); in a running session, open `/hooks`. Codex records the approval in <tmp>/codex/config.toml; lorectl never writes it.
+";
+
+/// The hashes Codex records for the two hooks in
+/// [`codex_session_hook_line`], computed independently of lorectl.
+const OTHER_HASH: &str = "4d94f384be3cc0ea88ea38fb55a3f90184a7803dd3d96bf04f4e7f43df4fe111";
+const LORE_HASH: &str = "7bbb39e07ddb4f9a42712b3bf26f5bafac476e185201cac2df0b5a7ddbe68e68";
+
+/// Codex's session hook line, for a `hooks.json` with another tool's session
+/// hook at index 0 and Lore's at index 1, and a `config.toml` holding
+/// `approvals` as (`<group>:<handler>`, hash).
+fn codex_session_hook_line(tmp: &Path, approvals: &[(&str, &str)]) -> String {
+    fs::create_dir_all(tmp.join("codex")).unwrap();
+    let hooks = tmp.join("codex/hooks.json");
+    fs::write(
+        &hooks,
+        r#"{"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": "other-tool session-start", "timeout": 2}]},
+            {"hooks": [{"type": "command", "command": "lorectl hook session-start", "timeout": 10}]}
+        ]}}"#,
+    )
+    .unwrap();
+    let config: String = approvals
+        .iter()
+        .map(|(index, hash)| {
+            format!(
+                "[hooks.state.\"{}:session_start:{index}\"]\ntrusted_hash = \"sha256:{hash}\"\n",
+                hooks.display()
+            )
+        })
+        .collect();
+    fs::write(tmp.join("codex/config.toml"), config).unwrap();
+    let out = connect(tmp, |_| {});
+    let codex = out.split("\nCodex  ").nth(1).unwrap();
+    let line = codex
+        .lines()
+        .find(|line| line.starts_with("  Session hook"));
+    line.unwrap().to_string()
+}
+
+#[test]
+fn another_tools_approval_at_index_0_does_not_approve_lores_hook_at_index_1() {
+    let tmp = tempfile::tempdir().unwrap();
+    let line = codex_session_hook_line(tmp.path(), &[("0:0", OTHER_HASH)]);
+    assert_eq!(
+        line,
+        "  Session hook  configured but not approved (Codex skips it; <tmp>/codex/hooks.json, hooks.SessionStart)"
+    );
+    // Nor does the other hook's hash recorded at Lore's index.
+    let line = codex_session_hook_line(tmp.path(), &[("0:0", OTHER_HASH), ("1:0", OTHER_HASH)]);
+    assert_eq!(
+        line,
+        "  Session hook  configured but not approved (changed since approved; Codex skips it; <tmp>/codex/hooks.json, hooks.SessionStart)"
+    );
+}
+
+#[test]
+fn a_matching_approval_at_lores_index_connects_the_codex_hook() {
+    let tmp = tempfile::tempdir().unwrap();
+    let line = codex_session_hook_line(tmp.path(), &[("0:0", OTHER_HASH), ("1:0", LORE_HASH)]);
+    assert_eq!(
+        line,
+        "  Session hook  connected (<tmp>/codex/hooks.json, hooks.SessionStart)"
     );
 }
 
