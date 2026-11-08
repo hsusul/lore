@@ -184,12 +184,18 @@ pub const REPLY_WINDOW_MS: i64 = 48 * 60 * 60 * 1000;
 const CONTINUED: &str = "This session is being continued";
 
 /// How user turns open that the harness wrote, not the person: an interrupt
-/// notice, the text of a skill being loaded, and a message relayed from
-/// another agent session. A lessons run would read each one and drop it.
+/// notice, the text of a skill being loaded, a message relayed from another
+/// agent session, and the notes the host app writes around a usage limit:
+/// one asking to carry on once it has reset, written in the first person,
+/// a bracketed grace-period notice, and a bracketed notice that the earlier
+/// ones no longer apply. A lessons run would read each one and drop it.
 const NOT_THE_PERSON: &[&str] = &[
     "[Request interrupted",
     "Base directory for this skill",
     "Another Claude session sent a message",
+    "I hit my usage limit while you were working",
+    "[Usage limit reached",
+    "[Earlier usage-limit notes",
 ];
 
 /// Whether a user turn is text the harness wrote, not the person: a
@@ -204,6 +210,18 @@ pub fn is_harness_text(text: &str) -> bool {
         || text.starts_with(CONTINUED)
         || NOT_THE_PERSON.iter().any(|p| text.starts_with(p))
         || is_bare_image(text)
+}
+
+/// The words the person wrote in `raw`, a user turn as the agent recorded
+/// or sent it, read as the miner reads a turn: the words after a slash
+/// command, or the text without harness blocks such as `<system-reminder>`
+/// or `<task-notification>`. `None` when nothing is left or what is left is
+/// harness text ([`is_harness_text`]).
+#[must_use]
+pub fn persons_words(raw: &str) -> Option<String> {
+    let text = command_args(raw).unwrap_or_else(|| strip_harness(raw));
+    let text = text.trim();
+    (!text.is_empty() && !is_harness_text(text)).then(|| text.to_owned())
 }
 
 /// A user turn that corrects the agent, with where it was said.

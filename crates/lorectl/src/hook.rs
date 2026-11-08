@@ -40,7 +40,12 @@
 //! words with the prompt (see [`PROMPT_NOTE_CAP`] for which) and prints them
 //! as the UserPromptSubmit `additionalContext` reply, so a lesson arrives
 //! next to the request it is about rather than far back at session start.
-//! A prompt with no content words, such as "yes", prints nothing.
+//! A prompt with no content words, such as "yes", prints nothing. Nor does
+//! a turn the host wrote rather than the person, such as a background task's
+//! `<task-notification>` or a usage-limit note: recall reads only the
+//! person's words, as the miner does (`lore_memory::mine::persons_words`),
+//! so a typed request with a notification block in it recalls on the typed
+//! words alone.
 //!
 //! `pre-edit` runs before a tool changes a file. It reads `tool_input.file_path`
 //! (or `notebook_path`) from the hook JSON, or for Codex's `apply_patch` every
@@ -82,6 +87,7 @@ use lore_core::landing;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::{query, storage};
 use lore_memory::enforce::{self, Rules, ToolCall};
+use lore_memory::mine;
 use lore_memory::note::RelPath;
 use lore_memory::recall;
 use lore_memory::repo::RepoContext;
@@ -286,10 +292,10 @@ fn memory_notes(cwd: Option<&Path>, session_id: Option<&str>) -> Option<String> 
 /// The notes that match what the person just sent and the session has not
 /// been shown, or `None` when there are none. See [`PROMPT_NOTE_CAP`].
 fn prompt_notes(input: &HookInput) -> Option<String> {
-    let prompt = input.prompt.as_deref()?;
+    let prompt = mine::persons_words(input.prompt.as_deref()?)?;
     let cwd = input.cwd.clone().or_else(|| std::env::current_dir().ok())?;
     let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
-    let found = recall::related(&vault, prompt, &cwd, PROMPT_CANDIDATES).ok()?;
+    let found = recall::related(&vault, &prompt, &cwd, PROMPT_CANDIDATES).ok()?;
     if found.notes.is_empty() {
         return None;
     }

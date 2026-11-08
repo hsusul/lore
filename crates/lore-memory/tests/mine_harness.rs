@@ -8,7 +8,9 @@
 #[path = "common/archive.rs"]
 mod archive;
 
-use lore_memory::mine::{corrections, find_conflicts, is_harness_text, lessons, read_turns};
+use lore_memory::mine::{
+    corrections, find_conflicts, is_harness_text, lessons, persons_words, read_turns,
+};
 
 #[test]
 fn is_harness_text_names_what_the_harness_wrote_in_a_user_turn() {
@@ -20,12 +22,91 @@ fn is_harness_text_names_what_the_harness_wrote_in_a_user_turn() {
         "(Re-invocation of /review)",
         "[Image #1] [Image #2]",
         "  <pasted-content>notes</pasted-content>",
+        "I hit my usage limit while you were working, carry on from there.",
+        "[Usage limit reached; wrap up the step you are on.]",
+        "[Earlier usage-limit notes are void. Keep going.]",
     ] {
         assert!(is_harness_text(text), "{text}");
     }
     for text in ["pin the schema version first", "[Image #1] like this", ""] {
         assert!(!is_harness_text(text), "{text}");
     }
+}
+
+#[test]
+fn persons_words_drops_what_the_host_wrote() {
+    for raw in [
+        "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n\
+         <summary>Agent finished</summary>\n</task-notification>",
+        "<system-reminder>a PR is open</system-reminder>\n  ",
+        "<local-command-stdout>ok</local-command-stdout>",
+        "I hit my usage limit while you were working, carry on from there.",
+        "",
+    ] {
+        assert_eq!(persons_words(raw), None, "{raw}");
+    }
+    assert_eq!(
+        persons_words(
+            "<task-notification><task-id>a1</task-id></task-notification>\n\
+             retry the migration"
+        )
+        .as_deref(),
+        Some("retry the migration")
+    );
+    assert_eq!(
+        persons_words("no, use pnpm not npm").as_deref(),
+        Some("no, use pnpm not npm")
+    );
+}
+
+#[test]
+fn a_usage_limit_note_is_not_mined() {
+    let dir = tempfile::tempdir().unwrap();
+    let ids: Vec<String> = (11..=13).map(sid).collect();
+    let note = "I hit my usage limit while you were working, but it is back now. \
+                Please continue where you stopped.";
+    let grace = "[Usage limit reached; a little time remains, so stop after this step.]";
+    let lifted = "[Earlier usage-limit notes no longer hold. Don't stop, carry on.]";
+    let conn = archive::claude_archive(
+        dir.path(),
+        &[
+            (
+                &ids[0],
+                &[
+                    ("user", "go", "2026-08-01T10:00:00.000Z"),
+                    ("assistant", "Working on it.", "2026-08-01T10:00:01.000Z"),
+                    ("user", note, "2026-08-01T10:00:02.000Z"),
+                    ("assistant", "Resuming.", "2026-08-01T10:00:03.000Z"),
+                    ("user", grace, "2026-08-01T10:00:04.000Z"),
+                    ("assistant", "Stopping here.", "2026-08-01T10:00:05.000Z"),
+                    ("user", lifted, "2026-08-01T10:00:06.000Z"),
+                ],
+            ),
+            (
+                &ids[1],
+                &[
+                    ("user", "go", "2026-08-02T10:00:00.000Z"),
+                    ("assistant", "Working on it.", "2026-08-02T10:00:01.000Z"),
+                    ("user", note, "2026-08-02T10:00:02.000Z"),
+                ],
+            ),
+            (
+                &ids[2],
+                &[
+                    ("user", "go", "2026-08-03T10:00:00.000Z"),
+                    (
+                        "assistant",
+                        "Running npm install.",
+                        "2026-08-03T10:00:01.000Z",
+                    ),
+                    ("user", "no, use pnpm not npm", "2026-08-03T10:00:02.000Z"),
+                ],
+            ),
+        ],
+    );
+    let found = corrections(&conn).unwrap();
+    let texts: Vec<&str> = found.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(texts, ["no, use pnpm not npm"]);
 }
 
 fn sid(n: u32) -> String {
