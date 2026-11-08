@@ -72,7 +72,11 @@ use crate::storage::{Result, StorageError};
 /// v15: Codex `developer` messages and user-role messages that are only
 /// injected context (AGENTS.md, `<environment_context>`) are system text,
 /// so archives stop reading them as the person's turns only after a re-parse.
-pub const PARSER_VERSION: &str = "15";
+///
+/// v16: a message the person typed while Claude Code was busy (a `human`
+/// `queued_command` attachment) is a user turn with its text, so archives
+/// gain those turns only after a re-parse.
+pub const PARSER_VERSION: &str = "16";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
