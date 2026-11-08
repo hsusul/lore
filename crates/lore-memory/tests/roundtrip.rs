@@ -457,3 +457,30 @@ fn roundtrip_generated_ids_are_valid_and_distinct() {
     assert!(NoteId::parse(a.as_str()).is_ok(), "{}", a.as_str());
     assert!(a.as_str().starts_with('0'), "{}", a.as_str());
 }
+
+#[test]
+fn roundtrip_parses_list_items_with_hyphen_on_its_own_line() {
+    let text = with(
+        "anchors:\n  -\n    path: crates/lore-memory/src/note.rs\n    lines: 10-20\n  - \n    path: src/main.rs\nrelations:\n  -\n    updates: 01JC9V6Q4M8K2T7X3N5R0B1H01\nsources:\n  -\n    claude-code:7d2f9a1e\nenforce:\n  -\n    tool: bash\n    pattern: 'echo hello'",
+    );
+    let note = Note::parse(&text).unwrap();
+    assert_eq!(note.anchors.len(), 2);
+    assert_eq!(
+        note.anchors[0].path.as_str(),
+        "crates/lore-memory/src/note.rs"
+    );
+    assert_eq!(note.anchors[0].lines.unwrap().start(), 10);
+    assert_eq!(note.anchors[0].lines.unwrap().end(), 20);
+    assert_eq!(note.anchors[1].path.as_str(), "src/main.rs");
+    assert_eq!(note.relations.len(), 1);
+    assert_eq!(note.relations[0].kind(), "updates");
+    assert_eq!(
+        note.relations[0].target().as_str(),
+        "01JC9V6Q4M8K2T7X3N5R0B1H01"
+    );
+    assert_eq!(note.sources.len(), 1);
+    assert_eq!(note.sources[0].to_string(), "claude-code:7d2f9a1e");
+    assert_eq!(note.enforce.len(), 1);
+    assert_eq!(note.enforce[0].tool.as_str(), "bash");
+    assert_eq!(note.enforce[0].pattern.as_str(), "echo hello");
+}

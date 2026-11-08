@@ -1099,6 +1099,15 @@ struct Item<'a> {
     more: Vec<&'a str>,
 }
 
+impl<'a> Item<'a> {
+    fn lines(&self) -> impl Iterator<Item = &'a str> + '_ {
+        (!self.head.is_empty())
+            .then_some(self.head)
+            .into_iter()
+            .chain(self.more.iter().copied())
+    }
+}
+
 fn list_items<'a>(field: &str, lines: &[&'a str]) -> Result<Vec<Item<'a>>, NoteError> {
     let mut items: Vec<Item<'a>> = Vec::new();
     let mut dash_indent = None;
@@ -1126,8 +1135,7 @@ fn list_items<'a>(field: &str, lines: &[&'a str]) -> Result<Vec<Item<'a>>, NoteE
 
 /// The `key: value` pairs of a map-shaped list item.
 fn item_pairs<'a>(field: &str, item: &Item<'a>) -> Result<Vec<(&'a str, String)>, NoteError> {
-    std::iter::once(item.head)
-        .chain(item.more.iter().copied())
+    item.lines()
         .map(|line| {
             let (key, value) = line.split_once(':').ok_or_else(|| {
                 field_error(field, format!("expected `key: value`, got `{line}`"))
@@ -1354,10 +1362,7 @@ fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), No
                     Err(error) => fields.enforce_errors.push(RuleError {
                         index,
                         error,
-                        written: std::iter::once(item.head)
-                            .chain(item.more.iter().copied())
-                            .collect::<Vec<_>>()
-                            .join("\n    "),
+                        written: item.lines().collect::<Vec<_>>().join("\n    "),
                     }),
                 }
             }
@@ -1377,10 +1382,12 @@ fn read_block(key: Key, block: &Block<'_>, fields: &mut Fields) -> Result<(), No
         Key::Sources => {
             for (index, item) in list_field(key, block)?.iter().enumerate() {
                 let field = format!("sources[{index}]");
-                if !item.more.is_empty() {
-                    return Err(field_error(&field, "expected `agent:session`"));
-                }
-                let value = parse_scalar(item.head).map_err(|e| field_error(&field, e))?;
+                let scalar = match (item.head.is_empty(), item.more.as_slice()) {
+                    (false, []) => item.head,
+                    (true, [single]) => single,
+                    _ => return Err(field_error(&field, "expected `agent:session`")),
+                };
+                let value = parse_scalar(scalar).map_err(|e| field_error(&field, e))?;
                 fields
                     .sources
                     .push(SourceRef::parse(&value).map_err(|e| field_error(&field, e))?);
