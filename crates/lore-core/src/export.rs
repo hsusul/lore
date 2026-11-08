@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use lore_ipc::MessageDto;
 use rusqlite::Connection;
 
 use crate::ingest::det_id;
@@ -29,9 +30,8 @@ pub fn export_session_markdown(
         return Ok(None);
     };
     let s = &detail.summary;
-    let estimated_capacity = detail
-        .messages
-        .len()
+    let estimated_capacity = usize::try_from(s.message_count)
+        .unwrap_or(0)
         .saturating_mul(256)
         .saturating_add(detail.file_events.len().saturating_mul(64))
         .saturating_add(512);
@@ -87,47 +87,16 @@ pub fn export_session_markdown(
     );
 
     for message in &detail.messages {
-        let _ = writeln!(out, "### {}", message.role);
-        for part in &message.parts {
-            let pid = det_id("p", &[&message.id, &part.ordinal.to_string()]);
-            match part.kind.as_str() {
-                "opaque" => {
-                    let _ = writeln!(out, "_[encrypted content omitted]_\n");
-                }
-                "thinking" => {
-                    if let Some(text) = &part.text {
-                        let rendered = render(&pid, "text", text);
-                        if rendered.is_empty() {
-                            let _ = writeln!(out, "> _(thinking)_\n");
-                        } else {
-                            for (i, line) in rendered.lines().enumerate() {
-                                if i == 0 {
-                                    if line.is_empty() {
-                                        let _ = writeln!(out, "> _(thinking)_");
-                                    } else {
-                                        let _ = writeln!(out, "> _(thinking)_ {line}");
-                                    }
-                                } else if line.is_empty() {
-                                    let _ = writeln!(out, ">");
-                                } else {
-                                    let _ = writeln!(out, "> {line}");
-                                }
-                            }
-                            let _ = writeln!(out);
-                        }
-                    }
-                }
-                _ => {
-                    if let Some(text) = &part.text {
-                        let _ = writeln!(out, "{}\n", render(&pid, "text", text));
-                    } else if let Some(json) = &part.content_json {
-                        let rendered_json = render(&pid, "content_json", json);
-                        let fence = markdown_fence(&rendered_json);
-                        let _ = writeln!(out, "{fence}json\n{rendered_json}\n{fence}\n");
-                    }
-                }
-            }
+        render_message_markdown(&mut out, message, &render);
+    }
+
+    let mut cursor = detail.next_message_cursor;
+    while let Some(c) = cursor {
+        let page = query::list_session_messages_page(conn, session_id, 1_000, Some(&c))?;
+        for message in &page.messages {
+            render_message_markdown(&mut out, message, &render);
         }
+        cursor = page.next_cursor;
     }
 
     if !detail.file_events.is_empty() {
@@ -139,6 +108,54 @@ pub fn export_session_markdown(
     }
 
     Ok(Some(out))
+}
+
+fn render_message_markdown(
+    out: &mut String,
+    message: &MessageDto,
+    render: &impl Fn(&str, &str, &str) -> String,
+) {
+    let _ = writeln!(out, "### {}", message.role);
+    for part in &message.parts {
+        let pid = det_id("p", &[&message.id, &part.ordinal.to_string()]);
+        match part.kind.as_str() {
+            "opaque" => {
+                let _ = writeln!(out, "_[encrypted content omitted]_\n");
+            }
+            "thinking" => {
+                if let Some(text) = &part.text {
+                    let rendered = render(&pid, "text", text);
+                    if rendered.is_empty() {
+                        let _ = writeln!(out, "> _(thinking)_\n");
+                    } else {
+                        for (i, line) in rendered.lines().enumerate() {
+                            if i == 0 {
+                                if line.is_empty() {
+                                    let _ = writeln!(out, "> _(thinking)_");
+                                } else {
+                                    let _ = writeln!(out, "> _(thinking)_ {line}");
+                                }
+                            } else if line.is_empty() {
+                                let _ = writeln!(out, ">");
+                            } else {
+                                let _ = writeln!(out, "> {line}");
+                            }
+                        }
+                        let _ = writeln!(out);
+                    }
+                }
+            }
+            _ => {
+                if let Some(text) = &part.text {
+                    let _ = writeln!(out, "{}\n", render(&pid, "text", text));
+                } else if let Some(json) = &part.content_json {
+                    let rendered_json = render(&pid, "content_json", json);
+                    let fence = markdown_fence(&rendered_json);
+                    let _ = writeln!(out, "{fence}json\n{rendered_json}\n{fence}\n");
+                }
+            }
+        }
+    }
 }
 
 fn intern_rule(rule: &str) -> &'static str {
@@ -544,5 +561,29 @@ mod tests {
                 || md.contains("> _(thinking)_ internal reasoning process")
         );
         assert!(md.contains("response text"));
+    }
+
+    #[test]
+    fn export_session_markdown_paginates_beyond_initial_message_limit() {
+        let conn = crate::storage::open_in_memory().unwrap();
+        let mut jsonl = String::new();
+        for i in 1..=250 {
+            use std::fmt::Write;
+            let _ = writeln!(
+                jsonl,
+                r#"{{"type":"user","uuid":"u{i}","sessionId":"e_paginated","cwd":"/p","message":{{"role":"user","content":"msg_{i}"}}}}"#
+            );
+        }
+        let sid = persist(&conn, &jsonl);
+        let md = export_session_markdown(&conn, &sid, false)
+            .unwrap()
+            .expect("session must export");
+        assert!(md.contains("250 messages"));
+        assert!(md.contains("msg_1"));
+        assert!(md.contains("msg_200"));
+        assert!(
+            md.contains("msg_250"),
+            "messages beyond initial limit must be included in export"
+        );
     }
 }
