@@ -117,6 +117,9 @@ fn parse(
                     parser.value().map_err(|e| usage(e.to_string()))?,
                 ));
             }
+            Long("archive") => {
+                let _ = parser.value().map_err(|e| usage(e.to_string()))?;
+            }
             Long("cwd") if sub == "recall" || sub == "add" => {
                 cwd = Some(PathBuf::from(
                     parser.value().map_err(|e| usage(e.to_string()))?,
@@ -190,13 +193,12 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         return crate::enforce_check::run(invocation, USAGE);
     }
     if crate::review::SUBCOMMANDS.contains(&sub) {
-        let archive = invocation.archive_dir().ok();
         return crate::review::run(
             sub,
             &invocation.rest,
             invocation.json,
             USAGE,
-            archive,
+            invocation.archive.as_deref(),
             invocation.vault.as_deref(),
         );
     }

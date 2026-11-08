@@ -6,10 +6,10 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use lexopt::prelude::*;
-use lore_core::paths::ARCHIVE_DB_FILENAME;
+use lore_core::paths::{self, ARCHIVE_DB_FILENAME};
 use lore_core::{query, storage};
 use lore_memory::eval::{self, Case, Gate, Policy, Report};
 use lore_memory::inbox;
@@ -31,6 +31,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
         invocation.vault.clone(),
         invocation.json,
     );
+    let mut archive_dir = invocation.archive.clone();
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
             Short('h') | Long("help") => {
@@ -45,6 +46,10 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
                 let value = parser.value().map_err(|e| usage(e.to_string()))?;
                 vault_dir = Some(PathBuf::from(value));
             }
+            Long("archive") => {
+                let value = parser.value().map_err(|e| usage(e.to_string()))?;
+                archive_dir = Some(PathBuf::from(value));
+            }
             Long("json") => json = true,
             other => return Err(usage(other.unexpected().to_string())),
         }
@@ -53,7 +58,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let cases = eval::cases(&vault)?;
     let policy: Box<dyn Policy> = match policy.as_str() {
         "never" => Box::new(eval::Never),
-        "starting-bar" => Box::new(StartingBar::new(verified(invocation, &cases))),
+        "starting-bar" => Box::new(StartingBar::new(verified(archive_dir.as_deref(), &cases))),
         other => return Err(usage(format!("unknown policy `{other}`; use {POLICIES}"))),
     };
     let report = eval::score(policy.as_ref(), &cases);
@@ -70,9 +75,8 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
 
 /// The proposal sessions the archive holds for the agent that proposed under
 /// them. None when there is no archive.
-fn verified(invocation: &Invocation, cases: &[Case]) -> BTreeSet<String> {
-    let conn = invocation
-        .archive_dir()
+fn verified(archive: Option<&Path>, cases: &[Case]) -> BTreeSet<String> {
+    let conn = paths::archive_dir(archive)
         .ok()
         .and_then(|dir| storage::open_read_only(&dir.join(ARCHIVE_DB_FILENAME)).ok());
     let Some(conn) = conn else {

@@ -636,3 +636,28 @@ fn mem_recall_empty_scope_and_json_stderr() {
     assert_eq!(stderr(&out), "");
     assert!(serde_json::from_str::<serde_json::Value>(&stdout(&out)).is_ok());
 }
+
+#[test]
+fn mem_subcommands_accept_trailing_archive_flag() {
+    let (dir, vault) = init();
+    let file = note_file(dir.path(), "n.md", NOTE);
+    lorectl(&vault, &["add", &file]);
+
+    let archive = dir.path().join("archive");
+    std::fs::create_dir_all(&archive).unwrap();
+    drop(lore_core::storage::open(&archive.join(lore_core::paths::ARCHIVE_DB_FILENAME)).unwrap());
+    let archive_str = archive.to_str().unwrap();
+
+    for sub in [
+        vec!["show", "worktrees-share-refs"],
+        vec!["mine"],
+        vec!["eval"],
+        vec!["inbox"],
+        vec!["enforce-check"],
+    ] {
+        let mut args = sub.clone();
+        args.extend(["--archive", archive_str]);
+        let out = lorectl(&vault, &args);
+        assert_eq!(code(&out), 0, "{:?}: {}", sub, stderr(&out));
+    }
+}
