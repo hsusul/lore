@@ -21,6 +21,13 @@
 //! `plugins/cache/<marketplace>/<name>/<version>`. A plugin's hooks are in
 //! `hooks/hooks.json` and its MCP servers in `.mcp.json`, unless its manifest
 //! names other files.
+//!
+//! Codex runs a hook from `config.toml` or `hooks.json` only once the person
+//! has approved it: `config.toml` must hold
+//! `[hooks.state."<file>:<event>:<group>:<handler>"]` with a `trusted_hash`
+//! equal to the hook's current hash (see [`codex_hook_hash`]). A Lore hook
+//! without one is reported as configured but not approved, with how to approve
+//! it in Codex, never as connected.
 
 use std::path::{Path, PathBuf};
 
@@ -47,6 +54,10 @@ const HOOKS: [(&str, &str); 3] = [
 ];
 /// The `lorectl hook` event the tool hook ran before `pre-tool`.
 const OLD_TOOL_HOOK: &str = "pre-edit";
+/// Each hook's event as Codex names it in a trust key, in [`HOOKS`] order.
+const CODEX_EVENT_KEYS: [&str; 3] = ["session_start", "user_prompt_submit", "pre_tool_use"];
+/// Codex's default `additionalContextLimit`, left out of a hook's hash.
+const CODEX_DEFAULT_CONTEXT_LIMIT: u64 = 2_500;
 
 /// Print the report for the running binary. Always exit 0.
 pub fn run() -> u8 {
@@ -90,6 +101,7 @@ const CODEX_HOOKS: [&str; 3] = [
   command = {hook}
   timeout = 5"#,
 ];
+const CODEX_APPROVE: &str = "approve it in Codex: start `codex` in a terminal and, at \"Hooks need review\", choose \"Trust all and continue\" (or \"Review hooks\" to trust each one); in a running session, open `/hooks`. Codex records the approval in {file}; lorectl never writes it.";
 
 fn report(exe: &str) -> String {
     let fill = |template: &str, file: &Path, event: &str| {
@@ -131,7 +143,8 @@ fn report(exe: &str) -> String {
             let (event, sub) = HOOKS[i];
             let fix = fill(CODEX_HOOKS[i], &config, sub);
             let find = |root: &Value| hook_entry(root, event, sub);
-            let piece = check(&files, &find, fix);
+            let approve = fill(CODEX_APPROVE, &config, sub);
+            let piece = codex_trust(check(&files, &find, fix), &files, i, approve);
             outdated(i, &files, by_plugin(piece, &plugins, false, &find))
         };
         let piece = check(&files[..1], &codex_mcp, fill(CODEX_MCP, &config, ""));
@@ -179,7 +192,7 @@ fn report(exe: &str) -> String {
 /// not connected, and one of `files` still runs the `pre-edit` hook.
 fn outdated(i: usize, files: &[(PathBuf, bool)], piece: Piece) -> Piece {
     let (event, _) = HOOKS[2];
-    if i != 2 || piece.1.is_none() {
+    if i != 2 || piece.1.is_none() || piece.0.starts_with("configured") {
         return piece;
     }
     let old = check(
@@ -216,6 +229,108 @@ fn check(files: &[(PathBuf, bool)], find: &dyn Fn(&Value) -> Option<String>, fix
         }
     }
     (status, Some(fix))
+}
+
+/// `piece`, a Codex hook found in `files`, unless Codex would skip it: no
+/// `lorectl hook` entry for hook `i` has an approval in `config.toml`
+/// (`files[0]`) whose `trusted_hash` matches the entry, or the approved one is
+/// disabled. Then it is reported as configured but not approved, with
+/// `approve` as the fix. Another hook's approval, such as another tool's at the
+/// same event's index 0, never counts: the key names the entry's own indices.
+fn codex_trust(piece: Piece, files: &[(PathBuf, bool)], i: usize, approve: String) -> Piece {
+    if piece.1.is_some() {
+        return piece;
+    }
+    let (event, sub) = HOOKS[i];
+    let config = read_config(&files[0].0, true).unwrap_or_default();
+    let states = &config["hooks"]["state"];
+    let (mut changed, mut disabled) = (false, false);
+    for (path, is_toml) in files {
+        let Some(root) = read_config(path, *is_toml) else {
+            continue;
+        };
+        let groups = root["hooks"][event].as_array().into_iter().flatten();
+        for (g, group) in groups.enumerate() {
+            let hooks = group["hooks"].as_array().into_iter().flatten();
+            for (h, hook) in hooks.enumerate() {
+                let command = hook["command"].as_str().unwrap_or_default();
+                if !runs_lorectl(command, &["hook", sub]) {
+                    continue;
+                }
+                let key = format!("{}:{}:{g}:{h}", path.display(), CODEX_EVENT_KEYS[i]);
+                let state = &states[key.as_str()];
+                match state["trusted_hash"].as_str() {
+                    Some(hash) if hash == codex_hook_hash(i, group, hook) => {
+                        if state["enabled"].as_bool() == Some(false) {
+                            disabled = true;
+                        } else {
+                            return piece;
+                        }
+                    }
+                    Some(_) => changed = true,
+                    None => {}
+                }
+            }
+        }
+    }
+    let at = piece.0.strip_prefix("connected (").unwrap_or(&piece.0);
+    let at = at.strip_suffix(')').unwrap_or(at);
+    let status = if disabled {
+        format!("configured but disabled in Codex (Codex skips it; {at})")
+    } else if changed {
+        format!("configured but not approved (changed since approved; Codex skips it; {at})")
+    } else {
+        format!("configured but not approved (Codex skips it; {at})")
+    };
+    (status, Some(approve))
+}
+
+/// The hash Codex trusts a hook by: SHA-256 over the compact, key-sorted JSON
+/// of `{event_name, matcher, hooks: [handler]}`, the handler normalized the way
+/// Codex normalizes it (`timeout` defaulting to 600, `async` to false, an
+/// `additionalContextLimit` of the default left out, a prompt hook's matcher
+/// ignored). Mirrors `hook_hash` in openai/codex
+/// `codex-rs/hooks/src/engine/discovery.rs` (codex-cli 0.162).
+fn codex_hook_hash(i: usize, group: &Value, hook: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    // Keys go in sorted order, so the JSON is sorted with or without
+    // serde_json's `preserve_order`.
+    let mut handler = serde_json::Map::new();
+    let limit = hook["additionalContextLimit"].as_u64();
+    if let Some(limit) = limit.filter(|limit| *limit != CODEX_DEFAULT_CONTEXT_LIMIT) {
+        handler.insert("additionalContextLimit".into(), limit.into());
+    }
+    let is_async = hook["async"].as_bool().unwrap_or(false);
+    handler.insert("async".into(), is_async.into());
+    handler.insert("command".into(), hook["command"].clone());
+    if let Some(message) = hook["statusMessage"].as_str() {
+        handler.insert("statusMessage".into(), message.into());
+    }
+    let timeout = hook["timeout"].as_u64().unwrap_or(600).max(1);
+    handler.insert("timeout".into(), timeout.into());
+    handler.insert("type".into(), "command".into());
+    let mut identity = serde_json::Map::new();
+    identity.insert("event_name".into(), CODEX_EVENT_KEYS[i].into());
+    identity.insert("hooks".into(), Value::Array(vec![handler.into()]));
+    let (event, _) = HOOKS[i];
+    if let Some(matcher) = group["matcher"].as_str() {
+        if event != "UserPromptSubmit" {
+            identity.insert("matcher".into(), matcher.into());
+        }
+    }
+    let digest = Sha256::digest(Value::Object(identity).to_string());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
+/// A JSON file, or a TOML one when `is_toml`, if it reads and parses.
+fn read_config(path: &Path, is_toml: bool) -> Option<Value> {
+    let text = std::fs::read_to_string(path).ok()?;
+    if is_toml {
+        toml::from_str(&text).ok()
+    } else {
+        serde_json::from_str(&text).ok()
+    }
 }
 
 /// An enabled plugin: its name, and its MCP server and hooks files.
@@ -479,6 +594,34 @@ mod tests {
 
         let missing = json!({ "mcp_servers": {} });
         assert_eq!(codex_mcp(&missing), None);
+    }
+
+    /// Vectors computed independently of this code by Codex's scheme, which
+    /// reproduced every approval in a real Codex 0.162 `config.toml`.
+    #[test]
+    fn codex_hook_hash_matches_codexs_scheme() {
+        let tool = json!({"type": "command", "command": "lorectl hook pre-tool", "timeout": 5});
+        assert_eq!(
+            codex_hook_hash(2, &json!({"matcher": "Bash|apply_patch"}), &tool),
+            "sha256:9f99b1781c13b94d7902c915cb9373d0aa1482fae23cd333c3d37614ddf5c69b"
+        );
+        // A prompt hook's matcher is ignored.
+        let prompt = json!({"type": "command", "command": "lorectl hook prompt", "timeout": 5});
+        assert_eq!(
+            codex_hook_hash(1, &json!({"matcher": "ignored"}), &prompt),
+            "sha256:7e59890e2962dd2649673688e1fe5d03700df447aabcf360696dc44dfdf5c29e"
+        );
+        // The default timeout and context limit hash as if left out.
+        let session = json!({
+            "type": "command",
+            "command": "lorectl hook session-start",
+            "statusMessage": "Lore",
+            "additionalContextLimit": 2500,
+        });
+        assert_eq!(
+            codex_hook_hash(0, &json!({}), &session),
+            "sha256:67a75affecc9a4d66d6f75080acd637eade4d2e5167cf5cc3ec047a017cc8ae6"
+        );
     }
 
     #[test]

@@ -105,7 +105,9 @@ Connect (lorectl connect):
     events session-start, prompt, and pre-tool, and the exact command or
     config to add each one missing. A pre-edit hook is reported as
     outdated, since it enforces no note. A piece an enabled plugin runs
-    is connected (plugin <name>), with nothing to add.
+    is connected (plugin <name>), with nothing to add. A Codex hook is
+    connected only once approved in Codex; until then it is configured
+    but not approved, with how to approve it in codex.
     Reads .claude.json and settings.json, and Codex's config.toml and
     hooks.json, and the plugins each records as installed and enabled.
     CLAUDE_CONFIG_DIR and CODEX_HOME set where it looks;
