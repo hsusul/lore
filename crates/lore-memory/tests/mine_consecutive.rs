@@ -9,7 +9,7 @@ mod archive;
 
 use std::collections::BTreeSet;
 
-use lore_memory::mine::{corrections, read_turns, replies_in, Limits, Signal};
+use lore_memory::mine::{corrections, lessons, read_turns, replies_in, Limits, Signal};
 
 const S: &str = "33333333-3333-4333-8333-333333333333";
 
@@ -91,8 +91,18 @@ fn a_single_turn_after_the_agent_behaves_as_before() {
         found[0].preceding.as_deref(),
         Some("Rewriting the ledger exporter now.")
     );
+    // It states no rule, so no lesson keeps it: a lessons run reads it as a
+    // reply instead.
     let turns = read_turns(&conn).unwrap();
-    assert!(replies_in(&turns, &Limits::default(), i64::MIN).is_empty());
+    let replies = replies_in(&turns, &Limits::default(), i64::MIN);
+    let replied: Vec<(&str, Signal)> = replies
+        .iter()
+        .map(|c| (c.text.as_str(), c.signal))
+        .collect();
+    assert_eq!(
+        replied,
+        [("no, leave the ledger exporter alone", Signal::Reply)]
+    );
 }
 
 #[test]
@@ -127,11 +137,25 @@ fn a_run_yields_each_turn_once_and_harness_text_ends_it() {
         corrected,
         ["no, the other staging bucket", "wrong region too"]
     );
+    // Neither correction states a rule, so no lesson keeps them and they are
+    // offered as replies, with the run's other reply.
     let replied: Vec<&str> = replies.iter().map(|c| c.text.as_str()).collect();
-    assert_eq!(replied, ["and rename the folder"]);
+    assert_eq!(
+        replied,
+        [
+            "no, the other staging bucket",
+            "wrong region too",
+            "and rename the folder"
+        ]
+    );
 
+    // A lessons run reads each turn once: a lesson's receipt or a reply.
+    let receipts: Vec<_> = lessons(found)
+        .into_iter()
+        .flat_map(|l| l.receipts)
+        .collect();
     let mut seen = BTreeSet::new();
-    for c in found.iter().chain(&replies) {
+    for c in receipts.iter().chain(&replies) {
         assert!(seen.insert(c.text.clone()), "counted twice: {}", c.text);
     }
 }

@@ -226,9 +226,15 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
         .into_iter()
         .filter(|c| in_scope(c))
         .collect();
+    // A flagged correction whose lesson the miner drops is offered as a reply
+    // too; it is counted once, as flagged.
+    let counted: std::collections::HashSet<(&str, Option<i64>, &str)> = (flagged.iter())
+        .map(|c| (c.session.as_str(), c.at_ms, c.text.as_str()))
+        .collect();
     let replies: Vec<Candidate> = mine::replies_in(&turns, &limits, start)
         .into_iter()
         .filter(|c| in_scope(c))
+        .filter(|c| !counted.contains(&(c.session.as_str(), c.at_ms, c.text.as_str())))
         .collect();
     drop(turns);
 
