@@ -60,7 +60,7 @@ fn lockfiles_plugin_manifests_name_what_is_installed_or_enabled() {
     );
     assert_eq!(
         locks.codex_enabled.into_iter().collect::<Vec<_>>(),
-        ["tool@mkt"]
+        [("tool@mkt".to_string(), "1.0".to_string())]
     );
 }
 
