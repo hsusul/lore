@@ -67,10 +67,43 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 /// Open (creating if absent) the archive database at `path`, configure it, and
 /// apply all pending migrations.
 pub fn open(path: &Path) -> Result<Connection> {
+    make_private_file(path)?;
     let conn = Connection::open(path)?;
     configure(&conn)?;
     migrations::run(&conn)?;
     Ok(conn)
+}
+
+/// Create `dir` and any missing parents readable by their owner only, as the
+/// archive directory and the blob store must be: they hold full transcripts.
+pub fn create_private_dir(dir: &Path) -> Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)?;
+    Ok(())
+}
+
+/// Create the database file 0600 before SQLite does, or tighten one an older
+/// build left 0644, matching backups. SQLite gives `-wal` and `-shm` the
+/// database file's mode when it creates them, so this covers them too.
+#[cfg(unix)]
+fn make_private_file(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_private_file(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 /// Open an in-memory database with identical configuration and migrations.
