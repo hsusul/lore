@@ -10,7 +10,7 @@ You turn this person's past corrections into short rules they can review. The to
 
 ## 1. Learn what already exists
 
-Call `recall_memory` with `cwd` set to the absolute path of the current directory. Leave out `query`. Read every note it returns. Never propose a rule that an existing note already states. If a rule sharpens an existing note, pass that note's id as `updates`.
+Call `recall_memory` with `cwd` set to the absolute path of the current directory. Leave out `query`. Read every note it returns. Never propose a new rule that an existing note already states. If a rule repeats or sharpens an existing note, file it with that note's id as `updates`, so the note gains the receipts.
 
 ## 2. Read every candidate
 
@@ -18,7 +18,7 @@ Call `mine_candidates` with `cwd` set to the absolute path of the current direct
 
 Each candidate has the person's words, a suggested rule, receipts, and `may_conflict_with`. A receipt names the session, agent, date, and repository. It quotes the person's `correction`, what the agent had just done as `before`, and the agent's reply as `after`. The reply's `cwd_repo` is the repository at the current directory.
 
-Lore lists only candidates with a receipt no earlier run has read. Each receipt says whether it is `new`. Only `new` receipts need a rule. Older receipts are context: use them to group and to understand, but do not file a rule again for what they already said. If a new receipt sharpens a note you read in step 1, pass that note's id as `updates`.
+Lore lists only candidates with a receipt no earlier run has read. Each receipt says whether it is `new`. Only `new` receipts need a rule. Older receipts are context: use them to group and to understand, but do not file a rule again for what they already said. If a new receipt repeats or sharpens a note you read in step 1, file it with that note's id as `updates`. Do not drop it as already covered: the person repeating a rule is a receipt for it.
 
 Receipts with `signal: "reply"` are ordinary replies the rules did not flag, and most of them correct nothing. Apply the same steps to them, and drop each one that does not correct the agent or state a standing rule.
 
@@ -33,7 +33,11 @@ If `before` and `after` do not make both clear, drop the candidate. Do not guess
 
 ## 4. Keep standing rules only
 
-Keep a candidate only when it states a rule a future session should follow. Drop these.
+Keep a candidate only when it states a rule a future session should follow. One receipt is enough.
+
+Feedback on the style, format, length, or wording of something the agent wrote, such as a doc, a message, a resume, or a debate block, is a standing rule when it would apply to the next thing of that kind. Write the rule for that kind of output.
+
+Drop these.
 
 - Questions.
 - One-off orders about a specific branch, PR, file, or task.
@@ -62,7 +66,7 @@ Write each rule as one short imperative sentence in plain words, such as "Run th
 Call `propose_memory` once per rule with these fields.
 
 - `title` is the rule.
-- `body` is one sentence on what the agent did and what the person wanted instead, then a Receipts list. Each item quotes the person's words and names the agent, session, and date from one receipt.
+- `body` is one sentence on what the agent did and what the person wanted instead, then a Receipts list with every new receipt in the group. Each item quotes the person's words and names the agent, session, and date from one receipt.
 - `type` is `convention`, or `pitfall` when the rule warns against a mistake.
 - `scope` is `repo`, with `cwd` set to the current directory, when `cwd_repo` is not null and every receipt's `repo.scope` equals `cwd_repo.scope`. Otherwise it is `global`.
 - `session_id` is the session of the newest receipt.
