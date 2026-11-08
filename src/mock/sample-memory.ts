@@ -226,6 +226,163 @@ const LESSONS: [Where, string, string, string, [string, number][]][] = [
       ["untagged again, every resource needs tags", 12],
     ],
   ],
+  [
+    "global",
+    "claude-code",
+    "Ask before installing a new package",
+    "The agent added a dependency to solve a ten-line problem.",
+    [
+      ["don't add a package for that, just write it", 1],
+      ["ask me before adding dependencies", 8],
+    ],
+  ],
+  [
+    "global",
+    "codex",
+    "Say which commands you did not run",
+    "The agent reported the change as tested when only the build had run.",
+    [
+      ["you said tested but you only built it", 2],
+      ["tell me what you didn't run", 10],
+      ["don't say done if the tests didn't run", 15],
+    ],
+  ],
+  [
+    "global",
+    "claude-code",
+    "Keep commits to one change",
+    "The agent bundled a refactor and a bug fix into one commit.",
+    [["split that into two commits", 4]],
+  ],
+  [
+    "global",
+    "claude-code",
+    "Never edit generated files",
+    "The agent hand-edited the generated API client instead of the schema.",
+    [
+      ["that file is generated, change the schema", 3],
+      ["don't touch anything under gen/", 14],
+    ],
+  ],
+  [
+    "storefront",
+    "codex",
+    "Every price goes through formatMoney",
+    "The agent formatted a price with toFixed and showed $12.5.",
+    [
+      ["use formatMoney, not toFixed", 1],
+      ["prices always go through formatMoney", 9],
+    ],
+  ],
+  [
+    "storefront",
+    "claude-code",
+    "Test checkout in both currencies",
+    "The agent checked the fix in USD only, and EUR still rounded wrong.",
+    [["check it in EUR too", 2]],
+  ],
+  [
+    "storefront",
+    "claude-code",
+    "Keep the cart reducer pure",
+    "The agent pushed into state.items and the total stopped updating.",
+    [
+      ["don't mutate state in the reducer", 5],
+      ["again, return a new cart", 11],
+    ],
+  ],
+  [
+    "pricing",
+    "claude-code",
+    "Use the fixed clock in tests",
+    "The agent called Date.now in a test that then failed at midnight.",
+    [["use the test clock, this is flaky at midnight", 3]],
+  ],
+  [
+    "pricing",
+    "codex",
+    "Never retry a charge",
+    "The agent wrapped the charge call in the generic retry helper.",
+    [
+      ["no, charges are not idempotent, don't retry them", 6],
+      ["remove the retry around charge", 13],
+    ],
+  ],
+  [
+    "mobile",
+    "claude-code",
+    "Every string goes through i18n",
+    "The agent hard-coded English labels on the settings screen.",
+    [
+      ["those strings need to be translated", 2],
+      ["use t() for every label", 7],
+    ],
+  ],
+  [
+    "mobile",
+    "codex",
+    "Check the small-phone layout",
+    "The agent's new button pushed the form off screen on an SE.",
+    [["check it on the small phone", 4]],
+  ],
+  [
+    "pipeline",
+    "claude-code",
+    "Make every job safe to rerun",
+    "The agent's backfill appended rows, so a rerun doubled the counts.",
+    [
+      ["this has to be idempotent, it doubled the data", 1],
+      ["jobs must be safe to rerun", 12],
+    ],
+  ],
+  [
+    "pipeline",
+    "codex",
+    "Write timestamps in UTC",
+    "The agent stored local time and the daily partitions split wrong.",
+    [["utc please, the partitions are off", 5]],
+  ],
+  [
+    "design",
+    "claude-code",
+    "Use the 4px spacing scale",
+    "The agent used 10px and 14px paddings that are not on the scale.",
+    [
+      ["stick to the spacing scale", 3],
+      ["no 10px, use space-2 or space-3", 9],
+    ],
+  ],
+  [
+    "design",
+    "claude-code",
+    "Never remove focus rings",
+    "The agent set outline: none on the new button.",
+    [["put the focus ring back", 6]],
+  ],
+  [
+    "cli",
+    "codex",
+    "Send errors to stderr",
+    "The agent printed an error to stdout and broke a script reading --json.",
+    [
+      ["errors go to stderr, it broke the json", 2],
+      ["stdout is for output only", 16],
+    ],
+  ],
+  [
+    "admin",
+    "claude-code",
+    "Stay on PHP 7.4 syntax",
+    "The agent used match expressions the host's PHP cannot run.",
+    [["the server is 7.4, no match", 8]],
+  ],
+  [
+    "site",
+    "codex",
+    "Give every image alt text",
+    "The agent added a diagram to a post with an empty alt.",
+    [["that image needs alt text", 4]],
+  ],
 ];
 
 /** [skill, uses, sessions, days since last use or null, re-prompts as [said, before]] */

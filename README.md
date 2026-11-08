@@ -45,7 +45,7 @@ The desktop app opens on a map of everything Lore knows. Your global notes sit i
 
 **Zoom into a repository.** Click a cluster to read its notes. The Lore logo takes you back out to the whole map.
 
-<img alt="The map zoomed into the acme-storefront repository, showing each of its notes by title" src="assets/screenshots/repo.png" width="900">
+<img alt="The map zoomed into the acme-storefront repository, showing each of its notes by title, with one of its lessons open" src="assets/screenshots/repo.png" width="900">
 
 **Read a session.** Search or browse every session without leaving the map.
 
@@ -54,10 +54,6 @@ The desktop app opens on a map of everything Lore knows. Your global notes sit i
 **See which skills need a look.** A skill you had to re-prompt after shows the moment it went wrong, and an agent can draft the fix for you to apply.
 
 <img alt="The code-review skill: 22 uses in 15 sessions, with the re-prompt that followed it" src="assets/screenshots/skill.png" width="900">
-
-**The full archive.** Folders, filters, exports, files touched, and git evidence for every session.
-
-<img alt="The full archive: repositories, folders and agents on the left, a session list, and one session with its model, tokens, cost and messages" src="assets/screenshots/archive.png" width="900">
 
 The screenshots use the sample data that `npm run dev` serves. None of it is real.
 
