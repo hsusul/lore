@@ -442,6 +442,35 @@ fn vault_find_normalizes_relative_dot_prefixes_and_absolute_paths() {
 }
 
 #[test]
+fn vault_find_resolves_symlinked_absolute_path_without_extension() {
+    let (dir, vault) = new_vault();
+    vault.add(NOTE).unwrap();
+
+    let link_dir = tempfile::tempdir().unwrap();
+    let link_path = link_dir.path().join("vault_link");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(dir.path(), &link_path).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(dir.path(), &link_path).unwrap();
+
+    let link_vault = Vault::open(&link_path).unwrap();
+
+    let canonical_without_ext = dir.path().join("global/prune-worktrees");
+    assert_eq!(
+        link_vault
+            .find(canonical_without_ext.to_str().unwrap())
+            .unwrap(),
+        "global/prune-worktrees.md"
+    );
+
+    let link_without_ext = link_path.join("global/prune-worktrees");
+    assert_eq!(
+        vault.find(link_without_ext.to_str().unwrap()).unwrap(),
+        "global/prune-worktrees.md"
+    );
+}
+
+#[test]
 fn vault_add_with_writes_what_prepare_changed_and_nothing_when_it_fails() {
     let (dir, vault) = new_vault();
     let refused = vault.add_with(NOTE, |_| Err(VaultError::NotFound("prepare".into())));

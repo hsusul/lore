@@ -124,6 +124,18 @@ fn mem_show_accepts_dot_slash_and_absolute_paths() {
     let absolute = lorectl(&vault, &["show", full_path.to_str().unwrap()]);
     assert_eq!(code(&absolute), 0, "{}", stderr(&absolute));
     assert!(stdout(&absolute).contains("\nmood: calm\n"));
+
+    let link_dir = tempfile::tempdir().unwrap();
+    let link_vault = link_dir.path().join("vault_link");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&vault, &link_vault).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&vault, &link_vault).unwrap();
+
+    let link_without_ext = link_vault.join("repos/3f9a1c0b5e2d7a46/worktrees-share-refs");
+    let link_absolute = lorectl(&vault, &["show", link_without_ext.to_str().unwrap()]);
+    assert_eq!(code(&link_absolute), 0, "{}", stderr(&link_absolute));
+    assert!(stdout(&link_absolute).contains("\nmood: calm\n"));
 }
 
 #[test]
