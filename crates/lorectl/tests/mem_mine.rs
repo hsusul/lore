@@ -140,7 +140,8 @@ fn mine_prints_each_lesson_with_its_receipts_and_writes_nothing() {
         serde_json::json!({
             "correction_id": id, "new": true,
             "session": s(5), "agent": "codex", "date": "2026-08-05",
-            "text": "I told you, pnpm not npm", "after": "npm install dayjs done.",
+            "text": "I told you, pnpm not npm", "before": "npm install dayjs done.",
+            "after": null,
             "signal": "correction", "repo": null,
         })
     );

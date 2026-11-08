@@ -14,7 +14,11 @@
 //!
 //! `--replies` also lists, after them, the ordinary replies of the last
 //! [`mine::REPLY_WINDOW_MS`] that no rule flagged, each on its own, as a
-//! Find lessons run offers them.
+//! Find lessons run offers them; `--reply-days N` looks back N days instead.
+//!
+//! In `--json`, each receipt's `before` is the agent text the person
+//! answered and `after` the agent's reply to it, as `mine_candidates` names
+//! them.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -35,6 +39,7 @@ use crate::exit::{self, CliError};
 use crate::receipt::date;
 
 const DEFAULT_LIMIT: usize = 20;
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// Receipts printed per lesson; `--json` carries them all.
 const SHOWN_RECEIPTS: usize = 3;
 
@@ -47,6 +52,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let mut archive_dir = invocation.archive.clone();
     let mut limits = mine::Limits::default();
     let (mut all, mut new_only, mut replies) = (false, false, false);
+    let mut reply_window_ms = mine::REPLY_WINDOW_MS;
     while let Some(arg) = parser.next().map_err(|e| usage(e.to_string()))? {
         match arg {
             Short('h') | Long("help") => {
@@ -65,6 +71,11 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
             Long("all") => all = true,
             Long("new") => new_only = true,
             Long("replies") => replies = true,
+            Long("reply-days") => {
+                let days = number(&mut parser, "--reply-days", 1..=3650)?;
+                reply_window_ms = i64::try_from(days).unwrap_or(i64::MAX) * DAY_MS;
+                replies = true;
+            }
             Long("propose") => propose = true,
             Long("vault") => {
                 let value = parser.value().map_err(|e| usage(e.to_string()))?;
@@ -86,7 +97,7 @@ pub fn run(invocation: &Invocation, usage_text: &str) -> Result<u8, CliError> {
     let mut lessons = mine::lessons_within(candidates, &limits);
     mine::find_conflicts(&turns, &mut lessons);
     if replies || propose {
-        let since = lore_core::now_ms().saturating_sub(mine::REPLY_WINDOW_MS);
+        let since = lore_core::now_ms().saturating_sub(reply_window_ms);
         lessons.extend(mine::reply_lessons(mine::replies_in(
             &turns, &limits, since,
         )));
@@ -216,7 +227,7 @@ fn lesson_json(marked: &Marked) -> Value {
             json!({
                 "correction_id": id.as_str(), "new": new,
                 "session": r.session, "agent": r.agent, "date": r.at_ms.and_then(date),
-                "text": r.text, "after": r.preceding, "repo": r.repo,
+                "text": r.text, "before": r.preceding, "after": r.following, "repo": r.repo,
                 "signal": r.signal.as_str(),
             })
         })

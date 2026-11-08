@@ -52,7 +52,7 @@ fn sessions(dir: &std::path::Path) -> rusqlite::Connection {
             "Base directory for this skill: /skills/review Review the diff.",
         ),
         ("assistant", "Reviewing."),
-        ("user", "ok ship it"),
+        ("user", "ship it with a short note"),
         ("assistant", "Shipped."),
     ]
     .iter()
@@ -97,7 +97,11 @@ fn picks_plain_replies_after_an_agent_turn_inside_the_window() {
     // turns in a row answers the same agent turn as the first.
     assert_eq!(
         texts(&found),
-        ["nice, now the docs", "and the changelog too", "ok ship it"]
+        [
+            "nice, now the docs",
+            "and the changelog too",
+            "ship it with a short note"
+        ]
     );
     assert!(found.iter().all(|c| c.signal == Signal::Reply));
     assert_eq!(found[0].preceding.as_deref(), Some("Done with part A."));
@@ -111,7 +115,7 @@ fn picks_plain_replies_after_an_agent_turn_inside_the_window() {
             "looks fine but rename the helper",
             "nice, now the docs",
             "and the changelog too",
-            "ok ship it"
+            "ship it with a short note"
         ]
     );
 }
@@ -140,7 +144,7 @@ fn a_reply_keeps_its_id_and_stands_alone() {
     assert_eq!(
         shape,
         [
-            ("ok ship it", 1),
+            ("ship it with a short note", 1),
             ("and the changelog too", 1),
             ("nice, now the docs", 1)
         ]
