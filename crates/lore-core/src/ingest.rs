@@ -76,7 +76,10 @@ use crate::storage::{Result, StorageError};
 /// v16: a message the person typed while Claude Code was busy (a `human`
 /// `queued_command` attachment) is a user turn with its text, so archives
 /// gain those turns only after a re-parse.
-pub const PARSER_VERSION: &str = "16";
+///
+/// v17: Claude `document` blocks are attachments, not unknown parts, so
+/// archives gain them only after a re-parse.
+pub const PARSER_VERSION: &str = "17";
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
