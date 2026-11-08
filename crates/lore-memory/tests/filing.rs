@@ -3,6 +3,7 @@
 
 mod common;
 
+use lore_memory::anchor::Freshness;
 use lore_memory::filing;
 use lore_memory::inbox;
 use lore_memory::mine::{Candidate, Lesson, Signal};
@@ -192,4 +193,20 @@ fn a_lesson_is_anchored_to_at_most_three_files() {
     let lesson = lesson_in(&root, &format!("stop editing {}", files.join(" ")));
 
     assert_eq!(anchored(&lesson), ["a.rs", "b.rs", "c.rs"]);
+}
+
+#[test]
+fn a_filed_anchor_tracks_the_file_not_its_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    tracking(&root, &["src/lib.rs"]);
+    let lesson = lesson_in(&root, "don't rename public functions in src/lib.rs");
+
+    let proposal = filing::proposal(&lesson).unwrap();
+    let [anchor] = proposal.anchors.as_slice() else {
+        panic!("one anchor expected: {:?}", proposal.anchors);
+    };
+    assert_eq!(anchor.hash, None);
+    std::fs::write(root.join("src/lib.rs"), "x\npub fn added() {}\n").unwrap();
+    assert_eq!(anchor.check(&root), Freshness::Fresh);
 }

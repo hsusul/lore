@@ -5,7 +5,8 @@
 //! receipt's archive session id, marked verified: the miner read that session
 //! from the archive, and it is where the person said it. Its body carries a
 //! marker with the lesson id, so one lesson is filed once. A lesson from one
-//! repository is anchored to the files of it that its receipts name.
+//! repository is anchored to up to three tracked files the person's words or
+//! two or more receipts name.
 
 use std::fs;
 use std::path::Path;
@@ -171,13 +172,20 @@ fn anchors(lesson: &Lesson, root: &Path) -> Vec<Anchor> {
         .into_iter()
         .filter(|(_, receipts)| *receipts >= 2)
         .map(|(path, _)| path);
+    let mut candidates: Vec<RelPath> = Vec::new();
+    for path in said.into_iter().chain(recurring) {
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+    let tracked = tracked(root, &candidates);
     let tree = WorkTree::new(root);
     let mut anchors: Vec<Anchor> = Vec::new();
-    for path in said.into_iter().chain(recurring) {
+    for path in candidates {
         if anchors.len() == MAX_ANCHORS {
             break;
         }
-        if anchors.iter().any(|a| a.path == path) || !tracked(root, &path) {
+        if !tracked.iter().any(|tracked| tracked == path.as_str()) {
             continue;
         }
         let anchor = Anchor {
@@ -186,7 +194,10 @@ fn anchors(lesson: &Lesson, root: &Path) -> Vec<Anchor> {
             hash: None,
             commit: None,
         };
-        if let Ok(pinned) = tree.pin(&anchor) {
+        if let Ok(mut pinned) = tree.pin(&anchor) {
+            // The anchor names the file the rule is about, not content that
+            // backs it, so an edit to the file must not mark the lesson changed.
+            pinned.hash = None;
             anchors.push(pinned);
         }
     }
@@ -218,11 +229,18 @@ fn named_path(word: &str, root: &Path) -> Option<RelPath> {
     RelPath::parse(file.strip_prefix(root).ok()?.to_str()?).ok()
 }
 
-/// Whether git tracks `path` under exactly that name.
-fn tracked(root: &Path, path: &RelPath) -> bool {
-    git(
-        root,
-        ["--literal-pathspecs", "ls-files", "-z", "--", path.as_str()],
-    )
-    .is_some_and(|out| out.split('\0').any(|tracked| tracked == path.as_str()))
+/// The `paths` git tracks under exactly those names, in one `git ls-files`.
+fn tracked(root: &Path, paths: &[RelPath]) -> Vec<String> {
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let args = ["--literal-pathspecs", "ls-files", "-z", "--"]
+        .into_iter()
+        .chain(paths.iter().map(RelPath::as_str));
+    git(root, args).map_or_else(Vec::new, |out| {
+        out.split('\0')
+            .filter(|tracked| paths.iter().any(|p| p.as_str() == *tracked))
+            .map(str::to_owned)
+            .collect()
+    })
 }
