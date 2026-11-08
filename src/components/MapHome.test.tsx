@@ -65,6 +65,9 @@ const pnpm: ProposalDto = {
   session_id: "s1",
   repo_name: "lore",
   proposed_ms: 1_785_751_203_000,
+  enforce: [],
+  updates: null,
+  target_enforce: [],
 };
 const tests: ProposalDto = {
   ...pnpm,
@@ -80,6 +83,8 @@ const push: NoteDto = {
   note_type: "convention",
   excerpt: "Open a PR.",
   repo_name: null,
+  enforce: [],
+  dropped_rules: [],
 };
 
 const summary = (id: string, title: string): SessionSummary => ({
@@ -480,6 +485,56 @@ describe("MapHome", () => {
         "Retired in the Lore app",
       ),
     );
+  });
+
+  it("shows the rules a lesson adds before it is accepted, and none for a lesson without", async () => {
+    const rule = { tool: "bash", pattern: "\\bnpm install\\b", unless: "--prefix" };
+    m.listProposals.mockResolvedValue([{ ...pnpm, enforce: [rule] }, tests]);
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    const card = await screen.findByRole("region", { name: "Opened item" });
+    const blocks = within(card).getByRole("region", { name: "Blocks" });
+    expect(within(blocks).getByText("\\bnpm install\\b").tagName).toBe("CODE");
+    expect(within(blocks).getByText("--prefix")).toBeTruthy();
+    expect(within(blocks).getByText(/Once accepted/)).toBeTruthy();
+    expect(within(blocks).queryByText("new")).toBeNull();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Ask again if it recurs" }));
+    const next = await screen.findByRole("heading", { name: "Run the tests before saying done" });
+    expect(next).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Blocks" })).toBeNull();
+  });
+
+  it("marks which rules an update adds to its note", async () => {
+    const kept = { tool: "bash", pattern: "git push.*main", unless: null };
+    const added = { tool: "path", pattern: "^\\.github/", unless: null };
+    m.listProposals.mockResolvedValue([
+      { ...pnpm, enforce: [kept, added], updates: "N1", target_enforce: [kept] },
+    ]);
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    const card = await screen.findByRole("region", { name: "Opened item" });
+    const rows = within(within(card).getByRole("region", { name: "Blocks" })).getAllByRole("listitem");
+    expect(rows.map((r) => r.textContent)).toEqual(["bashgit push.*main", "path^\\.github/new"]);
+  });
+
+  it("shows a note's rules, and a rule that does not parse as not enforced", async () => {
+    m.listNotes.mockResolvedValue([
+      {
+        ...push,
+        enforce: [{ tool: "bash", pattern: "git push.*main", unless: "--dry-run" }],
+        dropped_rules: [{ written: "tool: shell\npattern: 'x'", error: "`enforce[1].tool`: expected bash, write, or path, got `shell`" }],
+      },
+    ]);
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    await screen.findByRole("region", { name: "Opened item" });
+    fireEvent.click(screen.getByRole("button", { name: "Notes" }));
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Notes" })).getByRole("button", { name: /Never push to main/ }),
+    );
+    const blocks = within(screen.getByRole("region", { name: "Opened item" })).getByRole("region", { name: "Blocks" });
+    expect(within(blocks).getByText("git push.*main")).toBeTruthy();
+    expect(within(blocks).getByText("Agents' tool calls that match are denied.")).toBeTruthy();
+    expect(within(blocks).getByText("not enforced")).toBeTruthy();
+    expect(within(blocks).getByText(/got `shell`/)).toBeTruthy();
   });
 
   it("closes the card to look around; the logo or the pill brings it back", async () => {

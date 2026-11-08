@@ -2,7 +2,7 @@
 // review, and skill usage, spread over the sample repositories so the map has
 // something to show. Every name, rule, and quote here is made up.
 
-import type { NoteDto, ProposalDto, SkillUsageDto } from "../ipc";
+import type { DroppedRuleDto, EnforceRuleDto, NoteDto, ProposalDto, SkillUsageDto } from "../ipc";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -425,6 +425,31 @@ const SKILLS: [string, number, number, number | null, [string, string][]][] = [
   ["brandkit", 0, 0, null, []],
 ];
 
+const bash = (pattern: string, unless: string | null = null): EnforceRuleDto => ({ tool: "bash", pattern, unless });
+const retryCharge: EnforceRuleDto = { tool: "write", pattern: "retry\\(\\s*charge", unless: null };
+
+/** A few notes' `enforce` rules, by title, and one that does not parse. */
+const NOTE_RULES: Record<string, { enforce: EnforceRuleDto[]; dropped_rules: DroppedRuleDto[] }> = {
+  "Never push to main": { enforce: [bash("git push\\b.*\\bmain\\b", "--dry-run")], dropped_rules: [] },
+  "Do not run brew upgrade": {
+    enforce: [bash("\\bbrew upgrade\\b")],
+    dropped_rules: [
+      { written: "tool: bash\npattern: 'brew (upgrade", error: "`enforce[1].pattern`: `brew (upgrade` is not a valid regex: unclosed group" },
+    ],
+  },
+  "Retry only idempotent calls": { enforce: [retryCharge], dropped_rules: [] },
+};
+
+/** Rules some lessons would add, by title; one updates a note's rules. */
+const LESSON_RULES: Record<string, { enforce: EnforceRuleDto[]; updates?: string }> = {
+  "Ask before installing a new package": { enforce: [bash("\\b(npm|pnpm) (add|install|i) [a-z@]")] },
+  "Never edit generated files": { enforce: [{ tool: "path", pattern: "(^|/)generated/", unless: null }] },
+  "Never retry a charge": {
+    enforce: [retryCharge, { tool: "write", pattern: "withRetry\\(\\s*charge", unless: null }],
+    updates: "Retry only idempotent calls",
+  },
+};
+
 export function buildSampleNotes(): NoteDto[] {
   return NOTES.map(([where, type, title, excerpt], i) => {
     const s = scopeOf(where);
@@ -436,12 +461,16 @@ export function buildSampleNotes(): NoteDto[] {
       note_type: type,
       excerpt,
       ...s,
+      ...(NOTE_RULES[title] ?? { enforce: [], dropped_rules: [] }),
     };
   });
 }
 
 export function buildSampleProposals(now: number): ProposalDto[] {
+  const notes = buildSampleNotes();
   return LESSONS.map(([where, agent, title, reason, said], i) => {
+    const rules = LESSON_RULES[title];
+    const target = notes.find((n) => n.title === rules?.updates);
     const date = (days: number) => new Date(now - days * DAY).toISOString().slice(0, 10);
     const body = [
       reason,
@@ -458,6 +487,9 @@ export function buildSampleProposals(now: number): ProposalDto[] {
       agent_id: agent,
       session_id: `s${i + 1}0`,
       proposed_ms: now - said[0][1] * DAY,
+      enforce: rules?.enforce ?? [],
+      updates: target?.id ?? null,
+      target_enforce: target?.enforce ?? [],
       ...scopeOf(where),
     };
   });

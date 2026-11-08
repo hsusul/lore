@@ -18,6 +18,7 @@ import {
 } from "../ipc";
 import { areasOf, CENTRE, layout, type Dot, type Item } from "../map/layout";
 import { receipts, why } from "../map/proposal";
+import { Blocks } from "./Blocks";
 import { FindLessons } from "./FindLessons";
 import { Mark } from "./Mark";
 import { MapCanvas } from "./MapCanvas";
@@ -148,6 +149,14 @@ function LessonDetail({
           </li>
         ))}
       </ul>
+      {/* An update without rules leaves the target's as they are. */}
+      {lesson.enforce.length > 0 && (
+        <Blocks
+          rules={lesson.enforce}
+          before={lesson.updates === null ? undefined : lesson.target_enforce}
+          pending
+        />
+      )}
       <div className="mist-acts">
         {editing ? (
           <>
@@ -222,6 +231,7 @@ function NoteDetail({
       <div className="mist-kind">{scope}</div>
       <h2 className="mist-h2">{note.title}</h2>
       {note.excerpt && <p className="mist-why">{note.excerpt}</p>}
+      <Blocks rules={note.enforce} dropped={note.dropped_rules} />
       <div className="mist-acts">
         <button
           type="button"
