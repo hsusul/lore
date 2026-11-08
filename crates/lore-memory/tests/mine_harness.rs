@@ -1,7 +1,8 @@
 //! Claude Code puts harness text in user turns: slash command echoes,
 //! system reminders, local command output. They are not the person's words.
 //! A turn made only of such blocks is skipped, and the blocks are stripped
-//! from a turn that also has real text.
+//! from a turn that also has real text. The words typed after a slash
+//! command, in `<command-args>`, are the person's and are kept.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 #[path = "common/archive.rs"]
@@ -123,9 +124,15 @@ fn harness_blocks_are_not_the_persons_words() {
         .collect();
     assert_eq!(
         listed,
-        [(
-            archive::claude_session_id(&conn, &ids[5]),
-            "please open a PR for the exif branch"
-        )]
+        [
+            (
+                archive::claude_session_id(&conn, &ids[5]),
+                "please open a PR for the exif branch"
+            ),
+            (
+                archive::claude_session_id(&conn, &ids[1]),
+                "open a PR for it"
+            ),
+        ]
     );
 }
