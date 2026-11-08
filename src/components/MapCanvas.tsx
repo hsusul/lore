@@ -24,7 +24,7 @@ const reducedMotion = () =>
 /**
  * The map, drawn on a canvas. Drag or two-finger scroll pans, pinch zooms
  * about the pointer, a click on a dot opens it and a click on a cluster
- * zooms onto it. Escape goes back to the whole map.
+ * zooms onto it. Escape, or a new `homeKey`, goes back to the whole map.
  */
 export function MapCanvas({
   model,
@@ -33,6 +33,7 @@ export function MapCanvas({
   onSelect,
   onDeselect,
   label,
+  homeKey = 0,
 }: {
   model: MapModel;
   selectedId: string | null;
@@ -42,6 +43,8 @@ export function MapCanvas({
   /** A click that lands on no dot lets go of the opened one. */
   onDeselect: () => void;
   label: string;
+  /** Each new value glides back to the whole map, however it was zoomed. */
+  homeKey?: number;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -148,6 +151,16 @@ export function MapCanvas({
     focus.current = null;
     glide(home.current);
   };
+
+  // After the refit above, so a home press that also moves the card glides
+  // to the whole map in the new space.
+  const lastHomeKey = useRef(homeKey);
+  useEffect(() => {
+    if (homeKey === lastHomeKey.current) return;
+    lastHomeKey.current = homeKey;
+    goHome();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- go home only when asked
+  }, [homeKey]);
 
   useEffect(() => {
     const el = canvas.current;

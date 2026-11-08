@@ -33,15 +33,18 @@ vi.mock("./MapCanvas", () => ({
     label,
     selectedId,
     onDeselect,
+    homeKey,
   }: {
     label: string;
     selectedId: string | null;
     onDeselect: () => void;
+    homeKey?: number;
   }) => (
     <div
       role="img"
       aria-label={label}
       data-selected={selectedId ?? ""}
+      data-home={homeKey ?? 0}
       onClick={onDeselect}
     />
   ),
@@ -490,6 +493,16 @@ describe("MapHome", () => {
     expect(screen.queryByRole("region", { name: "Opened item" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Today" }));
     expect(screen.getByRole("region", { name: "Opened item" })).toBeTruthy();
+  });
+
+  it("zooms the map back out to the whole map when the logo is pressed", async () => {
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    const map = await screen.findByRole("img", { name: /^Map of/ });
+    const before = Number(map.getAttribute("data-home"));
+    fireEvent.click(screen.getByRole("button", { name: "Today" }));
+    expect(Number(map.getAttribute("data-home"))).toBe(before + 1);
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(Number(map.getAttribute("data-home"))).toBe(before + 1);
   });
 
   it("lists sessions in the card and opens one there, with a way back", async () => {
