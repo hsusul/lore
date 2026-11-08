@@ -523,11 +523,22 @@ const RELATED_WORDS: usize = 12;
 /// contraction carries no topic, so it is not a content word.
 const CONTRACTION_ENDINGS: &[&str] = &["n't", "'re", "'ve", "'ll", "'d", "'m"];
 
+/// Contractions typed without their apostrophe, as people often do in chat
+/// ("i dont know"). Like "don't", they carry no topic. Ones that are also
+/// words of their own, such as "well", "ill", "id" and "wed", are left out.
+const BARE_CONTRACTIONS: &[&str] = &[
+    "aint", "arent", "cant", "couldnt", "didnt", "doesnt", "dont", "hadnt", "hasnt", "havent",
+    "hes", "heres", "hows", "im", "isnt", "itll", "ive", "mustnt", "shes", "shouldnt", "thats",
+    "theres", "theyll", "theyre", "theyve", "wasnt", "werent", "weve", "whats", "wheres", "whos",
+    "wont", "wouldnt", "youd", "youll", "youre", "youve",
+];
+
 /// The content words of `text`, lowercased, each once, in order, at most
 /// [`RELATED_WORDS`], after dropping a leading slash command such as
 /// `/review`. Curly and straight apostrophes are the same. A contraction
-/// such as "don't" is dropped whole, a possessive such as "repo's" counts as
-/// "repo", and single letters and [`STOPWORDS`] are dropped. This is the one
+/// such as "don't" is dropped whole, as is one typed without its apostrophe
+/// ([`BARE_CONTRACTIONS`]), a possessive such as "repo's" counts as "repo",
+/// and single letters and [`STOPWORDS`] are dropped. This is the one
 /// rule for which words two texts share.
 #[must_use]
 pub fn related_words(text: &str) -> Vec<String> {
@@ -559,6 +570,7 @@ pub fn related_words(text: &str) -> Vec<String> {
         for word in token.split('\'') {
             if word.chars().count() < 2
                 || STOPWORDS.contains(&word)
+                || BARE_CONTRACTIONS.contains(&word)
                 || words.iter().any(|w| w == word)
             {
                 continue;
@@ -676,5 +688,13 @@ mod tests {
         assert_eq!(related_words("x y z build"), ["build"]);
         assert!(related_words("don't").is_empty());
         assert!(related_words("don't won't can't").is_empty());
+        // Typed without the apostrophe, they are still not content words.
+        assert_eq!(
+            related_words("i dont know, thats the wrong branch im on"),
+            ["know", "wrong", "branch"]
+        );
+        assert!(related_words("dont wont cant youre ive").is_empty());
+        // Words that only look like a bare contraction are kept.
+        assert_eq!(related_words("well, ill id"), ["well", "ill", "id"]);
     }
 }
