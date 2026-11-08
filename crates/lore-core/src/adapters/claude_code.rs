@@ -108,12 +108,14 @@ fn parse_from(
 
         match event_type {
             "custom-title" => {
-                session.title = str_field(&obj, "customTitle").or(session.title.take());
+                session.title = str_field(&obj, "customTitle")
+                    .filter(|s| !s.trim().is_empty())
+                    .or(session.title.take());
                 continue;
             }
             "ai-title" => {
                 if session.title.is_none() {
-                    session.title = str_field(&obj, "aiTitle");
+                    session.title = str_field(&obj, "aiTitle").filter(|s| !s.trim().is_empty());
                 }
                 continue;
             }
@@ -1401,6 +1403,52 @@ mod tests {
             Some("Analyze database indexing strategy")
         );
         assert!(session2.title_is_synthetic);
+    }
+
+    #[test]
+    fn empty_custom_title_falls_back_to_user_prompt() {
+        let jsonl = concat!(
+            "{\"type\":\"custom-title\",\"customTitle\":\"\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_empty_custom\",\"message\":{\"role\":\"user\",\"content\":\"Fix repository discovery\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "s_empty_custom");
+        assert_eq!(session.title.as_deref(), Some("Fix repository discovery"));
+        assert!(session.title_is_synthetic);
+    }
+
+    #[test]
+    fn empty_ai_title_falls_back_to_user_prompt() {
+        let jsonl = concat!(
+            "{\"type\":\"ai-title\",\"aiTitle\":\"\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_empty_ai\",\"message\":{\"role\":\"user\",\"content\":\"Fix repository discovery\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "s_empty_ai");
+        assert_eq!(session.title.as_deref(), Some("Fix repository discovery"));
+        assert!(session.title_is_synthetic);
+    }
+
+    #[test]
+    fn empty_custom_title_does_not_mask_ai_title() {
+        let jsonl = concat!(
+            "{\"type\":\"custom-title\",\"customTitle\":\"\"}\n",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Non-empty AI Title\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_empty_then_ai\",\"message\":{\"role\":\"user\",\"content\":\"Fix repository discovery\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "s_empty_then_ai");
+        assert_eq!(session.title.as_deref(), Some("Non-empty AI Title"));
+        assert!(!session.title_is_synthetic);
+    }
+
+    #[test]
+    fn whitespace_title_events_fall_back_to_user_prompt() {
+        let jsonl = concat!(
+            "{\"type\":\"custom-title\",\"customTitle\":\"   \"}\n",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"\t\n\"}\n",
+            "{\"type\":\"user\",\"sessionId\":\"s_ws\",\"message\":{\"role\":\"user\",\"content\":\"Fix repository discovery\"}}\n"
+        );
+        let session = ClaudeCodeAdapter::new().parse_str(jsonl, "s_ws");
+        assert_eq!(session.title.as_deref(), Some("Fix repository discovery"));
+        assert!(session.title_is_synthetic);
     }
 
     #[test]

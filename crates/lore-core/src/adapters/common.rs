@@ -111,7 +111,7 @@ pub(crate) fn finish_parse(
         }
     }
 
-    let native_title = session.title.take();
+    let native_title = session.title.take().filter(|t| !t.trim().is_empty());
     let derived_title = from
         .derived_title
         .clone()
