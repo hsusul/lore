@@ -615,8 +615,6 @@ const ASSIGN_MIN_ENTROPY: f64 = 3.0;
 /// alone would not be enough — an equal span at equal severity would be decided by
 /// detector order rather than by specificity.
 fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
-    // Only spans present before this detector ran count as "already covered".
-    let already = out.len();
     const KEYWORDS: &[&str] = &[
         "password",
         "passwd",
@@ -637,14 +635,21 @@ fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
             let start = from + rel;
             from = start + 1;
 
-            // Word boundary: `token` must not match inside `access_token`,
-            // which has its own (longer, earlier) keyword entry.
-            if start > 0 && is_word_byte(bytes[start - 1]) {
+            // The keyword may be one segment of a longer name (`DB_PASSWORD`,
+            // `STRIPE_SECRET_KEY`), but not part of a word (`mytoken`,
+            // `secretary`). An overlapping keyword such as `token` inside
+            // `access_token` lands on the same value and is dropped below.
+            if start > 0 && bytes[start - 1].is_ascii_alphanumeric() {
                 continue;
             }
             let mut i = start + needle.len();
-            if i < bytes.len() && is_word_byte(bytes[i]) {
+            if i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
                 continue;
+            }
+            if i < bytes.len() && matches!(bytes[i], b'_' | b'-') {
+                i += run_len(bytes, i, |b| {
+                    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')
+                });
             }
 
             // Optional closing quote (`"api_key": …`), whitespace, separator.
@@ -732,7 +737,7 @@ fn scan_generic_assignment(text: &str, bytes: &[u8], out: &mut Vec<Finding>) {
             if shannon_per_char(value.as_bytes()) < ASSIGN_MIN_ENTROPY {
                 continue;
             }
-            let covered = out[..already]
+            let covered = out
                 .iter()
                 .any(|f| f.start < value_end && value_start < f.end);
             if covered {
