@@ -694,6 +694,10 @@ pub struct RedactedDocument {
     /// The message role for a message part, otherwise the projected field
     /// (`title`, `patch`).
     pub label: String,
+    /// The message part's kind (`text`, `tool_result`, ...) for a message
+    /// part, so a reader can tell what a person typed from what a tool
+    /// returned in their turn; `None` for a title or a patch.
+    pub part: Option<String>,
     pub text: String,
 }
 
@@ -711,7 +715,7 @@ pub fn session_documents_page(
     limit: i64,
 ) -> Result<Vec<RedactedDocument>> {
     let mut stmt = conn.prepare(
-        "SELECT sd.id, COALESCE(m.role, sd.field), sd.redacted_text
+        "SELECT sd.id, COALESCE(m.role, sd.field), sd.redacted_text, p.kind
          FROM search_document sd
          LEFT JOIN message_part p ON sd.source_kind = 'message_part' AND p.id = sd.source_id
          LEFT JOIN message m ON m.id = p.message_id
@@ -726,6 +730,7 @@ pub fn session_documents_page(
                 id: row.get(0)?,
                 label: row.get(1)?,
                 text: row.get(2)?,
+                part: row.get(3)?,
             })
         },
     )?;

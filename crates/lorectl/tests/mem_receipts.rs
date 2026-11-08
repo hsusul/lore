@@ -178,20 +178,32 @@ const CONTINUED: &str = "cccccccc-0000-4000-8000-000000000003";
 /// A vault, and an archive holding one Claude Code session of `turns`,
 /// alternating person and agent, the person first.
 fn home_with_claude_session(home: &Path, turns: &[&str]) {
+    let messages: Vec<(&str, serde_json::Value)> = (turns.iter().enumerate())
+        .map(|(i, text)| {
+            if i % 2 == 0 {
+                ("user", serde_json::json!(text))
+            } else {
+                ("assistant", agent_text(text))
+            }
+        })
+        .collect();
+    home_with_claude_messages(home, &messages);
+}
+
+/// An agent message of one text part.
+fn agent_text(text: &str) -> serde_json::Value {
+    serde_json::json!([{ "type": "text", "text": text }])
+}
+
+/// A vault, and an archive holding one Claude Code session of `messages`,
+/// each a role and the message content as Claude Code writes it.
+fn home_with_claude_messages(home: &Path, messages: &[(&str, serde_json::Value)]) {
     ok(&lorectl(home, &["mem", "init"], ""));
     let project = home.join("claude/projects/p");
     std::fs::create_dir_all(&project).unwrap();
     let mut jsonl = String::new();
     let mut parent = serde_json::Value::Null;
-    for (i, text) in turns.iter().enumerate() {
-        let (kind, content) = if i % 2 == 0 {
-            ("user", serde_json::json!(text))
-        } else {
-            (
-                "assistant",
-                serde_json::json!([{ "type": "text", "text": text }]),
-            )
-        };
+    for (i, (kind, content)) in messages.iter().enumerate() {
         let uuid = format!("t{i}");
         let line = serde_json::json!({
             "type": kind, "uuid": uuid, "parentUuid": parent, "sessionId": CONTINUED,
@@ -281,5 +293,103 @@ fn a_receipt_shows_the_turn_the_proposal_quotes() {
              - 2026-08-12 claude-code s: \"I said pin it before anything else runs.\"\n",
         ),
         "...I said pin it before anything else runs."
+    );
+}
+
+/// A lesson about leaving other people's branches alone.
+const BRANCHES: &str = "Don't push to, merge, or edit other people's branches or PRs";
+const BRANCHES_BODY: &str = "Only change work the person owns. Do not push commits to, \
+     merge, rebase or edit a branch or PR someone else opened. If their branch needs a \
+     change, say what and stop.\n\n\
+     Why: the agent pushed onto a teammate's branch and the person had to have it reverted.\n";
+
+/// A person's turn that ran `/ship-mode` with `args` typed after it.
+fn command(args: &str) -> serde_json::Value {
+    serde_json::json!(format!(
+        "<command-message>ship-mode</command-message>\n\
+         <command-name>/ship-mode</command-name>\n\
+         <command-args>{args}</command-args>"
+    ))
+}
+
+#[test]
+fn a_receipt_shows_the_words_typed_after_a_command_not_the_skill_or_a_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    home_with_claude_messages(
+        home,
+        &[
+            (
+                "user",
+                command("leave Sam's branch alone, never push to it"),
+            ),
+            // The skill's text, which Claude Code adds as the person's turn.
+            (
+                "user",
+                serde_json::json!(
+                    "Base directory for this skill: /home/me/.claude/skills/ship-mode\n\n\
+                     # Ship mode\n\nYou own what lands. Push, merge, rebase and edit each \
+                     branch and PR the person owns; verify every change before it lands."
+                ),
+            ),
+            (
+                "assistant",
+                serde_json::json!([{
+                    "type": "tool_use", "id": "read1", "name": "Read",
+                    "input": { "file_path": "/home/me/.claude/skills/ship-mode/shipping.md" },
+                }]),
+            ),
+            // A file the agent read, which arrives in the person's turn.
+            (
+                "user",
+                serde_json::json!([{
+                    "type": "tool_result", "tool_use_id": "read1",
+                    "content": "### Shipping\n\nYou own what lands. Push commits, merge each \
+                                PR, rebase a branch someone opened, edit and change what \
+                                needs it, then stop.",
+                }]),
+            ),
+            ("assistant", agent_text("Leaving it alone.")),
+        ],
+    );
+    assert_eq!(
+        excerpt_for(home, BRANCHES, BRANCHES_BODY),
+        "leave Sam's branch alone, never push to it"
+    );
+}
+
+#[test]
+fn a_receipt_shows_the_persons_turn_most_about_the_lesson() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    home_with_claude_messages(
+        home,
+        &[
+            // A request that shares two words with the lesson by chance.
+            (
+                "user",
+                command(
+                    "can we start merging my older prs, group them prior to the launch, \
+                     so 519 and below, group so we don't have to test every single one \
+                     and make sure it works then start merging",
+                ),
+            ),
+            ("assistant", agent_text("Merging 519 and below.")),
+            // A go-ahead, all of whose words are the lesson's.
+            ("user", serde_json::json!("Yes, merge them")),
+            (
+                "assistant",
+                agent_text("Merged, and pushed a fix onto Sam's branch."),
+            ),
+            (
+                "user",
+                serde_json::json!("don't touch any of Sam's stuff, revert it"),
+            ),
+            ("assistant", agent_text("Reverted.")),
+        ],
+    );
+    assert_eq!(
+        excerpt_for(home, BRANCHES, BRANCHES_BODY),
+        "don't touch any of Sam's stuff, revert it"
     );
 }

@@ -584,6 +584,21 @@ pub fn related_words(text: &str) -> Vec<String> {
     words
 }
 
+/// `word` with a common English plural or verb ending folded, so the forms of
+/// one word compare equal: "filing" and "file" are "fil", "reverted" and
+/// "revert" are "revert". A stem is kept at three or more letters.
+#[must_use]
+pub fn stem(word: &str) -> String {
+    for ending in ["ing", "ed", "es", "s", "e"] {
+        if let Some(stem) = word.strip_suffix(ending) {
+            if stem.chars().count() >= 3 {
+                return stem.to_owned();
+            }
+        }
+    }
+    word.to_owned()
+}
+
 /// A word held by at most this many notes is never generic, so a small vault
 /// keeps every word.
 const SPECIFIC_NOTES: i64 = 3;

@@ -15,7 +15,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::index::related_words;
+use crate::index::{related_words, stem};
 use crate::note::{Note, Scope, Status};
 
 /// The share of content words two titles must share to be one note twice.
@@ -24,19 +24,7 @@ pub const NEAR_IDENTICAL: f64 = 0.7;
 /// The content words of a title with common English endings folded, so the
 /// forms of one word compare equal.
 fn stems(title: &str) -> BTreeSet<String> {
-    related_words(title)
-        .into_iter()
-        .map(|word| {
-            for ending in ["ing", "ed", "es", "s", "e"] {
-                if let Some(stem) = word.strip_suffix(ending) {
-                    if stem.chars().count() >= 3 {
-                        return stem.to_owned();
-                    }
-                }
-            }
-            word
-        })
-        .collect()
+    related_words(title).iter().map(|word| stem(word)).collect()
 }
 
 /// Whether two titles are near-identical; see the module docs. A title with
