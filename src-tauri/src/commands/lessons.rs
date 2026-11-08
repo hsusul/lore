@@ -35,8 +35,6 @@ const CODEX_SKILL: &str = include_str!("../../../plugins/codex/skills/lore-lesso
 /// What the headless run adds to the skill: it starts in no repository.
 const FROM_THE_APP: &str = "\n\n## Running from the Lore app\n\n\
 You were started by the Lore app, not in a repository, so `cwd_repo` is null. \
-For a rule whose receipts all share one non-null `repo.scope`, file it with `scope` set to repo \
-and `cwd` set to that receipt's `repo_path`. File every other rule as global. \
 Do not ask questions; nobody is there to answer. End with the report.";
 
 /// The Lore tools, as Claude Code names a server called `lore`.
