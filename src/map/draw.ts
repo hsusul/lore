@@ -8,15 +8,13 @@ export interface View {
 }
 
 export interface Palette {
-  /** Lessons, and the selected dot's halo. */
+  /** Lessons, the selected dot's halo, and the ring on the keyboard's place. */
   ink: string;
   /** Notes. */
   quiet: string;
   name: string;
   count: string;
   ground: string;
-  /** The ring on the keyboard's place. */
-  focus: string;
   font: string;
 }
 
@@ -134,7 +132,7 @@ export function draw(
   const ring = cluster ? { x: cluster.x, y: cluster.y, r: cluster.r * s + 10 } : dot ? { x: dot.x, y: dot.y, r: dotRadius(dot, s) + 5 } : null;
   if (ring) {
     g.globalAlpha = 1;
-    g.strokeStyle = palette.focus;
+    g.strokeStyle = palette.ink;
     g.lineWidth = 2;
     g.beginPath();
     g.arc(ring.x * s + tx, ring.y * s + ty, ring.r, 0, 2 * Math.PI);

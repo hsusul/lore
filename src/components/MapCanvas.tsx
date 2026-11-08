@@ -97,7 +97,6 @@ export function MapCanvas({
         name: token("--mist-t1"),
         count: token("--mist-t2"),
         ground: token("--mist-bg"),
-        focus: token("--focus-ring"),
         font: getComputedStyle(c).fontFamily,
       },
       selectedId,
