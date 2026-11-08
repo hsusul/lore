@@ -93,12 +93,16 @@ fn picks_plain_replies_after_an_agent_turn_inside_the_window() {
     let found = replies_in(&turns, &Limits::default(), AUG_2);
     // Not the correction the rules picked, the slash command, the
     // continuation summary, the interrupt notice, the bare image, the loaded
-    // skill text, the user turn after a user turn, or the reply older than
-    // the window.
-    assert_eq!(texts(&found), ["nice, now the docs", "ok ship it"]);
+    // skill text, or the reply older than the window. The second of two
+    // turns in a row answers the same agent turn as the first.
+    assert_eq!(
+        texts(&found),
+        ["nice, now the docs", "and the changelog too", "ok ship it"]
+    );
     assert!(found.iter().all(|c| c.signal == Signal::Reply));
     assert_eq!(found[0].preceding.as_deref(), Some("Done with part A."));
-    assert_eq!(found[1].following.as_deref(), Some("Shipped."));
+    assert_eq!(found[1].preceding.as_deref(), Some("Done with part A."));
+    assert_eq!(found[2].following.as_deref(), Some("Shipped."));
 
     let everything = replies_in(&turns, &Limits::default(), i64::MIN);
     assert_eq!(
@@ -106,6 +110,7 @@ fn picks_plain_replies_after_an_agent_turn_inside_the_window() {
         [
             "looks fine but rename the helper",
             "nice, now the docs",
+            "and the changelog too",
             "ok ship it"
         ]
     );
@@ -132,11 +137,18 @@ fn a_reply_keeps_its_id_and_stands_alone() {
         .iter()
         .map(|l| (l.text.as_str(), l.receipts.len()))
         .collect();
-    assert_eq!(shape, [("ok ship it", 1), ("nice, now the docs", 1)]);
+    assert_eq!(
+        shape,
+        [
+            ("ok ship it", 1),
+            ("and the changelog too", 1),
+            ("nice, now the docs", 1)
+        ]
+    );
 
     // A run reads the rule-mined corrections and the window's replies.
     let pending = unconsidered(&turns, &BTreeSet::new(), AUG_2);
-    assert_eq!(pending.len(), 3, "{pending:?}");
+    assert_eq!(pending.len(), 4, "{pending:?}");
     assert!(first.iter().all(|id| pending.contains(id)));
     let seen: BTreeSet<CorrectionId> = pending.iter().cloned().collect();
     assert!(unconsidered(&turns, &seen, AUG_2).is_empty());
