@@ -326,11 +326,15 @@ The server offers six tools. All but `propose_memory` are read only.
 
 ## Privacy
 
-Everything stays on your machine. Lore has no accounts, no telemetry, and no server. The archive code, the memory and skills code, `lorectl`, and the desktop shell have no network code. CI scans their sources for networking APIs. For the archive, memory, skills, and `lorectl` crates it also checks the dependency graph for networking crates and runs the tests with the network denied (`scripts/egress-check.sh`). The app does not check for updates: its updater is compiled out unless it is built with the `updater` feature.
+The archive and the vault stay on your machine. Text from them leaves only through an agent you signed in to, as described below. Lore has no accounts, no telemetry, and no server. The archive code, the memory and skills code, `lorectl`, and the desktop shell have no network code. CI scans their sources for networking APIs. For the archive, memory, skills, and `lorectl` crates it also checks the dependency graph for networking crates and runs the tests with the network denied (`scripts/egress-check.sh`). The app does not check for updates: its updater is compiled out unless it is built with the `updater` feature.
 
 Before text is indexed, Lore scans it for secrets with fixed rules for known key formats plus an entropy check. Flagged spans are masked. Search, snippets, exports, and MCP results use the masked text. The archive still holds the original text, and so does the original log. Proposals are redacted before they reach the inbox. Redaction is a safeguard, not a promise that nothing secret remains.
 
-When you connect `lorectl mcp` to an agent, the redacted text it returns goes to that agent's model provider, as any tool result does.
+In the app and `lorectl`, three things send text to a model provider. Claude Code sends it to Anthropic and Codex sends it to OpenAI, under your own login.
+
+- When you connect `lorectl mcp` to an agent, the redacted text it returns goes to that agent's model provider, as any tool result does.
+- **Find lessons** in the app starts Claude Code or Codex with Lore's MCP server. The agent reads your new corrections, the turns around them, and your notes through Lore's tools, which return redacted text. The app also runs it on its own, at most once a day when there are new corrections, with Sonnet for Claude Code. **Find lessons automatically** in Settings turns that off.
+- **Propose an edit** on a skill sends the agent that skill's SKILL.md and up to eight redacted corrections made right after it ran, each with what the agent had just said.
 
 ### Replays talk to a model provider
 
