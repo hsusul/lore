@@ -37,6 +37,7 @@ import {
   buildSampleSessions,
   type SampleSession,
 } from "./sample-data";
+import { buildSampleNotes, buildSampleProposals, buildSampleSkills } from "./sample-memory";
 
 type Args = Record<string, unknown>;
 export type MockHandler = (args: Args) => unknown;
@@ -244,6 +245,9 @@ export function createMockHandlers(
   let assignments = new Map(Object.entries(SAMPLE_FOLDER_ASSIGNMENTS));
   let settings = new Map(Object.entries(SAMPLE_SETTINGS));
   let backup = { ...SAMPLE_BACKUP_SCHEDULE };
+  let notes = buildSampleNotes();
+  let proposals = buildSampleProposals(now);
+  const skills = buildSampleSkills(now);
   let autoLessons: AutoLessonsDto = {
     enabled: true,
     running: false,
@@ -497,17 +501,7 @@ export function createMockHandlers(
       },
     ],
 
-    list_notes: () => [
-      {
-        id: "01JD0000000000000000000001",
-        path: "global/never-push-to-main.md",
-        title: "Never push to main",
-        scope: "global",
-        note_type: "convention",
-        excerpt: "Open a PR.",
-        repo_name: null,
-      },
-    ],
+    list_notes: () => notes.map((n) => ({ ...n })),
     agents_read: () => ({
       repo_key: null,
       repo_name: null,
@@ -521,24 +515,30 @@ export function createMockHandlers(
     }),
 
     accept_lesson: () => "global/use-pnpm-not-npm.md",
-    retire_note: () => "global/never-push-to-main.md",
+    retire_note: (a) => {
+      const note = notes.find((n) => n.id === asString(a.key) || n.path === asString(a.key));
+      notes = notes.filter((n) => n !== note);
+      return note?.path ?? "global/never-push-to-main.md";
+    },
     edit_note: () => "global/never-push-to-main.md",
     account_name: () => "Sample User",
-    list_proposals: () => [
-      {
-        id: "01JD0000000000000000000021",
-        title: "Use pnpm, not npm",
-        body: 'The agent ran npm install, and the person wanted pnpm.\n\nReceipts:\n- "no, use pnpm not npm" (claude-code, session s1, 2026-10-12)\n',
-        scope: "global",
-        note_type: "convention",
-        agent_id: "claude-code",
-        session_id: "s1",
-        repo_name: null,
-        proposed_ms: 1_785_751_203_000,
-      },
-    ],
-    accept_proposal: () => "global/use-pnpm-not-npm.md",
-    reject_proposal: () => undefined,
+    list_proposals: () => proposals.map((p) => ({ ...p })),
+    accept_proposal: (a) => {
+      const proposal = proposals.find((p) => p.id === asString(a.id));
+      proposals = proposals.filter((p) => p !== proposal);
+      if (!proposal) return "global/use-pnpm-not-npm.md";
+      const folder = proposal.repo_name ? `repos/${proposal.repo_name}` : "global";
+      const title = typeof a.title === "string" && a.title ? a.title : proposal.title;
+      const path = `${folder}/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`;
+      notes = [
+        ...notes,
+        { id: proposal.id, path, title, scope: proposal.scope, note_type: proposal.note_type, excerpt: "", repo_name: proposal.repo_name },
+      ];
+      return path;
+    },
+    reject_proposal: (a) => {
+      proposals = proposals.filter((p) => p.id !== asString(a.id));
+    },
     find_lessons: () => "Filed: 1 rule.",
     lesson_agents: () => [
       { id: "claude-code", label: "Claude Code", installed: true, signed_in: true, sign_in: "claude auth login" },
@@ -549,10 +549,7 @@ export function createMockHandlers(
       autoLessons = { ...autoLessons, enabled: Boolean(a.enabled) };
       return { ...autoLessons };
     },
-    skill_usage: () => [
-      { skill: "code-review", uses: 22, sessions: 15, last_ms: 1_785_751_203_000, reprompts: [{ session_id: "s1", agent_id: "claude-code", repo: "lore", at_ms: 1_785_751_203_000, text: "no, you missed the tests, look again", preceding: "Reviewed it, looks fine." }], editable_path: "/Users/you/.claude/skills/code-review/SKILL.md" },
-      { skill: "taste-skill", uses: 0, sessions: 0, last_ms: null, reprompts: [], editable_path: null },
-    ],
+    skill_usage: () => skills,
     draft_skill_edit: () => ({
       path: "/Users/you/.claude/skills/code-review/SKILL.md",
       summary: "Read the tests before approving a change.",
