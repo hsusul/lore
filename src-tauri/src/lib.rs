@@ -301,4 +301,32 @@ mod tests {
         let res = validate_export_path(&valid_path, &archive_dir, &registry, &config).unwrap();
         assert_eq!(res, valid_path);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_export_replaces_a_symlink_without_writing_through_it() {
+        let temp = TestTempDir::new("export_symlink");
+        let victim = temp.path().join("victim.md");
+        std::fs::write(&victim, "original").unwrap();
+        let link = temp.path().join("export.md");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+        write_export(&link, "exported").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original");
+        assert!(!std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "exported");
+    }
+
+    #[test]
+    fn write_export_overwrites_a_regular_file_and_leaves_no_temp_file() {
+        let temp = TestTempDir::new("export_overwrite");
+        let target = temp.path().join("export.md");
+        std::fs::write(&target, "old").unwrap();
+
+        write_export(&target, "new").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
 }

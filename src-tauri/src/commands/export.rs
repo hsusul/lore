@@ -118,6 +118,10 @@ pub async fn save_session_export(
     let markdown = lore_core::export::export_session_markdown(&conn, &id, include_secrets)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "session not found".to_string())?;
-    std::fs::write(&target_path, markdown).map_err(|e| e.to_string())?;
+    write_export(&target_path, &markdown)?;
     Ok(true)
+}
+
+pub fn write_export(target: &Path, contents: &str) -> Result<(), String> {
+    std::fs::write(target, contents).map_err(|e| e.to_string())
 }
