@@ -2,6 +2,8 @@
 //! a scan of recent sessions, and the lessons in them, then what to do next.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -10,9 +12,9 @@ fn lorectl(home: &Path, args: &[&str]) -> Output {
     lorectl_in(home, args, "")
 }
 
-/// `lorectl args` with `stdin` as its scripted input.
-fn lorectl_in(home: &Path, args: &[&str], stdin: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+fn command(home: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lorectl"));
+    command
         .args(args)
         .env("HOME", home)
         .env("LORE_VAULT_DIR", home.join("vault"))
@@ -20,7 +22,19 @@ fn lorectl_in(home: &Path, args: &[&str], stdin: &str) -> Output {
         .env("CLAUDE_CONFIG_DIR", home.join("claude"))
         .env("CODEX_HOME", home.join("codex"))
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    command
+}
+
+/// `lorectl args` as a person runs it, typing `answers` at a terminal. The
+/// terminal shows what they type, so stdout has only the prompts.
+fn person(home: &Path, args: &[&str], answers: &str) -> Output {
+    common::on_a_terminal(&mut command(home, args), answers)
+}
+
+/// `lorectl args` with `stdin` as its piped input.
+fn lorectl_in(home: &Path, args: &[&str], stdin: &str) -> Output {
+    let mut child = command(home, args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -299,7 +313,7 @@ fn review_a_keeps_the_suggested_rule_as_a_note_and_a_second_run_shows_it_kept() 
     two_lessons(home);
     let vault = home.join("vault");
 
-    let first = masked(&lorectl_in(home, &["init", "--review"], "a\ns\n"));
+    let first = masked(&person(home, &["init", "--review"], "a\ns\n"));
     let [docs, fmt] = <[String; 2]>::try_from(ids(&first)).unwrap();
     let docs_rule = "Docs are never tracked in git";
     let fmt_rule = "Always run cargo fmt before you commit";
@@ -308,8 +322,8 @@ fn review_a_keeps_the_suggested_rule_as_a_note_and_a_second_run_shows_it_kept() 
     assert_eq!(
         first,
         format!(
-            "{}{docs_block}{PROMPT}a\n      kept global/docs-are-never-tracked-in-git.md\n\n\
-             {fmt_block}{PROMPT}s\n\n{}",
+            "{}{docs_block}{PROMPT}      kept global/docs-are-never-tracked-in-git.md\n\n\
+             {fmt_block}{PROMPT}\n{}",
             header(home),
             kept(1)
         )
@@ -332,7 +346,7 @@ fn review_a_keeps_the_suggested_rule_as_a_note_and_a_second_run_shows_it_kept() 
 
     // Again, with stdin at its end: the kept lesson is not offered, and the
     // end of input stops the review at the next one.
-    let second = masked(&lorectl_in(home, &["init", "--review"], ""));
+    let second = masked(&person(home, &["init", "--review"], ""));
     assert_eq!(
         second,
         format!(
@@ -366,7 +380,7 @@ fn review_e_keeps_the_new_text_and_an_empty_edit_keeps_the_suggestion() {
 
     // A stray answer asks once more.
     let script = "e\nKeep docs out of git\nx\ne\n\n";
-    let out = masked(&lorectl_in(home, &["init", "--review"], script));
+    let out = masked(&person(home, &["init", "--review"], script));
     let [docs, fmt] = <[String; 2]>::try_from(ids(&out)).unwrap();
     let docs_block = block(
         home,
@@ -381,8 +395,8 @@ fn review_e_keeps_the_new_text_and_an_empty_edit_keeps_the_suggestion() {
     assert_eq!(
         out,
         format!(
-            "{}{docs_block}{PROMPT}e\n      rule: Keep docs out of git\n      kept global/keep-docs-out-of-git.md\n\n\
-             {fmt_block}{PROMPT}x\n{PROMPT}e\n      rule: \n      kept global/always-run-cargo-fmt-before-you-commit.md\n\n{}",
+            "{}{docs_block}{PROMPT}      rule:       kept global/keep-docs-out-of-git.md\n\n\
+             {fmt_block}{PROMPT}{PROMPT}      rule:       kept global/always-run-cargo-fmt-before-you-commit.md\n\n{}",
             header(home),
             kept(2)
         )
@@ -410,7 +424,7 @@ fn review_s_and_two_stray_answers_leave_the_vault_unchanged() {
     two_lessons(home);
     let vault = home.join("vault");
 
-    let out = masked(&lorectl_in(home, &["init", "--review"], "s\nx\ny\n"));
+    let out = masked(&person(home, &["init", "--review"], "s\nx\ny\n"));
     let [docs, fmt] = <[String; 2]>::try_from(ids(&out)).unwrap();
     let docs_block = block(
         home,
@@ -425,7 +439,7 @@ fn review_s_and_two_stray_answers_leave_the_vault_unchanged() {
     assert_eq!(
         out,
         format!(
-            "{}{docs_block}{PROMPT}s\n\n{fmt_block}{PROMPT}x\n{PROMPT}y\n\n{}",
+            "{}{docs_block}{PROMPT}\n{fmt_block}{PROMPT}{PROMPT}\n{}",
             header(home),
             kept(0)
         )
@@ -445,7 +459,7 @@ fn review_q_stops_before_the_next_lesson() {
     two_lessons(home);
     let vault = home.join("vault");
 
-    let out = masked(&lorectl_in(home, &["init", "--review"], "q\na\n"));
+    let out = masked(&person(home, &["init", "--review"], "q\na\n"));
     let [docs] = <[String; 1]>::try_from(ids(&out)).unwrap();
     let docs_block = block(
         home,
@@ -457,7 +471,7 @@ fn review_q_stops_before_the_next_lesson() {
     );
     assert_eq!(
         out,
-        format!("{}{docs_block}{PROMPT}q\n\n{}", header(home), kept(0))
+        format!("{}{docs_block}{PROMPT}\n{}", header(home), kept(0))
     );
     assert!(!vault.join("_inbox").exists(), "quitting filed a proposal");
     assert_eq!(git(&vault, &["rev-list", "--count", "HEAD"]), "1\n");
@@ -562,16 +576,12 @@ fn review_accepts_one_proposal_and_rejects_the_other_with_a_reason() {
     let (tidy, friday) = two_proposals(home);
     let vault = home.join("vault");
 
-    let out = masked(&lorectl_in(
-        home,
-        &["init", "--review"],
-        "a\nr\ntoo vague\n",
-    ));
+    let out = masked(&person(home, &["init", "--review"], "a\nr\ntoo vague\n"));
     assert_eq!(
         out,
         format!(
-            "{}{}{INBOX_PROMPT}a\n      accepted global/tidy-up-the-repository-weekly.md\n\n\
-             {}{INBOX_PROMPT}r\n      reason: too vague\n      rejected\n\n\
+            "{}{}{INBOX_PROMPT}      accepted global/tidy-up-the-repository-weekly.md\n\n\
+             {}{INBOX_PROMPT}      reason:       rejected\n\n\
              Lessons    none found in your sessions yet.\n\n{}",
             inbox_header(home),
             tidy_block(home, &tidy),
@@ -626,11 +636,11 @@ fn review_skip_leaves_a_proposal_pending_and_an_empty_reason_is_filled_in() {
     let (tidy, friday) = two_proposals(home);
     let vault = home.join("vault");
 
-    let out = masked(&lorectl_in(home, &["init", "--review"], "s\nr\n\n"));
+    let out = masked(&person(home, &["init", "--review"], "s\nr\n\n"));
     assert_eq!(
         out,
         format!(
-            "{}{}{INBOX_PROMPT}s\n\n{}{INBOX_PROMPT}r\n      reason: \n      rejected\n\n\
+            "{}{}{INBOX_PROMPT}\n{}{INBOX_PROMPT}      reason:       rejected\n\n\
              Lessons    none found in your sessions yet.\n\n{}",
             inbox_header(home),
             tidy_block(home, &tidy),
@@ -654,16 +664,38 @@ fn review_skip_leaves_a_proposal_pending_and_an_empty_reason_is_filled_in() {
 }
 
 #[test]
+fn review_with_piped_answers_is_refused_and_accepts_nothing() {
+    // Answers piped in could come from an agent's shell tool, so `--review`
+    // without a terminal is refused before anything is offered.
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let (tidy, friday) = two_proposals(home);
+    two_lessons(home);
+
+    let out = lorectl_in(home, &["init", "--review"], "a\na\na\na\n");
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("`lorectl init --review` needs a person at a terminal"),
+        "{stderr}"
+    );
+    let still = pending(home);
+    assert!(still.contains(&tidy) && still.contains(&friday), "{still}");
+    assert!(!home.join("vault/global").exists(), "a note was written");
+}
+
+#[test]
 fn review_q_on_a_proposal_stops_the_review() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     let (tidy, friday) = two_proposals(home);
 
-    let out = masked(&lorectl_in(home, &["init", "--review"], "q\na\n"));
+    let out = masked(&person(home, &["init", "--review"], "q\na\n"));
     assert_eq!(
         out,
         format!(
-            "{}{}{INBOX_PROMPT}q\n\n{}",
+            "{}{}{INBOX_PROMPT}\n{}",
             inbox_header(home),
             tidy_block(home, &tidy),
             kept(0)
@@ -733,7 +765,7 @@ fn review_says_a_lesson_was_rejected_or_is_waiting_instead_of_kept() {
     );
 
     // The fmt proposal is still pending: skip it in the inbox step.
-    let out = masked(&lorectl_in(home, &["init", "--review"], "s\n"));
+    let out = masked(&person(home, &["init", "--review"], "s\n"));
     let docs_block = block(
         home,
         &docs,
@@ -768,7 +800,7 @@ fn the_last_line_counts_accepted_proposals_apart_from_kept_lessons() {
     two_lessons(home);
     // Accept the first proposal, skip the second, keep the first lesson,
     // skip the second.
-    let out = masked(&lorectl_in(home, &["init", "--review"], "a\ns\na\ns\n"));
+    let out = masked(&person(home, &["init", "--review"], "a\ns\na\ns\n"));
     assert!(out.ends_with(&done(1, 1)), "{out}");
 }
 

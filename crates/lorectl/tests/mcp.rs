@@ -363,19 +363,34 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-/// `lorectl mem <args>` against `<home>/vault`, with `HOME` at `home`.
-/// Returns stdout.
-fn mem(home: &Path, args: &[&str]) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+fn mem_command(home: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lorectl"));
+    command
         .arg("mem")
         .args(args)
         .arg("--vault")
         .arg(home.join("vault"))
         .envs(GIT_ENV)
         .env("HOME", home)
-        .env_remove("LORE_VAULT_DIR")
-        .output()
-        .unwrap();
+        .env_remove("LORE_VAULT_DIR");
+    command
+}
+
+/// `lorectl mem <args>` against `<home>/vault`, with `HOME` at `home`.
+/// Returns stdout.
+fn mem(home: &Path, args: &[&str]) -> String {
+    let out = mem_command(home, args).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// [`mem`] as a person runs it, at a terminal: how a note is accepted.
+fn person(home: &Path, args: &[&str]) -> String {
+    let out = common::on_a_terminal(&mut mem_command(home, args), "");
     assert!(
         out.status.success(),
         "{}",
@@ -1302,7 +1317,7 @@ fn propose_memory_with_enforce_round_trips_through_accept_into_the_note() {
         listed.contains(r"  enforce bash '(?i)co-authored-by:\s*claude' unless 'it's fine'"),
         "{listed}"
     );
-    let accepted = mem(home.path(), &["accept", &id]);
+    let accepted = person(home.path(), &["accept", &id]);
     let rel = accepted.split_whitespace().nth(1).unwrap();
     let text = std::fs::read_to_string(vault.join(rel)).unwrap();
     assert!(
@@ -1330,7 +1345,7 @@ fn propose_memory_with_enforce_round_trips_through_accept_into_the_note() {
         .as_str()
         .unwrap()
         .to_owned();
-    let accepted = mem(home.path(), &["accept", &first]);
+    let accepted = person(home.path(), &["accept", &first]);
     let (rel, note_id) = {
         let mut words = accepted.split_whitespace().skip(1);
         (
@@ -1357,7 +1372,7 @@ fn propose_memory_with_enforce_round_trips_through_accept_into_the_note() {
         .as_str()
         .unwrap()
         .to_owned();
-    mem(home.path(), &["accept", &second]);
+    person(home.path(), &["accept", &second]);
     let text = std::fs::read_to_string(vault.join(&rel)).unwrap();
     assert!(
         text.contains("enforce:\n  - tool: path\n    pattern: '(^|/)PLAN\\.md$'\n"),

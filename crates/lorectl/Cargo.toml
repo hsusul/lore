@@ -53,3 +53,6 @@ sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
+# A pseudo-terminal for the tests that run `mem accept`, `mem retire`, and
+# `init --review` as a person would. Already in the graph at this version.
+rustix = { version = "1", features = ["pty"] }

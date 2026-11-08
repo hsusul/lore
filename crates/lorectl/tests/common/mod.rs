@@ -1,7 +1,9 @@
 //! Helpers shared by the `lorectl` integration tests.
 #![allow(dead_code, clippy::expect_used, clippy::unwrap_used)]
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 
 /// Every entry under `root`, relative and sorted, for asserting that a command
 /// left an archive exactly as it found it.
@@ -46,4 +48,32 @@ pub fn empty_homes() -> tempfile::TempDir {
 #[must_use]
 pub fn db_path(archive: &Path) -> PathBuf {
     archive.join(lore_core::paths::ARCHIVE_DB_FILENAME)
+}
+
+/// Run `command` the way a person does, with a terminal on its stdin, typing
+/// `input` (whole lines) and then the end-of-input key. Stdout and stderr are
+/// piped. `mem accept`, `mem retire`, and `init --review` refuse any other
+/// stdin.
+pub fn on_a_terminal(command: &mut Command, input: &str) -> Output {
+    use rustix::fs::{Mode, OFlags};
+    use rustix::pty::{self, OpenptFlags};
+    assert!(input.is_empty() || input.ends_with('\n'), "{input:?}");
+    let keyboard = pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
+    pty::grantpt(&keyboard).unwrap();
+    pty::unlockpt(&keyboard).unwrap();
+    let name = pty::ptsname(&keyboard, Vec::new()).unwrap();
+    let terminal = rustix::fs::open(&name, OFlags::RDWR | OFlags::NOCTTY, Mode::empty()).unwrap();
+    let child = command
+        .stdin(terminal)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Ctrl-D at the start of a line, a terminal's end of input. The keyboard
+    // stays open until the child exits, so no typed line is dropped.
+    let mut keyboard = std::fs::File::from(keyboard);
+    keyboard
+        .write_all(format!("{input}\x04").as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
 }
