@@ -160,8 +160,52 @@ fn pinning_fills_the_hash_and_the_head_commit() {
     );
     assert_eq!(pinned.commit.unwrap().as_str(), &head[..12]);
     let path_only = tree.pin(&anchor(None)).unwrap();
-    assert_eq!(path_only.hash, None);
+    let digest = hash_lines([&b"one"[..], b"two"]);
+    assert_eq!(
+        path_only.hash,
+        Some(LineHash::parse(&format!("b3:{}", &digest[..16])).unwrap()),
+        "a whole-file anchor hashes every line"
+    );
     assert_eq!(path_only.commit.unwrap().as_str(), &head[..12]);
+}
+
+#[test]
+fn a_whole_file_anchor_sees_its_file_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    repo(root, None);
+    commit(root, "a.txt", "one\ntwo\n", "a");
+    let anchor = WorkTree::new(root)
+        .pin(&Anchor {
+            path: RelPath::parse("a.txt").unwrap(),
+            lines: None,
+            hash: None,
+            commit: None,
+        })
+        .unwrap();
+    assert_eq!(anchor.check(root), Freshness::Fresh);
+    fs::write(root.join("a.txt"), "one\r\ntwo\r\n").unwrap();
+    assert_eq!(anchor.check(root), Freshness::Fresh, "CRLF reads as LF");
+    fs::write(root.join("a.txt"), "").unwrap();
+    assert_eq!(anchor.check(root), Freshness::Changed, "emptied");
+    fs::write(root.join("a.txt"), "one\nthree\n").unwrap();
+    assert_eq!(anchor.check(root), Freshness::Changed, "rewritten");
+
+    fs::write(root.join("a.txt"), "one\ntwo\n").unwrap();
+    git(root, &["mv", "--", "a.txt", "b.txt"]);
+    assert_eq!(
+        anchor.check(root),
+        Freshness::Moved {
+            lines: lines("1-2")
+        },
+        "renamed and unchanged"
+    );
+    fs::write(root.join("b.txt"), "one\ntwo\nthree\n").unwrap();
+    assert_eq!(
+        anchor.check(root),
+        Freshness::Changed,
+        "renamed and rewritten"
+    );
 }
 
 #[test]
