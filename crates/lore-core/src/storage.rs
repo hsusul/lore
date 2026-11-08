@@ -183,6 +183,8 @@ const READER_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// readers room for FTS sorts. They return rows, so `execute_batch` is used; it
 /// ignores results.
 fn configure_common(conn: &Connection) -> Result<()> {
+    // The views decode compressed bodies with these ([`crate::codec`]).
+    crate::codec::register(conn)?;
     conn.execute_batch(
         "PRAGMA cache_size = -65536;\n\
          PRAGMA temp_store = MEMORY;\n\

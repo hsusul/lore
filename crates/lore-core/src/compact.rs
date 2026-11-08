@@ -16,6 +16,11 @@
 //!   exactly once, it is stored with the output replaced by a marker
 //!   ([`slim_tool_output`]) and `message_part_full` (migration 0020) puts it
 //!   back from `text`. [`slim_tool_outputs`] converts older rows.
+//! - **Bodies compressed.** Once the conversions above are done,
+//!   [`compress_bodies`] trains one zstd dictionary per compressed column
+//!   ([`crate::codec::COLUMNS`]) from a sample of the archive's own rows and
+//!   rewrites the rows compressed. The views of migration 0021 decode them,
+//!   and later ingests write compressed values directly.
 //! - **Free pages leave the file.** A forget or a re-ingest frees pages that
 //!   SQLite otherwise keeps inside the file for reuse. With `auto_vacuum =
 //!   INCREMENTAL`, [`reclaim_free_pages`] hands them back. New archives get the
@@ -49,12 +54,18 @@ pub const RECLAIM_MIN_FREE_PAGES: i64 = 2048;
 /// The setting that records the one-time `VACUUM`'s outcome, content-free.
 pub const VACUUM_SETTING: &str = "compact.vacuum";
 
-/// The setting that records how many attachment rows the last [`compact`]
-/// could not verify and left inline ([`DedupeReport::failed`]). A count only.
+/// The setting that records how many rows the last [`compact`] could not
+/// verify and left as they were: attachments left inline
+/// ([`DedupeReport::failed`]) and values left uncompressed
+/// ([`ZstdReport::failed`]). A count only.
 pub const FAILED_ROWS_SETTING: &str = "compact.failed_rows";
 
+/// The attachment part of [`FAILED_ROWS_SETTING`]: rows the backup check
+/// tolerates as inline.
+pub const DEDUPE_FAILED_SETTING: &str = "compact.dedupe_failed_rows";
+
 /// The setting that records why the last [`compact`] failed, content-free:
-/// `{"stage": "backup" | "dedupe" | "slim" | "vacuum" | "reclaim",
+/// `{"stage": "backup" | "dedupe" | "slim" | "zstd" | "vacuum" | "reclaim",
 /// "sqlite_code": n | null}`,
 /// or JSON `null` after a run that finished without error.
 pub const ERROR_SETTING: &str = "compact.error";
@@ -71,17 +82,30 @@ pub fn body_hash(body: &str) -> String {
 /// happens unless the table was damaged, and the caller then keeps the body
 /// inline, so a bad row can never stand in for good content.
 ///
+/// Stored compressed once `part_body.body` has a dictionary. The row held
+/// under the hash is decoded here rather than through `part_body_full`, so a
+/// damaged one also reads as "not the same" instead of failing the ingest.
+///
 /// Runs in the caller's transaction.
-pub(crate) fn store_body(tx: &Connection, body: &str) -> Result<Option<String>> {
+pub(crate) fn store_body(
+    tx: &Connection,
+    packer: &crate::codec::Packer,
+    body: &str,
+) -> Result<Option<String>> {
     let hash = body_hash(body);
     tx.prepare_cached(
         "INSERT INTO part_body (hash, body) VALUES (?1, ?2) ON CONFLICT(hash) DO NOTHING",
     )?
-    .execute(params![hash, body])?;
+    .execute(params![hash, packer.pack(&crate::codec::PART_BODY, body)])?;
     let same: bool = tx
-        .prepare_cached("SELECT body FROM part_body WHERE hash = ?1")?
+        .prepare_cached(
+            "SELECT body, (SELECT d.dict FROM zstd_dict d WHERE d.id = lore_dict_id(body))
+             FROM part_body WHERE hash = ?1",
+        )?
         .query_row([&hash], |row| {
-            Ok(row.get_ref(0)?.as_bytes()? == body.as_bytes())
+            let dict = row.get_ref(1)?.as_blob_or_null()?;
+            Ok(crate::codec::decode(row.get_ref(0)?, dict)
+                .is_ok_and(|stored| stored.as_deref() == Some(body)))
         })?;
     Ok(same.then_some(hash))
 }
@@ -203,6 +227,50 @@ pub(crate) fn delete_all_orphan_bodies(tx: &Connection) -> Result<usize> {
     )?)
 }
 
+/// Delete every dictionary no row of its column uses any more, and the
+/// conversion cursor of a column left with none, so a later compaction trains
+/// and converts afresh. Runs in the caller's transaction, after a forget has
+/// deleted rows: a dictionary holds fragments of the rows it was trained on,
+/// so one that outlives them would keep forgotten text in the archive.
+///
+/// A column's rows are searched newest first: its newest rows use its newest
+/// dictionary, so a dictionary still in use is found at once. A conversion
+/// that loaded a dictionary deleted here stops before writing with it
+/// ([`convert_column`]), and ingest loads dictionaries in its own transaction.
+pub(crate) fn delete_unused_dicts(tx: &Connection) -> Result<usize> {
+    let dicts: Vec<(i64, String)> = tx
+        .prepare("SELECT id, \"column\" FROM zstd_dict")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut removed = 0;
+    for (id, key) in dicts {
+        let Some(column) = crate::codec::COLUMNS.iter().find(|c| c.key == key) else {
+            continue;
+        };
+        let used = tx
+            .prepare_cached(&format!(
+                "SELECT 1 FROM {t} WHERE lore_dict_id({c}) = ?1 ORDER BY rowid DESC LIMIT 1",
+                t = column.table,
+                c = column.column
+            ))?
+            .query_row([id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if !used {
+            removed += tx.execute("DELETE FROM zstd_dict WHERE id = ?1", [id])?;
+        }
+    }
+    for column in crate::codec::COLUMNS {
+        if column_dict(tx, &column)?.is_none() {
+            tx.execute(
+                "DELETE FROM setting WHERE key = ?1",
+                [zstd_cursor_key(&column)],
+            )?;
+        }
+    }
+    Ok(removed)
+}
+
 /// Outcome of [`dedupe_attachments`]. Counts only, never content.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DedupeReport {
@@ -253,7 +321,7 @@ pub fn dedupe_attachments(
             .prepare_cached(
                 "SELECT rowid, id, content_json FROM message_part
                  WHERE rowid > ?1 AND kind = ?2
-                   AND body_hash IS NULL AND content_json IS NOT NULL
+                   AND body_hash IS NULL AND typeof(content_json) = 'text'
                  ORDER BY rowid LIMIT ?3",
             )?
             .query_map(params![after, ATTACHMENT, limit], |row| {
@@ -461,15 +529,352 @@ pub fn slim_tool_outputs(conn: &Connection, batch: usize, stop: &AtomicBool) -> 
     Ok(report)
 }
 
-/// Attachment rows still stored inline.
+/// Attachment rows still stored inline and uncompressed, the rows
+/// [`dedupe_attachments`] would try. A compressed one was left inline by an
+/// earlier failure and then compressed in place.
 pub fn inline_attachments(conn: &Connection) -> Result<u64> {
     let n: i64 = conn.query_row(
         "SELECT count(*) FROM message_part
-         WHERE kind = ?1 AND body_hash IS NULL AND content_json IS NOT NULL",
+         WHERE kind = ?1 AND body_hash IS NULL AND typeof(content_json) = 'text'",
         [ATTACHMENT],
         |row| row.get(0),
     )?;
     Ok(u64::try_from(n).unwrap_or(0))
+}
+
+/// Rows rewritten per transaction by [`compress_bodies`].
+pub const ZSTD_BATCH: usize = 1000;
+
+/// How a column's dictionary is trained ([`compress_bodies`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Training {
+    /// Largest dictionary, in bytes.
+    pub dict_size: usize,
+    /// Fewest distinct sample rows a dictionary is trained from. A column with
+    /// fewer rows gets no dictionary and stays plain; a later run tries again.
+    pub min_samples: usize,
+    /// Rows probed for samples, spread evenly over the table's rowids.
+    pub probes: usize,
+    /// Most bytes taken from one row.
+    pub sample_cap: usize,
+    /// Most sample bytes in all, about a hundred times the dictionary, as
+    /// zstd recommends.
+    pub sample_budget: usize,
+}
+
+impl Default for Training {
+    /// A 112 KiB dictionary: 2.6 to 4.9 times smaller bodies on a 2.66 GB
+    /// archive at level 3.
+    fn default() -> Self {
+        Self {
+            dict_size: 112 * 1024,
+            min_samples: 1000,
+            probes: 20_000,
+            sample_cap: 16 * 1024,
+            sample_budget: 100 * 112 * 1024,
+        }
+    }
+}
+
+/// Outcome of [`compress_bodies`]. Counts only, never content.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ZstdReport {
+    /// Dictionaries this call trained and stored.
+    pub dicts_trained: u64,
+    /// Values this call stored compressed.
+    pub converted: u64,
+    /// Values that did not compress back to their exact bytes, or did not
+    /// read back exactly through SQL. Each is exactly as it was.
+    pub failed: u64,
+    /// Bytes of the converted values before and after.
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+    /// Whether rows remain to convert: false once complete, true if stopped.
+    pub pending: bool,
+}
+
+fn zstd_cursor_key(column: &crate::codec::Column) -> String {
+    format!("compact.zstd_after.{}", column.key)
+}
+
+/// The column's current dictionary: id, bytes and the last rowid it covers.
+fn column_dict(
+    conn: &Connection,
+    column: &crate::codec::Column,
+) -> Result<Option<(u32, Vec<u8>, i64)>> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT id, dict, until_rowid FROM zstd_dict WHERE \"column\" = ?1
+             ORDER BY id DESC LIMIT 1",
+        )?
+        .query_row([column.key], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .optional()?)
+}
+
+/// Whether any column has a dictionary and rows up to its `until_rowid` that
+/// [`compress_bodies`] has not reached yet.
+pub fn zstd_pending(conn: &Connection) -> Result<bool> {
+    for column in crate::codec::COLUMNS {
+        let Some((_, _, until)) = column_dict(conn, &column)? else {
+            continue;
+        };
+        let after = setting_i64(conn, &zstd_cursor_key(&column))?;
+        if after >= until {
+            continue;
+        }
+        let sql = format!(
+            "SELECT EXISTS(SELECT 1 FROM {} WHERE rowid > ?1 AND rowid <= ?2)",
+            column.table
+        );
+        if conn.query_row(&sql, params![after, until], |row| row.get::<_, bool>(0))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Sample `column`'s plain values, spread evenly over the table's rowids.
+fn sample_column(
+    conn: &Connection,
+    column: &crate::codec::Column,
+    training: &Training,
+) -> Result<Vec<Vec<u8>>> {
+    let (lo, hi): (Option<i64>, Option<i64>) = conn.query_row(
+        &format!("SELECT min(rowid), max(rowid) FROM {}", column.table),
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let (Some(lo), Some(hi)) = (lo, hi) else {
+        return Ok(Vec::new());
+    };
+    let probes = i64::try_from(training.probes.max(1)).unwrap_or(i64::MAX);
+    let step = ((hi - lo) / probes).max(1);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT rowid, {c} FROM {t} WHERE rowid >= ?1 AND typeof({c}) = 'text'
+         ORDER BY rowid LIMIT 1",
+        c = column.column,
+        t = column.table
+    ))?;
+    let mut samples = Vec::new();
+    let mut total = 0;
+    let mut last = None;
+    let mut at = lo;
+    while at <= hi && total < training.sample_budget {
+        let row: Option<(i64, Vec<u8>)> = stmt
+            .query_row([at], |row| {
+                Ok((row.get(0)?, row.get_ref(1)?.as_bytes()?.to_vec()))
+            })
+            .optional()?;
+        at = at.saturating_add(step);
+        let Some((rowid, bytes)) = row else {
+            break;
+        };
+        if last == Some(rowid) || bytes.len() < crate::codec::MIN_LEN {
+            continue;
+        }
+        last = Some(rowid);
+        let Some(sample) = redacted_sample(&bytes, training.sample_cap) else {
+            continue;
+        };
+        total += sample.len();
+        samples.push(sample);
+    }
+    Ok(samples)
+}
+
+/// Bytes past a sample's cap that are scanned with it, so a secret the cap
+/// cuts through (a PEM private key block is about 3 KiB) is still found whole.
+const SAMPLE_SCAN_MARGIN: usize = 16 * 1024;
+
+/// A training sample from `value`: its first `cap` bytes with every secret the
+/// scanner finds masked, the way `search_document` holds it. A dictionary
+/// keeps fragments of its samples verbatim and outlives the rows they came
+/// from, so it is trained on redacted text; the rows themselves are still
+/// compressed raw, so only the dictionary's content changes. `None` when
+/// `value` is not UTF-8 or the scan fails: such a row is not sampled.
+fn redacted_sample(value: &[u8], cap: usize) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(value).ok()?;
+    let mut end = text.len().min(cap.saturating_add(SAMPLE_SCAN_MARGIN));
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let window = &text[..end];
+    let findings = crate::secrets::scan(window).ok()?;
+    let mut sample = crate::secrets::redact(window, &findings).into_bytes();
+    sample.truncate(cap);
+    Some(sample)
+}
+
+/// Train and store a dictionary for `column` unless it has one or too few
+/// rows. Whether one was stored.
+fn train_column(
+    conn: &Connection,
+    column: &crate::codec::Column,
+    training: &Training,
+) -> Result<bool> {
+    if column_dict(conn, column)?.is_some() {
+        return Ok(false);
+    }
+    let samples = sample_column(conn, column, training)?;
+    if samples.len() < training.min_samples {
+        return Ok(false);
+    }
+    let Some(dict) = crate::codec::train(&samples, training.dict_size) else {
+        return Ok(false);
+    };
+    let _write = crate::storage::write_lock();
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    // Every row up to the table's last rowid now is converted by compaction;
+    // every later one is written by an ingest that sees this dictionary.
+    tx.execute(
+        &format!(
+            "INSERT INTO zstd_dict (\"column\", dict, until_rowid, trained_at)
+             SELECT ?1, ?2, COALESCE(max(rowid), 0), ?3 FROM {}",
+            column.table
+        ),
+        params![column.key, dict, crate::now_ms()],
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
+/// Rewrite `column`'s plain rows up to its dictionary's `until_rowid`
+/// compressed, in verified batches.
+fn convert_column(
+    conn: &Connection,
+    column: &crate::codec::Column,
+    batch: usize,
+    stop: &AtomicBool,
+    report: &mut ZstdReport,
+) -> Result<()> {
+    let Some((id, dict, until)) = column_dict(conn, column)? else {
+        return Ok(());
+    };
+    let dict = crate::codec::Dict::new(id, dict);
+    let key = zstd_cursor_key(column);
+    let limit = i64::try_from(batch.max(1)).unwrap_or(i64::MAX);
+    let (t, c) = (column.table, column.column);
+    let select = format!(
+        "SELECT rowid, {c} FROM {t} WHERE rowid > ?1 AND rowid <= ?2
+           AND typeof({c}) = 'text' ORDER BY rowid LIMIT ?3"
+    );
+    let update = format!("UPDATE {t} SET {c} = ?2 WHERE rowid = ?1");
+    let read_back = format!(
+        "SELECT {} FROM {t} WHERE rowid = ?1",
+        crate::codec::unpack_sql(c)
+    );
+    while !stop.load(Ordering::Relaxed) {
+        let _write = crate::storage::write_lock();
+        let tx =
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+        let after = setting_i64(&tx, &key)?;
+        if after >= until {
+            break;
+        }
+        // A forget may have deleted the dictionary since it was loaded, if no
+        // row used it yet ([`delete_unused_dicts`]): never write with one
+        // that is gone. Ids are never reused (`AUTOINCREMENT`).
+        if column_dict(&tx, column)?.map(|d| d.0) != Some(id) {
+            break;
+        }
+        // A value that is not UTF-8 text reads as `None` and is left alone.
+        let rows: Vec<(i64, Option<String>)> = tx
+            .prepare_cached(&select)?
+            .query_map(params![after, until, limit], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get_ref(1)?.as_str().ok().map(str::to_owned),
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let last = rows.last().map(|r| r.0);
+        let mut failed: u64 = 0;
+        for (rowid, plain) in &rows {
+            let Some(plain) = plain else {
+                continue;
+            };
+            // Decompressed and compared before anything is written.
+            let packed = match crate::codec::pack_checked(&dict, plain) {
+                crate::codec::Packed::Value(v) => v,
+                crate::codec::Packed::Plain => continue,
+                crate::codec::Packed::Failed => {
+                    failed += 1;
+                    continue;
+                }
+            };
+            tx.execute_batch("SAVEPOINT zstd_value")?;
+            tx.prepare_cached(&update)?
+                .execute(params![rowid, packed])?;
+            // And read back through SQL's decoder after: a decode error is a
+            // mismatch like any other.
+            let same = tx
+                .prepare_cached(&read_back)?
+                .query_row([rowid], |row| {
+                    Ok(row.get_ref(0)?.as_bytes_or_null()? == Some(plain.as_bytes()))
+                })
+                .unwrap_or(false);
+            if same {
+                tx.execute_batch("RELEASE zstd_value")?;
+                report.converted += 1;
+                report.bytes_before += plain.len() as u64;
+                report.bytes_after += packed.len() as u64;
+            } else {
+                tx.execute_batch("ROLLBACK TO zstd_value; RELEASE zstd_value")?;
+                failed += 1;
+            }
+        }
+        put_setting_i64(&tx, &key, last.unwrap_or(until))?;
+        tx.commit()?;
+        report.failed += failed;
+        if last.is_none() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Compress the archive's bodies: for each column of
+/// [`crate::codec::COLUMNS`], train a dictionary from a sample of its rows if
+/// it has none and enough rows ([`Training`]), then rewrite its rows up to
+/// the dictionary's `until_rowid` compressed.
+///
+/// The same shape as [`slim_tool_outputs`]: batches of `batch` rows, each one
+/// IMMEDIATE transaction under the write lock that advances the column's
+/// cursor, so a crash, an error or a stop loses at most the batch in flight
+/// and a rerun continues after the last committed one.
+///
+/// Verified twice: each value is compressed, decompressed and compared byte
+/// for byte before it is written, then read back through SQL's decoder and
+/// compared again before the batch commits. A value that fails either is left
+/// exactly as it was and counted in [`ZstdReport::failed`]. A dictionary is
+/// never replaced. `stop` is checked between batches.
+///
+/// `before_writing` runs once dictionaries exist and before any row is
+/// rewritten; [`compact`] backs the archive up there.
+pub fn compress_bodies(
+    conn: &Connection,
+    training: &Training,
+    batch: usize,
+    stop: &AtomicBool,
+    before_writing: impl FnOnce(&Connection) -> Result<()>,
+) -> Result<ZstdReport> {
+    let mut report = ZstdReport::default();
+    for column in crate::codec::COLUMNS {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        report.dicts_trained += u64::from(train_column(conn, &column, training)?);
+    }
+    if zstd_pending(conn)? && !stop.load(Ordering::Relaxed) {
+        before_writing(conn)?;
+        for column in crate::codec::COLUMNS {
+            convert_column(conn, &column, batch, stop, &mut report)?;
+        }
+    }
+    report.pending = zstd_pending(conn)?;
+    Ok(report)
 }
 
 /// Pages on the archive's freelist.
@@ -608,31 +1013,71 @@ pub fn vacuum_once_with(
     let outcome = decide_vacuum(conn, space, tolerated_inline)?;
     let outcome = match outcome {
         Some(outcome) => outcome,
-        None => {
-            let pages_before = page_count(conn)?;
-            {
-                let _write = crate::storage::write_lock();
-                crate::storage::checkpoint(conn);
-                // The rewritten copy goes to a temporary file, not memory:
-                // with the connection's usual `temp_store = MEMORY` it would
-                // hold the whole archive in RAM. Restored whatever happens.
-                conn.execute_batch("PRAGMA temp_store = FILE;")?;
-                let vacuumed = conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;");
-                conn.execute_batch("PRAGMA temp_store = MEMORY;")?;
-                vacuumed?;
-            }
-            crate::storage::checkpoint(conn);
-            VacuumOutcome::Vacuumed {
-                pages_before,
-                pages_after: page_count(conn)?,
-            }
-        }
+        None => full_vacuum(conn)?,
     };
     if outcome != VacuumOutcome::NoFile {
         // `settings::set` takes the write lock itself.
         crate::settings::set(conn, VACUUM_SETTING, &format!("\"{}\"", outcome.as_str()))?;
     }
     Ok(outcome)
+}
+
+/// Rewrite the archive with one `VACUUM`, in incremental mode.
+fn full_vacuum(conn: &Connection) -> Result<VacuumOutcome> {
+    let pages_before = page_count(conn)?;
+    {
+        let _write = crate::storage::write_lock();
+        crate::storage::checkpoint(conn);
+        // The rewritten copy goes to a temporary file, not memory: with the
+        // connection's usual `temp_store = MEMORY` it would hold the whole
+        // archive in RAM. Restored whatever happens.
+        conn.execute_batch("PRAGMA temp_store = FILE;")?;
+        let vacuumed = conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM;");
+        conn.execute_batch("PRAGMA temp_store = MEMORY;")?;
+        vacuumed?;
+    }
+    crate::storage::checkpoint(conn);
+    Ok(VacuumOutcome::Vacuumed {
+        pages_before,
+        pages_after: page_count(conn)?,
+    })
+}
+
+/// The setting that records the outcome of the one `VACUUM` after
+/// compression ([`vacuum_after_compression`]), content-free.
+pub const ZSTD_VACUUM_SETTING: &str = "compact.zstd_vacuum";
+
+/// Rewrite the archive once after [`compress_bodies`] has converted every
+/// column with a dictionary. Compressing shrinks rows in place and leaves
+/// pages part-filled, which returning free pages cannot recover: on a 2.66 GB
+/// archive about 220 MB. The same space rule as [`vacuum_once`] applies; a
+/// skip is recorded under [`ZSTD_VACUUM_SETTING`] and retried by a later
+/// run. `None` when there is nothing to do: no dictionary yet, rows still to
+/// convert, or already done.
+pub fn vacuum_after_compression(conn: &Connection) -> Result<Option<VacuumOutcome>> {
+    let done =
+        crate::settings::get(conn, ZSTD_VACUUM_SETTING)?.is_some_and(|v| v == "\"vacuumed\"");
+    let has_dict: bool =
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM zstd_dict)", [], |r| r.get(0))?;
+    if done || !has_dict || zstd_pending(conn)? {
+        return Ok(None);
+    }
+    let Some(path) = conn.path().filter(|p| !p.is_empty()) else {
+        return Ok(Some(VacuumOutcome::NoFile));
+    };
+    let space = vacuum_space(std::path::Path::new(path))?;
+    let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+    let size = u64::try_from(page_count(conn)?.saturating_mul(page_size)).unwrap_or(u64::MAX);
+    let outcome = match space.shortfall(size) {
+        Some((needed, available)) => VacuumOutcome::LowSpace { needed, available },
+        None => full_vacuum(conn)?,
+    };
+    crate::settings::set(
+        conn,
+        ZSTD_VACUUM_SETTING,
+        &format!("\"{}\"", outcome.as_str()),
+    )?;
+    Ok(Some(outcome))
 }
 
 /// `Some(outcome)` when the `VACUUM` should not run, `None` when it should.
@@ -647,7 +1092,10 @@ fn decide_vacuum(
     if conn.path().filter(|p| !p.is_empty()).is_none() {
         return Ok(Some(VacuumOutcome::NoFile));
     }
-    if inline_attachments(conn)? > tolerated_inline || tool_outputs_pending(conn)? {
+    if inline_attachments(conn)? > tolerated_inline
+        || tool_outputs_pending(conn)?
+        || zstd_pending(conn)?
+    {
         return Ok(Some(VacuumOutcome::DedupePending));
     }
     let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
@@ -678,7 +1126,7 @@ fn vacuum_space(db_path: &std::path::Path) -> Result<VacuumSpace> {
 
 /// Bytes available to this user on the volume holding `dir`, and that
 /// volume's device id.
-fn free_bytes(dir: &std::path::Path) -> Result<(u64, rustix::fs::Dev)> {
+pub(crate) fn free_bytes(dir: &std::path::Path) -> Result<(u64, rustix::fs::Dev)> {
     let stat = rustix::fs::statvfs(dir).map_err(|_| StorageError::Io)?;
     let dev = rustix::fs::stat(dir).map_err(|_| StorageError::Io)?.st_dev;
     Ok((stat.f_bavail.saturating_mul(stat.f_frsize), dev))
@@ -713,7 +1161,10 @@ fn sqlite_temp_dir() -> std::path::PathBuf {
 pub struct CompactReport {
     pub dedupe: DedupeReport,
     pub slim: SlimReport,
+    pub zstd: ZstdReport,
     pub vacuum: VacuumOutcome,
+    /// The one `VACUUM` after compression, when it was due this run.
+    pub zstd_vacuum: Option<VacuumOutcome>,
     /// Free pages returned to the file system after the conversions, on an
     /// archive already in incremental mode.
     pub reclaimed_pages: i64,
@@ -756,14 +1207,52 @@ fn compact_stages(
 ) -> std::result::Result<CompactReport, (&'static str, StorageError)> {
     back_up_before_converting(conn).map_err(|e| ("backup", e))?;
     let dedupe = dedupe_attachments(conn, DEDUPE_BATCH, stop).map_err(|e| ("dedupe", e))?;
+    crate::settings::set(conn, DEDUPE_FAILED_SETTING, &dedupe.failed.to_string())
+        .map_err(|e| ("dedupe", e))?;
     crate::settings::set(conn, FAILED_ROWS_SETTING, &dedupe.failed.to_string())
         .map_err(|e| ("dedupe", e))?;
     let slim = slim_tool_outputs(conn, DEDUPE_BATCH, stop).map_err(|e| ("slim", e))?;
+    // Compression reads the stored form the conversions above produce, so it
+    // waits for them.
+    let ready = !stop.load(Ordering::Relaxed) && !slim.pending && dedupe.remaining <= dedupe.failed;
+    let zstd = if ready {
+        let zstd = compress_bodies(
+            conn,
+            &Training::default(),
+            ZSTD_BATCH,
+            stop,
+            back_up_before_converting,
+        )
+        .map_err(|e| ("zstd", e))?;
+        crate::settings::set(
+            conn,
+            FAILED_ROWS_SETTING,
+            &(dedupe.failed + zstd.failed).to_string(),
+        )
+        .map_err(|e| ("zstd", e))?;
+        zstd
+    } else {
+        ZstdReport {
+            pending: true,
+            ..ZstdReport::default()
+        }
+    };
     let vacuum = if stop.load(Ordering::Relaxed) {
         VacuumOutcome::DedupePending
     } else {
         vacuum_once(conn, dedupe.failed).map_err(|e| ("vacuum", e))?
     };
+    // A first-time VACUUM after a finished compression already did the work.
+    if matches!(vacuum, VacuumOutcome::Vacuumed { .. }) && !zstd.pending && zstd.converted > 0 {
+        crate::settings::set(conn, ZSTD_VACUUM_SETTING, "\"vacuumed\"")
+            .map_err(|e| ("vacuum", e))?;
+    }
+    let zstd_vacuum =
+        if vacuum == VacuumOutcome::AlreadyIncremental && !stop.load(Ordering::Relaxed) {
+            vacuum_after_compression(conn).map_err(|e| ("vacuum", e))?
+        } else {
+            None
+        };
     let mut reclaimed_pages = 0;
     if vacuum == VacuumOutcome::AlreadyIncremental {
         let reclaim = || -> Result<i64> {
@@ -777,7 +1266,9 @@ fn compact_stages(
     Ok(CompactReport {
         dedupe,
         slim,
+        zstd,
         vacuum,
+        zstd_vacuum,
         reclaimed_pages,
     })
 }
@@ -786,10 +1277,13 @@ fn compact_stages(
 /// could not verify do not count: they are left as they were, and backing up
 /// on every launch for them would only fill the disk.
 fn back_up_before_converting(conn: &Connection) -> Result<()> {
-    let known_failed = crate::settings::get(conn, FAILED_ROWS_SETTING)?
+    let known_failed = crate::settings::get(conn, DEDUPE_FAILED_SETTING)?
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
-    if inline_attachments(conn)? <= known_failed && !tool_outputs_pending(conn)? {
+    if inline_attachments(conn)? <= known_failed
+        && !tool_outputs_pending(conn)?
+        && !zstd_pending(conn)?
+    {
         return Ok(());
     }
     let Some(dir) = crate::backup::backup_dir_for(conn) else {

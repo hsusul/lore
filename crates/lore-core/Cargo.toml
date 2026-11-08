@@ -18,7 +18,8 @@ workspace = true
 lore-ipc = { path = "../lore-ipc" }
 # Bundled SQLite (compiles the amalgamation with FTS5 enabled) so we never
 # depend on a system libsqlite3 and FTS5 is always present.
-rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+# `functions` registers the codec's decoder as SQL scalar functions.
+rusqlite = { version = "0.32", features = ["bundled", "backup", "functions"] }
 # Content addressing for the blob store. A cryptographic digest is required:
 # blob paths are dedupe keys and carry a `scan_state`, so a forgeable address
 # would let colliding content inherit another blob's "clean" scan. No network,
@@ -39,6 +40,12 @@ thiserror = "1"
 # on across a platform change.
 rustix = { version = "1", features = ["fs"] }
 serde_json = "1"
+# Lossless compression of stored bodies with trained dictionaries (`codec`).
+# Bundles libzstd through `cc`, the way rusqlite bundles SQLite. Pure
+# in-memory (de)compression: no I/O, no network. Of the default features only
+# `zdict_builder` (dictionary training) is used; the legacy-format decoder
+# and `arrays` are left out.
+zstd = { version = "0.14", default-features = false, features = ["zdict_builder"] }
 # Substring search for the secret scanner's prefix rules. Already in the graph
 # via gix (bstr), same version; pure byte search, no I/O.
 memchr = "2"

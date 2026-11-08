@@ -62,6 +62,7 @@ pub fn forget_session(
         let bodies = crate::compact::session_body_hashes(&tx, session_id)?;
         tx.execute("DELETE FROM agent_session WHERE id = ?1", [session_id])?;
         crate::compact::delete_orphan_bodies(&tx, &bodies)?;
+        crate::compact::delete_unused_dicts(&tx)?;
 
         let orphans = orphan_blobs(&tx)?;
         for (id, _) in &orphans {
@@ -124,6 +125,7 @@ pub fn forget_all(conn: &Connection, blobs: &BlobStore) -> Result<ForgetReport> 
         tx.execute("DELETE FROM source_artifact", [])?;
         tx.execute("DELETE FROM agent", [])?;
         crate::compact::delete_all_orphan_bodies(&tx)?;
+        crate::compact::delete_unused_dicts(&tx)?;
         // Every blob is now unreferenced.
         let orphans = orphan_blobs(&tx)?;
         tx.execute("DELETE FROM blob", [])?;
