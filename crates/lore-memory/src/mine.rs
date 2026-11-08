@@ -578,13 +578,13 @@ fn is_bare_image(text: &str) -> bool {
 /// first agent text after it ([`agent_after`]), both from its own session.
 /// Its text is kept whole; whoever shows it cuts it short. A resume or fork
 /// copy of a reply is kept once, the earliest session's, as in [`lessons`].
+/// A turn flagged as a correction whose group [`lessons`] drops, because no
+/// turn in it states a rule ([`states_rule`]), is offered here instead, so
+/// no correction reaches neither a lesson nor a lessons run.
 /// Most replies correct nothing: they are for an agent to judge, not rules.
 #[must_use]
 pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidate> {
-    let picked: BTreeSet<usize> = corrections_at(turns, limits)
-        .into_iter()
-        .map(|(i, _)| i)
-        .collect();
+    let picked = in_lessons(turns, limits);
     let invoked = bare_commands(turns);
     let turns = &turns.0;
     let mut found: Vec<Candidate> = Vec::new();
@@ -625,6 +625,26 @@ pub fn replies_in(turns: &Turns, limits: &Limits, since_ms: i64) -> Vec<Candidat
     let mut seen = std::collections::HashSet::new();
     found.retain(|c| c.at_ms.is_none() || seen.insert((c.at_ms, c.text.to_lowercase())));
     found
+}
+
+/// The indexes in `turns.0` of the turns [`corrections_at`] flags, less the
+/// corrections in a group [`lesson`] drops, which fall through to
+/// [`replies_in`]. A repeat or a rule in a dropped group stays out of both.
+fn in_lessons(turns: &Turns, limits: &Limits) -> BTreeSet<usize> {
+    let flagged = corrections_at(turns, limits);
+    let mut picked: BTreeSet<usize> = flagged.iter().map(|(i, _)| *i).collect();
+    for group in groups(flagged, limits) {
+        let (at, members): (Vec<usize>, Vec<Candidate>) = group.into_iter().unzip();
+        let signals: Vec<Signal> = members.iter().map(|c| c.signal).collect();
+        if lesson(members).is_none() {
+            for (i, signal) in at.into_iter().zip(signals) {
+                if signal == Signal::Correction {
+                    picked.remove(&i);
+                }
+            }
+        }
+    }
+    picked
 }
 
 /// Each reply as a lesson of its own, newest first: replies are never grouped
@@ -708,23 +728,42 @@ fn collect_turns(
     Ok(Turns(turns, invoked))
 }
 
+/// How Claude Code wraps text the person pasted into a turn:
+/// `<pasted_content id="...">`, closed by `</pasted_content id="...">`.
+const PASTED: &str = "pasted_content";
+
 /// `text` without the blocks an agent harness injects into a turn, such as
 /// `<command-name>`, `<command-args>`, `<system-reminder>`, and
 /// `<local-command-stdout>`: any `<name>...</name>` whose name is lowercase
-/// words joined by hyphens. Other markup, like `<div>`, stays.
+/// words joined by hyphens. Other markup, like `<div>`, stays. A pasted
+/// block ([`PASTED`]) goes too, so the words the person typed before or
+/// after it are read on their own; a turn that is only pasted text is kept
+/// whole, as harness text, since nothing in it was typed.
 fn strip_harness(text: &str) -> String {
+    let stripped = strip_blocks(text, true);
+    if stripped.trim().is_empty() && text.contains(PASTED) {
+        strip_blocks(text, false)
+    } else {
+        stripped
+    }
+}
+
+/// [`strip_harness`], with pasted blocks stripped only when `pastes`.
+fn strip_blocks(text: &str, pastes: bool) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(open) = rest.find('<') {
         let after = &rest[open + 1..];
         let name_len = after
             .bytes()
-            .take_while(|b| b.is_ascii_lowercase() || *b == b'-')
+            .take_while(|b| b.is_ascii_lowercase() || *b == b'-' || *b == b'_')
             .count();
         let name = &after[..name_len];
         let end = if name.contains('-') && after[name_len..].starts_with('>') {
             find_close_tag(&after[name_len + 1..], name)
                 .map(|pos| (name_len + 1 + pos, name.len() + 3))
+        } else if pastes && name == PASTED {
+            pasted_end(&after[name_len..]).map(|end| (name_len + end, 0))
         } else {
             None
         };
@@ -758,6 +797,27 @@ fn command_args(raw: &str) -> Option<String> {
     let (args, _) = after.split_once("</command-args>")?;
     let args = args.trim();
     (!args.is_empty()).then(|| args.to_owned())
+}
+
+/// Where a pasted block ends in `rest`, the text after its tag's name: past
+/// the `>` of its closing tag, `</pasted_content>` or one with attributes
+/// such as `</pasted_content id="...">`. `None` when the opening tag or the
+/// block is not closed.
+fn pasted_end(rest: &str) -> Option<usize> {
+    if !rest.starts_with(['>', ' ']) {
+        return None;
+    }
+    let body = rest.find('>')? + 1;
+    let close = format!("</{PASTED}");
+    let mut from = body;
+    loop {
+        let at = from + rest[from..].find(&close)?;
+        let tail = &rest[at + close.len()..];
+        if tail.starts_with(['>', ' ']) {
+            return Some(at + close.len() + tail.find('>')? + 1);
+        }
+        from = at + close.len();
+    }
 }
 
 fn find_close_tag(haystack: &str, name: &str) -> Option<usize> {
@@ -1143,31 +1203,12 @@ pub fn lessons(candidates: Vec<Candidate>) -> Vec<Lesson> {
 
 /// [`lessons`] with `limits.min_overlap_per_mille` in place of the default.
 #[must_use]
-pub fn lessons_within(mut candidates: Vec<Candidate>, limits: &Limits) -> Vec<Lesson> {
-    candidates.sort_by(|a, b| (a.at_ms, &a.session, &a.text).cmp(&(b.at_ms, &b.session, &b.text)));
-    // A resume or fork copies the conversation into a new session, user turns
-    // and timestamps included. Keep one copy of each, so copies of one
-    // conversation never count as two sessions. The earliest session id wins.
-    let mut seen = std::collections::HashSet::new();
-    candidates.retain(|c| c.at_ms.is_none() || seen.insert((c.at_ms, c.text.to_lowercase())));
-    let mut groups: Vec<Vec<(BTreeSet<String>, Candidate)>> = Vec::new();
-    for candidate in candidates {
-        let words = content_words(&candidate.text);
-        if words.is_empty() {
-            continue;
-        }
-        let joins = groups.iter().position(|group| {
-            group
-                .iter()
-                .take(MATCH_MEMBERS)
-                .any(|(other, _)| overlap_per_mille(other, &words) >= limits.min_overlap_per_mille)
-        });
-        match joins {
-            Some(at) => groups[at].push((words, candidate)),
-            None => groups.push(vec![(words, candidate)]),
-        }
-    }
-    let mut found: Vec<Lesson> = groups.into_iter().filter_map(lesson).collect();
+pub fn lessons_within(candidates: Vec<Candidate>, limits: &Limits) -> Vec<Lesson> {
+    let tagged = candidates.into_iter().map(|c| (0, c)).collect();
+    let mut found: Vec<Lesson> = groups(tagged, limits)
+        .into_iter()
+        .filter_map(|group| lesson(group.into_iter().map(|(_, c)| c).collect()))
+        .collect();
     found.sort_by(|a, b| {
         (b.score, b.conversations, b.latest_ms, &a.id).cmp(&(
             a.score,
@@ -1179,12 +1220,53 @@ pub fn lessons_within(mut candidates: Vec<Candidate>, limits: &Limits) -> Vec<Le
     found
 }
 
+/// `candidates`, each with a tag the caller keeps track of it by, grouped as
+/// [`lessons_within`] groups them: oldest first, a resume or fork copy and a
+/// candidate with no content words left out, each joining the first group
+/// with one of its first [`MATCH_MEMBERS`] members whose content words
+/// overlap its own by at least `limits.min_overlap_per_mille`.
+fn groups<T>(mut candidates: Vec<(T, Candidate)>, limits: &Limits) -> Vec<Vec<(T, Candidate)>> {
+    candidates.sort_by(|(_, a), (_, b)| {
+        (a.at_ms, &a.session, &a.text).cmp(&(b.at_ms, &b.session, &b.text))
+    });
+    // A resume or fork copies the conversation into a new session, user turns
+    // and timestamps included. Keep one copy of each, so copies of one
+    // conversation never count as two sessions. The earliest session id wins.
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|(_, c)| c.at_ms.is_none() || seen.insert((c.at_ms, c.text.to_lowercase())));
+    let mut words_of: Vec<Vec<BTreeSet<String>>> = Vec::new();
+    let mut groups: Vec<Vec<(T, Candidate)>> = Vec::new();
+    for (tag, candidate) in candidates {
+        let words = content_words(&candidate.text);
+        if words.is_empty() {
+            continue;
+        }
+        let joins = words_of.iter().position(|group| {
+            group
+                .iter()
+                .take(MATCH_MEMBERS)
+                .any(|other| overlap_per_mille(other, &words) >= limits.min_overlap_per_mille)
+        });
+        match joins {
+            Some(at) => {
+                words_of[at].push(words);
+                groups[at].push((tag, candidate));
+            }
+            None => {
+                words_of.push(vec![words]);
+                groups.push(vec![(tag, candidate)]);
+            }
+        }
+    }
+    groups
+}
+
 /// One group, oldest first, as a lesson, or `None` when it holds no correction
 /// or states no rule.
-fn lesson(group: Vec<(BTreeSet<String>, Candidate)>) -> Option<Lesson> {
-    let oldest = group.first()?.1.clone();
+fn lesson(group: Vec<Candidate>) -> Option<Lesson> {
+    let oldest = group.first()?.clone();
     let mut receipts: Vec<Candidate> = Vec::new();
-    for (_, candidate) in group.into_iter().rev() {
+    for candidate in group.into_iter().rev() {
         if !receipts.iter().any(|r| r.session == candidate.session) {
             receipts.push(candidate);
         }
