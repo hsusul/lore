@@ -334,7 +334,7 @@ In the app, `lorectl`, and its hooks, these send text to a model provider. Claud
 
 - When you connect `lorectl mcp` to an agent, the redacted text it returns goes to that agent's model provider, as any tool result does.
 - Lore's hooks add the titles of the accepted notes that apply to a session to its context, so they reach the provider with the session. Titles are masked, except when a note blocks a tool call and the agent is told its title as written.
-- **Find lessons** in the app starts Claude Code or Codex with only Lore's tools. The agent reads your new corrections, the turns around them, and your notes through them, and they return redacted text. Codex still loads your `~/.codex/config.toml`, so MCP servers you added there are offered too. The app also runs it on its own, on by default, at most once a day when there are new corrections, with Sonnet for Claude Code. **Find lessons automatically** in Settings turns that off.
+- **Find lessons** in the app starts Claude Code or Codex with only Lore's tools. The agent reads your new corrections, the turns around them, and your notes through them, and they return redacted text. Codex runs without your `~/.codex/config.toml`, so it uses its default model and none of the MCP servers you added there. The app also runs it on its own, on by default, at most once a day when there are new corrections, with Sonnet for Claude Code. **Find lessons automatically** in Settings turns that off.
 - **Propose an edit** on a skill sends the agent that skill's SKILL.md and up to eight redacted corrections made right after it ran, with what the agent had just said when there is one.
 
 ### Replays talk to a model provider
