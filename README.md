@@ -5,11 +5,29 @@
   </picture>
 </p>
 
-# Lore
+<h1 align="center">Lore</h1>
+
+<p align="center">
+  Long-term memory for your coding agents, built from the corrections you already gave them.
+</p>
+
+<p align="center">
+  <a href="https://github.com/hsusul/lore/releases/latest">Download</a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="#the-archive">Archive</a> ·
+  <a href="#memory">Memory</a> ·
+  <a href="#skills">Skills</a> ·
+  <a href="#using-lore-from-an-agent">Agents</a> ·
+  <a href="#privacy">Privacy</a>
+</p>
+
+<p align="center">
+  <img alt="The Lore map: every accepted note and waiting lesson, grouped by repository, with installed skills in their own cluster" src="assets/screenshots/map.png" width="900">
+</p>
 
 Lore keeps a local, searchable archive of your Claude Code and Codex sessions.
-It gives coding agents long-term memory in a vault of plain markdown notes that you review.
-It checks the skill folders your agents load for duplicates, drift, and broken references.
+It finds the times you corrected an agent ("no, use pnpm not npm"), turns them into lessons, and, once you accept one, shows it to every connected agent from the next session on.
+It also checks the skill folders your agents load for duplicates, drift, and broken references.
 
 Three rules hold the design together.
 
@@ -17,17 +35,40 @@ Three rules hold the design together.
 - Agents only propose. A person accepts. Agents never get delete.
 - Every recalled note says whether the code it points at still matches. A stale note is labelled, not silently served.
 
+## A look around
+
+The desktop app opens on a map of everything Lore knows. Your global notes sit in the middle, each repository gets its own cluster, and your skills have one more.
+
+**Review a lesson.** Each lesson comes with its receipts: what you said, in which session, and when. Accept it, edit the wording, or reject it.
+
+<img alt="A lesson waiting for review, with three receipts from past sessions and Accept, Edit, and Reject buttons" src="assets/screenshots/review.png" width="900">
+
+**Zoom into a repository.** Click a cluster to read its notes. The Lore logo takes you back out to the whole map.
+
+<img alt="The map zoomed into the acme-storefront repository, showing each of its notes by title, with one of its lessons open" src="assets/screenshots/repo.png" width="900">
+
+**Read a session.** Search or browse every session without leaving the map.
+
+<img alt="A Claude Code session open in the side card, next to the map" src="assets/screenshots/session.png" width="900">
+
+**See which skills need a look.** A skill you had to re-prompt after shows the moment it went wrong, and an agent can draft the fix for you to apply.
+
+<img alt="The code-review skill: 22 uses in 15 sessions, with the re-prompt that followed it" src="assets/screenshots/skill.png" width="900">
+
+The screenshots use the sample data that `npm run dev` serves. None of it is real.
+
 ## Get started
 
-Lore is early. The [v0.2.0 release](https://github.com/hsusul/lore/releases/tag/v0.2.0) has `lorectl` for macOS on Apple Silicon (`aarch64-apple-darwin`) and Intel (`x86_64-apple-darwin`), and for Linux (`x86_64-unknown-linux-gnu`). Download the archive for your machine, check it against `SHA256SUMS` (`sha256sum -c` on Linux), and put `lorectl` on your `PATH`, where agents can run it too:
+Lore is early. The [latest release](https://github.com/hsusul/lore/releases/latest) has `lorectl` for macOS on Apple Silicon (`aarch64-apple-darwin`) and Intel (`x86_64-apple-darwin`), and for Linux (`x86_64-unknown-linux-gnu`). Download the archive for your machine, check it against `SHA256SUMS` (`sha256sum -c` on Linux), and put `lorectl` on your `PATH`, where agents can run it too:
 
 ```bash
+version=v0.2.3
 target=aarch64-apple-darwin
-base=https://github.com/hsusul/lore/releases/download/v0.2.0
-curl -LO "$base/lorectl-v0.2.0-$target.tar.gz" -LO "$base/SHA256SUMS"
+base=https://github.com/hsusul/lore/releases/download/$version
+curl -LO "$base/lorectl-$version-$target.tar.gz" -LO "$base/SHA256SUMS"
 shasum -a 256 -c SHA256SUMS --ignore-missing
-tar -xzf "lorectl-v0.2.0-$target.tar.gz"
-mkdir -p ~/.local/bin && cp "lorectl-v0.2.0-$target/lorectl" ~/.local/bin/  # must be on PATH
+tar -xzf "lorectl-$version-$target.tar.gz"
+mkdir -p ~/.local/bin && cp "lorectl-$version-$target/lorectl" ~/.local/bin/  # must be on PATH
 lorectl init
 ```
 
@@ -55,7 +96,9 @@ Accept, edit, or skip each one. `--no-review` only lists them. From the next ses
 
 Without the plugin, or for Codex, run `lorectl connect`. It says whether each agent runs the MCP server and the three hooks, and prints the exact command or config to add for each one missing. Codex runs a hook only after you approve it, so a Codex hook that is configured but not yet approved reads as `configured but not approved (Codex skips it)`; approve it by starting `codex` and choosing "Trust all and continue" (or "Review hooks") at the "Hooks need review" prompt, or with `/hooks` in a running session. It reads the agents' config files and writes none. It does not look at installed plugins, so a plugin install still reads as not connected; do not add the printed entries on top of the plugin, or each hook runs twice. `lorectl help mem` prints the memory commands alone.
 
-The desktop app is a second front end over the same archive. The release has it as `Lore_0.2.0_aarch64.dmg`, for Apple Silicon only, and `SHA256SUMS` does not list it. It is not signed: drag Lore to Applications, then right-click it and choose Open the first time, or run `xattr -dr com.apple.quarantine /Applications/Lore.app`. To run it from source you need Node.js 20, the Xcode command-line tools, and the Tauri 2 prerequisites for macOS. Then run `npm run tauri dev`.
+### The desktop app
+
+The desktop app is a second front end over the same archive. The release has it as `Lore_<version>_aarch64.dmg`, for Apple Silicon only, and `SHA256SUMS` does not list it. It is not signed: drag Lore to Applications, then right-click it and choose Open the first time, or run `xattr -dr com.apple.quarantine /Applications/Lore.app`. To run it from source you need Node.js 20, the Xcode command-line tools, and the Tauri 2 prerequisites for macOS. Then run `npm run tauri dev`.
 
 ## The archive
 
