@@ -2,12 +2,15 @@
 //! run them: stdin bodies, printed lines, and exit codes.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-fn lorectl(vault: &Path, args: &[&str], stdin: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+fn mem(vault: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lorectl"));
+    command
         .arg("mem")
         .args(args)
         .arg("--vault")
@@ -15,7 +18,17 @@ fn lorectl(vault: &Path, args: &[&str], stdin: &str) -> Output {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("HOME", vault.parent().unwrap())
-        .env_remove("LORE_VAULT_DIR")
+        .env_remove("LORE_VAULT_DIR");
+    command
+}
+
+/// `lorectl mem args` as a person runs it, at a terminal.
+fn person(vault: &Path, args: &[&str]) -> Output {
+    common::on_a_terminal(&mut mem(vault, args), "")
+}
+
+fn lorectl(vault: &Path, args: &[&str], stdin: &str) -> Output {
+    let mut child = mem(vault, args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -84,15 +97,14 @@ fn mem_propose_then_accept_writes_one_note() {
     assert_eq!(items[0]["anchors"][0]["lines"], "4-8");
     assert_eq!(items[0]["source_verified"], false);
 
-    let accepted = ok(&lorectl(&vault, &["accept", &id], ""));
+    let accepted = ok(&person(&vault, &["accept", &id]));
     assert!(accepted.starts_with("accepted repos/3f9a1c0b01234567/prune-worktrees.md "));
-    let again = ok(&lorectl(&vault, &["accept", &id], ""));
+    let again = ok(&person(&vault, &["accept", &id]));
     assert!(again.starts_with("unchanged repos/3f9a1c0b01234567/prune-worktrees.md "));
     assert_eq!(ok(&lorectl(&vault, &["inbox"], "")), "");
-    let retired = ok(&lorectl(
+    let retired = ok(&person(
         &vault,
         &["retire", "prune-worktrees", "--reason", "git does it now"],
-        "",
     ));
     assert_eq!(
         retired,
@@ -100,6 +112,41 @@ fn mem_propose_then_accept_writes_one_note() {
     );
     let shown = ok(&lorectl(&vault, &["show", "prune-worktrees"], ""));
     assert!(shown.contains("status: retired\n"));
+}
+
+#[test]
+fn accept_and_retire_without_a_terminal_are_refused_and_write_nothing() {
+    // An agent's shell tool runs a command with no terminal on stdin. It may
+    // propose a note there, but not accept or retire one.
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    ok(&lorectl(&vault, &["init"], ""));
+    let id = propose(&vault, "s1", "Prune worktrees");
+    let before = head(&vault);
+    for (args, command) in [
+        (vec!["accept", id.as_str()], "mem accept"),
+        (
+            vec!["retire", "prune-worktrees", "--reason", "x"],
+            "mem retire",
+        ),
+    ] {
+        let refused = lorectl(&vault, &args, "");
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            stderr.contains(&format!("`lorectl {command}` needs a person at a terminal")),
+            "{stderr}"
+        );
+        assert!(stderr.contains("ask the person"), "{stderr}");
+    }
+    assert_eq!(head(&vault), before);
+    assert!(ok(&lorectl(&vault, &["inbox"], "")).starts_with(&format!("{id}  ")));
+    let accepted = ok(&person(&vault, &["accept", &id]));
+    assert!(accepted.starts_with("accepted "), "{accepted}");
+    let refused = lorectl(&vault, &["retire", "prune-worktrees", "--reason", "x"], "");
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    let shown = ok(&lorectl(&vault, &["show", "prune-worktrees"], ""));
+    assert!(shown.contains("status: active\n"), "{shown}");
 }
 
 #[test]
@@ -112,9 +159,9 @@ fn mem_reject_and_refusals_have_exit_codes() {
         ok(&lorectl(&vault, &["reject", &id, "--reason", "dup"], "")),
         format!("rejected {id}\n")
     );
-    let accept = lorectl(&vault, &["accept", &id], "");
+    let accept = person(&vault, &["accept", &id]);
     assert_eq!(accept.status.code(), Some(7));
-    let missing = lorectl(&vault, &["accept", "01JC9V6Q4M8K2T7X3N5R0B1H6D"], "");
+    let missing = person(&vault, &["accept", "01JC9V6Q4M8K2T7X3N5R0B1H6D"]);
     assert_eq!(missing.status.code(), Some(1));
     let empty = lorectl(
         &vault,
@@ -175,7 +222,7 @@ fn mem_accept_refuses_a_hand_edited_target_with_exit_7() {
     let vault = dir.path().join("vault");
     ok(&lorectl(&vault, &["init"], ""));
     let id = propose(&vault, "s1", "Prune worktrees");
-    let accepted = ok(&lorectl(&vault, &["accept", &id], ""));
+    let accepted = ok(&person(&vault, &["accept", &id]));
     let note_id = accepted.split_whitespace().nth(2).unwrap();
     let path = vault.join("repos/3f9a1c0b01234567/prune-worktrees.md");
     let edited = std::fs::read_to_string(&path)
@@ -202,7 +249,7 @@ fn mem_accept_refuses_a_hand_edited_target_with_exit_7() {
         "New statement.\n",
     ));
     let update = out.split_whitespace().nth(1).unwrap();
-    let refused = lorectl(&vault, &["accept", update], "");
+    let refused = person(&vault, &["accept", update]);
     assert_eq!(
         refused.status.code(),
         Some(7),
@@ -241,7 +288,7 @@ fn mem_inbox_names_an_update_target_and_accept_refuses_another_scope() {
     let vault = dir.path().join("vault");
     ok(&lorectl(&vault, &["init"], ""));
     let id = propose(&vault, "s1", "Prune worktrees");
-    let accepted = ok(&lorectl(&vault, &["accept", &id], ""));
+    let accepted = ok(&person(&vault, &["accept", &id]));
     let note_id = accepted.split_whitespace().nth(2).unwrap();
     let same = propose_update(&vault, "s2", "repo:3f9a1c0b01234567", note_id);
     let global = propose_update(&vault, "s3", "global", note_id);
@@ -260,7 +307,7 @@ fn mem_inbox_names_an_update_target_and_accept_refuses_another_scope() {
         "{listed}"
     );
     let before = head(&vault);
-    let refused = lorectl(&vault, &["accept", &global], "");
+    let refused = person(&vault, &["accept", &global]);
     assert_eq!(
         refused.status.code(),
         Some(7),
@@ -268,7 +315,7 @@ fn mem_inbox_names_an_update_target_and_accept_refuses_another_scope() {
         String::from_utf8_lossy(&refused.stdout)
     );
     assert_eq!(head(&vault), before);
-    let done = ok(&lorectl(&vault, &["accept", &same], ""));
+    let done = ok(&person(&vault, &["accept", &same]));
     assert!(done.starts_with("updated repos/3f9a1c0b01234567/prune-worktrees.md "));
 }
 
@@ -332,7 +379,7 @@ fn mem_accept_refuses_lines_appended_to_the_inbox_by_hand() {
         .unwrap();
     let before = head(&vault);
     for (forged_id, ..) in &forged {
-        let out = lorectl(&vault, &["accept", forged_id], "");
+        let out = person(&vault, &["accept", forged_id]);
         assert_eq!(
             out.status.code(),
             Some(7),
@@ -366,7 +413,7 @@ fn a_lost_decision_is_recovered_for_a_note_with_a_non_ascii_name() {
     let vault = dir.path().join("vault");
     ok(&lorectl(&vault, &["init"], ""));
     let id = propose(&vault, "s1", "Café réglages");
-    let accepted = ok(&lorectl(&vault, &["accept", &id], ""));
+    let accepted = ok(&person(&vault, &["accept", &id]));
     assert!(
         accepted.starts_with("accepted repos/3f9a1c0b01234567/café-réglages.md "),
         "{accepted}"
@@ -402,7 +449,7 @@ fn a_torn_line_with_a_stray_byte_does_not_break_review() {
     let listed = ok(&lorectl(&vault, &["inbox"], ""));
     assert!(listed.contains(&second), "{listed}");
     assert!(!listed.contains(&first), "the rejection was lost: {listed}");
-    let accepted = ok(&lorectl(&vault, &["accept", &second], ""));
+    let accepted = ok(&person(&vault, &["accept", &second]));
     assert!(accepted.starts_with("accepted "), "{accepted}");
 }
 

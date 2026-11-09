@@ -59,9 +59,11 @@ fn hook(event: &str, cwd: &Path, home: &Path, vault: &Path, stdin: &str) -> Outp
     child.wait_with_output().unwrap()
 }
 
-/// `lorectl mem` against `vault`, which must succeed.
+/// `lorectl mem` against `vault` as a person runs it, at a terminal, which
+/// must succeed.
 fn mem(home: &Path, vault: &Path, args: &[&str]) {
-    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lorectl"));
+    command
         .arg("mem")
         .args(args)
         .arg("--vault")
@@ -69,9 +71,8 @@ fn mem(home: &Path, vault: &Path, args: &[&str]) {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("HOME", home)
-        .env_remove("LORE_VAULT_DIR")
-        .output()
-        .expect("spawn lorectl");
+        .env_remove("LORE_VAULT_DIR");
+    let out = common::on_a_terminal(&mut command, "");
     assert!(
         out.status.success(),
         "mem {args:?}: {}",

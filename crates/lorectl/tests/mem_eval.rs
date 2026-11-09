@@ -2,12 +2,15 @@
 //! proposals they already accepted and rejected, with nothing written.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-fn lorectl(home: &Path, args: &[&str], stdin: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+fn command(home: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lorectl"));
+    command
         .arg("--archive")
         .arg(home.join("archive"))
         .args(args)
@@ -17,7 +20,17 @@ fn lorectl(home: &Path, args: &[&str], stdin: &str) -> Output {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("HOME", home)
         .env_remove("LORE_VAULT_DIR")
-        .env_remove("LORE_ARCHIVE_DIR")
+        .env_remove("LORE_ARCHIVE_DIR");
+    command
+}
+
+/// `lorectl args` as a person runs it, at a terminal.
+fn person(home: &Path, args: &[&str]) -> Output {
+    common::on_a_terminal(&mut command(home, args), "")
+}
+
+fn lorectl(home: &Path, args: &[&str], stdin: &str) -> Output {
+    let mut child = command(home, args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -71,8 +84,8 @@ fn decided_home() -> tempfile::TempDir {
     let b = propose(home.path(), "s-2", "Second fact");
     let c = propose(home.path(), "s-3", "Wrong fact");
     propose(home.path(), "s-4", "Pending fact");
-    ok(&lorectl(home.path(), &["mem", "accept", &a], ""));
-    ok(&lorectl(home.path(), &["mem", "accept", &b], ""));
+    ok(&person(home.path(), &["mem", "accept", &a]));
+    ok(&person(home.path(), &["mem", "accept", &b]));
     ok(&lorectl(
         home.path(),
         &["mem", "reject", &c, "--reason", "wrong"],
@@ -233,15 +246,13 @@ fn eval_with_archive_verifies_sessions_by_native_id() {
 
     lore_memory::inbox::propose(&vault, p1).unwrap();
     lore_memory::inbox::propose(&vault, p2).unwrap();
-    ok(&lorectl(
+    ok(&person(
         home.path(),
         &["mem", "accept", "01JD0000000000000000000001"],
-        "",
     ));
-    ok(&lorectl(
+    ok(&person(
         home.path(),
         &["mem", "accept", "01JD0000000000000000000002"],
-        "",
     ));
 
     let out = ok(&lorectl(

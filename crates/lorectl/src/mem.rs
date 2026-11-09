@@ -44,9 +44,11 @@ Memory (lorectl mem <SUBCOMMAND> [--vault <DIR>]):
                       [--anchor PATH[:LINES]]... [--updates|--extends|--derives ID]
     inbox             List pending proposals, each with its source session
                       and a redacted excerpt from the archive [--json]
-    accept <ID>       Write a proposal as a note, one commit [--as <slug>]
+    accept <ID>       Write a proposal as a note, one commit [--as <slug>];
+                      needs a terminal on stdin
     reject <ID>       Decline a proposal --reason <TEXT>; the vault is untouched
-    retire <NOTE>     Mark a note retired --reason <TEXT>, one commit
+    retire <NOTE>     Mark a note retired --reason <TEXT>, one commit; needs
+                      a terminal on stdin
     mine              Lessons from corrections and rules you gave agents,
                       most conversations first, each with its receipts;
                       writes nothing

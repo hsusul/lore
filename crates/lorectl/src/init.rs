@@ -5,10 +5,12 @@
 //! failure after the vault step is printed on that step's line and the next
 //! step still runs.
 //!
-//! On a terminal, or with `--review`, each pending proposal is offered first:
-//! accept, reject with a reason, skip, or quit. Then each lesson: accept the
-//! suggested rule, edit it, skip, or quit. A kept lesson is filed and
-//! accepted as a note in one step, so `mem eval` counts it as decided.
+//! On a terminal, unless `--no-review`, each pending proposal is offered
+//! first: accept, reject with a reason, skip, or quit. Then each lesson:
+//! accept the suggested rule, edit it, skip, or quit. A kept lesson is filed
+//! and accepted as a note in one step, so `mem eval` counts it as decided.
+//! `--review` without a terminal is refused: piped answers could come from
+//! an agent, and only a person accepts notes.
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -108,6 +110,9 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     let archive_dir = paths::archive_dir(args.archive.as_deref())?;
     let vault_dir = vault::resolve_dir(args.vault.as_deref())?;
     let terminal = std::io::stdin().is_terminal();
+    if args.review == Some(true) && !terminal {
+        return Err(CliError::NotATerminal("init --review"));
+    }
     let review = args.review.unwrap_or(terminal);
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "Lore");
@@ -180,17 +185,14 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     }
 
     let mut input = std::io::stdin().lock();
-    // Piped answers are not echoed, so print them as a terminal would.
-    let echo = !terminal;
-    let (accepted, go_on) =
-        review_proposals(&mut out, &mut input, echo, &vault, &archive, &proposals);
+    let (accepted, go_on) = review_proposals(&mut out, &mut input, &vault, &archive, &proposals);
     let mut kept = 0;
     if go_on {
         match lessons {
             Ok(lessons) => {
                 let _ = write!(out, "{}", header(&lessons, args.limit));
                 let shown = &lessons[..lessons.len().min(args.limit)];
-                kept = review_lessons(&mut out, &mut input, echo, &vault, shown);
+                kept = review_lessons(&mut out, &mut input, &vault, shown);
             }
             Err(error) => drop(writeln!(out, "Lessons    failed: {error}\n")),
         }
@@ -245,7 +247,6 @@ enum Verdict {
 fn review_proposals(
     out: &mut impl Write,
     input: &mut impl BufRead,
-    echo: bool,
     vault: &Vault,
     archive: &Archive,
     proposals: &[Proposal],
@@ -253,7 +254,7 @@ fn review_proposals(
     let mut accepted = 0;
     for proposal in proposals {
         let _ = write!(out, "{}", proposal_text(proposal, archive));
-        let Some(verdict) = decide(|prompt| answer(out, input, echo, prompt)) else {
+        let Some(verdict) = decide(|prompt| answer(out, input, prompt)) else {
             let _ = writeln!(out);
             return (accepted, false);
         };
@@ -319,7 +320,6 @@ const PROMPT: &str = "      [a]ccept  [e]dit  [s]kip  [q]uit ";
 fn review_lessons(
     out: &mut impl Write,
     input: &mut impl BufRead,
-    echo: bool,
     vault: &Vault,
     lessons: &[Lesson],
 ) -> usize {
@@ -334,7 +334,7 @@ fn review_lessons(
             continue;
         }
         let suggested = mine::suggest_rule(&lesson.text);
-        let Some(title) = choose(|prompt| answer(out, input, echo, prompt), suggested) else {
+        let Some(title) = choose(|prompt| answer(out, input, prompt), suggested) else {
             let _ = writeln!(out);
             break;
         };
@@ -395,12 +395,7 @@ fn choose(
 }
 
 /// Print `prompt` and read one trimmed line. `None` at the end of input.
-fn answer(
-    out: &mut impl Write,
-    input: &mut impl BufRead,
-    echo: bool,
-    prompt: &str,
-) -> Option<String> {
+fn answer(out: &mut impl Write, input: &mut impl BufRead, prompt: &str) -> Option<String> {
     let _ = write!(out, "{prompt}");
     let _ = out.flush();
     let mut line = String::new();
@@ -408,11 +403,7 @@ fn answer(
         let _ = writeln!(out);
         return None;
     }
-    let line = line.trim().to_owned();
-    if echo {
-        let _ = writeln!(out, "{line}");
-    }
-    Some(line)
+    Some(line.trim().to_owned())
 }
 
 /// Every mined lesson with a rule score of 0 or more, in the miner's order.

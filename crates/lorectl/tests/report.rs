@@ -3,12 +3,15 @@
 //! JSON, a narrower `--since`, and a short explanation with no archive.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-fn lorectl(home: &Path, args: &[&str], stdin: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+fn command(home: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lorectl"));
+    command
         .args(args)
         .env("HOME", home)
         .env("LORE_VAULT_DIR", home.join("vault"))
@@ -16,7 +19,17 @@ fn lorectl(home: &Path, args: &[&str], stdin: &str) -> Output {
         .env("CLAUDE_CONFIG_DIR", home.join("claude"))
         .env("CODEX_HOME", home.join("codex"))
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    command
+}
+
+/// `lorectl args` as a person runs it, at a terminal.
+fn person(home: &Path, args: &[&str]) -> Output {
+    common::on_a_terminal(&mut command(home, args), "")
+}
+
+fn lorectl(home: &Path, args: &[&str], stdin: &str) -> Output {
+    let mut child = command(home, args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -134,7 +147,7 @@ fn fixture(home: &Path) {
     let accepted = propose("Lint before committing");
     let rejected = propose("Lint twice");
     propose("Lint on Fridays");
-    ok(&lorectl(home, &["mem", "accept", &accepted], ""));
+    ok(&person(home, &["mem", "accept", &accepted]));
     ok(&lorectl(
         home,
         &["mem", "reject", &rejected, "--reason", "duplicate"],

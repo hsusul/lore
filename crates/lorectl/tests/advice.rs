@@ -1,16 +1,27 @@
 //! End-to-end assertions for actionable advice printed on stderr.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
-fn lorectl(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_lorectl"))
+fn command(home: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lorectl"));
+    command
         .args(args)
         .env("HOME", home)
-        .env("LORE_ARCHIVE_DIR", home.join("archive"))
-        .output()
-        .unwrap()
+        .env("LORE_ARCHIVE_DIR", home.join("archive"));
+    command
+}
+
+fn lorectl(home: &Path, args: &[&str]) -> Output {
+    command(home, args).output().unwrap()
+}
+
+/// `lorectl args` as a person runs it, at a terminal.
+fn person(home: &Path, args: &[&str]) -> Output {
+    common::on_a_terminal(&mut command(home, args), "")
 }
 
 #[test]
@@ -75,7 +86,7 @@ fn proposal_not_found_and_bad_slug_advice() {
     let init = lorectl(dir.path(), &["mem", "init"]);
     assert_eq!(init.status.code(), Some(0));
 
-    let not_found = lorectl(dir.path(), &["mem", "accept", "01JC0000000000000000000000"]);
+    let not_found = person(dir.path(), &["mem", "accept", "01JC0000000000000000000000"]);
     assert_eq!(not_found.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&not_found.stderr);
     assert!(
@@ -83,7 +94,7 @@ fn proposal_not_found_and_bad_slug_advice() {
         "stderr was: {stderr}"
     );
 
-    let bad_slug = lorectl(
+    let bad_slug = person(
         dir.path(),
         &[
             "mem",
