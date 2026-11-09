@@ -83,7 +83,15 @@ use crate::storage::{Result, StorageError};
 /// v18: the `generic-assignment` rule also masks values after secret keywords
 /// inside longer names (`DB_PASSWORD`, `AUTH_TOKEN`), so stored text is
 /// re-redacted only after a re-parse.
-pub const PARSER_VERSION: &str = "18";
+///
+/// v19: sessions a program started (`claude -p`, `codex exec`, a Codex
+/// subagent thread) are marked automated, so the miner skips them only
+/// after a re-parse.
+pub const PARSER_VERSION: &str = "19";
+
+/// `agent_session.metadata_json` for a session a program started; see
+/// [`ParsedSession::automated`].
+pub const AUTOMATED_METADATA: &str = r#"{"automated":true}"#;
 /// `ingest_state.state` of a source whose session the user forgot.
 pub(crate) const FORGOTTEN: &str = "forgotten";
 /// Bytes of a source file hashed to distinguish append from rewrite.
@@ -234,8 +242,9 @@ fn persist_rows(
         "INSERT INTO agent_session
             (id, agent_id, native_session_id, dedupe_key, title, started_at, ended_at,
              primary_model, message_count, tool_call_count, total_input_tokens,
-             total_output_tokens, total_cache_tokens, parse_status, parse_note, agent_version)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+             total_output_tokens, total_cache_tokens, parse_status, parse_note, agent_version,
+             metadata_json)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
         params![
             session_id,
             agent_id,
@@ -253,6 +262,7 @@ fn persist_rows(
             parsed.status.as_str(),
             parse_note(parsed),
             parsed.agent_version,
+            parsed.automated.then_some(AUTOMATED_METADATA),
         ],
     )?;
 
@@ -826,7 +836,8 @@ fn append_rows(
         "UPDATE agent_session SET
             title = ?2, ended_at = ?3, primary_model = ?4, message_count = ?5,
             tool_call_count = ?6, total_input_tokens = ?7, total_output_tokens = ?8,
-            total_cache_tokens = ?9, parse_status = ?10, parse_note = ?11, agent_version = ?12
+            total_cache_tokens = ?9, parse_status = ?10, parse_note = ?11, agent_version = ?12,
+            metadata_json = coalesce(?13, metadata_json)
          WHERE id = ?1",
         params![
             session_id,
@@ -841,6 +852,10 @@ fn append_rows(
             parsed.status.as_str(),
             note_summary(end.note_count, end.first_note.as_deref()),
             parsed.agent_version,
+            // A session a person started and a program resumed (`claude -p
+            // --resume`) is marked from the appended lines; a mark is never
+            // cleared.
+            parsed.automated.then_some(AUTOMATED_METADATA),
         ],
     )?;
 

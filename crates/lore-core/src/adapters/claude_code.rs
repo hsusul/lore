@@ -107,6 +107,11 @@ fn parse_from(
         if session.agent_version.is_none() {
             session.agent_version = str_field(&obj, "version");
         }
+        // `claude -p` and the Agent SDK record an `sdk-*` entrypoint; the
+        // terminal, desktop app, and IDEs record their own.
+        if str_field(&obj, "entrypoint").is_some_and(|e| e.starts_with("sdk")) {
+            session.automated = true;
+        }
 
         match event_type {
             "custom-title" => {
