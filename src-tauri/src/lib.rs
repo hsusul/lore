@@ -304,18 +304,34 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn write_export_replaces_a_symlink_without_writing_through_it() {
+    fn write_export_refuses_a_symlink_and_leaves_both_ends_alone() {
         let temp = TestTempDir::new("export_symlink");
         let victim = temp.path().join("victim.md");
         std::fs::write(&victim, "original").unwrap();
         let link = temp.path().join("export.md");
         std::os::unix::fs::symlink(&victim, &link).unwrap();
 
-        write_export(&link, "exported").unwrap();
+        assert!(write_export(&link, "exported").is_err());
 
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original");
-        assert!(!std::fs::symlink_metadata(&link).unwrap().is_symlink());
-        assert_eq!(std::fs::read_to_string(&link).unwrap(), "exported");
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_export_keeps_an_existing_files_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TestTempDir::new("export_mode");
+        let target = temp.path().join("export.md");
+        std::fs::write(&target, "old").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_export(&target, "new").unwrap();
+
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
     }
 
     #[test]
