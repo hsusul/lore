@@ -415,6 +415,63 @@ fn repeats_need_an_earlier_note_with_the_same_lesson() {
     assert_eq!(repeated, [(FMT, "2026-08-02")], "{json}");
 }
 
+/// Lesson words compare by stem, so "permissions" repeats a note that says
+/// "permission"; and "each" is filler, so sharing it and one more word with
+/// a note is not a repeat.
+#[test]
+fn repeats_compare_stems_and_skip_filler() {
+    const ASK: &str = "01JD0000000000000000000021";
+    const PR: &str = "01JD0000000000000000000022";
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(
+        home,
+        &[
+            ("Should I run it?", "no, don't ask me for permissions again"),
+            (
+                "Opened the PR.",
+                "no, in each pr make sure to add screenshots",
+            ),
+        ],
+    );
+    ok(&lorectl(home, &["mem", "init"], ""));
+    for (name, id, title, body) in [
+        (
+            "ask.md",
+            ASK,
+            "Don't ask for permission to proceed",
+            "Act and report.",
+        ),
+        (
+            "pr.md",
+            PR,
+            "Give each change its own PR",
+            "Keep a PR to one change.",
+        ),
+    ] {
+        let path = home.join(name);
+        std::fs::write(
+            &path,
+            format!("---\nid: {id}\ntype: convention\ntitle: {title}\ncreated: 2026-07-01\n---\n{body}\n"),
+        )
+        .unwrap();
+        ok(&lorectl(home, &["mem", "add", path.to_str().unwrap()], ""));
+    }
+    let json: serde_json::Value = serde_json::from_str(&ok(&lorectl(
+        home,
+        &["report", "--since", "2026-08-01", "--json"],
+        "",
+    )))
+    .unwrap();
+    let repeated: Vec<&str> = json["repeats"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["note_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(repeated, [ASK], "{json}");
+}
+
 /// Filler is not a shared word: a correction that shares one lesson word
 /// with a note, plus a contraction typed without its apostrophe that the
 /// receipt also says, does not repeat it. One sharing two real lesson words
