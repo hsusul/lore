@@ -1838,3 +1838,137 @@ fn read_session_returns_all_of_a_document_longer_than_a_page() {
         "read_session lost part of a long reply"
     );
 }
+
+/// A folder that looks like a repository but whose `.git/HEAD` is a FIFO, so
+/// opening it blocks, as an open under a folder macOS is asking the person
+/// about does until they answer.
+fn stuck_folder(home: &Path) -> String {
+    let stuck = home.join("stuck");
+    std::fs::create_dir_all(stuck.join(".git/objects")).unwrap();
+    std::fs::create_dir_all(stuck.join(".git/refs")).unwrap();
+    let fifo = Command::new("mkfifo")
+        .arg(stuck.join(".git/HEAD"))
+        .status()
+        .unwrap();
+    assert!(fifo.success(), "mkfifo failed");
+    stuck.to_str().unwrap().to_owned()
+}
+
+/// One Codex session that worked in `cwd`, scanned into `<home>/archive`.
+/// Returns its native id.
+fn archive_codex_session_in(home: &Path, cwd: &str) -> String {
+    let native = "019e0000-0000-7000-8000-00000000c0de";
+    let day = home.join("codex/sessions/2026/08/01");
+    std::fs::create_dir_all(&day).unwrap();
+    let lines = [
+        json!({"type": "session_meta", "timestamp": "2026-08-01T10:00:00.000Z", "payload": {
+            "id": native, "cwd": cwd, "cli_version": "0.133.0", "model_provider": "openai"}}),
+        json!({"type": "response_item", "timestamp": "2026-08-01T10:00:01.000Z", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "use pnpm"}]}}),
+    ];
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(day.join("rollout-00000000c0de.jsonl"), body).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["scan", "--archive"])
+        .arg(home.join("archive"))
+        .env("CLAUDE_CONFIG_DIR", home.join("claude"))
+        .env("CODEX_HOME", home.join("codex"))
+        .envs(GIT_ENV)
+        .env_remove("LORE_ARCHIVE_DIR")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    native.to_owned()
+}
+
+fn repo_lesson(cwd: &str) -> Value {
+    json!({
+        "title": "Use pnpm for installs here",
+        "body": "The lockfile is pnpm's.\n",
+        "type": "convention",
+        "scope": "repo",
+        "cwd": cwd,
+    })
+}
+
+#[test]
+fn propose_memory_answers_cwd_unreadable_instead_of_hanging_and_keeps_serving() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let stuck = stuck_folder(home.path());
+    let mut global = repo_lesson(&stuck);
+    global["scope"] = json!("global");
+    let started = std::time::Instant::now();
+    let replies = session(
+        home.path(),
+        &vault,
+        &[("LORE_AGENT", "codex")],
+        None,
+        &[
+            propose(1, repo_lesson(&stuck)),
+            propose(2, global),
+            // The stuck folder is refused at once, not waited on again.
+            propose(3, repo_lesson(&stuck)),
+            call(4, "mine_candidates", json!({ "cwd": stuck })),
+        ],
+    );
+    let elapsed = started.elapsed();
+    assert!(elapsed.as_secs() < 10, "took {elapsed:?}");
+    for reply in [&replies[0], &replies[2]] {
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
+        let error = &reply["result"]["structuredContent"];
+        assert_eq!(error["code"], "cwd_unreadable", "{reply}");
+        assert_eq!(error["field"], "cwd");
+        assert!(
+            error["fix"]
+                .as_str()
+                .unwrap()
+                .contains("macOS may be asking"),
+            "{reply}"
+        );
+    }
+    assert_eq!(structured(&replies[1])["source_verified"], false);
+    assert_eq!(
+        replies[3]["result"]["structuredContent"]["code"],
+        "cwd_unreadable"
+    );
+    assert_eq!(inbox_files(&vault).len(), 1, "only the global lesson");
+}
+
+#[test]
+fn propose_memory_for_an_archived_session_uses_its_recorded_repo_without_reading_cwd() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let repo = lore_repo(home.path());
+    let native = archive_codex_session_in(home.path(), &repo);
+    let stuck = stuck_folder(home.path());
+    let mut lesson = repo_lesson(&stuck);
+    lesson["session_id"] = json!(native);
+    let mut without_cwd = lesson.clone();
+    without_cwd.as_object_mut().unwrap().remove("cwd");
+    let started = std::time::Instant::now();
+    let replies = session(
+        home.path(),
+        &vault,
+        &[("LORE_AGENT", "codex")],
+        None,
+        &[propose(1, lesson), propose(2, without_cwd)],
+    );
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed.as_secs() < 5,
+        "read the stuck cwd: took {elapsed:?}"
+    );
+    for reply in &replies {
+        assert_eq!(structured(reply)["source_verified"], true, "{reply}");
+    }
+    let inbox = inbox_files(&vault);
+    assert_eq!(inbox.len(), 1, "{inbox:?}");
+    let filed = std::fs::read_to_string(vault.join("_inbox").join(&inbox[0])).unwrap();
+    assert_eq!(filed.matches("repo:81444c90f1ff44ac").count(), 2, "{filed}");
+}

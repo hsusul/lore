@@ -77,6 +77,13 @@
 //! comes before anything else, and the second exists to repeat a note at the
 //! moment its file is touched.
 //!
+//! Every part that reads the working tree at `cwd` first asks whether it
+//! answers within [`WORKTREE_LIMIT`] (`crate::worktree`): macOS can hold an
+//! open under Desktop or Documents until a person answers a privacy prompt.
+//! One that does not answer is left out, as if `cwd` were not a repository:
+//! `pre-tool` then checks only global rules, and a `Write` whose file on disk
+//! cannot be read in time counts every line it writes as added.
+//!
 //! It does **not** scan. A scan is unbounded — it can walk hundreds of megabytes
 //! — and taking that time at session start would make Lore the reason a session
 //! is slow to begin. Keeping the archive current is the desktop app's job, or an
@@ -92,15 +99,15 @@ use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::{query, storage};
 use lore_memory::enforce::{self, Rules, ToolCall};
 use lore_memory::mine;
-use lore_memory::note::RelPath;
+use lore_memory::note::{RelPath, Scope};
 use lore_memory::recall;
-use lore_memory::repo::RepoContext;
 use lore_memory::session_start::{self, line};
 use lore_memory::shown::Shown;
 use lore_memory::vault::{self, Vault};
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
+use crate::worktree;
 
 /// The event names this build understands.
 ///
@@ -138,6 +145,9 @@ const STDIN_CAP: u64 = 1 << 20;
 /// The history walk behind the at-risk line gives up past this. Half the 10 s
 /// the Claude Code plugin allows the hook, so the notes still get their turn.
 const AT_RISK_BUDGET: Duration = Duration::from_secs(5);
+/// How long a hook waits on the working tree at `cwd` before going on
+/// without it. Well inside the 10 s the plugins allow the hook.
+const WORKTREE_LIMIT: Duration = Duration::from_secs(1);
 
 /// Run a hook event. Always returns `Ok(exit::OK)`.
 pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
@@ -145,6 +155,7 @@ pub fn run(invocation: &Invocation) -> Result<u8, CliError> {
     if event == SESSION_START {
         let input = hook_input();
         let cwd = input.cwd.or_else(|| std::env::current_dir().ok());
+        let cwd = cwd.filter(|cwd| worktree::discover(cwd, WORKTREE_LIMIT).is_ok());
         // Errors are swallowed on purpose: see the module docs.
         let _ = session_start(invocation, cwd.as_deref());
         let mut stdout = std::io::stdout().lock();
@@ -222,9 +233,23 @@ fn denial(json: &serde_json::Value, input: &HookInput) -> Option<String> {
         })
         .flatten()
         .filter(|path| !path.is_empty())
-        .and_then(|path| enforce::read_existing(&cwd.join(path)));
+        .and_then(|path| {
+            let file = cwd.join(path);
+            worktree::within(&cwd, WORKTREE_LIMIT, move || enforce::read_existing(&file))
+                .ok()
+                .flatten()
+        });
     let call = ToolCall::from_tool_over(name, &tool_input, existing.as_deref());
-    let (rule, found) = enforce::first_denial(&rules.in_scope(&cwd), &call)?;
+    let repo_rules = (rules.rules.iter()).any(|rule| !matches!(rule.scope, Scope::Global));
+    let in_scope = if repo_rules && worktree::discover(&cwd, WORKTREE_LIMIT).is_err() {
+        let global = rules.rules.iter();
+        global
+            .filter(|rule| matches!(rule.scope, Scope::Global))
+            .collect()
+    } else {
+        rules.in_scope(&cwd)
+    };
+    let (rule, found) = enforce::first_denial(&in_scope, &call)?;
     Some(enforce::deny_reason(rule, found))
 }
 
@@ -310,6 +335,7 @@ fn prompt_notes(input: &HookInput) -> Option<String> {
     let prompt = mine::persons_words(input.prompt.as_deref()?)?;
     let cwd = input.cwd.clone().or_else(|| std::env::current_dir().ok())?;
     let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
+    worktree::discover(&cwd, WORKTREE_LIMIT).ok()?;
     let found = recall::related(&vault, &prompt, &cwd, PROMPT_CANDIDATES).ok()?;
     if found.notes.is_empty() {
         return None;
@@ -345,7 +371,8 @@ fn anchored_notes(input: &HookInput) -> Option<String> {
     if input.file_paths.is_empty() {
         return None;
     }
-    let root = RepoContext::discover(&cwd).root()?.to_path_buf();
+    let context = worktree::discover(&cwd, WORKTREE_LIMIT).ok()?;
+    let root = context.root()?.to_path_buf();
     let vault = Vault::open(&vault::resolve_dir(None).ok()?).ok()?;
     // Look no further once the files read so far fill the cap.
     let (mut notes, mut count) = (Vec::new(), 0);

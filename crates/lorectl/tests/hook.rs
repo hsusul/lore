@@ -1431,3 +1431,95 @@ fn a_rule_blocks_nothing_when_retired_out_of_scope_or_invalid() {
         "retired: {listed}"
     );
 }
+
+/// [`hook`], killed after ten seconds, with how long it took.
+fn timed_hook(
+    event: &str,
+    cwd: &Path,
+    home: &Path,
+    vault: &Path,
+    stdin: &str,
+) -> (Output, std::time::Duration) {
+    let started = Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["hook", event, "--archive"])
+        .arg(home.join("archive"))
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("LORE_VAULT_DIR", vault)
+        .env("CLAUDE_CONFIG_DIR", home.join("claude"))
+        .env("CODEX_HOME", home.join("codex"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("LORE_ARCHIVE_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn lorectl");
+    let mut pipe = child.stdin.take().unwrap();
+    pipe.write_all(stdin.as_bytes()).unwrap();
+    drop(pipe);
+    while child.try_wait().unwrap().is_none() {
+        if started.elapsed().as_secs() >= 10 {
+            child.kill().unwrap();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let elapsed = started.elapsed();
+    (child.wait_with_output().unwrap(), elapsed)
+}
+
+/// A folder that looks like a repository but whose `.git/HEAD` is a FIFO, so
+/// opening it blocks, as an open under a folder macOS is asking the person
+/// about does until they answer.
+fn stuck_folder(home: &Path) -> PathBuf {
+    let stuck = home.join("stuck");
+    std::fs::create_dir_all(stuck.join(".git/objects")).unwrap();
+    std::fs::create_dir_all(stuck.join(".git/refs")).unwrap();
+    let fifo = Command::new("mkfifo")
+        .arg(stuck.join(".git/HEAD"))
+        .status()
+        .unwrap();
+    assert!(fifo.success(), "mkfifo failed");
+    stuck
+}
+
+#[test]
+fn hooks_go_on_without_a_working_tree_that_does_not_answer() {
+    let (home, vault, _repo) = memory_home();
+    for (i, text) in [NO_TODO_MARKERS, NO_PLAN_FILES].iter().enumerate() {
+        let file = home.path().join(format!("rule-{i}.md"));
+        std::fs::write(&file, text).unwrap();
+        mem(home.path(), &vault, &["add", file.to_str().unwrap()]);
+    }
+    let stuck = stuck_folder(home.path());
+    let runs = [
+        ("session-start", cwd_json(&stuck)),
+        (
+            "prompt",
+            prompt_json(&stuck, "s-1", "leave markers in planning docs"),
+        ),
+        (
+            "pre-tool",
+            tool_json(
+                &stuck,
+                "Write",
+                serde_json::json!({ "file_path": stuck.join("a.rs"), "content": "XXX(later)" }),
+            ),
+        ),
+    ];
+    for (event, stdin) in runs {
+        let (out, elapsed) = timed_hook(event, &stuck, home.path(), &vault, &stdin);
+        assert!(elapsed.as_secs() < 2, "{event} took {elapsed:?}");
+        assert_eq!(code(&out), 0, "{event}");
+        if event == "pre-tool" {
+            // Global rules still hold where the repository cannot be read.
+            let reason = deny_reason(&out).unwrap();
+            assert!(reason.contains("01JD0000000000000000000012"), "{reason}");
+        } else {
+            assert_eq!(stdout(&out), "", "{event}");
+        }
+    }
+}

@@ -31,6 +31,7 @@ mod review;
 mod scan;
 mod skills;
 mod status;
+mod worktree;
 
 use std::io::Write;
 use std::process::ExitCode;

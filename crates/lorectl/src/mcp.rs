@@ -34,6 +34,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::search::{self, SortOrder, HIGHLIGHT_END, HIGHLIGHT_START};
@@ -43,8 +44,8 @@ use lore_memory::considered::{self, CorrectionId};
 use lore_memory::enforce::Enforcement;
 use lore_memory::inbox::{InboxError, Proposal};
 use lore_memory::note::{
-    AgentKind, Anchor, InvalidValue, LineRange, Note, NoteId, NoteType, RelPath, Relation, Scope,
-    SessionId,
+    AgentKind, Anchor, InvalidValue, LineRange, Note, NoteId, NoteType, RelPath, Relation, RepoKey,
+    Scope, SessionId,
 };
 use lore_memory::repo::RepoContext;
 use lore_memory::vault::{self, Vault, VaultError};
@@ -55,6 +56,7 @@ use time::OffsetDateTime;
 
 use crate::cli::Invocation;
 use crate::exit::{self, CliError};
+use crate::worktree;
 
 /// The protocol revisions this server can speak. The tools surface it uses is
 /// the same in all of them, so a client's requested revision is echoed back
@@ -92,6 +94,10 @@ const PROPOSE_TITLE_CHARS: usize = 120;
 const PROPOSE_BODY_CHARS: usize = 4_000;
 const PROPOSE_MAX_ANCHORS: usize = 8;
 
+/// How long a call waits on the working tree at `cwd`. Past it the call
+/// answers `cwd_unreadable` instead of stalling the server (`worktree`).
+const WORKTREE_LIMIT: Duration = Duration::from_secs(5);
+
 const NOTE_ARG_PROBLEM: &str = "must be a note id, file name, or path inside the vault";
 const NOTE_NOT_FOUND_FIX: &str = "Call recall_memory to get a current note id.";
 const NOTE_AMBIGUOUS_FIX: &str = "Pass the note id instead of the slug.";
@@ -105,6 +111,11 @@ const ANCHOR_NOT_FOUND_FIX: &str = "Anchor paths are relative to the repo root a
 Check path and lines, or omit lines.";
 const SCOPE_MISMATCH_FIX: &str = "Anchors need scope repo and a cwd inside that repo.";
 const SESSION_MISMATCH_FIX: &str = "That session belongs to another agent. Omit session_id.";
+const CWD_UNREADABLE_FIX: &str = "macOS may be asking for access to this folder. Ask the user to \
+allow it, then call again. For scope repo, passing session_id from your session-start context \
+lets Lore use the repository it recorded instead of reading cwd.";
+const MINE_CWD_UNREADABLE_FIX: &str = "macOS may be asking for access to this folder. Call again \
+without cwd.";
 
 const INSTRUCTIONS: &str = "Lore archives past Claude Code and Codex sessions on this machine. \
 Use search_sessions to find earlier work, decisions, or errors, then read_session to read one. \
@@ -320,9 +331,11 @@ fn propose_schema() -> Value {
                 "description": "Markdown. Lore writes the `## Timeline` section." },
             "type": { "type": "string", "enum": NoteType::ALL.map(NoteType::as_str) },
             "scope": { "type": "string", "enum": ["global", "repo"],
-                "description": "repo means the repository at cwd." },
+                "description": "repo means the repository the archive recorded for session_id, \
+    else the one at cwd." },
             "cwd": { "type": "string",
-                "description": "Absolute path you are working in. Required for scope repo." },
+                "description": "Absolute path you are working in. Required for scope repo, \
+    unless session_id names an archived session and there are no anchors." },
             "anchors": { "type": "array", "maxItems": PROPOSE_MAX_ANCHORS, "items": {
                 "type": "object",
                 "properties": {
@@ -477,6 +490,18 @@ fn invalid_argument(field: &str, problem: &str) -> Value {
         &format!("Fix `{field}`: {problem}, then call again."),
     );
     error["field"] = json!(field);
+    error
+}
+
+/// The working tree at `cwd` did not answer within [`WORKTREE_LIMIT`].
+fn cwd_unreadable(cwd: &Path, fix: &str) -> Value {
+    let message = format!(
+        "reading {} did not finish within {} seconds",
+        cwd.display(),
+        WORKTREE_LIMIT.as_secs()
+    );
+    let mut error = tool_error("cwd_unreadable", message, fix);
+    error["field"] = json!("cwd");
     error
 }
 
@@ -649,6 +674,8 @@ fn recall_memory(_ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         }
         Err(e) => return Err(vault_error(&e)),
     };
+    // Recall reads the working tree; find out first whether it answers.
+    worktree::discover(cwd, WORKTREE_LIMIT).map_err(|_| cwd_unreadable(cwd, CWD_UNREADABLE_FIX))?;
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let found = recall::recall(&vault, query_text, cwd, limit).map_err(|e| vault_error(&e))?;
     // Recall left the index fresh, so counting the scope is one query.
@@ -733,9 +760,18 @@ fn read_note(_ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
 
     let (body, timeline) = index::split_timeline(&note.body);
     let timeline_entries = timeline.lines().filter(|l| l.starts_with("- ")).count();
-    let context = cwd.map_or(RepoContext::NoRepo, RepoContext::discover);
-    let tree = context.root().map(WorkTree::new);
-    let (_, freshness) = recall::check_note(&note, &context, tree.as_ref());
+    let freshness = match cwd {
+        None => recall::check_note(&note, &RepoContext::NoRepo, None).1,
+        Some(cwd) => {
+            let (dir, checked) = (cwd.to_path_buf(), note.clone());
+            worktree::within(cwd, WORKTREE_LIMIT, move || {
+                let context = RepoContext::discover(&dir);
+                let tree = context.root().map(WorkTree::new);
+                recall::check_note(&checked, &context, tree.as_ref()).1
+            })
+            .map_err(|_| cwd_unreadable(cwd, CWD_UNREADABLE_FIX))?
+        }
+    };
     let body = redact(body.trim_end())?;
     let truncated = body.chars().count() > READ_NOTE_BODY_CHARS;
     Ok(json!({
@@ -806,6 +842,11 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let owner = (arguments.get("session_id"))
         .and_then(|_| archived_session(&ctx.archive_dir, session.as_str()));
     let source_verified = owner.is_some();
+    // The repository the archive recorded for this agent's session, so a
+    // repo-scoped proposal need not read the working tree at all.
+    let recorded = (owner.as_ref())
+        .filter(|owner| owner.agent_id == agent.as_str())
+        .and_then(|owner| recorded_repo(&ctx.archive_dir, &owner.archive_id));
     let session = match owner {
         None => session,
         Some(owner) if owner.agent_id == agent.as_str() => SessionId::parse(&owner.archive_id)
@@ -831,25 +872,25 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         return Err(tool_error("scope_mismatch", mismatch, SCOPE_MISMATCH_FIX));
     }
     if repo_scope {
-        let cwd = string_arg(arguments, "cwd")
-            .map(Path::new)
-            .filter(|cwd| cwd.is_absolute())
-            .ok_or_else(|| invalid_argument("cwd", "must be an absolute path"))?;
-        let context = RepoContext::discover(cwd);
-        let (Some(key), Some(root)) = (context.key(), context.root()) else {
-            let outside = format!(
-                "{} is not inside a git repository with an origin remote",
-                cwd.display()
-            );
-            return Err(tool_error("scope_mismatch", outside, SCOPE_MISMATCH_FIX));
+        let cwd = match arguments.get("cwd") {
+            None if recorded.is_some() => None,
+            cwd => Some(
+                cwd.and_then(Value::as_str)
+                    .map(Path::new)
+                    .filter(|cwd| cwd.is_absolute())
+                    .ok_or_else(|| invalid_argument("cwd", "must be an absolute path"))?,
+            ),
         };
-        scope = Scope::Repo(key.clone());
-        let tree = WorkTree::new(root);
-        for anchor in &mut anchors {
-            *anchor = tree
-                .pin(anchor)
-                .map_err(|e| tool_error("anchor_not_found", e, ANCHOR_NOT_FOUND_FIX))?;
-        }
+        let key = match (recorded, cwd) {
+            (Some(key), _) if anchors.is_empty() => key,
+            (recorded, cwd) => {
+                let cwd = cwd.ok_or_else(|| invalid_argument("cwd", "must be an absolute path"))?;
+                let pinned = repo_at(cwd, recorded.as_ref(), std::mem::take(&mut anchors))?;
+                anchors = pinned.1;
+                pinned.0
+            }
+        };
+        scope = Scope::Repo(key);
     }
     let vault = open_vault()?;
     if let Some(Relation::Updates(target)) = &relation {
@@ -892,6 +933,44 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         "session": written.session.as_str(),
         "source_verified": source_verified,
     }))
+}
+
+/// The repository at `cwd`, which must be `recorded` when that is known, and
+/// `anchors` pinned in it. Reads the working tree within [`WORKTREE_LIMIT`].
+fn repo_at(
+    cwd: &Path,
+    recorded: Option<&RepoKey>,
+    anchors: Vec<Anchor>,
+) -> Result<(RepoKey, Vec<Anchor>), Value> {
+    let unreadable = || cwd_unreadable(cwd, CWD_UNREADABLE_FIX);
+    let context = worktree::discover(cwd, WORKTREE_LIMIT).map_err(|_| unreadable())?;
+    let (Some(key), Some(root)) = (context.key(), context.root()) else {
+        let outside = format!(
+            "{} is not inside a git repository with an origin remote",
+            cwd.display()
+        );
+        return Err(tool_error("scope_mismatch", outside, SCOPE_MISMATCH_FIX));
+    };
+    if recorded.is_some_and(|recorded| recorded != key) {
+        let other = format!(
+            "{} is not in the repository the archive recorded for this session",
+            cwd.display()
+        );
+        return Err(tool_error("scope_mismatch", other, SCOPE_MISMATCH_FIX));
+    }
+    if anchors.is_empty() {
+        return Ok((key.clone(), anchors));
+    }
+    let root = root.to_path_buf();
+    let pinned = worktree::within(cwd, WORKTREE_LIMIT, move || {
+        let tree = WorkTree::new(&root);
+        (anchors.iter())
+            .map(|anchor| tree.pin(anchor).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .map_err(|_| unreadable())?
+    .map_err(|e| tool_error("anchor_not_found", e, ANCHOR_NOT_FOUND_FIX))?;
+    Ok((key.clone(), pinned))
 }
 
 /// Words a title cannot start with: each leans on a conversation the reader
@@ -945,7 +1024,9 @@ fn mine_candidates(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
     let cwd_repo = match string_arg(arguments, "cwd") {
         None => Value::Null,
         Some(cwd) if Path::new(cwd).is_absolute() => {
-            let context = RepoContext::discover(Path::new(cwd));
+            let cwd = Path::new(cwd);
+            let context = worktree::discover(cwd, WORKTREE_LIMIT)
+                .map_err(|_| cwd_unreadable(cwd, MINE_CWD_UNREADABLE_FIX))?;
             let name = context.name().map(|name| name.as_str().to_owned());
             context
                 .key()
@@ -1101,7 +1182,13 @@ fn repo_json(name: Option<String>, key: &lore_memory::note::RepoKey) -> Value {
 /// The repository a session worked in, from the origin URL the archive
 /// recorded for it, or null when it recorded none.
 fn session_repo(conn: &Connection, session: &str, name: Option<String>) -> Value {
-    let url: Option<String> = conn
+    recorded_key(conn, session).map_or(Value::Null, |key| repo_json(name, &key))
+}
+
+/// The key of the repository the archive recorded for `session`, an archive
+/// session id, from its origin URL. `None` when it recorded none.
+fn recorded_key(conn: &Connection, session: &str) -> Option<RepoKey> {
+    let url: String = conn
         .query_row(
             "SELECT e.display_value FROM session_segment seg
              JOIN repository_identity_evidence e ON e.repository_id = seg.repository_id
@@ -1110,10 +1197,14 @@ fn session_repo(conn: &Connection, session: &str, name: Option<String>) -> Value
             [session],
             |r| r.get(0),
         )
-        .ok();
-    url.as_deref()
-        .and_then(lore_memory::repo::repo_key)
-        .map_or(Value::Null, |key| repo_json(name, &key))
+        .ok()?;
+    lore_memory::repo::repo_key(&url)
+}
+
+/// [`recorded_key`] with the archive opened read-only. A missing or
+/// unreadable archive records nothing.
+fn recorded_repo(archive_dir: &Path, session: &str) -> Option<RepoKey> {
+    recorded_key(&open(archive_dir).ok()?, session)
 }
 
 /// The corrections earlier lessons runs read, from the vault's ledger. With
