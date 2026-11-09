@@ -69,7 +69,7 @@ Call `propose_memory` once per rule with these fields.
 - `body` is one sentence on what the agent did and what the person wanted instead, then a Receipts list with every new receipt in the group. Each item quotes the person's words and names the agent, session, and date from one receipt.
 - `type` is `convention`, or `pitfall` when the rule warns against a mistake.
 - `scope` is `repo`, with `cwd` set to the current directory, when `cwd_repo` is not null and every receipt's `repo.scope` equals `cwd_repo.scope`. Otherwise it is `global`.
-- `session_id` is the session of the newest receipt.
+- `session_id` is the session of the newest receipt that your own agent recorded (Claude Code receipts when you are Claude Code, Codex receipts when you are Codex). Leave it out when no receipt in the group is your agent's: Lore refuses another agent's session.
 - `enforce` only when the rule is mechanical and breaking it shows in one tool call, such as AI attribution in a commit message or a planning doc being written. Give one narrow `pattern` for the exact violation, with `tool` set to `bash`, `write`, or `path`, and `unless` for a known safe form. Leave it out for any rule that needs judgment, because a hook will deny every call the pattern matches.
 
 If `propose_memory` refuses the session because another agent recorded it, use the newest receipt your own agent recorded. If there is none, leave out `session_id`.
