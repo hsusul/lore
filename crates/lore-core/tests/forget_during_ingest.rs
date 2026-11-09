@@ -236,6 +236,54 @@ fn a_forget_during_an_append_is_not_undone_by_it() {
     }
 }
 
+/// A log Lore had never read before the forget is new, not forgotten: it is
+/// archived whole, and the forget still removes everything older.
+#[test]
+fn a_new_log_ingested_during_forget_everything_is_archived_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = lore_core::storage::open(&dir.path().join("lore.db")).unwrap();
+    let blobs = BlobStore::open(dir.path().join("blobs")).unwrap();
+    let old = dir.path().join(format!("{OTHER}.jsonl"));
+    std::fs::write(&old, line("o1", "user", "older").replace(SESSION, OTHER)).unwrap();
+    ingest_file(&conn, &ClaudeCodeAdapter::new(), &old, &blobs).unwrap();
+
+    let new = dir.path().join(format!("{SESSION}.jsonl"));
+    std::fs::write(
+        &new,
+        line("u1", "user", "question") + &line("u2", "assistant", "answer"),
+    )
+    .unwrap();
+    let racing = ForgetsWhileParsing::new(dir.path(), forget_everything);
+    let outcome = ingest_file(&conn, &racing, &new, &blobs).unwrap();
+    assert!(racing.forgot(), "the forget ran during the parse");
+
+    assert!(
+        matches!(outcome, IngestOutcome::Ingested { .. }),
+        "{outcome:?}"
+    );
+    let natives: Vec<String> = conn
+        .prepare("SELECT native_session_id FROM agent_session")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(natives, [SESSION], "only the new log is archived");
+    let messages: i64 = conn
+        .query_row("SELECT count(*) FROM message", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(messages, 2, "the new log is archived whole");
+    let old_state: String = conn
+        .query_row(
+            "SELECT s.state FROM ingest_state s JOIN source_artifact a ON a.id = s.source_artifact_id
+              WHERE a.current_path LIKE ?1",
+            [format!("%{OTHER}.jsonl")],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(old_state, "forgotten");
+}
+
 #[test]
 fn a_forget_during_an_ingest_leaves_none_of_its_files() {
     for change in [append_screenshot as fn(&Path), rewrite_with_screenshot] {

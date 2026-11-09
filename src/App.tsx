@@ -297,7 +297,7 @@ export default function App({
       overlay({
         kind: "confirm",
         title: "Forget everything?",
-        body: "This removes every session, repository, finding, and backup from Lore. Your original agent logs are not touched, and only new sessions will be archived from now on. This cannot be undone.",
+        body: "This removes every session, repository, finding, and backup from Lore. Your original agent logs are not touched, and only new sessions will be archived from now on. Lore keeps the paths of those logs so it can skip them. This cannot be undone.",
         confirmLabel: "Forget everything",
         onConfirm: () =>
           void forgetEverything().then(async (report) => {
