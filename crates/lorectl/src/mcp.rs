@@ -239,7 +239,8 @@ is not null, call again with it, and read every page before you group anything."
         description: "Call once you have verified something a future agent here should know. \
 A person reviews it before it becomes memory. Pass `updates` with a note id to supersede that \
 note. Retiring a note needs a person. Pass `enforce` only for a mechanical lesson whose \
-violation shows in one tool call: a hook then denies a call its narrow pattern matches.",
+violation shows in one tool call: a hook then denies a call its narrow pattern matches. A rule \
+an active note or a pending proposal already says is refused as `already_filed`.",
         input_schema: propose_schema,
         call: propose_memory,
     },
