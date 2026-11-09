@@ -48,6 +48,8 @@ const TOOLS: [&str; 3] = [
 
 /// A run reads every candidate and may take a while; past this it is stopped.
 const LIMIT: Duration = Duration::from_secs(20 * 60);
+/// How long a run's processes have to exit on SIGTERM before SIGKILL.
+const GRACE: Duration = Duration::from_secs(3);
 
 /// The scratch file that lists the corrections a run reads, one id a line.
 const PINNED_FILE: &str = "find-lessons.candidates.txt";
@@ -572,38 +574,67 @@ pub(crate) fn run(
     path: &std::ffi::OsStr,
     last: &Path,
 ) -> Result<String, String> {
+    run_for(agent, binary, args, prompt, home, path, last, LIMIT)
+}
+
+/// [`run`], stopped after `limit`.
+#[allow(clippy::too_many_arguments)]
+fn run_for(
+    agent: Agent,
+    binary: &Path,
+    args: &[String],
+    prompt: &str,
+    home: &Path,
+    path: &std::ffi::OsStr,
+    last: &Path,
+    limit: Duration,
+) -> Result<String, String> {
     let label = agent.label();
     let _ = std::fs::remove_file(last);
-    let mut child = Command::new(binary)
-        .args(args)
+    let mut cmd = Command::new(binary);
+    cmd.args(args)
         .current_dir(home)
         .env("PATH", path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Its own process group, which the MCP server it starts inherits, so
+    // stopping the group stops that server too instead of leaving it to launchd.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("could not start {label}: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(prompt.as_bytes())
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = stdin.write_all(prompt.as_bytes()) {
+            stop_group(&mut child);
+            return Err(e.to_string());
+        }
     }
     // Read both pipes while it runs, so a long report cannot fill one and stall it.
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
     let started = Instant::now();
     loop {
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            break;
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(e) => {
+                stop_group(&mut child);
+                return Err(e.to_string());
+            }
         }
-        if started.elapsed() > LIMIT {
-            let _ = child.kill();
+        if started.elapsed() > limit {
+            stop_group(&mut child);
+            let minutes = limit.as_secs() / 60;
             return Err(format!(
-                "{label} took more than 20 minutes and was stopped."
+                "{label} took more than {minutes} minutes and was stopped."
             ));
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+    // Nothing the agent started outlives it, and nothing left holds its pipes.
+    stop_group(&mut child);
     let stdout = stdout.join().unwrap_or_default();
     let stderr = stderr.join().unwrap_or_default();
     match agent {
@@ -614,6 +645,37 @@ pub(crate) fn run(
             .filter(|text| !text.is_empty())
             .ok_or_else(|| no_report(label, &format!("{stdout}\n{stderr}"))),
     }
+}
+
+/// Stop every process in `child`'s group, which [`run_for`] made `child` lead:
+/// SIGTERM, up to [`GRACE`] for the group to empty, then SIGKILL; and reap
+/// `child`. The signals go from this process, not through a `kill` program.
+fn stop_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        use rustix::process::{kill_process_group, test_kill_process_group, Pid, Signal};
+        let group = Pid::from_child(child);
+        // Fails only when the group is already empty: nothing to stop.
+        if kill_process_group(group, Signal::TERM).is_ok() {
+            let started = Instant::now();
+            let mut empty = false;
+            while started.elapsed() < GRACE {
+                // Reap the leader, so a group of only its zombie reads as empty.
+                let _ = child.try_wait();
+                if test_kill_process_group(group).is_err() {
+                    empty = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            if !empty {
+                let _ = kill_process_group(group, Signal::KILL);
+            }
+        }
+    }
+    // No signal once reaped: std remembers the exit status.
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// What a run needs to start `agent`: the binary, home, and PATH.
@@ -880,6 +942,97 @@ mod tests {
             assert!(result.is_err(), "{result:?}");
         }
         assert!(considered::considered(&vault).unwrap().is_empty());
+    }
+
+    /// A fake `claude` that starts a long-lived child holding its stdout,
+    /// writes its own pid and the child's to `dir`, prints `stdout`, then
+    /// either exits or sleeps for ten minutes.
+    fn fake_claude_with_child(dir: &Path, stdout: &str, hang: bool) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("claude");
+        let d = dir.display();
+        let tail = if hang { "sleep 600\n" } else { "exit 0\n" };
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\ncat >/dev/null\nsleep 600 &\necho $! >'{d}/child.pid'\n\
+                 echo $$ >'{d}/self.pid'\nprintf '%s' '{stdout}'\n{tail}"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    /// Whether the process `dir/<file>` names is still alive, after giving
+    /// launchd or init a moment to reap it.
+    fn alive(dir: &Path, file: &str) -> bool {
+        let pid: i32 = std::fs::read_to_string(dir.join(file))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let pid = rustix::process::Pid::from_raw(pid).unwrap();
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(5) {
+            if rustix::process::test_kill_process(pid).is_err() {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        true
+    }
+
+    #[test]
+    fn a_stopped_run_leaves_no_process_and_records_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (vault, _) = Vault::init(&dir.path().join("vault")).unwrap();
+        let pinned = dir.path().join(PINNED_FILE);
+        let pending = ids(&["cr-0123456789abcdef"]);
+        let bin = fake_claude_with_child(dir.path(), "", true);
+        let last = dir.path().join("last.txt");
+        let result = run_pinned(&pending, &pinned, Some(&vault), "r", || {
+            run_for(
+                Agent::Claude,
+                &bin,
+                &[],
+                "skill",
+                dir.path(),
+                std::ffi::OsStr::new("/usr/bin:/bin"),
+                &last,
+                Duration::from_secs(1),
+            )
+        });
+        assert!(
+            result.as_ref().is_err_and(|e| e.contains("was stopped")),
+            "{result:?}"
+        );
+        assert!(!alive(dir.path(), "self.pid"), "the agent survived");
+        assert!(!alive(dir.path(), "child.pid"), "its child survived");
+        assert!(considered::considered(&vault).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_finished_run_leaves_no_process_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake_claude_with_child(
+            dir.path(),
+            r#"{"result":"Filed: 1 rule","is_error":false}"#,
+            false,
+        );
+        let result = run_for(
+            Agent::Claude,
+            &bin,
+            &[],
+            "skill",
+            dir.path(),
+            std::ffi::OsStr::new("/usr/bin:/bin"),
+            &dir.path().join("last.txt"),
+            Duration::from_secs(60),
+        );
+        assert_eq!(result, Ok("Filed: 1 rule".to_owned()));
+        assert!(!alive(dir.path(), "self.pid"), "the agent survived");
+        assert!(!alive(dir.path(), "child.pid"), "its child survived");
     }
 
     #[test]

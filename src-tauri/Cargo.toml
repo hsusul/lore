@@ -48,6 +48,11 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Stopping a Find lessons run signals the agent's whole process group, so the
+# MCP server it started stops too. Safe `kill(-pgid)`; already in the graph.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [features]
 # The updater is the sole network-capable component and is OFF by default
 # (M0 requirement). Compiling it in requires explicitly enabling this feature.
