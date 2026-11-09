@@ -41,4 +41,10 @@ describe("bundled fonts", () => {
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.filter((u) => !u.startsWith("./files/"))).toEqual([]);
   });
+
+  it("ships the font's SIL Open Font License with the app", async () => {
+    const { default: license } = (await import("../public/licenses/Figtree-OFL.txt?raw")) as { default: string };
+    expect(license).toContain("The Figtree Project Authors");
+    expect(license).toContain("SIL OPEN FONT LICENSE Version 1.1");
+  });
 });
