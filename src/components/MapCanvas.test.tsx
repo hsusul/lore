@@ -43,9 +43,19 @@ it("reaches and opens a dot in every cluster from the keyboard alone", async () 
   );
 
   await user.tab();
-  expect(document.activeElement).toBe(screen.getByRole("img", { name: "Map" }));
+  expect(document.activeElement).toBe(
+    screen.getByRole("application", { name: "Map" }),
+  );
+  const spoken = () => screen.getByText(/Enter/).textContent;
+  expect(spoken()).toBe("Henry, group 1 of 2. Enter zooms in.");
 
-  await user.keyboard("{ArrowRight}{Enter}{ArrowRight}{Enter}");
+  await user.keyboard("{ArrowRight}");
+  expect(spoken()).toBe("Skills, group 2 of 2. Enter zooms in.");
+  await user.keyboard("{Enter}");
+  expect(spoken()).toBe(
+    "skill:review, 1 of 2. Enter opens it, Escape goes back.",
+  );
+  await user.keyboard("{ArrowRight}{Enter}");
   expect(onSelect).toHaveBeenLastCalledWith(model.dots[2]);
 
   await user.keyboard("{Escape}{ArrowLeft}{Enter}{Enter}");

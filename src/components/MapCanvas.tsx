@@ -63,6 +63,8 @@ export function MapCanvas({
   const home = useRef<View>({ s: 1, tx: 0, ty: 0 });
   const focus = useRef<string | null>(null);
   const cursor = useRef<string | null>(null);
+  // What a screen reader hears as the arrows move the ring.
+  const [spoken, setSpoken] = useState("");
   const anim = useRef(0);
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
 
@@ -169,6 +171,22 @@ export function MapCanvas({
       ? model.dots.filter((d) => d.area === focus.current).map((d) => d.id)
       : model.clusters.map((c) => c.key);
 
+  // Ring `id` and say what it is, where it is, and what Enter does.
+  const ring = (id: string | null) => {
+    cursor.current = id;
+    const ids = stops();
+    const place = `${ids.indexOf(id ?? "") + 1} of ${ids.length}`;
+    const cluster = model.clusters.find((c) => c.key === id);
+    const dot = model.dots.find((d) => d.id === id);
+    setSpoken(
+      cluster
+        ? `${cluster.name}, group ${place}. Enter zooms in.`
+        : dot
+          ? `${dot.label}, ${place}. Enter opens it, Escape goes back.`
+          : "",
+    );
+  };
+
   // After the refit above, so a home press that also moves the card glides
   // to the whole map in the new space.
   const lastHomeKey = useRef(homeKey);
@@ -205,21 +223,24 @@ export function MapCanvas({
       <canvas
         ref={canvas}
         className="map__canvas"
-        role="img"
+        role="application"
+        aria-roledescription="map"
         aria-label={label}
         tabIndex={0}
         style={{ width: size.width, height: size.height }}
         onFocus={(e) => {
           if (!e.currentTarget.matches(":focus-visible")) return;
           const ids = stops();
-          cursor.current =
+          ring(
             selectedId && ids.includes(selectedId)
               ? selectedId
-              : (ids[0] ?? null);
+              : (ids[0] ?? null),
+          );
           paint();
         }}
         onBlur={() => {
           cursor.current = null;
+          setSpoken("");
           paint();
         }}
         onKeyDown={(e) => {
@@ -227,7 +248,7 @@ export function MapCanvas({
             const from = focus.current;
             onDeselect();
             goHome();
-            cursor.current = from ?? cursor.current;
+            ring(from ?? cursor.current);
             return;
           }
           const ids = stops();
@@ -235,8 +256,9 @@ export function MapCanvas({
           if (step) {
             e.preventDefault();
             const at = ids.indexOf(cursor.current ?? "");
-            cursor.current =
-              ids[at < 0 ? 0 : (at + step + ids.length) % ids.length] ?? null;
+            ring(
+              ids[at < 0 ? 0 : (at + step + ids.length) % ids.length] ?? null,
+            );
             paint();
             return;
           }
@@ -251,7 +273,7 @@ export function MapCanvas({
           if (!cluster) return;
           onDeselect();
           focus.current = cluster.key;
-          cursor.current = stops()[0] ?? null;
+          ring(stops()[0] ?? null);
           glide(onto(cluster, home.current, frame));
         }}
         onPointerDown={(e) => {
@@ -304,6 +326,9 @@ export function MapCanvas({
           }
         }}
       />
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {spoken}
+      </p>
     </div>
   );
 }
