@@ -296,6 +296,36 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_only_the_reflog_reaches_still_clones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "then"]);
+        let then = stdout(&repo, &["rev-parse", "HEAD"]);
+        sh(
+            &repo,
+            &["commit", "-q", "--amend", "--allow-empty", "-m", "amended"],
+        );
+        sh(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+        assert_eq!(
+            stdout(
+                &repo,
+                &["branch", "--contains", &then, "--format=%(refname)"]
+            ),
+            "",
+            "no branch reaches the commit any more"
+        );
+
+        let dest = tmp.path().join("clone");
+        clone_at(&repo, &then, Some("main"), &dest).unwrap();
+
+        assert_eq!(stdout(&dest, &["rev-parse", "HEAD"]), then);
+        assert_eq!(stdout(&dest, &["log", "--format=%s"]), "then\nbase");
+    }
+
+    #[test]
     fn a_shallow_source_gives_a_shallow_clone_whose_log_works() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
