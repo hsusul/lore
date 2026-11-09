@@ -13,6 +13,7 @@ use lore_ipc::ScanProgress;
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter};
 
+use crate::commands::auto_lessons::{self, DueTimer};
 use crate::commands::LessonsLock;
 
 /// Quiet period a source path must be idle before the watcher hands it to the
@@ -49,6 +50,10 @@ pub struct AppState {
     pub _scan_lock: Option<ScanLock>,
     /// Held by whichever Find lessons run is going, manual or automatic.
     pub lessons: LessonsLock,
+    /// Checks on a timer whether an automatic Find lessons run is due. Like the
+    /// worker, only while this instance holds the writer lock, so two app
+    /// instances never both start one.
+    pub lessons_timer: Mutex<Option<DueTimer>>,
 }
 
 /// An owned, thread-safe progress sink for the background worker. Accumulates
@@ -99,7 +104,7 @@ impl ProgressSink for WorkerSink {
         // New sessions may hold new corrections. Reads one setting; any
         // mining or agent run happens on a thread of its own.
         if ingested {
-            crate::commands::auto_lessons::on_ingest(&self.app);
+            auto_lessons::check(&self.app);
         }
     }
 }
@@ -232,6 +237,10 @@ pub fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error
     let handle = scan_lock
         .as_ref()
         .map(|_| worker::spawn(worker, watcher, WorkerSink::new(app.clone())));
+    // Its first tick comes after this state is managed, and finds it there.
+    let lessons_timer = scan_lock
+        .as_ref()
+        .and_then(|_| auto_lessons::start_timer(app));
 
     Ok(AppState {
         db: Mutex::new(conn),
@@ -242,5 +251,6 @@ pub fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error
         archive_dir: data_dir,
         _scan_lock: scan_lock,
         lessons: LessonsLock::default(),
+        lessons_timer: Mutex::new(lessons_timer),
     })
 }
