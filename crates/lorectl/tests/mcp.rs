@@ -1656,7 +1656,8 @@ fn two_servers_proposing_at_once_write_two_whole_files() {
                 let first = ["kal", "mor", "tiv", "sen", "dap"][usize::try_from(i).unwrap() % 5];
                 let second =
                     ["bex", "gun", "lop", "wir", "zat"][usize::try_from(i).unwrap() / 5 % 5];
-                let title = format!("Keep the {first}{second} log short on server {server}");
+                let tag = ["ash", "elm"][server];
+                let title = format!("Keep the {first}{second}{tag} log short");
                 propose(
                     i,
                     json!({ "title": title, "body": body, "type": "fact", "scope": "global" }),
