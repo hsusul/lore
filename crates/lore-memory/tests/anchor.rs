@@ -160,11 +160,9 @@ fn pinning_fills_the_hash_and_the_head_commit() {
     );
     assert_eq!(pinned.commit.unwrap().as_str(), &head[..12]);
     let path_only = tree.pin(&anchor(None)).unwrap();
-    let digest = hash_lines([&b"one"[..], b"two"]);
     assert_eq!(
-        path_only.hash,
-        Some(LineHash::parse(&format!("b3:{}", &digest[..16])).unwrap()),
-        "a whole-file anchor hashes every line"
+        path_only.hash, None,
+        "pinning leaves a path-only anchor unhashed"
     );
     assert_eq!(path_only.commit.unwrap().as_str(), &head[..12]);
 }
@@ -175,7 +173,8 @@ fn a_whole_file_anchor_sees_its_file_change() {
     let root = dir.path();
     repo(root, None);
     commit(root, "a.txt", "one\ntwo\n", "a");
-    let anchor = WorkTree::new(root)
+    let digest = hash_lines([&b"one"[..], b"two"]);
+    let mut anchor = WorkTree::new(root)
         .pin(&Anchor {
             path: RelPath::parse("a.txt").unwrap(),
             lines: None,
@@ -183,6 +182,7 @@ fn a_whole_file_anchor_sees_its_file_change() {
             commit: None,
         })
         .unwrap();
+    anchor.hash = Some(LineHash::parse(&format!("b3:{}", &digest[..16])).unwrap());
     assert_eq!(anchor.check(root), Freshness::Fresh);
     fs::write(root.join("a.txt"), "one\r\ntwo\r\n").unwrap();
     assert_eq!(anchor.check(root), Freshness::Fresh, "CRLF reads as LF");

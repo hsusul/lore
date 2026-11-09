@@ -169,24 +169,22 @@ impl WorkTree {
         }
     }
 
-    /// Fill in a hash for an anchor with none, over its lines or the whole
-    /// file, and the commit from `HEAD` when the anchor names none. Fails when
-    /// the file or lines are not in the working tree.
+    /// Fill in a hash for an anchor with lines and none, and the commit from
+    /// `HEAD` when the anchor names none. Fails when the file or lines are not
+    /// in the working tree. A path-only anchor stays unhashed: hashing it
+    /// would mark the note changed after any edit to the file.
     pub fn pin(&self, anchor: &Anchor) -> Result<Anchor, PinError> {
         let missing = || PinError::Missing(anchor.path.as_str().to_string());
         let file = self.file(&anchor.path).ok_or_else(missing)?;
         let mut pinned = anchor.clone();
-        if anchor.hash.is_none() {
-            let digest = match anchor.lines {
-                Some(lines) => range_digest(&file, lines)
-                    .map_err(|_| missing())?
-                    .ok_or_else(|| PinError::OutOfRange {
-                        path: anchor.path.as_str().to_string(),
-                        lines,
-                        len: fs::read(&file).map(|b| split_lines(&b).len()).unwrap_or(0),
-                    })?,
-                None => file_digest(&file).map_err(|_| missing())?,
-            };
+        if let (Some(lines), None) = (anchor.lines, &anchor.hash) {
+            let digest = range_digest(&file, lines)
+                .map_err(|_| missing())?
+                .ok_or_else(|| PinError::OutOfRange {
+                    path: anchor.path.as_str().to_string(),
+                    lines,
+                    len: fs::read(&file).map(|b| split_lines(&b).len()).unwrap_or(0),
+                })?;
             pinned.hash = LineHash::parse(&format!("b3:{}", &digest[..PINNED_HASH_LEN])).ok();
         }
         if pinned.commit.is_none() {
@@ -365,9 +363,22 @@ fn range_digest(file: &Path, lines: LineRange) -> io::Result<Option<String>> {
     Ok(Some(hasher.finalize().to_hex().to_string()))
 }
 
-/// The digest of every line in `file`.
+/// The digest of every line in `file`, read in a stream; the same as
+/// `hash_lines(split_lines(..))` over the whole file.
 fn file_digest(file: &Path) -> io::Result<String> {
-    Ok(hash_lines(split_lines(&fs::read(file)?)))
+    let mut reader = BufReader::new(File::open(file)?);
+    let mut hasher = blake3::Hasher::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        let slice = line.strip_suffix(b"\n").unwrap_or(&line);
+        hasher.update(strip_cr(slice));
+        hasher.update(b"\n");
+    }
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 fn strip_cr(line: &[u8]) -> &[u8] {
@@ -465,6 +476,25 @@ mod tests {
             blake3::hash(b"a\nb\n").to_hex().to_string(),
             "the digest is plain BLAKE3 of the LF-terminated lines"
         );
+    }
+
+    #[test]
+    fn file_digest_matches_hashing_the_split_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f");
+        for body in [
+            &b""[..],
+            b"\n",
+            b"a",
+            b"a\nb",
+            b"a\nb\n",
+            b"a\r\nb\r\n",
+            b"\n\n",
+        ] {
+            fs::write(&file, body).unwrap();
+            let want = hash_lines(split_lines(body));
+            assert_eq!(file_digest(&file).unwrap(), want, "{body:?}");
+        }
     }
 
     #[test]
