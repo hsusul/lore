@@ -1489,6 +1489,45 @@ fn stuck_folder(home: &Path) -> PathBuf {
     stuck
 }
 
+/// A parent that writes the event and keeps the pipe open (or a child that
+/// inherited its write end) must not hold the hook until the pipe closes.
+#[test]
+fn a_hook_answers_while_its_stdin_stays_open() {
+    let (home, vault, repo) = memory_home();
+    let started = Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lorectl"))
+        .args(["hook", "prompt", "--archive"])
+        .arg(home.path().join("archive"))
+        .current_dir(&repo)
+        .env("HOME", home.path())
+        .env("LORE_VAULT_DIR", &vault)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("LORE_ARCHIVE_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn lorectl");
+    let mut pipe = child.stdin.take().unwrap();
+    pipe.write_all(prompt_json(&repo, "s-open", "hello").as_bytes())
+        .unwrap();
+    pipe.flush().unwrap();
+    let exited = loop {
+        if child.try_wait().unwrap().is_some() {
+            break true;
+        }
+        if started.elapsed().as_secs() >= 5 {
+            break false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    drop(pipe);
+    let out = child.wait_with_output().unwrap();
+    assert!(exited, "the hook waited for stdin to close");
+    assert_eq!(code(&out), 0);
+}
+
 #[test]
 fn hooks_go_on_without_a_working_tree_that_does_not_answer() {
     let (home, vault, _repo) = memory_home();

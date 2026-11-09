@@ -295,20 +295,21 @@ fn read_input(json: &serde_json::Value) -> HookInput {
     }
 }
 
-/// Stdin parsed as JSON. A terminal is never read, so a person running the
-/// hook is not left waiting.
+/// The first JSON value on stdin. A terminal is never read, so a person
+/// running the hook is not left waiting. Reading stops at the end of that
+/// value, not at end of file: a parent that keeps the pipe open, or a child
+/// that inherited its write end, would otherwise hold every hook until it
+/// exits.
 fn stdin_json() -> Option<serde_json::Value> {
     let stdin = std::io::stdin();
     if stdin.is_terminal() {
         return None;
     }
-    let mut text = String::new();
-    stdin
-        .lock()
-        .take(STDIN_CAP)
-        .read_to_string(&mut text)
-        .ok()?;
-    serde_json::from_str(&text).ok()
+    let reader = stdin.lock().take(STDIN_CAP);
+    serde_json::Deserializer::from_reader(reader)
+        .into_iter::<serde_json::Value>()
+        .next()?
+        .ok()
 }
 
 /// The archive id of the session `id` names, read only. `None` when there is
