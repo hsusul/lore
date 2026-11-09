@@ -4,7 +4,8 @@
 //! those lines. The hash is BLAKE3 over each anchored line with a trailing CR
 //! removed and a LF appended, written `b3:<hex>`; a stored hash may be any
 //! prefix of 8 to 64 hex characters. The same digest is
-//! `sed -n '<a>,<b>p' FILE | tr -d '\r' | b3sum`.
+//! `sed -n '<a>,<b>p' FILE | tr -d '\r' | b3sum`. An anchor without lines
+//! hashes every line of the file.
 //!
 //! Checks read the working tree, never write it, and never follow a path out
 //! of the repository.
@@ -170,7 +171,8 @@ impl WorkTree {
 
     /// Fill in a hash for an anchor with lines and none, and the commit from
     /// `HEAD` when the anchor names none. Fails when the file or lines are not
-    /// in the working tree.
+    /// in the working tree. A path-only anchor stays unhashed: hashing it
+    /// would mark the note changed after any edit to the file.
     pub fn pin(&self, anchor: &Anchor) -> Result<Anchor, PinError> {
         let missing = || PinError::Missing(anchor.path.as_str().to_string());
         let file = self.file(&anchor.path).ok_or_else(missing)?;
@@ -204,7 +206,11 @@ impl WorkTree {
     fn check_at(&self, anchor: &Anchor, path: &RelPath) -> Option<Freshness> {
         let file = self.file(path)?;
         let Some(lines) = anchor.lines else {
-            return Some(Freshness::Fresh);
+            let same = |hash| file_digest(&file).is_ok_and(|d| hash_matches(hash, &d));
+            return Some(match &anchor.hash {
+                Some(hash) if !same(hash) => Freshness::Changed,
+                _ => Freshness::Fresh,
+            });
         };
         let Ok(digest) = range_digest(&file, lines) else {
             return Some(Freshness::Changed);
@@ -357,6 +363,24 @@ fn range_digest(file: &Path, lines: LineRange) -> io::Result<Option<String>> {
     Ok(Some(hasher.finalize().to_hex().to_string()))
 }
 
+/// The digest of every line in `file`, read in a stream; the same as
+/// `hash_lines(split_lines(..))` over the whole file.
+fn file_digest(file: &Path) -> io::Result<String> {
+    let mut reader = BufReader::new(File::open(file)?);
+    let mut hasher = blake3::Hasher::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        let slice = line.strip_suffix(b"\n").unwrap_or(&line);
+        hasher.update(strip_cr(slice));
+        hasher.update(b"\n");
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 fn strip_cr(line: &[u8]) -> &[u8] {
     line.strip_suffix(b"\r").unwrap_or(line)
 }
@@ -452,6 +476,25 @@ mod tests {
             blake3::hash(b"a\nb\n").to_hex().to_string(),
             "the digest is plain BLAKE3 of the LF-terminated lines"
         );
+    }
+
+    #[test]
+    fn file_digest_matches_hashing_the_split_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f");
+        for body in [
+            &b""[..],
+            b"\n",
+            b"a",
+            b"a\nb",
+            b"a\nb\n",
+            b"a\r\nb\r\n",
+            b"\n\n",
+        ] {
+            fs::write(&file, body).unwrap();
+            let want = hash_lines(split_lines(body));
+            assert_eq!(file_digest(&file).unwrap(), want, "{body:?}");
+        }
     }
 
     #[test]
