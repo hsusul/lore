@@ -2846,7 +2846,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lore-app"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "lore-core",
  "lore-ipc",
@@ -2865,7 +2865,7 @@ dependencies = [
 
 [[package]]
 name = "lore-core"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "blake3",
  "dirs",
@@ -2885,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "lore-ipc"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -2894,7 +2894,7 @@ dependencies = [
 
 [[package]]
 name = "lore-memory"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "blake3",
  "dirs",
@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "lore-replay"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "lexopt",
  "lore-core",
@@ -2928,7 +2928,7 @@ dependencies = [
 
 [[package]]
 name = "lore-skills"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "blake3",
  "serde",
@@ -2937,7 +2937,7 @@ dependencies = [
 
 [[package]]
 name = "lorectl"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "lexopt",
  "lore-core",
