@@ -241,6 +241,7 @@ export function createMockHandlers(
   { now = Date.now(), scanStepMs = 220 }: MockOptions = {},
 ): Record<string, MockHandler> {
   let sessions = buildSampleSessions(now);
+  const forgotten = new Set<string>();
   let folders = SAMPLE_FOLDERS.map((f) => ({ ...f }));
   let assignments = new Map(Object.entries(SAMPLE_FOLDER_ASSIGNMENTS));
   let settings = new Map(Object.entries(SAMPLE_SETTINGS));
@@ -428,11 +429,13 @@ export function createMockHandlers(
     forget_session: (a) => {
       const found = find(a.id);
       sessions = sessions.filter((s) => s !== found);
+      if (found) forgotten.add(found.summary.id);
       assignments.delete(asString(a.id));
       return forget(found ? [found] : []);
     },
     forget_everything: () => {
       const report = forget(sessions);
+      for (const s of sessions) forgotten.add(s.summary.id);
       sessions = [];
       folders = [];
       assignments = new Map();
@@ -440,8 +443,8 @@ export function createMockHandlers(
       return report;
     },
 
-    // Scanning: the sample logs stay "on disk", so a rescan after "forget
-    // everything" re-ingests them, and an unchanged archive is all skipped.
+    // Scanning: the sample logs stay "on disk" but a forgotten one is skipped,
+    // as in the app, and an unchanged archive is all skipped.
     rescan: async () => {
       const all = buildSampleSessions(now);
       const present = new Set(sessions.map((s) => s.summary.id));
@@ -449,7 +452,7 @@ export function createMockHandlers(
       const tally: ScanProgress = { discovered: all.length, ingested: 0, skipped: 0, failed: 0, enriched: 0, recent_done: false, done: false };
       for (let i = 0; i < all.length; i += chunk) {
         for (const session of all.slice(i, i + chunk)) {
-          if (present.has(session.summary.id)) {
+          if (present.has(session.summary.id) || forgotten.has(session.summary.id)) {
             tally.skipped += 1;
           } else {
             sessions = [...sessions, session];

@@ -1338,13 +1338,8 @@ pub fn ingest_file(
             snapshot: &snapshot,
             fallback: &fallback,
         };
-        if let Some(session_id) = ingest_append(conn, adapter, &source, blobs)? {
-            return Ok(IngestOutcome::Ingested {
-                session_id,
-                source_artifact_id: artifact_id,
-                generation,
-                change,
-            });
+        if let Some(outcome) = ingest_append(conn, adapter, &source, blobs)? {
+            return Ok(outcome);
         }
     }
 
@@ -1362,6 +1357,10 @@ pub fn ingest_file(
     // parse and blob staging so file I/O stays outside the lock.
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
+    if forgotten_since_read(&tx, &artifact_id)? {
+        discard_staged(&tx, blobs, &patch_blobs)?;
+        return Ok(IngestOutcome::Skipped);
+    }
     let target_session_id = session_id_for(agent_id, &parsed);
     let left_folder = if prev.is_some() {
         save_left_captures(&tx, &artifact_id, &target_session_id)?;
@@ -1429,7 +1428,7 @@ struct AppendSource<'a> {
 }
 
 /// Parse and persist only the lines appended since the last ingest. Returns
-/// the session id, or `None` when the archive does not provably hold what that
+/// the outcome, or `None` when the archive does not provably hold what that
 /// ingest's checkpoint describes, or the new lines change earlier rows; the
 /// caller then parses the whole file.
 fn ingest_append(
@@ -1437,7 +1436,7 @@ fn ingest_append(
     adapter: &dyn AgentAdapter,
     source: &AppendSource<'_>,
     blobs: &BlobStore,
-) -> Result<Option<String>> {
+) -> Result<Option<IngestOutcome>> {
     let row = source.row;
     let Some(from) = row
         .resume_json
@@ -1484,6 +1483,10 @@ fn ingest_append(
     let patch_blobs = stage_blobs(blobs, &mut append.session)?;
     let _write = crate::storage::write_lock();
     let tx = conn.unchecked_transaction()?;
+    if forgotten_since_read(&tx, &row.id)? {
+        discard_staged(&tx, blobs, &patch_blobs)?;
+        return Ok(Some(IngestOutcome::Skipped));
+    }
     append_rows(
         &tx,
         &session_id,
@@ -1498,7 +1501,12 @@ fn ingest_append(
     let resume = ends_on_line(source.snapshot).then_some(&append.checkpoint);
     write_ingest_state(&tx, &row.id, row.generation, source.snapshot, resume)?;
     tx.commit()?;
-    Ok(Some(session_id))
+    Ok(Some(IngestOutcome::Ingested {
+        session_id,
+        source_artifact_id: row.id.clone(),
+        generation: row.generation,
+        change: ChangeClass::Appended,
+    }))
 }
 
 /// The session `source_artifact_id` alone feeds, when it holds `message_count`
@@ -1522,6 +1530,38 @@ fn sole_session(
     } else {
         None
     })
+}
+
+/// Whether a forget marked the source after ingest read its state. That read
+/// and the parse run outside the write lock, so a forget can commit between
+/// them and the write that would bring the session back.
+fn forgotten_since_read(tx: &Connection, source_artifact_id: &str) -> Result<bool> {
+    let state: Option<String> = tx
+        .query_row(
+            "SELECT state FROM ingest_state WHERE source_artifact_id = ?1",
+            [source_artifact_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(state.as_deref() == Some(FORGOTTEN))
+}
+
+/// Delete the files staged for a write a forget preempted, except those a
+/// `blob` row names: the same content may belong to another session. The
+/// caller holds the write lock, so no row can appear while this checks.
+fn discard_staged(tx: &Connection, blobs: &BlobStore, staged: &Staged) -> Result<()> {
+    let payloads = staged.payloads.iter().map(|moved| &moved.staged);
+    for file in staged.patches.iter().flatten().chain(payloads) {
+        let referenced: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM blob WHERE content_hash = ?1)",
+            [file.content_hash()],
+            |r| r.get(0),
+        )?;
+        if !referenced {
+            blobs.remove(file.relpath())?;
+        }
+    }
+    Ok(())
 }
 
 /// A checkpoint is only resumable at a line boundary: a partial last line is

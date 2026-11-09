@@ -109,9 +109,10 @@ fn merge_search_index(conn: &Connection) -> Result<()> {
 
 /// Forget **all** archive content, keeping the database file/connection open
 /// (the connection-safe form of "forget everything" for a running app): remove
-/// every session, repository, source, projection, finding, and blob, then run
-/// secure-delete maintenance. Settings and the job queue are preserved. The
-/// file-level [`forget_everything`] is for a full uninstall instead.
+/// every session, repository, projection, finding, and blob, mark every source
+/// forgotten, then run secure-delete maintenance. Settings and the job queue
+/// are preserved. The file-level [`forget_everything`] is for a full uninstall
+/// instead.
 pub fn forget_all(conn: &Connection, blobs: &BlobStore) -> Result<ForgetReport> {
     conn.execute_batch("PRAGMA secure_delete = ON;")?;
     let orphans = {
@@ -122,8 +123,18 @@ pub fn forget_all(conn: &Connection, blobs: &BlobStore) -> Result<ForgetReport> 
         tx.execute("DELETE FROM search_document", [])?;
         tx.execute("DELETE FROM agent_session", [])?;
         tx.execute("DELETE FROM repository", [])?;
-        tx.execute("DELETE FROM source_artifact", [])?;
-        tx.execute("DELETE FROM agent", [])?;
+        // Keep the sources and mark them forgotten, as `forget_session` does,
+        // so the next change to an original log is skipped instead of bringing
+        // its whole history back. Their checkpoints hold session titles.
+        tx.execute(
+            "UPDATE ingest_state SET state = ?1, resume_json = NULL,
+                 updated_at = unixepoch('now')*1000",
+            [crate::ingest::FORGOTTEN],
+        )?;
+        tx.execute(
+            "DELETE FROM agent WHERE id NOT IN (SELECT agent_id FROM source_artifact)",
+            [],
+        )?;
         crate::compact::delete_all_orphan_bodies(&tx)?;
         crate::compact::delete_unused_dicts(&tx)?;
         // Every blob is now unreferenced.

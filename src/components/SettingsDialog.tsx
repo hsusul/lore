@@ -291,7 +291,7 @@ export default function SettingsDialog({
             Forget everything
           </h3>
           <p className="quiet" id="data-desc">
-            Removes every session, repository, finding, and backup from Lore. Original agent logs stay where they are.
+            Removes every session, repository, finding, and backup from Lore. Original agent logs stay where they are, and only new sessions will be archived from now on. Lore keeps the paths of those logs so it can skip them.
             SSDs may keep old blocks until they are reused.
           </p>
           <button type="button" className="btn btn--danger" aria-describedby="data-desc" onClick={onForgetEverything}>
