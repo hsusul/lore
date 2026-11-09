@@ -836,7 +836,8 @@ fn append_rows(
         "UPDATE agent_session SET
             title = ?2, ended_at = ?3, primary_model = ?4, message_count = ?5,
             tool_call_count = ?6, total_input_tokens = ?7, total_output_tokens = ?8,
-            total_cache_tokens = ?9, parse_status = ?10, parse_note = ?11, agent_version = ?12
+            total_cache_tokens = ?9, parse_status = ?10, parse_note = ?11, agent_version = ?12,
+            metadata_json = coalesce(?13, metadata_json)
          WHERE id = ?1",
         params![
             session_id,
@@ -851,6 +852,10 @@ fn append_rows(
             parsed.status.as_str(),
             note_summary(end.note_count, end.first_note.as_deref()),
             parsed.agent_version,
+            // A session a person started and a program resumed (`claude -p
+            // --resume`) is marked from the appended lines; a mark is never
+            // cleared.
+            parsed.automated.then_some(AUTOMATED_METADATA),
         ],
     )?;
 
