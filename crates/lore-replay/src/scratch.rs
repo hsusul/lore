@@ -1,10 +1,12 @@
 //! The scratch repository a replay runs in.
 //!
 //! A replay must see the repository as it was when the prompt was given, and
-//! must never write to the person's real one. So it clones, then checks out
-//! the commit HEAD pointed at then (from the reflog, via
-//! [`lore_core::git::head_at`]). The clone is a plain one, not `--shared`: a
-//! shared clone borrows the original's object store, which the sandbox hides.
+//! must never write to the person's real one. So it fetches the commit HEAD
+//! pointed at then (from the reflog, via [`lore_core::git::head_at`]) into a
+//! new repository and checks it out. It fetches that commit alone, not a
+//! clone: a clone brings every branch, tag, and object, so the agent could
+//! read the later fix it is being graded against. Nor is it `--shared`: that
+//! borrows the original's object store, which the sandbox hides.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -81,31 +83,41 @@ fn toplevel(cwd: &Path) -> Option<PathBuf> {
     (!top.is_empty()).then(|| PathBuf::from(top))
 }
 
-/// Clone `toplevel` into `dest` (which must not exist) and check out
-/// `commit`, on `branch` when the clone has that branch. The clone keeps
-/// every local branch and no remote, so the agent cannot push anywhere.
+/// Make `dest` (which must not exist) a repository holding only `commit` and
+/// its history, and check it out, on `branch` when `toplevel` has that
+/// branch. The repository has no remote, so the agent cannot push anywhere.
 pub fn clone_at(toplevel: &Path, commit: &str, branch: Option<&str>, dest: &Path) -> Result<()> {
+    // A fresh init is SHA-1, which cannot fetch from a SHA-256 repository.
+    let mut init = vec![os("init"), os("-q")];
+    if let Some(format) = run(
+        Some(toplevel),
+        &[os("rev-parse"), os("--show-object-format")],
+    )
+    .ok()
+    .filter(|o| o.status.success())
+    .and_then(|o| String::from_utf8(o.stdout).ok())
+    {
+        init.push(os(&format!("--object-format={}", format.trim())));
+    }
+    init.push(dest.into());
+    git(None, &init)?;
+    // Protocol v2 serves any commit by its id; v0 refuses one no ref points
+    // at, which is most of them once the branch has moved on. Without
+    // --update-shallow, a shallow source's commit arrives with no shallow
+    // boundary and `git log` dies on the missing parents.
     git(
-        None,
+        Some(dest),
         &[
-            os("clone"),
+            os("-c"),
+            os("protocol.version=2"),
+            os("fetch"),
             os("-q"),
-            os("--no-checkout"),
+            os("--no-tags"),
+            os("--update-shallow"),
             toplevel.into(),
-            dest.into(),
+            os(commit),
         ],
     )?;
-    let fetch = [
-        os("fetch"),
-        os("-q"),
-        os("--update-head-ok"),
-        toplevel.into(),
-        os("+refs/heads/*:refs/heads/*"),
-    ];
-    // Best effort, as a clone already brought the default branch: a failure
-    // here only loses other branches.
-    let _ = run(Some(dest), &fetch);
-    git(Some(dest), &[os("remote"), os("remove"), os("origin")])?;
     git(
         Some(dest),
         &[os("checkout"), os("-q"), os("--detach"), os(commit)],
@@ -113,7 +125,7 @@ pub fn clone_at(toplevel: &Path, commit: &str, branch: Option<&str>, dest: &Path
     if let Some(branch) = branch {
         let reference = format!("refs/heads/{branch}");
         let exists = run(
-            Some(dest),
+            Some(toplevel),
             &[os("rev-parse"), os("-q"), os("--verify"), os(&reference)],
         )
         .is_ok_and(|o| o.status.success());
@@ -229,5 +241,132 @@ mod tests {
             panic!("expected a commit");
         };
         assert_eq!(commit.len(), 40);
+    }
+
+    fn out(dir: &Path, args: &[&str]) -> Output {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    fn stdout(dir: &Path, args: &[&str]) -> String {
+        let o = out(dir, args);
+        assert!(o.status.success(), "git {args:?}");
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    }
+
+    #[test]
+    fn the_clone_holds_no_history_after_the_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "then"]);
+        let then = stdout(&repo, &["rev-parse", "HEAD"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "later"]);
+        sh(&repo, &["tag", "v2"]);
+        sh(&repo, &["checkout", "-q", "-b", "fix"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "the fix"]);
+        let later = stdout(&repo, &["rev-list", "--all"]);
+
+        let dest = tmp.path().join("clone");
+        clone_at(&repo, &then, Some("main"), &dest).unwrap();
+
+        assert_eq!(stdout(&dest, &["rev-parse", "HEAD"]), then);
+        assert_eq!(stdout(&dest, &["symbolic-ref", "HEAD"]), "refs/heads/main");
+        assert_eq!(
+            stdout(&dest, &["for-each-ref", "--format=%(refname)"]),
+            "refs/heads/main"
+        );
+        assert_eq!(
+            stdout(&dest, &["rev-list", "--all", "--reflog"]),
+            then,
+            "a ref or reflog reaches past the commit"
+        );
+        for sha in later.lines().filter(|sha| *sha != then) {
+            assert!(
+                !out(&dest, &["cat-file", "-e", sha]).status.success(),
+                "{sha} from after the commit is in the clone"
+            );
+        }
+        assert_eq!(stdout(&dest, &["remote"]), "");
+    }
+
+    #[test]
+    fn a_commit_only_the_reflog_reaches_still_clones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "then"]);
+        let then = stdout(&repo, &["rev-parse", "HEAD"]);
+        sh(
+            &repo,
+            &["commit", "-q", "--amend", "--allow-empty", "-m", "amended"],
+        );
+        sh(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+        assert_eq!(
+            stdout(
+                &repo,
+                &["branch", "--contains", &then, "--format=%(refname)"]
+            ),
+            "",
+            "no branch reaches the commit any more"
+        );
+
+        let dest = tmp.path().join("clone");
+        clone_at(&repo, &then, Some("main"), &dest).unwrap();
+
+        assert_eq!(stdout(&dest, &["rev-parse", "HEAD"]), then);
+        assert_eq!(stdout(&dest, &["log", "--format=%s"]), "then\nbase");
+    }
+
+    #[test]
+    fn a_shallow_source_gives_a_shallow_clone_whose_log_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        for m in ["one", "two", "three"] {
+            sh(&repo, &["commit", "-q", "--allow-empty", "-m", m]);
+        }
+        let url = format!("file://{}", repo.display());
+        sh(
+            tmp.path(),
+            &["clone", "-q", "--depth", "2", &url, "shallow"],
+        );
+        let shallow = tmp.path().join("shallow");
+        let head = stdout(&shallow, &["rev-parse", "HEAD"]);
+
+        let dest = tmp.path().join("clone");
+        clone_at(&shallow, &head, Some("main"), &dest).unwrap();
+
+        assert_eq!(stdout(&dest, &["log", "--format=%s"]), "three\ntwo");
+        assert_eq!(
+            stdout(&dest, &["rev-parse", "--is-shallow-repository"]),
+            "true"
+        );
+    }
+
+    #[test]
+    fn a_sha256_source_clones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sh(
+            &repo,
+            &["init", "-q", "-b", "main", "--object-format=sha256"],
+        );
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let head = stdout(&repo, &["rev-parse", "HEAD"]);
+
+        let dest = tmp.path().join("clone");
+        clone_at(&repo, &head, Some("main"), &dest).unwrap();
+
+        assert_eq!(stdout(&dest, &["rev-parse", "HEAD"]), head);
     }
 }
