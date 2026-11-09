@@ -328,7 +328,9 @@ struct Report {
     vault_dir: Option<PathBuf>,
 }
 
-/// User turns with text, from `start` on, by agent and by repository.
+/// User turns with text, from `start` on, by agent and by repository. Turns
+/// of a session a program started (`claude -p`, `codex exec`) are left out:
+/// a program wrote them, not the person.
 fn activity(conn: &rusqlite::Connection, start: i64, scope: &Scope) -> Result<Activity, CliError> {
     let (filter, repo) = match scope {
         Scope::All => ("", None),
@@ -344,6 +346,7 @@ fn activity(conn: &rusqlite::Connection, start: i64, scope: &Scope) -> Result<Ac
          LEFT JOIN session_segment sg ON sg.id = m.segment_id
          LEFT JOIN repository r ON r.id = sg.repository_id
          WHERE m.role = 'user' AND m.is_sidechain = 0 AND m.ts >= ?1{filter}
+           AND coalesce(json_extract(s.metadata_json, '$.automated'), 0) = 0
            AND EXISTS (SELECT 1 FROM message_part p WHERE p.message_id = m.id AND p.kind = 'text')"
     );
     let sql = |e: rusqlite::Error| CliError::from(StorageError::from(e));
