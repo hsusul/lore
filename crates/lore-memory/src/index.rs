@@ -270,7 +270,7 @@ impl Index {
         repo: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Hit>, IndexError> {
-        let words = related_words(text);
+        let words = topic_words(text);
         let specific = self.specific(&words)?;
         let Some(fts) = fts_related(&words, &specific) else {
             return Ok(Vec::new());
@@ -599,6 +599,29 @@ pub fn stem(word: &str) -> String {
     word.to_owned()
 }
 
+/// [`related_words`] of `text` that say what it is about: without the words
+/// every lesson statement uses ("the agent did this, and the person wanted
+/// that") or that say how a rule applies ("each", "every"), and with one
+/// form of each word ("lines" and "line" are one).
+fn topic_words(text: &str) -> Vec<String> {
+    let mut stems: Vec<String> = Vec::new();
+    related_words(text)
+        .into_iter()
+        .filter(|word| !TOPICLESS.contains(&word.as_str()))
+        .filter(|word| {
+            let stem = stem(word);
+            let new = !stems.contains(&stem);
+            stems.push(stem);
+            new
+        })
+        .collect()
+}
+
+/// Words that match notes without saying which lesson a text is about.
+const TOPICLESS: &[&str] = &[
+    "agent", "agents", "person", "want", "wanted", "wants", "each", "every", "make", "own",
+];
+
 /// A word held by at most this many notes is never generic, so a small vault
 /// keeps every word.
 const SPECIFIC_NOTES: i64 = 3;
@@ -630,7 +653,7 @@ fn fts_related(words: &[String], specific: &[&str]) -> Option<String> {
     let mut pairs = Vec::new();
     for (i, a) in words.iter().enumerate() {
         for b in &words[i + 1..] {
-            pairs.push(format!("({a} AND {b})"));
+            pairs.push(format!("{{title body lesson}} : ({a} AND {b})"));
         }
     }
     Some(format!("({}) AND {in_lesson}", pairs.join(" OR ")))
@@ -673,15 +696,24 @@ mod tests {
         );
         assert_eq!(
             fts_related(&words("retry flaky test"), &["retry", "flaky", "test"]).unwrap(),
-            "((\"retry\" AND \"flaky\") OR (\"retry\" AND \"test\") OR (\"flaky\" AND \"test\")) \
-             AND lesson : (\"retry\" OR \"flaky\" OR \"test\")"
+            "({title body lesson} : (\"retry\" AND \"flaky\") OR {title body lesson} : (\"retry\" AND \"test\") \
+             OR {title body lesson} : (\"flaky\" AND \"test\")) AND lesson : (\"retry\" OR \"flaky\" OR \"test\")"
         );
         // A generic word can be the second word, never the one in the lesson.
         assert_eq!(
             fts_related(&words("retry the test"), &["retry"]).unwrap(),
-            "((\"retry\" AND \"test\")) AND lesson : (\"retry\")"
+            "({title body lesson} : (\"retry\" AND \"test\")) AND lesson : (\"retry\")"
         );
         assert!(fts_related(&words("the test"), &[]).is_none());
+    }
+
+    #[test]
+    fn topic_words_drop_lesson_boilerplate_and_fold_word_forms() {
+        assert_eq!(
+            topic_words("the agent kept the person waiting on each line of the lines"),
+            ["kept", "waiting", "line"]
+        );
+        assert!(topic_words("make sure every agent wants it").is_empty());
     }
 
     #[test]

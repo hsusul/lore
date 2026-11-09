@@ -211,3 +211,28 @@ fn related_keeps_file_paths_in_prompts() {
         "Source library guidelines"
     );
 }
+
+#[test]
+fn related_ignores_the_words_every_lesson_statement_uses() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, vault) = setup(dir.path());
+    vault
+        .add(&note(
+            "Pin the toolchain",
+            "global",
+            "active",
+            &[],
+            "The agent used a nightly toolchain and the person wanted the pinned one.",
+        ))
+        .unwrap();
+
+    let boilerplate = related(
+        &vault,
+        "the agent and the person disagree about naming",
+        &app,
+        10,
+    );
+    assert!(boilerplate.unwrap().notes.is_empty());
+    let topic = related(&vault, "which toolchain is pinned here", &app, 10).unwrap();
+    assert_eq!(topic.notes.len(), 1);
+}
