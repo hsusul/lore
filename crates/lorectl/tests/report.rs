@@ -292,6 +292,33 @@ fn since_narrows_the_window() {
 }
 
 #[test]
+fn activity_leaves_out_sessions_a_program_started() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    scanned(home, &[("Added it.", "thanks"), ("Added it.", "thanks")]);
+    // Rewrite the second rollout as a `codex exec` run and scan it again.
+    let exec = home.join("codex/sessions/2026/08/02/rollout-000000000002.jsonl");
+    let text = std::fs::read_to_string(&exec).unwrap();
+    let text = text.replacen(
+        "\"model_provider\":\"openai\"",
+        "\"model_provider\":\"openai\",\"source\":\"exec\"",
+        1,
+    );
+    assert!(text.contains("\"source\":\"exec\""), "{text}");
+    std::fs::write(&exec, text).unwrap();
+    ok(&lorectl(home, &["scan"], ""));
+
+    let json: serde_json::Value = serde_json::from_str(&ok(&lorectl(
+        home,
+        &["--json", "report", "--since", "2026-08-01"],
+        "",
+    )))
+    .unwrap();
+    assert_eq!(json["activity"]["sessions"], 1, "{json}");
+    assert_eq!(json["activity"]["user_turns"], 2, "{json}");
+}
+
+#[test]
 fn no_archive_explains_and_exits_zero() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
