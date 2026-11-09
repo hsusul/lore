@@ -8,7 +8,7 @@ export interface View {
 }
 
 export interface Palette {
-  /** Lessons, and the selected dot's halo. */
+  /** Lessons, the selected dot's halo, and the ring on the keyboard's place. */
   ink: string;
   /** Notes. */
   quiet: string;
@@ -92,6 +92,8 @@ export function draw(
   palette: Palette,
   selectedId: string | null,
   focus: string | null,
+  /** The keyboard's place: a cluster key from afar, a dot id inside `focus`. */
+  cursor: string | null,
 ): void {
   const { s, tx, ty } = view;
   const near = s > home.s * 1.35;
@@ -123,6 +125,18 @@ export function draw(
     g.arc(x, y, selected ? r + 1.5 : r, 0, 2 * Math.PI);
     g.fill();
     if (selected || (near && (!focus || d.area === focus))) labels.push({ d, x, y, r, selected });
+  }
+
+  const cluster = !focus && model.clusters.find((c) => c.key === cursor);
+  const dot = focus && model.dots.find((d) => d.id === cursor);
+  const ring = cluster ? { x: cluster.x, y: cluster.y, r: cluster.r * s + 10 } : dot ? { x: dot.x, y: dot.y, r: dotRadius(dot, s) + 5 } : null;
+  if (ring) {
+    g.globalAlpha = 1;
+    g.strokeStyle = palette.ink;
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(ring.x * s + tx, ring.y * s + ty, ring.r, 0, 2 * Math.PI);
+    g.stroke();
   }
 
   g.textBaseline = "middle";

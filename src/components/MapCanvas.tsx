@@ -21,10 +21,19 @@ import type { Dot, MapModel } from "../map/layout";
 const reducedMotion = () =>
   window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
+const steps: Record<string, number> = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+};
+
 /**
  * The map, drawn on a canvas. Drag or two-finger scroll pans, pinch zooms
  * about the pointer, a click on a dot opens it and a click on a cluster
- * zooms onto it. Escape, or a new `homeKey`, goes back to the whole map.
+ * zooms onto it. From the keyboard, the arrows step through the clusters, or
+ * the dots of the one zoomed onto, and Enter opens the one ringed. Escape, or
+ * a new `homeKey`, goes back to the whole map.
  */
 export function MapCanvas({
   model,
@@ -53,6 +62,9 @@ export function MapCanvas({
   const view = useRef<View>({ s: 1, tx: 0, ty: 0 });
   const home = useRef<View>({ s: 1, tx: 0, ty: 0 });
   const focus = useRef<string | null>(null);
+  const cursor = useRef<string | null>(null);
+  // What a screen reader hears as the arrows move the ring.
+  const [spoken, setSpoken] = useState("");
   const anim = useRef(0);
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
 
@@ -91,6 +103,7 @@ export function MapCanvas({
       },
       selectedId,
       focus.current,
+      cursor.current,
     );
   }, [model, size, inset, selectedId]);
 
@@ -152,6 +165,28 @@ export function MapCanvas({
     glide(home.current);
   };
 
+  // What the arrows step through: the clusters, or the dots of the one zoomed onto.
+  const stops = () =>
+    focus.current
+      ? model.dots.filter((d) => d.area === focus.current).map((d) => d.id)
+      : model.clusters.map((c) => c.key);
+
+  // Ring `id` and say what it is, where it is, and what Enter does.
+  const ring = (id: string | null) => {
+    cursor.current = id;
+    const ids = stops();
+    const place = `${ids.indexOf(id ?? "") + 1} of ${ids.length}`;
+    const cluster = model.clusters.find((c) => c.key === id);
+    const dot = model.dots.find((d) => d.id === id);
+    setSpoken(
+      cluster
+        ? `${cluster.name}, group ${place}. Enter zooms in.`
+        : dot
+          ? `${dot.label}, ${place}. Enter opens it, Escape goes back.`
+          : "",
+    );
+  };
+
   // After the refit above, so a home press that also moves the card glides
   // to the whole map in the new space.
   const lastHomeKey = useRef(homeKey);
@@ -188,17 +223,64 @@ export function MapCanvas({
       <canvas
         ref={canvas}
         className="map__canvas"
-        role="img"
+        role="application"
+        aria-roledescription="map"
         aria-label={label}
         tabIndex={0}
         style={{ width: size.width, height: size.height }}
+        onFocus={(e) => {
+          if (!e.currentTarget.matches(":focus-visible")) return;
+          const ids = stops();
+          ring(
+            selectedId && ids.includes(selectedId)
+              ? selectedId
+              : (ids[0] ?? null),
+          );
+          paint();
+        }}
+        onBlur={() => {
+          cursor.current = null;
+          setSpoken("");
+          paint();
+        }}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
+            const from = focus.current;
             onDeselect();
             goHome();
+            ring(from ?? cursor.current);
+            return;
           }
+          const ids = stops();
+          const step = steps[e.key];
+          if (step) {
+            e.preventDefault();
+            const at = ids.indexOf(cursor.current ?? "");
+            ring(
+              ids[at < 0 ? 0 : (at + step + ids.length) % ids.length] ?? null,
+            );
+            paint();
+            return;
+          }
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          if (focus.current) {
+            const dot = model.dots.find((d) => d.id === cursor.current);
+            if (dot) onSelect(dot);
+            return;
+          }
+          const cluster = model.clusters.find((c) => c.key === cursor.current);
+          if (!cluster) return;
+          onDeselect();
+          focus.current = cluster.key;
+          ring(stops()[0] ?? null);
+          glide(onto(cluster, home.current, frame));
         }}
         onPointerDown={(e) => {
+          if (cursor.current) {
+            cursor.current = null;
+            paint();
+          }
           drag.current = { ...point(e), moved: false };
           e.currentTarget.setPointerCapture?.(e.pointerId);
         }}
@@ -244,6 +326,9 @@ export function MapCanvas({
           }
         }}
       />
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {spoken}
+      </p>
     </div>
   );
 }
