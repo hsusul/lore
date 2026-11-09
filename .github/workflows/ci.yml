@@ -121,6 +121,9 @@ jobs:
         run: cargo clippy --locked -p lore-app --all-targets -- -D warnings
       - name: Build the shell
         run: cargo build --locked -p lore-app
+      - name: Test the shell (locked)
+        # Here rather than in rust-core, which installs no webview libraries.
+        run: cargo test --locked -p lore-app --all-targets
       - name: Network-boundary guard (shell call-site)
         run: cargo test -p lore-app --test no_egress
 
