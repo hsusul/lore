@@ -28,6 +28,7 @@ const state = (over: Partial<AutoLessonsDto> = {}): AutoLessonsDto => ({
   last_run_ms: null,
   last_check_ms: null,
   last_outcome: null,
+  next_ms: null,
   ...over,
 });
 
@@ -65,6 +66,24 @@ describe("Find lessons automatically", () => {
     expect(screen.getByRole("status").textContent).toBe("Finding lessons now…");
     act(() => events.auto?.(state({ last_check_ms: at + 2, last_outcome: "No new corrections." })));
     expect(screen.getByRole("status").textContent).toMatch(/: No new corrections\.$/);
+  });
+
+  it("says when a run that did not finish is tried again", async () => {
+    const at = Date.UTC(2026, 10, 8, 18, 36);
+    const failed = state({
+      last_run_ms: at,
+      last_check_ms: at,
+      last_outcome: "Claude Code failed: timed out",
+      next_ms: at + 60 * 60 * 1000,
+    });
+    m.getAutoLessons.mockResolvedValue(failed);
+    render(<AutoLessons />);
+    const line = await screen.findByText(/^Last automatic run, .+: Claude Code failed: timed out Next try .+\.$/);
+    expect(line.getAttribute("role")).toBe("status");
+
+    await vi.waitFor(() => expect(events.auto).not.toBeNull());
+    act(() => events.auto?.({ ...failed, enabled: false }));
+    expect(screen.getByRole("status").textContent).toMatch(/: Claude Code failed: timed out$/);
   });
 
   it("says when the setting cannot be saved", async () => {

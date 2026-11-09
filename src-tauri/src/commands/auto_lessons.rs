@@ -1,6 +1,8 @@
 //! Find lessons on its own: soon after the person corrects their agent, the
 //! app runs the same pinned Find lessons run the button starts, at most once a
-//! day and only when there are corrections no earlier run has read.
+//! day and only when there are corrections no earlier run has read. Only a run
+//! that finished counts toward the day: one that failed, timed out, or could
+//! not start is tried again an hour later, up to [`MAX_FAILURES`] times a day.
 //!
 //! Ingest events and a [`DueTimer`] tick ([`check`]) only look at one setting
 //! row. Mining and the run happen on a thread of their own, so neither waits
@@ -30,11 +32,16 @@ use crate::state::AppState;
 pub(crate) const KEY: &str = "lessons.auto";
 /// The event the UI hears when an automatic run starts or ends.
 pub(crate) const EVENT: &str = "auto_lessons";
-/// At most one automatic run starts in this long.
+/// At most one automatic run finishes in this long.
 pub(crate) const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// A check that found nothing new is not repeated for this long, so a stream
-/// of watcher events does not mine the archive again and again.
+/// of watcher events does not mine the archive again and again. A run that
+/// did not finish is tried again after this long, too.
 pub(crate) const HOUR_MS: i64 = 60 * 60 * 1000;
+/// After this many attempts in a row did not finish, no more are made until a
+/// day after the first of them, so a lasting failure does not spend usage
+/// every hour.
+pub(crate) const MAX_FAILURES: u32 = 3;
 /// An automatic Claude Code run uses Sonnet, not the person's default model,
 /// to keep a run they did not ask for cheap. Codex keeps its own default.
 const CLAUDE_MODEL: &str = "sonnet";
@@ -51,26 +58,49 @@ pub(crate) const TICK: Duration = Duration::from_secs(15 * 60);
 pub(crate) struct AutoLessons {
     /// On unless the person turned it off.
     pub enabled: bool,
-    /// When an automatic run last started an agent.
-    pub last_run_ms: Option<i64>,
+    /// When an automatic run last finished: its agent exited successfully and
+    /// the ledger recorded what it read.
+    pub last_finished_ms: Option<i64>,
+    /// When an automatic run last started, or last failed to finish or start.
+    pub last_attempt_ms: Option<i64>,
+    /// Attempts in a row that did not finish. A run counts as one when it
+    /// starts, and stops counting when it finishes, so a run cut off by the
+    /// app quitting counts too.
+    pub consecutive_failures: u32,
+    /// When the first of those attempts started.
+    pub failing_since_ms: Option<i64>,
     /// When Lore last looked for new corrections on its own.
     pub last_check_ms: Option<i64>,
     /// What that look led to, in a short sentence.
     pub last_outcome: Option<String>,
     /// The agent the person last ran Find lessons with, as `find_lessons` takes it.
     pub agent: Option<String>,
+    /// When an automatic run last started an agent, as stored before runs that
+    /// did not finish were told apart. [`AutoLessons::load`] moves it into the
+    /// fields above; it is never written.
+    #[serde(rename = "last_run_ms", skip_serializing)]
+    legacy_last_run_ms: Option<i64>,
 }
 
 impl Default for AutoLessons {
     fn default() -> Self {
         Self {
             enabled: true,
-            last_run_ms: None,
+            last_finished_ms: None,
+            last_attempt_ms: None,
+            consecutive_failures: 0,
+            failing_since_ms: None,
             last_check_ms: None,
             last_outcome: None,
             agent: None,
+            legacy_last_run_ms: None,
         }
     }
+}
+
+/// Whether `outcome` is what [`work`] stores for a run that finished.
+fn finished_outcome(outcome: &str) -> bool {
+    outcome.contains(" new correction") && outcome.contains(" and filed ")
 }
 
 impl AutoLessons {
@@ -79,8 +109,56 @@ impl AutoLessons {
         lore_core::settings::get(conn, KEY)
             .ok()
             .flatten()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .and_then(|raw| serde_json::from_str::<Self>(&raw).ok())
             .unwrap_or_default()
+            .migrated()
+    }
+
+    /// Move an old `last_run_ms` into the new fields: a run whose stored
+    /// outcome says it filed lessons finished; any other was an attempt that
+    /// did not.
+    fn migrated(mut self) -> Self {
+        let Some(t) = self.legacy_last_run_ms.take() else {
+            return self;
+        };
+        if self.last_finished_ms.is_some() || self.last_attempt_ms.is_some() {
+            return self;
+        }
+        if self.last_outcome.as_deref().is_some_and(finished_outcome) {
+            self.last_finished_ms = Some(t);
+        } else {
+            self.last_attempt_ms = Some(t);
+            self.consecutive_failures = 1;
+            self.failing_since_ms = Some(t);
+        }
+        self
+    }
+
+    /// An automatic run starts at `now_ms`. It counts as a failure until it
+    /// finishes; a day after the first failure in a row, the count starts over.
+    fn begin_attempt(&mut self, now_ms: i64) {
+        let window_over = self
+            .failing_since_ms
+            .is_none_or(|t| now_ms >= t.saturating_add(DAY_MS));
+        if self.consecutive_failures == 0 || window_over {
+            self.consecutive_failures = 1;
+            self.failing_since_ms = Some(now_ms);
+        } else {
+            self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        }
+        self.last_attempt_ms = Some(now_ms);
+    }
+
+    /// The run that started last finished at `now_ms`.
+    fn finish_attempt(&mut self, now_ms: i64) {
+        self.last_finished_ms = Some(now_ms);
+        self.consecutive_failures = 0;
+        self.failing_since_ms = None;
+    }
+
+    /// The run that started last failed at `now_ms`; the hour counts from here.
+    fn fail_attempt(&mut self, now_ms: i64) {
+        self.last_attempt_ms = Some(now_ms);
     }
 
     fn save(&self, conn: &Connection) -> Result<(), String> {
@@ -88,13 +166,18 @@ impl AutoLessons {
         lore_core::settings::set(conn, KEY, &json).map_err(|e| e.to_string())
     }
 
-    fn dto(&self, running: bool) -> AutoLessonsDto {
+    fn dto(&self, running: bool, now_ms: i64) -> AutoLessonsDto {
+        let next_ms = match due(self, now_ms, running) {
+            Due::NotYet { next_ms } => Some(next_ms),
+            _ => None,
+        };
         AutoLessonsDto {
             enabled: self.enabled,
             running,
-            last_run_ms: self.last_run_ms,
+            last_run_ms: self.last_finished_ms.max(self.last_attempt_ms),
             last_check_ms: self.last_check_ms,
             last_outcome: self.last_outcome.clone(),
+            next_ms,
         }
     }
 }
@@ -123,14 +206,17 @@ pub(crate) enum Due {
     Disabled,
     /// A run, manual or automatic, is going.
     Busy,
-    /// Too soon after the last run or the last empty check.
+    /// Too soon after the last finished run, the last failed one, or the last
+    /// empty check.
     NotYet { next_ms: i64 },
     /// Look for new corrections, and run when there are any.
     CheckForNew,
 }
 
 /// Decide, without mining, whether to look for new corrections at `now_ms`:
-/// at most one run a day, and at most one look an hour.
+/// at most one finished run a day, a retry an hour after a run that did not
+/// finish, none after [`MAX_FAILURES`] in a row until a day after the first,
+/// and at most one look an hour.
 pub(crate) fn due(settings: &AutoLessons, now_ms: i64, running: bool) -> Due {
     if !settings.enabled {
         return Due::Disabled;
@@ -138,9 +224,23 @@ pub(crate) fn due(settings: &AutoLessons, now_ms: i64, running: bool) -> Due {
     if running {
         return Due::Busy;
     }
-    let after_run = settings.last_run_ms.map(|t| t.saturating_add(DAY_MS));
-    let after_check = settings.last_check_ms.map(|t| t.saturating_add(HOUR_MS));
-    match after_run.max(after_check) {
+    let plus = |t: Option<i64>, ms: i64| t.map(|t| t.saturating_add(ms));
+    let after_finish = plus(settings.last_finished_ms, DAY_MS);
+    let failing = settings.consecutive_failures > 0;
+    let after_retry = plus(settings.last_attempt_ms.filter(|_| failing), HOUR_MS);
+    let after_streak = plus(
+        settings
+            .failing_since_ms
+            .or(settings.last_attempt_ms)
+            .filter(|_| settings.consecutive_failures >= MAX_FAILURES),
+        DAY_MS,
+    );
+    let after_check = plus(settings.last_check_ms, HOUR_MS);
+    match after_finish
+        .max(after_retry)
+        .max(after_streak)
+        .max(after_check)
+    {
         Some(next_ms) if now_ms < next_ms => Due::NotYet { next_ms },
         _ => Due::CheckForNew,
     }
@@ -218,11 +318,25 @@ pub(crate) fn poke(
     due
 }
 
+/// How a look ended, for the run counts in [`AutoLessons`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum End {
+    /// No run was started: mining failed or found nothing new.
+    Looked,
+    /// There was something new, but no agent could start.
+    NotStarted,
+    /// The run finished.
+    Finished,
+    /// The run failed or timed out.
+    Failed,
+}
+
 /// One automatic look, on its own thread: mine with `pending`; when anything
-/// is new, `choose` an agent from the one last used, stamp `last_run_ms`, and
-/// `run` it, which returns how many lessons it filed. Every end is stored as
-/// `last_outcome`. `notify` hears the setting when a run starts (`true`) and
-/// when the look ends (`false`).
+/// is new, `choose` an agent from the one last used, count an attempt, and
+/// `run` it, which returns how many lessons it filed. A run that returns `Ok`
+/// finished; any other end, or no agent to choose, is a failed attempt. Every
+/// end is stored as `last_outcome`. `notify` hears the setting when a run
+/// starts (`true`) and when the look ends (`false`).
 pub(crate) fn work(
     db: &Mutex<Connection>,
     now_ms: impl Fn() -> i64,
@@ -231,18 +345,29 @@ pub(crate) fn work(
     run: impl FnOnce(Agent, &BTreeSet<CorrectionId>) -> Result<usize, String>,
     notify: impl Fn(&AutoLessons, bool),
 ) -> Result<AutoLessons, String> {
-    let finish = |outcome: String| {
+    let finish = |outcome: String, end: End| {
         let outcome: String = outcome.chars().take(OUTCOME_CHARS).collect();
-        let settings = update(db, |s| s.last_outcome = Some(outcome))?;
+        let settings = update(db, |s| {
+            let t = now_ms();
+            match end {
+                End::Looked => {}
+                End::NotStarted => s.begin_attempt(t),
+                End::Finished => s.finish_attempt(t),
+                End::Failed => s.fail_attempt(t),
+            }
+            s.last_outcome = Some(outcome);
+        })?;
         notify(&settings, false);
         Ok(settings)
     };
     let pending = match pending() {
         Ok(pending) => pending,
-        Err(e) => return finish(format!("Could not read your corrections: {e}")),
+        Err(e) => {
+            return finish(format!("Could not read your corrections: {e}"), End::Looked);
+        }
     };
     if pending.is_empty() {
-        return finish("No new corrections.".to_owned());
+        return finish("No new corrections.".to_owned(), End::Looked);
     }
     let last = {
         let conn = db.lock().map_err(|_| "state lock poisoned")?;
@@ -252,20 +377,26 @@ pub(crate) fn work(
             .and_then(Agent::parse)
     };
     let Some(agent) = choose(last) else {
-        return finish("Not run: sign in to Claude Code or Codex.".to_owned());
+        return finish(
+            "Not run: sign in to Claude Code or Codex.".to_owned(),
+            End::NotStarted,
+        );
     };
-    let started = update(db, |s| s.last_run_ms = Some(now_ms()))?;
+    let started = update(db, |s| s.begin_attempt(now_ms()))?;
     notify(&started, true);
     let label = agent.label();
-    finish(match run(agent, &pending) {
+    match run(agent, &pending) {
         Ok(filed) => {
             let n = pending.len();
             let corrections = if n == 1 { "correction" } else { "corrections" };
             let lessons = if filed == 1 { "lesson" } else { "lessons" };
-            format!("{label} read {n} new {corrections} and filed {filed} {lessons}.")
+            finish(
+                format!("{label} read {n} new {corrections} and filed {filed} {lessons}."),
+                End::Finished,
+            )
         }
-        Err(e) => format!("{label} failed: {e}"),
-    })
+        Err(e) => finish(format!("{label} failed: {e}"), End::Failed),
+    }
 }
 
 /// How many proposals wait in `vault`'s inbox.
@@ -407,7 +538,7 @@ fn look(app: &AppHandle) -> Result<AutoLessons, String> {
             })
         },
         |settings, running| {
-            let _ = app.emit(EVENT, settings.dto(running));
+            let _ = app.emit(EVENT, settings.dto(running, lore_core::now_ms()));
         },
     )
 }
@@ -416,7 +547,7 @@ fn look(app: &AppHandle) -> Result<AutoLessons, String> {
 #[tauri::command]
 pub fn get_auto_lessons(state: State<'_, AppState>) -> Result<AutoLessonsDto, String> {
     let conn = state.db.lock().map_err(|_| "state lock poisoned")?;
-    Ok(AutoLessons::load(&conn).dto(state.lessons.auto_running()))
+    Ok(AutoLessons::load(&conn).dto(state.lessons.auto_running(), lore_core::now_ms()))
 }
 
 /// Turn the automatic run on or off.
@@ -426,7 +557,7 @@ pub fn set_auto_lessons(
     enabled: bool,
 ) -> Result<AutoLessonsDto, String> {
     let settings = update(&state.db, |s| s.enabled = enabled)?;
-    Ok(settings.dto(state.lessons.auto_running()))
+    Ok(settings.dto(state.lessons.auto_running(), lore_core::now_ms()))
 }
 
 #[cfg(test)]
@@ -442,12 +573,199 @@ mod tests {
     const NOW: i64 = 1_800_000_000_000;
     const MINUTE: i64 = 60 * 1000;
 
-    fn at(last_run_ms: Option<i64>, last_check_ms: Option<i64>) -> AutoLessons {
+    fn at(last_finished_ms: Option<i64>, last_check_ms: Option<i64>) -> AutoLessons {
         AutoLessons {
-            last_run_ms,
+            last_finished_ms,
             last_check_ms,
             ..AutoLessons::default()
         }
+    }
+
+    /// `failures` attempts in a row did not finish, the first at `since` and
+    /// the last at `last`; each looked when it started.
+    fn failing(failures: u32, since: i64, last: i64) -> AutoLessons {
+        AutoLessons {
+            last_attempt_ms: Some(last),
+            consecutive_failures: failures,
+            failing_since_ms: Some(since),
+            last_check_ms: Some(last),
+            ..AutoLessons::default()
+        }
+    }
+
+    #[test]
+    fn a_failed_run_is_retried_after_an_hour() {
+        let failed = NOW - 10 * MINUTE;
+        let s = failing(1, failed, failed);
+        assert_eq!(
+            due(&s, NOW, false),
+            Due::NotYet {
+                next_ms: failed + HOUR_MS
+            }
+        );
+        assert_eq!(
+            due(&s, failed + HOUR_MS - 1, false),
+            Due::NotYet {
+                next_ms: failed + HOUR_MS
+            }
+        );
+        assert_eq!(due(&s, failed + HOUR_MS, false), Due::CheckForNew);
+        // A run that timed out 20 minutes after it started waits an hour from
+        // the failure, not from the start.
+        let started = NOW - 30 * MINUTE;
+        let s = AutoLessons {
+            last_check_ms: Some(started),
+            ..failing(1, started, started + 20 * MINUTE)
+        };
+        assert_eq!(
+            due(&s, started + HOUR_MS, false),
+            Due::NotYet {
+                next_ms: started + 80 * MINUTE
+            }
+        );
+        assert_eq!(due(&s, started + 80 * MINUTE, false), Due::CheckForNew);
+        // A second failure in a row is retried the same way.
+        let s = failing(2, NOW - 2 * HOUR_MS, NOW - HOUR_MS);
+        assert_eq!(due(&s, NOW, false), Due::CheckForNew);
+        // Busy and off still win.
+        assert_eq!(due(&s, NOW, true), Due::Busy);
+        let off = AutoLessons {
+            enabled: false,
+            ..s
+        };
+        assert_eq!(due(&off, NOW, false), Due::Disabled);
+    }
+
+    #[test]
+    fn after_three_failures_in_a_row_no_retry_until_a_day_after_the_first() {
+        let first = NOW;
+        let s = failing(MAX_FAILURES, first, first + 2 * HOUR_MS);
+        for later in [
+            first + 3 * HOUR_MS,
+            first + 12 * HOUR_MS,
+            first + DAY_MS - 1,
+        ] {
+            assert_eq!(
+                due(&s, later, false),
+                Due::NotYet {
+                    next_ms: first + DAY_MS
+                }
+            );
+        }
+        assert_eq!(due(&s, first + DAY_MS, false), Due::CheckForNew);
+        // More than the cap counts the same.
+        let s = failing(MAX_FAILURES + 2, first, first + 4 * HOUR_MS);
+        assert_eq!(
+            due(&s, first + 5 * HOUR_MS, false),
+            Due::NotYet {
+                next_ms: first + DAY_MS
+            }
+        );
+        // A last failure close to the day's end still waits its hour.
+        let s = failing(MAX_FAILURES, first, first + DAY_MS - MINUTE);
+        assert_eq!(
+            due(&s, first + DAY_MS, false),
+            Due::NotYet {
+                next_ms: first + DAY_MS - MINUTE + HOUR_MS
+            }
+        );
+    }
+
+    #[test]
+    fn attempts_count_failures_in_a_day_and_a_finish_clears_them() {
+        let mut s = AutoLessons::default();
+        let mut t = NOW;
+        for n in 1..=MAX_FAILURES {
+            s.begin_attempt(t);
+            s.fail_attempt(t + MINUTE);
+            assert_eq!(s.consecutive_failures, n);
+            assert_eq!(s.failing_since_ms, Some(NOW));
+            assert_eq!(s.last_attempt_ms, Some(t + MINUTE));
+            t += HOUR_MS + MINUTE;
+        }
+        s.last_check_ms = Some(t - HOUR_MS);
+        assert_eq!(
+            due(&s, t, false),
+            Due::NotYet {
+                next_ms: NOW + DAY_MS
+            }
+        );
+        // A day after the first, the count starts over: an hour's retry again.
+        let next_day = NOW + DAY_MS;
+        assert_eq!(due(&s, next_day, false), Due::CheckForNew);
+        s.begin_attempt(next_day);
+        assert_eq!(s.consecutive_failures, 1);
+        assert_eq!(s.failing_since_ms, Some(next_day));
+        s.fail_attempt(next_day);
+        s.last_check_ms = Some(next_day);
+        assert_eq!(due(&s, next_day + HOUR_MS, false), Due::CheckForNew);
+        // A finished run clears the count and holds the next for a day.
+        s.begin_attempt(next_day + HOUR_MS);
+        s.finish_attempt(next_day + 2 * HOUR_MS);
+        s.last_check_ms = Some(next_day + HOUR_MS);
+        assert_eq!(s.consecutive_failures, 0);
+        assert_eq!(s.failing_since_ms, None);
+        assert_eq!(
+            due(&s, next_day + 3 * HOUR_MS, false),
+            Due::NotYet {
+                next_ms: next_day + 2 * HOUR_MS + DAY_MS
+            }
+        );
+        assert_eq!(
+            due(&s, next_day + 2 * HOUR_MS + DAY_MS, false),
+            Due::CheckForNew
+        );
+    }
+
+    #[test]
+    fn an_old_last_run_counts_as_finished_only_when_its_outcome_says_so() {
+        let db = lore_core::storage::open_in_memory().unwrap();
+        let stored = |outcome: &str| {
+            let json =
+                serde_json::json!({"enabled": true, "last_run_ms": NOW, "last_outcome": outcome});
+            lore_core::settings::set(&db, KEY, &json.to_string()).unwrap();
+            AutoLessons::load(&db)
+        };
+        let ok = stored("Claude Code read 75 new corrections and filed 2 lessons.");
+        assert_eq!(ok.last_finished_ms, Some(NOW));
+        assert_eq!(ok.last_attempt_ms, None);
+        assert_eq!(ok.consecutive_failures, 0);
+        assert_eq!(
+            due(&ok, NOW + HOUR_MS, false),
+            Due::NotYet {
+                next_ms: NOW + DAY_MS
+            }
+        );
+        let one = stored("Codex read 1 new correction and filed 1 lesson.");
+        assert_eq!(one.last_finished_ms, Some(NOW));
+        for failed in [
+            "Claude Code failed: timed out after 20 minutes",
+            "Not run: sign in to Claude Code or Codex.",
+            "No new corrections.",
+        ] {
+            let s = stored(failed);
+            assert_eq!(s.last_finished_ms, None, "{failed}");
+            assert_eq!(s.last_attempt_ms, Some(NOW));
+            assert_eq!(s.consecutive_failures, 1);
+            assert_eq!(s.failing_since_ms, Some(NOW));
+            assert_eq!(
+                due(&s, NOW + HOUR_MS - 1, false),
+                Due::NotYet {
+                    next_ms: NOW + HOUR_MS
+                }
+            );
+            assert_eq!(due(&s, NOW + HOUR_MS, false), Due::CheckForNew);
+        }
+        // Saved again, the old field is gone and the new ones stay.
+        let s = stored("Claude Code failed: timed out");
+        s.save(&db).unwrap();
+        let raw = lore_core::settings::get(&db, KEY).unwrap().unwrap();
+        assert!(!raw.contains("last_run_ms"), "{raw}");
+        assert_eq!(AutoLessons::load(&db), s);
+        // New fields already set are not overwritten by a stale old one.
+        let json = serde_json::json!({"last_run_ms": 5, "last_finished_ms": NOW});
+        lore_core::settings::set(&db, KEY, &json.to_string()).unwrap();
+        assert_eq!(AutoLessons::load(&db), at(Some(NOW), None));
     }
 
     #[test]
@@ -508,7 +826,7 @@ mod tests {
     fn an_unset_or_old_setting_reads_as_on() {
         let db = lore_core::storage::open_in_memory().unwrap();
         assert_eq!(AutoLessons::load(&db), AutoLessons::default());
-        lore_core::settings::set(&db, KEY, r#"{"last_run_ms":5}"#).unwrap();
+        lore_core::settings::set(&db, KEY, r#"{"last_finished_ms":5}"#).unwrap();
         assert_eq!(AutoLessons::load(&db), at(Some(5), None));
         lore_core::settings::set(&db, KEY, "\"garbage\"").unwrap();
         assert_eq!(AutoLessons::load(&db), AutoLessons::default());
@@ -662,7 +980,8 @@ mod tests {
         assert_eq!(runs[0][model + 1], "sonnet");
         assert_eq!(runs[0][0], "-p");
         let settings = world.settings();
-        assert_eq!(settings.last_run_ms, Some(NOW));
+        assert_eq!(settings.last_finished_ms, Some(NOW));
+        assert_eq!(settings.consecutive_failures, 0);
         assert_eq!(settings.last_check_ms, Some(NOW));
         assert_eq!(
             settings.last_outcome.as_deref(),
@@ -691,7 +1010,9 @@ mod tests {
         assert!(world.runs().is_empty());
         let settings = world.settings();
         assert_eq!(settings.last_check_ms, Some(NOW));
-        assert_eq!(settings.last_run_ms, None);
+        assert_eq!(settings.last_finished_ms, None);
+        assert_eq!(settings.last_attempt_ms, None);
+        assert_eq!(settings.consecutive_failures, 0);
         assert_eq!(
             settings.last_outcome.as_deref(),
             Some("No new corrections.")
@@ -778,7 +1099,7 @@ mod tests {
     fn a_due_run_starts_on_a_timer_tick_with_nothing_ingested() {
         let world = World::new();
         // The last run was a day ago; the corrections since are waiting.
-        update(&world.db, |s| s.last_run_ms = Some(NOW - DAY_MS)).unwrap();
+        update(&world.db, |s| s.last_finished_ms = Some(NOW - DAY_MS)).unwrap();
         let new = ids(&["cr-0123456789abcdef", "cr-aaaaaaaaaaaaaaaa"]);
         let (world, seen) = ticks(world, 6, &new);
         assert_eq!(seen[0], Due::CheckForNew);
@@ -788,7 +1109,7 @@ mod tests {
         );
         assert_eq!(world.runs().len(), 1);
         assert_eq!(world.mined.load(Ordering::SeqCst), 1);
-        assert_eq!(world.settings().last_run_ms, Some(NOW));
+        assert_eq!(world.settings().last_finished_ms, Some(NOW));
         assert_eq!(considered::considered(&world.vault).unwrap(), new);
         assert!(!world.lock.held());
     }
@@ -796,7 +1117,7 @@ mod tests {
     #[test]
     fn ticks_that_are_not_due_mine_nothing() {
         let world = World::new();
-        update(&world.db, |s| s.last_run_ms = Some(NOW - HOUR_MS)).unwrap();
+        update(&world.db, |s| s.last_finished_ms = Some(NOW - HOUR_MS)).unwrap();
         let (world, seen) = ticks(world, 5, &ids(&["cr-0123456789abcdef"]));
         assert!(
             seen.iter().all(|d| matches!(d, Due::NotYet { .. })),
@@ -808,7 +1129,7 @@ mod tests {
         // Turned off: a due tick still never looks.
         update(&world.db, |s| {
             s.enabled = false;
-            s.last_run_ms = None;
+            s.last_finished_ms = None;
         })
         .unwrap();
         let (world, seen) = ticks(world, 2, &BTreeSet::new());
@@ -868,10 +1189,82 @@ mod tests {
         .unwrap();
         assert_eq!(*chose.lock().unwrap(), Some(Some(Agent::Codex)));
         let settings = world.settings();
-        assert_eq!(settings.last_run_ms, None);
+        assert_eq!(settings.last_finished_ms, None);
         assert_eq!(
             settings.last_outcome.as_deref(),
             Some("Not run: sign in to Claude Code or Codex.")
         );
+        // Not starting is a failed attempt: tried again in an hour.
+        assert_eq!(settings.last_attempt_ms, Some(NOW));
+        assert_eq!(settings.consecutive_failures, 1);
+    }
+
+    /// One automatic look at `now` on `world` whose run ends with `result`.
+    fn look_at(world: &World, now: i64, result: Result<usize, String>) -> Due {
+        let result = Mutex::new(Some(result));
+        poke(&world.db, &world.lock, now, |guard| {
+            let _guard = guard;
+            work(
+                &world.db,
+                || now,
+                || Ok(ids(&["cr-0123456789abcdef"])),
+                |_| Some(Agent::Claude),
+                |_, _| result.lock().unwrap().take().unwrap(),
+                |_, _| {},
+            )
+            .unwrap();
+        })
+    }
+
+    #[test]
+    fn a_failed_run_does_not_use_up_the_day() {
+        let world = World::new();
+        let fail = || Err("timed out after 20 minutes".to_owned());
+        assert_eq!(look_at(&world, NOW, fail()), Due::CheckForNew);
+        let s = world.settings();
+        assert_eq!(s.last_finished_ms, None);
+        assert_eq!((s.last_attempt_ms, s.consecutive_failures), (Some(NOW), 1));
+        assert_eq!(
+            s.last_outcome.as_deref(),
+            Some("Claude Code failed: timed out after 20 minutes")
+        );
+        // Not within the hour; an hour later, tried again.
+        assert!(matches!(
+            look_at(&world, NOW + 59 * MINUTE, fail()),
+            Due::NotYet { .. }
+        ));
+        assert_eq!(look_at(&world, NOW + HOUR_MS, fail()), Due::CheckForNew);
+        assert_eq!(look_at(&world, NOW + 2 * HOUR_MS, fail()), Due::CheckForNew);
+        assert_eq!(world.settings().consecutive_failures, MAX_FAILURES);
+        // Three in a row: none until a day after the first.
+        for later in [3, 10, 23] {
+            assert_eq!(
+                look_at(&world, NOW + later * HOUR_MS, fail()),
+                Due::NotYet {
+                    next_ms: NOW + DAY_MS
+                }
+            );
+        }
+        // A manual run does not touch the count.
+        remember_agent(&world.db, Agent::Codex).unwrap();
+        assert_eq!(world.settings().consecutive_failures, MAX_FAILURES);
+        assert!(matches!(
+            due(&world.settings(), NOW + 23 * HOUR_MS, false),
+            Due::NotYet { .. }
+        ));
+        // The next day it runs, finishes, and holds the next for a day.
+        assert_eq!(look_at(&world, NOW + DAY_MS, Ok(1)), Due::CheckForNew);
+        let s = world.settings();
+        assert_eq!(s.last_finished_ms, Some(NOW + DAY_MS));
+        assert_eq!((s.consecutive_failures, s.failing_since_ms), (0, None));
+        assert_eq!(
+            s.dto(false, NOW + DAY_MS + HOUR_MS).next_ms,
+            Some(NOW + 2 * DAY_MS)
+        );
+        assert!(matches!(
+            look_at(&world, NOW + 2 * DAY_MS - 1, Ok(1)),
+            Due::NotYet { .. }
+        ));
+        assert_eq!(look_at(&world, NOW + 2 * DAY_MS, Ok(1)), Due::CheckForNew);
     }
 }

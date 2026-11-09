@@ -11,7 +11,8 @@ export type AutoLessonsDto = { enabled: boolean,
  */
 running: boolean, 
 /**
- * Epoch milliseconds an automatic run last started an agent.
+ * Epoch milliseconds an automatic run last started an agent, finished,
+ * or failed.
  */
 last_run_ms: number | null, 
 /**
@@ -21,4 +22,8 @@ last_check_ms: number | null,
 /**
  * What that look led to, in one short sentence.
  */
-last_outcome: string | null, };
+last_outcome: string | null, 
+/**
+ * Epoch milliseconds Lore will look again, when on, idle, and waiting.
+ */
+next_ms: number | null, };

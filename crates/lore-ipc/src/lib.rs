@@ -473,7 +473,8 @@ pub struct AutoLessonsDto {
     pub enabled: bool,
     /// An automatic run is going now.
     pub running: bool,
-    /// Epoch milliseconds an automatic run last started an agent.
+    /// Epoch milliseconds an automatic run last started an agent, finished,
+    /// or failed.
     #[ts(type = "number | null")]
     pub last_run_ms: Option<i64>,
     /// Epoch milliseconds Lore last looked for new corrections on its own.
@@ -481,6 +482,9 @@ pub struct AutoLessonsDto {
     pub last_check_ms: Option<i64>,
     /// What that look led to, in one short sentence.
     pub last_outcome: Option<String>,
+    /// Epoch milliseconds Lore will look again, when on, idle, and waiting.
+    #[ts(type = "number | null")]
+    pub next_ms: Option<i64>,
 }
 
 /// One note in the session-start section. Element of [`AgentsReadDto::notes`].

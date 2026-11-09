@@ -310,7 +310,14 @@ describe("ipc contract", () => {
 
   it("getAutoLessons and setAutoLessons invoke their commands", async () => {
     const { getAutoLessons, setAutoLessons } = await import("./ipc");
-    const off = { enabled: false, running: false, last_run_ms: null, last_check_ms: null, last_outcome: null };
+    const off = {
+      enabled: false,
+      running: false,
+      last_run_ms: null,
+      last_check_ms: null,
+      last_outcome: null,
+      next_ms: null,
+    };
     invoke.mockResolvedValueOnce({ ...off, enabled: true });
     expect((await getAutoLessons()).enabled).toBe(true);
     expect(invoke).toHaveBeenCalledWith("get_auto_lessons");

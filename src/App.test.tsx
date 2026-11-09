@@ -160,6 +160,7 @@ beforeEach(() => {
     last_run_ms: null,
     last_check_ms: null,
     last_outcome: null,
+    next_ms: null,
   });
   m.getJsonSetting.mockResolvedValue(null);
   m.setSetting.mockResolvedValue(undefined);
