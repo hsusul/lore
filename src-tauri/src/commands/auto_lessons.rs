@@ -2,14 +2,18 @@
 //! app runs the same pinned Find lessons run the button starts, at most once a
 //! day and only when there are corrections no earlier run has read.
 //!
-//! Ingest events ([`on_ingest`]) only look at one setting row. Mining and the
-//! run happen on a thread of their own, so ingest never waits on either. One
-//! [`LessonsLock`] is held by whichever run is going, manual or automatic, so
-//! two never overlap.
+//! Ingest events and a [`DueTimer`] tick ([`check`]) only look at one setting
+//! row. Mining and the run happen on a thread of their own, so neither waits
+//! on either. The timer is what starts a run that becomes due after the last
+//! session was ingested. One [`LessonsLock`] is held by whichever run is
+//! going, manual or automatic, so two never overlap.
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use lore_ipc::AutoLessonsDto;
 use lore_memory::considered::CorrectionId;
@@ -36,6 +40,10 @@ pub(crate) const HOUR_MS: i64 = 60 * 60 * 1000;
 const CLAUDE_MODEL: &str = "sonnet";
 /// An outcome is one line in Settings; a longer error is cut.
 const OUTCOME_CHARS: usize = 200;
+/// How long after launch the [`DueTimer`] first checks.
+pub(crate) const FIRST_TICK: Duration = Duration::from_secs(60);
+/// How often the [`DueTimer`] checks after that.
+pub(crate) const TICK: Duration = Duration::from_secs(15 * 60);
 
 /// The automatic run's setting and what it last did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,9 +292,80 @@ pub(crate) fn run_auto(
     Ok(waiting(vault).saturating_sub(before))
 }
 
+/// Handle to the thread that runs [`check`] on a timer, so a run that becomes
+/// due when nothing is being ingested still starts. Dropping it stops the
+/// thread and joins it, like the ingest worker's handle.
+pub struct DueTimer {
+    tx: Option<Sender<()>>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl DueTimer {
+    /// Call `tick` after `first`, then every `every`, until shut down. The
+    /// wait is a plain thread timeout: it holds no power assertion and sets
+    /// no wake timer, so it neither keeps the Mac awake nor wakes it; a tick
+    /// missed while asleep comes at most `every` after waking.
+    pub(crate) fn spawn(
+        first: Duration,
+        every: Duration,
+        mut tick: impl FnMut() + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let (tx, rx) = mpsc::channel::<()>();
+        let join = std::thread::Builder::new()
+            .name("auto-lessons-timer".to_owned())
+            .spawn(move || {
+                // A stop signal, or a dropped handle, ends the wait at once.
+                let mut wait = first;
+                while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(wait) {
+                    tick();
+                    wait = every;
+                }
+            })?;
+        Ok(Self {
+            tx: Some(tx),
+            join: Some(join),
+        })
+    }
+
+    /// Stop the timer and join its thread. A run it already started keeps
+    /// going on its own thread, as one an ingest event started does.
+    pub fn shutdown(mut self) {
+        self.stop();
+    }
+
+    fn stop(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+impl Drop for DueTimer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// The [`DueTimer`] of the running app: [`check`] after [`FIRST_TICK`], then
+/// every [`TICK`].
+pub(crate) fn start_timer(app: &AppHandle) -> Option<DueTimer> {
+    let app = app.clone();
+    match DueTimer::spawn(FIRST_TICK, TICK, move || check(&app)) {
+        Ok(timer) => Some(timer),
+        Err(e) => {
+            eprintln!("warning: automatic Find lessons timer could not start: {e}");
+            None
+        }
+    }
+}
+
 /// Called by the ingest worker after each ingested source and each finished
-/// scan. Cheap: reads one setting, and starts a thread only when a look is due.
-pub(crate) fn on_ingest(app: &AppHandle) {
+/// scan, and by the [`DueTimer`]. Cheap: reads one setting, and starts a
+/// thread only when a look is due.
+pub(crate) fn check(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
@@ -668,6 +747,106 @@ mod tests {
         assert_eq!(world.runs().len(), 1);
         // Once it ends, the button works again.
         assert!(world.lock.try_take(Runner::Manual).is_some());
+    }
+
+    /// Run `n` ticks of a [`DueTimer`] on `world`, the `i`th at `NOW + i *
+    /// TICK`, with nothing ingested; return `world` and what each decided.
+    fn ticks(world: World, n: usize, new: &BTreeSet<CorrectionId>) -> (World, Vec<Due>) {
+        let (tx, rx) = mpsc::channel();
+        let world = Arc::new(Mutex::new(world));
+        let (w, new) = (Arc::clone(&world), new.clone());
+        let mut i = 0_i64;
+        let tick_ms = i64::try_from(TICK.as_millis()).unwrap();
+        let timer = DueTimer::spawn(
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            move || {
+                let _ = tx.send(w.lock().unwrap().event(NOW + i * tick_ms, &new));
+                i += 1;
+            },
+        )
+        .unwrap();
+        let seen = (0..n)
+            .map(|_| rx.recv_timeout(Duration::from_secs(10)).unwrap())
+            .collect();
+        timer.shutdown();
+        let world = Arc::try_unwrap(world).ok().unwrap().into_inner().unwrap();
+        (world, seen)
+    }
+
+    #[test]
+    fn a_due_run_starts_on_a_timer_tick_with_nothing_ingested() {
+        let world = World::new();
+        // The last run was a day ago; the corrections since are waiting.
+        update(&world.db, |s| s.last_run_ms = Some(NOW - DAY_MS)).unwrap();
+        let new = ids(&["cr-0123456789abcdef", "cr-aaaaaaaaaaaaaaaa"]);
+        let (world, seen) = ticks(world, 6, &new);
+        assert_eq!(seen[0], Due::CheckForNew);
+        assert!(
+            seen[1..].iter().all(|d| matches!(d, Due::NotYet { .. })),
+            "{seen:?}"
+        );
+        assert_eq!(world.runs().len(), 1);
+        assert_eq!(world.mined.load(Ordering::SeqCst), 1);
+        assert_eq!(world.settings().last_run_ms, Some(NOW));
+        assert_eq!(considered::considered(&world.vault).unwrap(), new);
+        assert!(!world.lock.held());
+    }
+
+    #[test]
+    fn ticks_that_are_not_due_mine_nothing() {
+        let world = World::new();
+        update(&world.db, |s| s.last_run_ms = Some(NOW - HOUR_MS)).unwrap();
+        let (world, seen) = ticks(world, 5, &ids(&["cr-0123456789abcdef"]));
+        assert!(
+            seen.iter().all(|d| matches!(d, Due::NotYet { .. })),
+            "{seen:?}"
+        );
+        assert_eq!(world.mined.load(Ordering::SeqCst), 0);
+        assert!(world.runs().is_empty());
+
+        // Turned off: a due tick still never looks.
+        update(&world.db, |s| {
+            s.enabled = false;
+            s.last_run_ms = None;
+        })
+        .unwrap();
+        let (world, seen) = ticks(world, 2, &BTreeSet::new());
+        assert_eq!(seen, [Due::Disabled; 2]);
+        assert_eq!(world.mined.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_tick_during_a_manual_run_starts_nothing() {
+        let world = World::new();
+        let new = ids(&["cr-0123456789abcdef"]);
+        let manual = world.lock.try_take(Runner::Manual).unwrap();
+        let (world, seen) = ticks(world, 3, &new);
+        assert_eq!(seen, [Due::Busy; 3]);
+        assert_eq!(world.mined.load(Ordering::SeqCst), 0);
+        assert!(world.runs().is_empty());
+        assert_eq!(world.settings().last_check_ms, None);
+        drop(manual);
+        // Once it ends, the next tick runs.
+        let (world, seen) = ticks(world, 1, &new);
+        assert_eq!(seen, [Due::CheckForNew]);
+        assert_eq!(world.runs().len(), 1);
+    }
+
+    #[test]
+    fn the_timer_stops_promptly_and_waits_for_its_first_tick() {
+        let ticked = Arc::new(AtomicUsize::new(0));
+        let t = Arc::clone(&ticked);
+        let timer = DueTimer::spawn(TICK, TICK, move || {
+            t.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+        let started = std::time::Instant::now();
+        timer.shutdown();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(ticked.load(Ordering::SeqCst), 0);
+        // Dropping it stops it too.
+        drop(DueTimer::spawn(TICK, TICK, || {}).unwrap());
     }
 
     #[test]

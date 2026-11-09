@@ -95,6 +95,12 @@ pub fn run() {
         // checkpoints are never corrupted and no job is left unrecoverable.
         if let RunEvent::Exit = event {
             if let Some(state) = app_handle.try_state::<AppState>() {
+                // The lessons timer first, so no tick lands mid-shutdown.
+                if let Ok(mut guard) = state.lessons_timer.lock() {
+                    if let Some(timer) = guard.take() {
+                        timer.shutdown();
+                    }
+                }
                 if let Ok(mut guard) = state.worker.lock() {
                     if let Some(handle) = guard.take() {
                         handle.shutdown();
