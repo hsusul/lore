@@ -124,8 +124,9 @@ const EDIT_CHAR_CAP: usize = 1_000;
 /// At most this many notes for a prompt, in at most this many bytes.
 ///
 /// The relevance cut is the match itself, not a score: a note is a candidate
-/// only when it holds at least two of the prompt's content words, or the one
-/// word when the prompt has a single content word (`recall::related`).
+/// only when it holds at least two of the prompt's content words, or, when
+/// the prompt has a single content word, its title holds that word
+/// (`recall::related`).
 /// Content words are `index::related_words`: contractions such as "don't",
 /// single letters, and stopwords never count, so two texts do not match on
 /// the pieces of a contraction.
