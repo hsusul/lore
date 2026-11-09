@@ -118,6 +118,9 @@ fn parse_from(
                 if let Some(p) = payload {
                     session.native_session_id = str_field(p, "id");
                     session.agent_version = str_field(p, "cli_version");
+                    if started_by_a_program(p) {
+                        session.automated = true;
+                    }
                     provider = str_field(p, "model_provider");
                     if let Some(c) = str_field(p, "cwd") {
                         cwd = Some(c);
@@ -339,6 +342,17 @@ fn extract_patch_changes(p: &Value, ts: Option<i64>, session: &mut ParsedSession
             event_ts: ts,
         });
     }
+}
+
+/// Whether a program, not a person, started this session: `codex exec`
+/// (`source: "exec"`, originator `codex_exec`) or a subagent thread another
+/// agent spawned (`source: {"subagent": ...}`). The TUI, the IDE extensions,
+/// and the desktop app record their own sources.
+fn started_by_a_program(meta: &Value) -> bool {
+    let source = meta.get("source");
+    source.and_then(Value::as_str) == Some("exec")
+        || source.is_some_and(|s| s.get("subagent").is_some())
+        || meta.get("originator").and_then(Value::as_str) == Some("codex_exec")
 }
 
 /// Extract the recorded git fields that are actually present (absence is normal).

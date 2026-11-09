@@ -260,7 +260,8 @@ macro_rules! turns_query {
         AND sd.source_kind = 'message_part' AND sd.source_id = p.id
     LEFT JOIN session_segment seg ON seg.id = m.segment_id
     LEFT JOIN repository r ON r.id = seg.repository_id
-    WHERE m.role IN ('user', 'assistant') AND m.is_sidechain = 0",
+    WHERE m.role IN ('user', 'assistant') AND m.is_sidechain = 0
+        AND coalesce(json_extract(s.metadata_json, '$.automated'), 0) = 0",
             $filter,
             "
     ORDER BY m.session_id, m.seq, p.ordinal"

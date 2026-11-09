@@ -303,6 +303,12 @@ pub struct ParsedSession {
     /// findings and search hits (`SEARCH.md` §6, "without duplicates").
     pub title_is_synthetic: bool,
     pub agent_version: Option<String>,
+    /// True when a program, not a person, started the session: `claude -p`
+    /// or the Agent SDK, `codex exec`, or a Codex subagent thread. Its user
+    /// turns are prompts a program wrote, so they are never mined as the
+    /// person's corrections. Stored as `{"automated":true}` in
+    /// `agent_session.metadata_json`.
+    pub automated: bool,
     pub primary_model: Option<String>,
     /// Session-level totals when the source records cumulative usage. When a
     /// field is absent, persistence falls back to summing per-message usage.
@@ -328,6 +334,7 @@ impl ParsedSession {
             title: None,
             title_is_synthetic: false,
             agent_version: None,
+            automated: false,
             primary_model: None,
             total_tokens: Tokens::default(),
             started_at: None,

@@ -13,15 +13,33 @@ use rusqlite::Connection;
 /// `dir`, ingested into an in-memory archive. Session `i` starts on
 /// 2026-08-`i+1` and its turns are a second apart.
 pub fn codex_archive(dir: &Path, sessions: &[&[(&str, &str)]]) -> Connection {
+    let plain: Vec<(serde_json::Value, &[(&str, &str)])> = sessions
+        .iter()
+        .map(|turns| (serde_json::json!({}), *turns))
+        .collect();
+    codex_archive_with(dir, &plain)
+}
+
+/// [`codex_archive`], with each session's `session_meta` payload extended
+/// by the fields of its JSON object (`source`, `originator`).
+pub fn codex_archive_with(
+    dir: &Path,
+    sessions: &[(serde_json::Value, &[(&str, &str)])],
+) -> Connection {
     let root = dir.join("codex/sessions");
-    for (i, turns) in sessions.iter().enumerate() {
+    for (i, (extra, turns)) in sessions.iter().enumerate() {
         let day = root.join(format!("2026/08/{:02}", i + 1));
         std::fs::create_dir_all(&day).unwrap();
         let ts = |s: usize| format!("2026-08-{:02}T10:00:{:02}.000Z", i + 1, s);
+        let mut payload = serde_json::json!({
+            "id": format!("019e0000-0000-7000-8000-{:012x}", i + 1),
+            "cwd": "/proj", "cli_version": "0.133.0", "model_provider": "openai"
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            payload[key] = value.clone();
+        }
         let mut lines = vec![serde_json::json!({
-            "type": "session_meta", "timestamp": ts(0),
-            "payload": {"id": format!("019e0000-0000-7000-8000-{:012x}", i + 1),
-                "cwd": "/proj", "cli_version": "0.133.0", "model_provider": "openai"}
+            "type": "session_meta", "timestamp": ts(0), "payload": payload
         })];
         for (n, (role, text)) in turns.iter().enumerate() {
             let kind = if *role == "user" {
