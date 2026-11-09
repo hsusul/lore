@@ -44,6 +44,18 @@ const TOOLS: [&str; 3] = [
     "mcp__lore__propose_memory",
 ];
 
+/// Codex's tools that reach past Lore, turned off: its shell reads any file
+/// even in the read-only sandbox, and the others view images, start
+/// subagents, and search the web. Runs pass `--ignore-user-config`, so the
+/// person's own MCP servers do not load, and `--strict-config`, so a Codex
+/// that does not know one of these keys stops instead of leaving it on.
+const CODEX_OFF: [&str; 4] = [
+    "features.shell_tool=false",
+    "features.view_image=false",
+    "features.multi_agent=false",
+    "web_search=\"disabled\"",
+];
+
 /// A run reads every candidate and may take a while; past this it is stopped.
 const LIMIT: Duration = Duration::from_secs(20 * 60);
 /// How long a run's processes have to exit on SIGTERM before SIGKILL.
@@ -148,8 +160,13 @@ impl Agent {
                     "--ephemeral",
                     "-s",
                     "read-only",
-                    "-o",
+                    "--ignore-user-config",
+                    "--strict-config",
                 ]);
+                for config in CODEX_OFF {
+                    args.extend(["-c".to_owned(), config.to_owned()]);
+                }
+                args.push("-o".to_owned());
                 args.push(last.display().to_string());
                 args.push("-".to_owned());
                 args
@@ -165,7 +182,12 @@ impl Agent {
             Agent::Claude => {
                 let mut args = owned(&["-p", "--mcp-config"]);
                 args.push(scratch.join("find-lessons.mcp.json").display().to_string());
-                args.extend(owned(&["--strict-mcp-config", "--allowedTools"]));
+                args.extend(owned(&[
+                    "--strict-mcp-config",
+                    "--tools",
+                    "",
+                    "--allowedTools",
+                ]));
                 args.extend(owned(&TOOLS));
                 args.extend(owned(&["--output-format", "json"]));
                 args
@@ -180,8 +202,10 @@ impl Agent {
                     "--ephemeral",
                     "-s",
                     "read-only",
+                    "--ignore-user-config",
+                    "--strict-config",
                 ]);
-                for config in [
+                for config in CODEX_OFF.map(str::to_owned).into_iter().chain([
                     "approval_policy=\"never\"".to_owned(),
                     "mcp_servers.lore.default_tools_approval_mode=\"approve\"".to_owned(),
                     format!("mcp_servers.lore.command={}", quoted(lorectl)),
@@ -193,7 +217,7 @@ impl Agent {
                         "mcp_servers.lore.env={{LORE_AGENT=\"codex\",{PINNED_ENV}={}}}",
                         quoted(&scratch.join(PINNED_FILE))
                     ),
-                ] {
+                ]) {
                     args.push("-c".to_owned());
                     args.push(config);
                 }
@@ -319,6 +343,23 @@ fn no_report(label: &str, said: &str) -> String {
         format!("{label} did not finish its report")
     } else {
         format!("{label} did not finish its report: {tail}")
+    }
+}
+
+/// Why Codex left no report. A Codex too old to know a flag or key in
+/// [`CODEX_OFF`] stops before starting (on purpose, rather than leave that
+/// tool on), so say to update it instead of quoting a config error.
+fn codex_no_report(label: &str, said: &str) -> String {
+    let too_old = said.contains("unknown configuration field")
+        || said.contains("unexpected argument '--ignore-user-config'")
+        || said.contains("unexpected argument '--strict-config'");
+    if too_old {
+        format!(
+            "This {label} is too old to run with only Lore's tools. \
+             Update it (0.162 or newer works), then try again."
+        )
+    } else {
+        no_report(label, said)
     }
 }
 
@@ -641,7 +682,7 @@ fn run_for(
             .ok()
             .map(|text| text.trim().to_owned())
             .filter(|text| !text.is_empty())
-            .ok_or_else(|| no_report(label, &format!("{stdout}\n{stderr}"))),
+            .ok_or_else(|| codex_no_report(label, &format!("{stdout}\n{stderr}"))),
     }
 }
 
@@ -690,6 +731,21 @@ pub(crate) fn locate(agent: Agent) -> Result<(PathBuf, PathBuf, std::ffi::OsStri
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn a_codex_too_old_for_the_lockdown_is_told_to_update() {
+        for said in [
+            "Error loading config.toml: unknown configuration field `features.view_image` in -c/--config override",
+            "error: unexpected argument '--ignore-user-config' found",
+        ] {
+            let why = codex_no_report("Codex", said);
+            assert!(why.starts_with("This Codex is too old"), "{why}");
+        }
+        assert_eq!(
+            codex_no_report("Codex", "rate limited"),
+            "Codex did not finish its report: rate limited"
+        );
+    }
 
     #[test]
     fn looks_where_finder_apps_cannot_see() {
@@ -757,6 +813,8 @@ mod tests {
                 "--mcp-config",
                 "/s/find-lessons.mcp.json",
                 "--strict-mcp-config",
+                "--tools",
+                "",
                 "--allowedTools",
                 "mcp__lore__recall_memory",
                 "mcp__lore__mine_candidates",
@@ -773,6 +831,16 @@ mod tests {
                 "--ephemeral",
                 "-s",
                 "read-only",
+                "--ignore-user-config",
+                "--strict-config",
+                "-c",
+                "features.shell_tool=false",
+                "-c",
+                "features.view_image=false",
+                "-c",
+                "features.multi_agent=false",
+                "-c",
+                "web_search=\"disabled\"",
                 "-c",
                 "approval_policy=\"never\"",
                 "-c",
@@ -1054,6 +1122,16 @@ mod tests {
                 "--ephemeral",
                 "-s",
                 "read-only",
+                "--ignore-user-config",
+                "--strict-config",
+                "-c",
+                "features.shell_tool=false",
+                "-c",
+                "features.view_image=false",
+                "-c",
+                "features.multi_agent=false",
+                "-c",
+                "web_search=\"disabled\"",
                 "-o",
                 "/s/last.txt",
                 "-"
