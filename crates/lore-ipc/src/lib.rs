@@ -448,6 +448,20 @@ pub struct ProposalDto {
     pub updates: Option<String>,
     /// For an update, the rules the target note enforces now.
     pub target_enforce: Vec<EnforceRuleDto>,
+    /// An older pending proposal, or else an active note, that already says
+    /// this in a scope covering it. `None` for an update.
+    pub repeats: Option<RepeatsDto>,
+}
+
+/// What a proposal repeats. Payload of [`ProposalDto::repeats`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RepeatsDto {
+    pub id: String,
+    pub title: String,
+    /// `note` for an active note, `proposal` for one waiting for review.
+    #[ts(type = "\"note\" | \"proposal\"")]
+    pub kind: String,
 }
 
 /// An agent that can write lessons from the app. Element of the payload of
@@ -792,9 +806,15 @@ mod tests {
             ],
             updates: Some("N1".into()),
             target_enforce: vec![rule],
+            repeats: Some(RepeatsDto {
+                id: "P0".into(),
+                title: "Never frobnicate anything".into(),
+                kind: "proposal".into(),
+            }),
         };
         let json = serde_json::to_value(&proposal).unwrap();
         assert!(json["enforce"][1]["unless"].is_null());
+        assert_eq!(json["repeats"]["kind"], "proposal");
         assert_eq!(
             serde_json::from_value::<ProposalDto>(json).unwrap(),
             proposal

@@ -383,7 +383,19 @@ const LESSONS: [Where, string, string, string, [string, number][]][] = [
     "The agent added a diagram to a post with an empty alt.",
     [["that image needs alt text", 4]],
   ],
+  [
+    "global",
+    "codex",
+    "Show the failing test before you fix it",
+    "The agent changed the code before any test showed the bug.",
+    [["test first, show me it fails", 1]],
+  ],
 ];
+
+/** A lesson filed again, by title, and the earlier lesson it repeats. */
+const REPEATS: Record<string, string> = {
+  "Show the failing test before you fix it": "Show the failing test before the fix",
+};
 
 /** [skill, uses, sessions, days since last use or null, re-prompts as [said, before]] */
 const SKILLS: [string, number, number, number | null, [string, string][]][] = [
@@ -468,7 +480,7 @@ export function buildSampleNotes(): NoteDto[] {
 
 export function buildSampleProposals(now: number): ProposalDto[] {
   const notes = buildSampleNotes();
-  return LESSONS.map(([where, agent, title, reason, said], i) => {
+  const proposals: ProposalDto[] = LESSONS.map(([where, agent, title, reason, said], i) => {
     const rules = LESSON_RULES[title];
     const target = notes.find((n) => n.title === rules?.updates);
     const date = (days: number) => new Date(now - days * DAY).toISOString().slice(0, 10);
@@ -490,8 +502,13 @@ export function buildSampleProposals(now: number): ProposalDto[] {
       enforce: rules?.enforce ?? [],
       updates: target?.id ?? null,
       target_enforce: target?.enforce ?? [],
+      repeats: null,
       ...scopeOf(where),
     };
+  });
+  return proposals.map((p) => {
+    const earlier = proposals.find((e) => e.title === REPEATS[p.title]);
+    return earlier ? { ...p, repeats: { id: earlier.id, title: earlier.title, kind: "proposal" } } : p;
   });
 }
 

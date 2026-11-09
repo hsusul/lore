@@ -68,6 +68,7 @@ const pnpm: ProposalDto = {
   enforce: [],
   updates: null,
   target_enforce: [],
+  repeats: null,
 };
 const tests: ProposalDto = {
   ...pnpm,
@@ -311,6 +312,52 @@ describe("MapHome", () => {
         name: "Run the tests before saying done",
       }),
     ).toBeTruthy();
+  });
+
+  it("marks a lesson that repeats another, and rejects it as a duplicate", async () => {
+    m.listProposals.mockResolvedValue([
+      {
+        ...pnpm,
+        repeats: { id: "N1", title: "Never push to main", kind: "note" },
+      },
+      {
+        ...tests,
+        repeats: { id: "P0", title: "Run tests before done", kind: "proposal" },
+      },
+    ]);
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    const card = await screen.findByRole("region", { name: "Opened item" });
+    expect(
+      within(card).getByText("Already a note: Never push to main"),
+    ).toBeTruthy();
+    m.listProposals.mockResolvedValue([
+      {
+        ...tests,
+        repeats: { id: "P0", title: "Run tests before done", kind: "proposal" },
+      },
+    ]);
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Reject as duplicate" }),
+    );
+    await waitFor(() =>
+      expect(m.rejectProposal).toHaveBeenCalledWith("P1", "duplicate of N1"),
+    );
+    expect(
+      await screen.findByText(
+        "Same as a lesson you haven't reviewed: Run tests before done",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Rejected as a duplicate.",
+    );
+  });
+
+  it("shows no duplicate line or action for a lesson that repeats nothing", async () => {
+    render(<MapHome onArchive={() => {}} onSettings={() => {}} />);
+    const card = await screen.findByRole("region", { name: "Opened item" });
+    expect(
+      within(card).queryByRole("button", { name: "Reject as duplicate" }),
+    ).toBeNull();
   });
 
   it("finds lessons with the chosen agent when none wait, then shows them", async () => {

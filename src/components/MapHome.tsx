@@ -106,6 +106,7 @@ function LessonDetail({
   onAccept,
   onSkip,
   onReject,
+  onRejectDuplicate,
   onFindMore,
 }: {
   lesson: ProposalDto;
@@ -114,8 +115,10 @@ function LessonDetail({
   onAccept: (title?: string) => void;
   onSkip: () => void;
   onReject: () => void;
+  onRejectDuplicate: (of: string) => void;
   onFindMore: () => void;
 }) {
+  const repeats = lesson.repeats;
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(lesson.title);
   useEffect(() => {
@@ -136,6 +139,14 @@ function LessonDetail({
         />
       ) : (
         <h2 className="mist-h2">{lesson.title}</h2>
+      )}
+      {repeats && (
+        <p className="mist-mt">
+          {repeats.kind === "note"
+            ? "Already a note: "
+            : "Same as a lesson you haven't reviewed: "}
+          {repeats.title}
+        </p>
       )}
       {reason && <p className="mist-why">{reason}</p>}
       <ul className="mist-rc">
@@ -205,6 +216,16 @@ function LessonDetail({
             >
               Reject
             </button>
+            {repeats && (
+              <button
+                type="button"
+                className="mist-btn"
+                disabled={busy}
+                onClick={() => onRejectDuplicate(repeats.id)}
+              >
+                Reject as duplicate
+              </button>
+            )}
           </>
         )}
       </div>
@@ -552,6 +573,15 @@ export function MapHome({
                         "Rejected in the Lore app",
                       ).then(() => ""),
                     "Rejected.",
+                  )
+                }
+                onRejectDuplicate={(of) =>
+                  void act(
+                    () =>
+                      rejectProposal(shown.lesson.id, `duplicate of ${of}`).then(
+                        () => "",
+                      ),
+                    "Rejected as a duplicate.",
                   )
                 }
                 onSkip={() => {
