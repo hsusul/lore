@@ -170,12 +170,14 @@ function Backups() {
   );
 }
 
-/** What the automatic Find lessons run last did, in one line. */
+/** What the automatic Find lessons run last did, and when it tries next, in one line. */
 function lastRun(state: AutoLessonsDto): string {
   if (state.running) return "Finding lessons now…";
   if (!state.last_outcome) return "No automatic run yet.";
   const when = formatTime(state.last_check_ms ?? state.last_run_ms);
-  return when ? `Last automatic run, ${when}: ${state.last_outcome}` : `Last automatic run: ${state.last_outcome}`;
+  const last = when ? `Last automatic run, ${when}: ${state.last_outcome}` : `Last automatic run: ${state.last_outcome}`;
+  const next = state.enabled ? formatTime(state.next_ms) : "";
+  return next ? `${last} Next try ${next}.` : last;
 }
 
 export function AutoLessons() {

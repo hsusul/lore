@@ -254,6 +254,7 @@ export function createMockHandlers(
     last_run_ms: 1_785_751_203_000,
     last_check_ms: 1_785_751_203_000,
     last_outcome: "Claude Code read 3 new corrections and filed 1 lesson.",
+    next_ms: 1_785_751_203_000 + 24 * 60 * 60 * 1000,
   };
   let nextFolder = 1;
   const customRoots = new Map<string, string[]>();
