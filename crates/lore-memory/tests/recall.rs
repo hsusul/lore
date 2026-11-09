@@ -236,3 +236,26 @@ fn related_ignores_the_words_every_lesson_statement_uses() {
     let topic = related(&vault, "which toolchain is pinned here", &app, 10).unwrap();
     assert_eq!(topic.notes.len(), 1);
 }
+
+#[test]
+fn a_one_word_prompt_matches_titles_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, vault) = setup(dir.path());
+    for (title, body) in [
+        (
+            "Throttle Xcode builds",
+            "Builds at low priority keep the Mac usable.",
+        ),
+        (
+            "Keep caches on the external SSD",
+            "A build cache fills the internal disk.",
+        ),
+    ] {
+        vault
+            .add(&note(title, "global", "active", &[], body))
+            .unwrap();
+    }
+    let found = related(&vault, "Yes, build them", &app, 10).unwrap();
+    let titles: Vec<&str> = found.notes.iter().map(|r| r.note.title.as_str()).collect();
+    assert_eq!(titles, ["Throttle Xcode builds"]);
+}

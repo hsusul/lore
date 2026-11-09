@@ -626,9 +626,9 @@ const TOPICLESS: &[&str] = &[
 /// keeps every word.
 const SPECIFIC_NOTES: i64 = 3;
 
-/// An FTS5 query matching a note that holds any two of `words`, or the only
-/// one, with at least one of `specific` in the lesson (the title, or the
-/// body above its Receipts list). The person's quoted words can supply the
+/// An FTS5 query matching a note that holds any two of `words`, with at
+/// least one of `specific` in the lesson (the title, or the body above its
+/// Receipts list); or, for a text with one word, a note whose title holds it. The person's quoted words can supply the
 /// second word but never the only one: they are what was said in some other
 /// session, often about something else. A generic word, one most notes
 /// hold, can be the second word but never the only one. `None` when
@@ -648,7 +648,16 @@ fn fts_related(words: &[String], specific: &[&str]) -> Option<String> {
     );
     let words: Vec<String> = words.iter().map(|w| quoted(w)).collect();
     if words.len() < 2 {
-        return Some(in_lesson);
+        // One word is thin evidence ("yes, review them"): it must be in the
+        // title, what the note is about, not anywhere in its statement.
+        return Some(format!(
+            "title : ({})",
+            specific
+                .iter()
+                .map(|w| quoted(w))
+                .collect::<Vec<_>>()
+                .join(" OR ")
+        ));
     }
     let mut pairs = Vec::new();
     for (i, a) in words.iter().enumerate() {
@@ -692,7 +701,7 @@ mod tests {
         let words = |text: &str| related_words(text);
         assert_eq!(
             fts_related(&words("retry"), &["retry"]).unwrap(),
-            "lesson : (\"retry\")"
+            "title : (\"retry\")"
         );
         assert_eq!(
             fts_related(&words("retry flaky test"), &["retry", "flaky", "test"]).unwrap(),
