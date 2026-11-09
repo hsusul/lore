@@ -269,7 +269,9 @@ fn parse_file(vault: &Vault, rel: &str) -> Result<Option<Result<Note, NoteError>
     }
 }
 
-fn tier(freshness: Freshness) -> u8 {
+/// Where recall puts a note by freshness: usable notes first, then changed,
+/// then gone.
+pub(crate) fn tier(freshness: Freshness) -> u8 {
     match freshness {
         Freshness::Fresh
         | Freshness::Moved { .. }

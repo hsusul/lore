@@ -2,7 +2,7 @@
 //! runs, as the section `lorectl hook session-start` prints, and the same view
 //! for the desktop app's "What agents read".
 //!
-//! The notes are recall's, in recall's order, with two changes before the
+//! The notes are recall's, in recall's order, with changes before the
 //! cap. A note whose title is near-identical to one ranked above it is left
 //! out, so one lesson written twice takes one slot; recall ranks the fresher
 //! note first, then the repository's, then the one with more sources, then
@@ -18,7 +18,8 @@
 //!
 //! When more notes apply than fit, the ones fewer recent sessions were shown
 //! (the hooks' `.lore/shown` records, kept [`shown::MAX_AGE`]) take the
-//! slots first, recall's order breaking ties. Without that the same notes
+//! slots first, within recall's freshness tiers and with recall's order
+//! breaking ties. Without that the same notes
 //! won every session and the rest never reached an agent: in one owner's
 //! repository with 22 notes in scope, 11 were never shown at session start
 //! in a week.
@@ -80,7 +81,12 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
     let total = in_scope.saturating_sub(collapsed);
     if distinct.len() > NOTE_CAP {
         let seen = times_shown(vault);
-        distinct.sort_by_key(|r| seen.get(r.note.id.as_str()).copied().unwrap_or(0));
+        // Within recall's freshness tiers, so a changed or gone note that
+        // was rarely shown does not move ahead of a fresh one.
+        distinct.sort_by_key(|r| {
+            let times = seen.get(r.note.id.as_str()).copied().unwrap_or(0);
+            (recall::tier(r.freshness), times)
+        });
     }
     let global = |r: &Recalled| r.note.scope == Scope::Global;
     let mut notes = share(distinct, NOTE_CAP, global);

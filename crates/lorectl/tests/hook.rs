@@ -462,8 +462,12 @@ fn session_start_rotates_notes_that_do_not_all_fit() {
         .map(|i| titled(500 + i, &format!("Repo lesson {i:02}"), true))
         .collect();
     notes.extend((1..=10).map(|i| titled(600 + i, &format!("Global rule {i:02}"), false)));
+    // Anchored to a file that is then deleted: gone, so it never takes a
+    // fresh note's slot however rarely it was shown.
+    notes.push(RETRY.to_owned());
     let notes: Vec<&str> = notes.iter().map(String::as_str).collect();
     add_notes(home.path(), &vault, &repo, &notes);
+    std::fs::remove_file(repo.join("src/a.rs")).unwrap();
 
     let mut seen = std::collections::BTreeSet::new();
     for session in ["s-rot-1", "s-rot-2", "s-rot-3"] {
@@ -477,6 +481,7 @@ fn session_start_rotates_notes_that_do_not_all_fit() {
         );
         seen.extend(titles);
     }
+    assert!(!seen.contains("Retry the migration"), "{seen:?}");
     assert_eq!(seen.len(), 22, "{seen:?}");
 }
 
