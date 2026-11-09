@@ -12,7 +12,9 @@
 //! shared: global notes get at least [`GLOBAL_SHARE`] slots, the
 //! repository's notes the rest, and either side may use slots the other
 //! leaves empty, so a person's general rules still reach an agent in a repo
-//! with many notes of its own.
+//! with many notes of its own. In a repository, its notes come first under
+//! one heading and global notes after under another, so an agent can tell a
+//! rule for this repository from one for every repository.
 
 use std::path::Path;
 
@@ -68,8 +70,11 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
         .max(found.notes.len());
     let (distinct, collapsed) = collapse(found.notes, |r| &r.note.title);
     let total = in_scope.saturating_sub(collapsed);
-    let notes = share(distinct, NOTE_CAP, |r| r.note.scope == Scope::Global);
-    let (text, shown) = render(&found.context, notes.iter().map(line), total);
+    let global = |r: &Recalled| r.note.scope == Scope::Global;
+    let mut notes = share(distinct, NOTE_CAP, global);
+    notes.sort_by_key(global);
+    let lines = notes.iter().map(|r| (global(r), line(r)));
+    let (text, shown) = render(&found.context, lines, total);
     Ok(Some(SessionStart {
         context: found.context,
         notes,
@@ -137,27 +142,36 @@ pub fn title(text: &str) -> String {
         .replace(char::is_control, " ")
 }
 
-/// A heading, one line per note while the section stays under [`CHAR_CAP`],
-/// then a line saying how many of `total` were left out and where they are.
-/// Returns the section and how many note lines it holds.
+/// One line per note while the section stays under [`CHAR_CAP`], each kind
+/// under its heading, then a line saying how many of `total` were left out
+/// and where they are. `lines` pairs each line with whether its note is
+/// global. Returns the section and how many note lines it holds.
 fn render(
     context: &RepoContext,
-    lines: impl IntoIterator<Item = String>,
+    lines: impl IntoIterator<Item = (bool, String)>,
     total: usize,
 ) -> (String, usize) {
-    let header = match context {
-        RepoContext::NoRepo => "Lore memory:\n",
-        RepoContext::Repo { .. } | RepoContext::NoRemote { .. } => "Lore memory for this repo:\n",
-    };
-    let mut out = String::from(header);
+    let mut out = String::new();
+    let mut heading = "";
     let mut shown = 0;
-    for line in lines {
-        if out.len() + line.len() + 1 > CHAR_CAP {
+    for (global, line) in lines {
+        let wanted = match (context, global) {
+            (RepoContext::NoRepo, _) => "Lore memory:\n",
+            (_, false) => "Lore memory for this repo:\n",
+            (_, true) => "Lore memory for all repos:\n",
+        };
+        let new = if wanted == heading { "" } else { wanted };
+        if out.len() + new.len() + line.len() + 1 > CHAR_CAP {
             break;
         }
+        out.push_str(new);
+        heading = wanted;
         out.push_str(&line);
         out.push('\n');
         shown += 1;
+    }
+    if out.is_empty() {
+        out.push_str("Lore memory:\n");
     }
     let left = total.saturating_sub(shown);
     if left > 0 {
@@ -178,19 +192,43 @@ mod tests {
             root: std::path::PathBuf::from("/repo"),
         };
         let line = format!("- [fresh] {} (01JD0000000000000000000001)", "t".repeat(400));
-        let out = render(&repo, std::iter::repeat_n(line.clone(), 10), 10);
+        let out = render(&repo, std::iter::repeat_n((false, line.clone()), 10), 10);
         let expected = format!(
             "Lore memory for this repo:\n{line}\n{line}\n{line}\n{line}\n\
              - 6 more not shown. The recall_memory tool lists them.\n"
         );
         assert_eq!(out, (expected, 4));
         assert_eq!(
-            render(&repo, ["- [gone] a (b)".to_owned()], 1),
+            render(&repo, [(false, "- [gone] a (b)".to_owned())], 1),
             ("Lore memory for this repo:\n- [gone] a (b)\n".to_owned(), 1)
         );
         assert_eq!(
-            render(&RepoContext::NoRepo, ["- [gone] a (b)".to_owned()], 1),
+            render(
+                &RepoContext::NoRepo,
+                [(true, "- [gone] a (b)".to_owned())],
+                1
+            ),
             ("Lore memory:\n- [gone] a (b)\n".to_owned(), 1)
+        );
+    }
+
+    #[test]
+    fn global_notes_in_a_repo_are_headed_apart_from_the_repos_own() {
+        let repo = RepoContext::NoRemote {
+            root: std::path::PathBuf::from("/repo"),
+        };
+        let lines = [
+            (false, "- [fresh] a (1)".to_owned()),
+            (true, "- [fresh] b (2)".to_owned()),
+        ];
+        assert_eq!(
+            render(&repo, lines, 2).0,
+            "Lore memory for this repo:\n- [fresh] a (1)\n\
+             Lore memory for all repos:\n- [fresh] b (2)\n"
+        );
+        assert_eq!(
+            render(&repo, [(true, "- [fresh] b (2)".to_owned())], 1).0,
+            "Lore memory for all repos:\n- [fresh] b (2)\n"
         );
     }
 
