@@ -41,6 +41,7 @@ use lore_core::search::{self, SortOrder, HIGHLIGHT_END, HIGHLIGHT_START};
 use lore_core::{query, storage};
 use lore_memory::anchor::WorkTree;
 use lore_memory::considered::{self, CorrectionId};
+use lore_memory::duplicates::near_identical;
 use lore_memory::enforce::Enforcement;
 use lore_memory::inbox::{InboxError, Proposal};
 use lore_memory::note::{
@@ -49,7 +50,7 @@ use lore_memory::note::{
 };
 use lore_memory::repo::RepoContext;
 use lore_memory::vault::{self, Vault, VaultError};
-use lore_memory::{inbox, index, mine, recall};
+use lore_memory::{inbox, index, mine, recall, review};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -100,6 +101,8 @@ const WORKTREE_LIMIT: Duration = Duration::from_secs(5);
 
 const NOTE_ARG_PROBLEM: &str = "must be a note id, file name, or path inside the vault";
 const NOTE_NOT_FOUND_FIX: &str = "Call recall_memory to get a current note id.";
+const ALREADY_FILED_FIX: &str = "Skip this rule. To change an accepted note, call again with \
+updates set to its id.";
 const NOTE_AMBIGUOUS_FIX: &str = "Pass the note id instead of the slug.";
 const VAULT_CONFIG_FIX: &str = "Set LORE_VAULT_DIR to an absolute path in this MCP server's env.";
 const VAULT_BUSY_FIX: &str =
@@ -236,7 +239,8 @@ is not null, call again with it, and read every page before you group anything."
         description: "Call once you have verified something a future agent here should know. \
 A person reviews it before it becomes memory. Pass `updates` with a note id to supersede that \
 note. Retiring a note needs a person. Pass `enforce` only for a mechanical lesson whose \
-violation shows in one tool call: a hook then denies a call its narrow pattern matches.",
+violation shows in one tool call: a hook then denies a call its narrow pattern matches. A rule \
+an active note or a pending proposal already says is refused as `already_filed`.",
         input_schema: propose_schema,
         call: propose_memory,
     },
@@ -908,6 +912,11 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
             VaultError::NotFound(_) => tool_error("note_not_found", e, NOTE_NOT_FOUND_FIX),
             e => vault_error(&e),
         })?;
+    } else {
+        let title = string_arg(arguments, "title").unwrap_or_default();
+        if let Some(filed) = already_filed(&vault, &scope, title) {
+            return Err(tool_error("already_filed", filed, ALREADY_FILED_FIX));
+        }
     }
     let proposal = Proposal {
         id: NoteId::generate(),
@@ -943,6 +952,39 @@ fn propose_memory(ctx: &Ctx, arguments: &Value) -> Result<Value, Value> {
         "session": written.session.as_str(),
         "source_verified": source_verified,
     }))
+}
+
+/// What already says `title` where a note in `scope` would be read: an active
+/// note or a proposal waiting for review, in the same scope or global, whose
+/// title is near-identical (see [`lore_memory::duplicates`]). Lessons runs
+/// see only new corrections, so without this they file a rule again each
+/// time the person repeats it. A vault or inbox that cannot be read hides
+/// nothing: the proposal is filed and review shows both.
+fn already_filed(vault: &Vault, scope: &Scope, title: &str) -> Option<String> {
+    let covers = |other: &Scope| other == scope || *other == Scope::Global;
+    let notes = vault.notes().unwrap_or_default();
+    let note = notes.iter().find(|(_, note)| {
+        note.status == lore_memory::note::Status::Active
+            && covers(&note.scope)
+            && near_identical(&note.title, title)
+    });
+    if let Some((_, note)) = note {
+        let id = note.id.as_str();
+        return Some(format!("note {id} already says this: {}", note.title));
+    }
+    let pending = review::inbox(vault)
+        .map(|p| p.proposals)
+        .unwrap_or_default();
+    pending
+        .iter()
+        .find(|p| covers(&p.scope) && near_identical(&p.title, title))
+        .map(|p| {
+            format!(
+                "proposal {} is waiting for review: {}",
+                p.id.as_str(),
+                p.title
+            )
+        })
 }
 
 /// The repository at `cwd`, which must be `recorded` when that is known, and
