@@ -2,7 +2,7 @@
 //! runs, as the section `lorectl hook session-start` prints, and the same view
 //! for the desktop app's "What agents read".
 //!
-//! The notes are recall's, in recall's order, with two changes before the
+//! The notes are recall's, in recall's order, with changes before the
 //! cap. A note whose title is near-identical to one ranked above it is left
 //! out, so one lesson written twice takes one slot; recall ranks the fresher
 //! note first, then the repository's, then the one with more sources, then
@@ -15,6 +15,14 @@
 //! with many notes of its own. In a repository, its notes come first under
 //! one heading and global notes after under another, so an agent can tell a
 //! rule for this repository from one for every repository.
+//!
+//! When more notes apply than fit, the ones fewer recent sessions were shown
+//! (the hooks' `.lore/shown` records, kept [`shown::MAX_AGE`]) take the
+//! slots first, within recall's freshness tiers and with recall's order
+//! breaking ties. Without that the same notes
+//! won every session and the rest never reached an agent: in one owner's
+//! repository with 22 notes in scope, 11 were never shown at session start
+//! in a week.
 
 use std::path::Path;
 
@@ -24,6 +32,7 @@ use crate::index::Index;
 use crate::note::Scope;
 use crate::recall::{self, Recalled};
 use crate::repo::RepoContext;
+use crate::shown;
 use crate::vault::{Vault, VaultError};
 
 /// At most this many notes at session start. Experiment Q3 saw agents follow
@@ -68,8 +77,17 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
         .and_then(|index| index.count_active(scope.as_deref()).ok())
         .unwrap_or(0)
         .max(found.notes.len());
-    let (distinct, collapsed) = collapse(found.notes, |r| &r.note.title);
+    let (mut distinct, collapsed) = collapse(found.notes, |r| &r.note.title);
     let total = in_scope.saturating_sub(collapsed);
+    if distinct.len() > NOTE_CAP {
+        let seen = times_shown(vault);
+        // Within recall's freshness tiers, so a changed or gone note that
+        // was rarely shown does not move ahead of a fresh one.
+        distinct.sort_by_key(|r| {
+            let times = seen.get(r.note.id.as_str()).copied().unwrap_or(0);
+            (recall::tier(r.freshness), times)
+        });
+    }
     let global = |r: &Recalled| r.note.scope == Scope::Global;
     let mut notes = share(distinct, NOTE_CAP, global);
     notes.sort_by_key(global);
@@ -82,6 +100,17 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
         total,
         text,
     }))
+}
+
+/// How many sessions' records in the vault hold each note id.
+fn times_shown(vault: &Vault) -> std::collections::HashMap<String, usize> {
+    let mut seen = std::collections::HashMap::new();
+    for (_, ids) in shown::records(vault) {
+        for id in ids {
+            *seen.entry(id).or_insert(0) += 1;
+        }
+    }
+    seen
 }
 
 /// `notes` without any whose title is near-identical to one before it, and
