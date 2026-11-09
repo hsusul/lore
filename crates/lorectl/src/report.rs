@@ -37,7 +37,7 @@ use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_core::storage::{self, StorageError};
 use lore_memory::considered::{self, CorrectionId};
 use lore_memory::inbox;
-use lore_memory::index::{related_words, split_timeline, without_receipts, Index};
+use lore_memory::index::{related_words, split_timeline, stem, without_receipts, Index};
 use lore_memory::mine::{self, Candidate};
 use lore_memory::note::{Note, Status};
 use lore_memory::repo::RepoContext;
@@ -508,7 +508,7 @@ fn vault_sections(
         if mine::content_words(&c.text).len() < 2 {
             continue;
         }
-        let said: BTreeSet<String> = related_words(&c.text).into_iter().collect();
+        let said = stems(&c.text);
         checked += 1;
         let scope = match &c.repo_path {
             Some(path) => scopes
@@ -557,8 +557,26 @@ fn vault_sections(
     })
 }
 
+/// The content words of `text`, by [`related_words`], with plural and verb
+/// endings folded so "permissions" is "permission".
+fn stems(text: &str) -> BTreeSet<String> {
+    related_words(text)
+        .iter()
+        .filter(|w| !REPEAT_FILLER.contains(&w.as_str()))
+        .map(|w| stem(w))
+        .collect()
+}
+
+/// Words that say how a rule applies, not what it is about: "in each pr make
+/// sure to add images" is not a repeat of "Give each change its own PR". And
+/// the words every lesson's statement uses ("the agent did this, and the
+/// person wanted that"), which tie a correction to whichever note it meets.
+const REPEAT_FILLER: &[&str] = &[
+    "each", "every", "make", "own", "agent", "agents", "person", "want", "wanted", "wants",
+];
+
 /// The words of a note a correction must share to repeat it, by
-/// [`related_words`]: its lesson (the title and the statement above
+/// [`stems`]: its lesson (the title and the statement above
 /// `Receipts:`), and each receipt (a quoted correction under `Receipts:`).
 struct NoteWords {
     lesson: BTreeSet<String>,
@@ -571,8 +589,7 @@ impl NoteWords {
         let above = without_receipts(statement);
         // related_words keeps at most a dozen words of a text, so a long
         // lesson is read a line at a time.
-        let words =
-            |text: &str| -> BTreeSet<String> { text.lines().flat_map(related_words).collect() };
+        let words = |text: &str| -> BTreeSet<String> { text.lines().flat_map(stems).collect() };
         let lesson = words(&format!("{}\n{above}", note.title));
         let receipts = statement
             .get(above.len()..)
