@@ -346,6 +346,23 @@ fn no_report(label: &str, said: &str) -> String {
     }
 }
 
+/// Why Codex left no report. A Codex too old to know a flag or key in
+/// [`CODEX_OFF`] stops before starting (on purpose, rather than leave that
+/// tool on), so say to update it instead of quoting a config error.
+fn codex_no_report(label: &str, said: &str) -> String {
+    let too_old = said.contains("unknown configuration field")
+        || said.contains("unexpected argument '--ignore-user-config'")
+        || said.contains("unexpected argument '--strict-config'");
+    if too_old {
+        format!(
+            "This {label} is too old to run with only Lore's tools. \
+             Update it (0.162 or newer works), then try again."
+        )
+    } else {
+        no_report(label, said)
+    }
+}
+
 /// The agent's closing report from `claude -p --output-format json`, or why
 /// there is none, from what it printed to stderr.
 fn report(stdout: &str, stderr: &str) -> Result<String, String> {
@@ -665,7 +682,7 @@ fn run_for(
             .ok()
             .map(|text| text.trim().to_owned())
             .filter(|text| !text.is_empty())
-            .ok_or_else(|| no_report(label, &format!("{stdout}\n{stderr}"))),
+            .ok_or_else(|| codex_no_report(label, &format!("{stdout}\n{stderr}"))),
     }
 }
 
@@ -714,6 +731,21 @@ pub(crate) fn locate(agent: Agent) -> Result<(PathBuf, PathBuf, std::ffi::OsStri
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn a_codex_too_old_for_the_lockdown_is_told_to_update() {
+        for said in [
+            "Error loading config.toml: unknown configuration field `features.view_image` in -c/--config override",
+            "error: unexpected argument '--ignore-user-config' found",
+        ] {
+            let why = codex_no_report("Codex", said);
+            assert!(why.starts_with("This Codex is too old"), "{why}");
+        }
+        assert_eq!(
+            codex_no_report("Codex", "rate limited"),
+            "Codex did not finish its report: rate limited"
+        );
+    }
 
     #[test]
     fn looks_where_finder_apps_cannot_see() {
