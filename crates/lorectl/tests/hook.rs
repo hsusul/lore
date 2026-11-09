@@ -453,6 +453,33 @@ fn titles_in(section: &str) -> Vec<String> {
         .collect()
 }
 
+/// More notes than fit: each session start favors the ones earlier sessions
+/// were not shown, so within a few sessions every note reaches an agent.
+#[test]
+fn session_start_rotates_notes_that_do_not_all_fit() {
+    let (home, vault, repo) = memory_home();
+    let mut notes: Vec<String> = (1..=12)
+        .map(|i| titled(500 + i, &format!("Repo lesson {i:02}"), true))
+        .collect();
+    notes.extend((1..=10).map(|i| titled(600 + i, &format!("Global rule {i:02}"), false)));
+    let notes: Vec<&str> = notes.iter().map(String::as_str).collect();
+    add_notes(home.path(), &vault, &repo, &notes);
+
+    let mut seen = std::collections::BTreeSet::new();
+    for session in ["s-rot-1", "s-rot-2", "s-rot-3"] {
+        let stdin = serde_json::json!({ "session_id": session, "cwd": repo }).to_string();
+        let out = stdout(&session_start(&repo, home.path(), &vault, &stdin));
+        let titles = titles_in(&out);
+        assert_eq!(titles.len(), 10, "{out}");
+        assert!(
+            titles.iter().filter(|t| t.starts_with("Global")).count() >= 4,
+            "{out}"
+        );
+        seen.extend(titles);
+    }
+    assert_eq!(seen.len(), 22, "{seen:?}");
+}
+
 #[test]
 fn session_start_keeps_slots_for_global_notes_in_a_repo_with_many_notes() {
     let (home, vault, repo) = memory_home();

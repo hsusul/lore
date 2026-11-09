@@ -15,6 +15,13 @@
 //! with many notes of its own. In a repository, its notes come first under
 //! one heading and global notes after under another, so an agent can tell a
 //! rule for this repository from one for every repository.
+//!
+//! When more notes apply than fit, the ones fewer recent sessions were shown
+//! (the hooks' `.lore/shown` records, kept [`shown::MAX_AGE`]) take the
+//! slots first, recall's order breaking ties. Without that the same notes
+//! won every session and the rest never reached an agent: in one owner's
+//! repository with 22 notes in scope, 11 were never shown at session start
+//! in a week.
 
 use std::path::Path;
 
@@ -24,6 +31,7 @@ use crate::index::Index;
 use crate::note::Scope;
 use crate::recall::{self, Recalled};
 use crate::repo::RepoContext;
+use crate::shown;
 use crate::vault::{Vault, VaultError};
 
 /// At most this many notes at session start. Experiment Q3 saw agents follow
@@ -68,8 +76,12 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
         .and_then(|index| index.count_active(scope.as_deref()).ok())
         .unwrap_or(0)
         .max(found.notes.len());
-    let (distinct, collapsed) = collapse(found.notes, |r| &r.note.title);
+    let (mut distinct, collapsed) = collapse(found.notes, |r| &r.note.title);
     let total = in_scope.saturating_sub(collapsed);
+    if distinct.len() > NOTE_CAP {
+        let seen = times_shown(vault);
+        distinct.sort_by_key(|r| seen.get(r.note.id.as_str()).copied().unwrap_or(0));
+    }
     let global = |r: &Recalled| r.note.scope == Scope::Global;
     let mut notes = share(distinct, NOTE_CAP, global);
     notes.sort_by_key(global);
@@ -82,6 +94,17 @@ pub fn session_start(vault: &Vault, cwd: &Path) -> Result<Option<SessionStart>, 
         total,
         text,
     }))
+}
+
+/// How many sessions' records in the vault hold each note id.
+fn times_shown(vault: &Vault) -> std::collections::HashMap<String, usize> {
+    let mut seen = std::collections::HashMap::new();
+    for (_, ids) in shown::records(vault) {
+        for id in ids {
+            *seen.entry(id).or_insert(0) += 1;
+        }
+    }
+    seen
 }
 
 /// `notes` without any whose title is near-identical to one before it, and
