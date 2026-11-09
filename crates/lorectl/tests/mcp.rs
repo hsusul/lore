@@ -1146,22 +1146,30 @@ fn propose_memory_files_into_the_connection_inbox_as_claude_code() {
 fn propose_memory_takes_the_agent_from_lore_agent_then_client_info() {
     let home = memory_home();
     let vault = home.path().join("vault");
-    let note =
-        json!({ "title": "Keep the log short", "body": "B", "type": "fact", "scope": "global" });
     let cases = [
-        (Some("codex"), Some("claude-code"), "codex"),
-        (Some("claude-code"), Some("codex-tui"), "claude-code"),
-        (None, Some("codex-mcp-client"), "codex"),
+        (
+            Some("codex"),
+            Some("claude-code"),
+            "codex",
+            "Keep the log short",
+        ),
+        (
+            Some("claude-code"),
+            Some("codex-tui"),
+            "claude-code",
+            "Pin the toolchain",
+        ),
+        (
+            None,
+            Some("codex-mcp-client"),
+            "codex",
+            "Name branches after issues",
+        ),
     ];
-    for (env, client, agent) in cases {
+    for (env, client, agent, title) in cases {
         let extra: Vec<(&str, &str)> = env.map(|e| ("LORE_AGENT", e)).into_iter().collect();
-        let replies = session(
-            home.path(),
-            &vault,
-            &extra,
-            client,
-            &[propose(1, note.clone())],
-        );
+        let note = json!({ "title": title, "body": "B", "type": "fact", "scope": "global" });
+        let replies = session(home.path(), &vault, &extra, client, &[propose(1, note)]);
         let inbox = structured(&replies[0])["inbox"].as_str().unwrap();
         assert!(
             inbox.starts_with(&format!("_inbox/{agent}-mcp-")),
@@ -1170,6 +1178,66 @@ fn propose_memory_takes_the_agent_from_lore_agent_then_client_info() {
     }
     assert_eq!(inbox_files(&vault).len(), 3);
     assert_eq!(git_status(&vault), "");
+}
+
+#[test]
+fn propose_memory_refuses_a_rule_already_waiting_for_review() {
+    let home = memory_home();
+    let vault = home.path().join("vault");
+    let cwd = lore_repo(home.path());
+    let rule = |title: &str, scope: &str| {
+        let mut note = json!({ "title": title, "body": "B", "type": "convention", "scope": scope });
+        if scope == "repo" {
+            note["cwd"] = json!(cwd);
+        }
+        note
+    };
+    let replies = session(
+        home.path(),
+        &vault,
+        &[],
+        Some("claude-code"),
+        &[
+            propose(
+                1,
+                rule("Keep docs and planning markdown out of git", "global"),
+            ),
+            propose(
+                2,
+                rule("Keep the docs and planning markdown out of git", "global"),
+            ),
+            propose(
+                3,
+                rule("Keep planning markdown and docs out of git", "repo"),
+            ),
+            propose(4, rule("Run the tests before you push", "repo")),
+            propose(5, rule("Run tests before pushing", "global")),
+        ],
+    );
+    let first = structured(&replies[0])["proposal_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for reply in &replies[1..3] {
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
+        let error = &reply["result"]["structuredContent"];
+        assert_eq!(error["code"], "already_filed");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.starts_with(&format!("proposal {first} is waiting")),
+            "{message}"
+        );
+    }
+    assert!(
+        structured(&replies[3])["proposal_id"].is_string(),
+        "a new rule is filed"
+    );
+    assert!(
+        structured(&replies[4])["proposal_id"].is_string(),
+        "a repo rule does not stand for every repo, so the global one is filed"
+    );
+    let pending: Value = serde_json::from_str(&mem(home.path(), &["inbox", "--json"])).unwrap();
+    assert_eq!(pending.as_array().unwrap().len(), 3);
 }
 
 #[test]
@@ -1584,9 +1652,14 @@ fn two_servers_proposing_at_once_write_two_whole_files() {
         (0..25)
             .map(|i| {
                 let body = format!("Server {server} proposal {i}. {}", "x".repeat(3_000));
+                // Fifty different rules: one rule twice is refused as already filed.
+                let first = ["kal", "mor", "tiv", "sen", "dap"][usize::try_from(i).unwrap() % 5];
+                let second =
+                    ["bex", "gun", "lop", "wir", "zat"][usize::try_from(i).unwrap() / 5 % 5];
+                let title = format!("Keep the {first}{second} log short on server {server}");
                 propose(
                     i,
-                    json!({ "title": "Keep the log short", "body": body, "type": "fact", "scope": "global" }),
+                    json!({ "title": title, "body": body, "type": "fact", "scope": "global" }),
                 )
             })
             .collect()
@@ -1674,13 +1747,19 @@ fn propose_memory_verifies_a_session_of_the_calling_agent() {
     let archive_id = archive_in(home.path());
     let before = snapshot(&home.path().join("archive"));
     assert!(archive_id.starts_with("s_"), "{archive_id}");
-    for given in [SESSION_UUID, archive_id.as_str()] {
+    // Two rules, as one rule twice is refused as already filed.
+    for (given, title) in [
+        (SESSION_UUID, "Keep the log short"),
+        (archive_id.as_str(), "Pin the toolchain"),
+    ] {
+        let mut note = global_note(given);
+        note["title"] = json!(title);
         let replies = session(
             home.path(),
             &vault,
             &[],
             Some("claude-code"),
-            &[propose(1, global_note(given))],
+            &[propose(1, note)],
         );
         let reply = structured(&replies[0]);
         let id = reply["proposal_id"].as_str().unwrap();
@@ -2032,6 +2111,7 @@ fn propose_memory_for_an_archived_session_uses_its_recorded_repo_without_reading
     lesson["session_id"] = json!(native);
     let mut without_cwd = lesson.clone();
     without_cwd.as_object_mut().unwrap().remove("cwd");
+    without_cwd["title"] = json!("Build with the pinned Node version");
     let started = std::time::Instant::now();
     let replies = session(
         home.path(),

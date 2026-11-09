@@ -74,6 +74,8 @@ Call `propose_memory` once per rule with these fields.
 
 If `propose_memory` refuses the session because another agent recorded it, use the newest receipt your own agent recorded. If there is none, leave out `session_id`.
 
+If `propose_memory` answers `already_filed`, a note or a proposal waiting for review already says the rule. Skip it and count it as already filed in your report.
+
 A body looks like this.
 
 ```
