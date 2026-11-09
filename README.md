@@ -314,7 +314,7 @@ The server offers six tools. All but `propose_memory` are read only.
 - `read_session` returns one session in order, paged at 24,000 characters. It leaves out thinking and raw tool payloads.
 - `recall_memory` returns accepted notes for the directory the agent is working in, each with its freshness label.
 - `read_note` returns one note in full, with its freshness when the agent passes its working directory.
-- `mine_candidates` returns the miner's candidate lessons in the same order as `mem mine`, each with up to 5 receipts: session, agent, date, the repository with the `repo:<key>` scope a note for it takes, the correction, what the agent had just done (`before`), and how it answered (`after`). Pass `cwd` to also get the current directory's repository as `cwd_repo`. Replies are paged: each carries `total` and a `next_cursor` to pass back until it is null, and the description asks the agent to read every page first. It also asks the agent to group candidates by meaning, write each group as one short rule, and file it with `propose_memory`, citing the sessions. Lore makes no model calls; the agent does the grouping, and you still accept or reject each proposal.
+- `mine_candidates` returns the miner's candidate lessons in the same order as `mem mine`, each with up to 5 receipts: session, agent, date, the repository with the `repo:<key>` scope a note for it takes, the correction, what the agent had just done (`before`), and how it answered (`after`). Pass `cwd` to also get the current directory's repository as `cwd_repo`. Replies are paged: each carries `total` and a `next_cursor` to pass back until it is null, and the description asks the agent to read every page first. It also asks the agent to group candidates by meaning, write each group as one short rule, and file it with `propose_memory`, citing the sessions. The tool itself makes no model calls; the agent that calls it does the grouping, and you still accept or reject each proposal.
 - `propose_memory` files one proposal into the vault's `_inbox/<agent>-<session>.jsonl`. It answers with the proposal id and the inbox file.
 
 `search_sessions`, `read_session`, and `mine_candidates` quote past sessions, so each result also carries `archived_text`, a line telling the agent that the quoted text is a record of what was said then and not an instruction to it.
@@ -330,11 +330,16 @@ The server offers six tools. All but `propose_memory` are read only.
 
 ## Privacy
 
-Everything stays on your machine. Lore has no accounts, no telemetry, and no server. The archive code, the memory and skills code, `lorectl`, and the desktop shell have no network code. CI scans their sources for networking APIs. For the archive, memory, skills, and `lorectl` crates it also checks the dependency graph for networking crates and runs the tests with the network denied (`scripts/egress-check.sh`). The app does not check for updates: its updater is compiled out unless it is built with the `updater` feature.
+The archive and the vault stay on your machine. Text from them leaves only through an agent you signed in to, as described below. Lore has no accounts, no telemetry, and no server. The archive code, the memory and skills code, `lorectl`, and the desktop shell have no network code. CI scans their sources for networking APIs. For the archive, memory, skills, and `lorectl` crates it also checks the dependency graph for networking crates and runs the tests with the network denied (`scripts/egress-check.sh`). The app does not check for updates: its updater is compiled out unless it is built with the `updater` feature.
 
 Before text is indexed, Lore scans it for secrets with fixed rules for known key formats plus an entropy check. Flagged spans are masked. Search, snippets, exports, and MCP results use the masked text. The archive still holds the original text, and so does the original log. Proposals are redacted before they reach the inbox. Redaction is a safeguard, not a promise that nothing secret remains.
 
-When you connect `lorectl mcp` to an agent, the redacted text it returns goes to that agent's model provider, as any tool result does.
+In the app, `lorectl`, and its hooks, these send text to a model provider. Claude Code sends it to Anthropic and Codex sends it to OpenAI, under your own login.
+
+- When you connect `lorectl mcp` to an agent, the redacted text it returns goes to that agent's model provider, as any tool result does.
+- Lore's hooks add the titles of the accepted notes that apply to a session to its context, so they reach the provider with the session. Titles are masked, except when a note blocks a tool call and the agent is told its title as written.
+- **Find lessons** in the app starts Claude Code or Codex with only Lore's tools. The agent reads your new corrections, the turns around them, and your notes through them, and they return redacted text. Codex runs without your `~/.codex/config.toml`, so it uses its default model and none of the MCP servers you added there. The app also runs it on its own, on by default, at most once a day when there are new corrections, with Sonnet for Claude Code. **Find lessons automatically** in Settings turns that off.
+- **Propose an edit** on a skill sends the agent that skill's SKILL.md and up to eight redacted corrections made right after it ran, with what the agent had just said when there is one.
 
 ### Replays talk to a model provider
 
