@@ -81,10 +81,7 @@ impl BlobStore {
         // A store an older build made 0755: closing the root hides the blob
         // files inside it, whatever their own modes.
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
-        }
+        super::set_mode_if_supported(&root, 0o700)?;
         Ok(Self { root })
     }
 

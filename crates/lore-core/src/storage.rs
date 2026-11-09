@@ -118,9 +118,39 @@ fn drop_group_and_other_access(path: &Path) -> Result<()> {
         Err(e) => return Err(e.into()),
     };
     if mode & 0o077 != 0 {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o700))?;
+        set_mode_if_supported(path, mode & 0o700)?;
     }
     Ok(())
+}
+
+/// Set `path`'s mode, skipping filesystems that cannot hold one (exFAT, some
+/// network shares answer `EPERM` or `ENOTSUP`): there the archive opens with
+/// whatever access that filesystem gives, rather than not opening at all.
+#[cfg(unix)]
+pub(crate) fn set_mode_if_supported(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)) {
+        Err(e) if chmod_unsupported(&e) => Ok(()),
+        other => Ok(other?),
+    }
+}
+
+#[cfg(unix)]
+fn chmod_unsupported(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+    ) || e.raw_os_error() == Some(libc_enotsup())
+}
+
+/// `ENOTSUP` without a libc dependency: 45 on macOS and the BSDs, 95 on Linux.
+#[cfg(unix)]
+const fn libc_enotsup() -> i32 {
+    if cfg!(target_os = "linux") {
+        95
+    } else {
+        45
+    }
 }
 
 #[cfg(not(unix))]
@@ -349,6 +379,16 @@ pub fn write_lock() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_filesystem_without_modes_does_not_stop_the_archive_opening() {
+        let raw = std::io::Error::from_raw_os_error;
+        assert!(chmod_unsupported(&raw(1)), "EPERM");
+        assert!(chmod_unsupported(&raw(libc_enotsup())), "ENOTSUP");
+        assert!(!chmod_unsupported(&raw(2)), "ENOENT is a real error");
+        assert!(!chmod_unsupported(&raw(5)), "EIO is a real error");
+    }
 
     fn foreign_keys_on(conn: &Connection) -> bool {
         conn.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
