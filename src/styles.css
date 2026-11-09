@@ -4,6 +4,10 @@
  * tokens. Later redesign PRs replace them area by area.
  */
 @import "./tokens.css";
+/* --mist-sans ships in the bundle: the app runs offline and its CSP takes fonts only from 'self'. Mist uses these three weights. */
+@import "@fontsource/figtree/400.css";
+@import "@fontsource/figtree/500.css";
+@import "@fontsource/figtree/600.css";
 
 @tailwind base;
 @tailwind components;

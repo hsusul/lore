@@ -17,7 +17,7 @@ export default defineConfig({
     globals: true,
     include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["src/test-setup.ts"],
-    // Two tests read tokens.css and styles.css as text; nothing else needs real CSS.
-    css: { include: [/(tokens|styles)\.css/] },
+    // Tests read tokens.css, styles.css and the bundled font faces as text; nothing else needs real CSS.
+    css: { include: [/(tokens|styles)\.css/, /@fontsource\//] },
   },
 });
