@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use lore_core::adapters::AdapterRegistry;
@@ -118,6 +119,51 @@ pub async fn save_session_export(
     let markdown = lore_core::export::export_session_markdown(&conn, &id, include_secrets)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "session not found".to_string())?;
-    std::fs::write(&target_path, markdown).map_err(|e| e.to_string())?;
+    write_export(&target_path, &markdown)?;
     Ok(true)
+}
+
+/// Write `contents` to `target` through a new sibling temp file renamed over it.
+/// A symlink at `target` is refused rather than written through (which could
+/// redirect the export past `validate_export_path`) or replaced (which would
+/// delete a link the person made). A regular file there is replaced and keeps
+/// its permissions.
+pub fn write_export(target: &Path, contents: &str) -> Result<(), String> {
+    let existing = match std::fs::symlink_metadata(target) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err("the destination is a symbolic link; choose another name".into())
+        }
+        Ok(meta) => Some(meta.permissions()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.to_string()),
+    };
+    let dir = target.parent().ok_or("invalid destination path")?;
+    let file_name = target.file_name().ok_or("invalid destination file name")?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = dir.join(format!(
+        ".{}.{}.{nanos}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
+    // `create_new` refuses any existing entry at `tmp`, symlinks included.
+    let mut file = std::fs::File::options()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(|e| e.to_string())?;
+    let written = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| match existing {
+            Some(permissions) => file.set_permissions(permissions),
+            None => Ok(()),
+        });
+    drop(file);
+    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, target)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    Ok(())
 }
