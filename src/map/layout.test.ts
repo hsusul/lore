@@ -18,6 +18,7 @@ const lesson = (id: string, repo: string | null, n = 1): ProposalDto => ({
   enforce: [],
   updates: null,
   target_enforce: [],
+  repeats: null,
 });
 
 const note = (

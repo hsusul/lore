@@ -7,11 +7,12 @@ use std::path::Path;
 use lore_core::paths::ARCHIVE_DB_FILENAME;
 use lore_ipc::{
     AgentsReadDto, DroppedRuleDto, EnforceRuleDto, LessonDto, NoteDto, ProposalDto, ReadNoteDto,
-    ReceiptDto,
+    ReceiptDto, RepeatsDto,
 };
+use lore_memory::duplicates::near_identical;
 use lore_memory::enforce::{Enforcement, Rules};
 use lore_memory::mine::{self, Candidate, Lesson, Limits};
-use lore_memory::note::{Note, Relation};
+use lore_memory::note::{Note, Relation, Scope, Status};
 use lore_memory::session_start::{self, CHAR_CAP, NOTE_CAP};
 use lore_memory::vault::{self, Vault, VaultError};
 use lore_memory::{filing, inbox, index, review};
@@ -207,9 +208,17 @@ fn proposals(vault: &Vault, conn: &Connection) -> Result<Vec<ProposalDto>, revie
     } else {
         Rules::default()
     };
+    let notes = if pending.is_empty() {
+        Vec::new()
+    } else {
+        vault.notes()?
+    };
+    let repeats = repeats(&pending, &notes);
     Ok(pending
         .into_iter()
-        .map(|p| ProposalDto {
+        .zip(repeats)
+        .map(|(p, repeats)| ProposalDto {
+            repeats,
             updates: match &p.relation {
                 Some(Relation::Updates(target)) => Some(target.as_str().to_owned()),
                 _ => None,
@@ -231,6 +240,42 @@ fn proposals(vault: &Vault, conn: &Connection) -> Result<Vec<ProposalDto>, revie
                 .unwrap_or(i64::MAX),
         })
         .collect())
+}
+
+/// For each of `pending`, oldest first, the first earlier proposal or else the
+/// first active note of `notes` that says the same in a scope covering it:
+/// the same scope, or global. An update repeats nothing; it targets a note.
+fn repeats(pending: &[inbox::Proposal], notes: &[(String, Note)]) -> Vec<Option<RepeatsDto>> {
+    let covers = |other: &Scope, scope: &Scope| other == scope || *other == Scope::Global;
+    pending
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            if matches!(p.relation, Some(Relation::Updates(_))) {
+                return None;
+            }
+            let earlier = pending[..i]
+                .iter()
+                .find(|e| covers(&e.scope, &p.scope) && near_identical(&e.title, &p.title))
+                .map(|e| (e.id.as_str(), &e.title, "proposal"));
+            let note = || {
+                notes
+                    .iter()
+                    .map(|(_, n)| n)
+                    .find(|n| {
+                        n.status == Status::Active
+                            && covers(&n.scope, &p.scope)
+                            && near_identical(&n.title, &p.title)
+                    })
+                    .map(|n| (n.id.as_str(), &n.title, "note"))
+            };
+            earlier.or_else(note).map(|(id, title, kind)| RepeatsDto {
+                id: id.to_owned(),
+                title: title.clone(),
+                kind: kind.to_owned(),
+            })
+        })
+        .collect()
 }
 
 fn open_vault() -> Option<Vault> {
@@ -596,6 +641,58 @@ pub(crate) mod tests {
             .map(|n| n.title)
             .collect();
         assert_eq!(kept, ["Run cargo fmt before every push"]);
+    }
+
+    #[test]
+    fn a_proposal_that_repeats_an_older_one_or_a_note_names_it() {
+        use lore_memory::note::{NoteId, Relation, Scope};
+        let dir = tempfile::tempdir().unwrap();
+        let conn = archive(dir.path(), &[&[("user", "hello")]]);
+        let session = session_id(&conn, 1);
+        let vault = vault(dir.path());
+        let push = id_of(&vault, "global/never-push-to-main.md");
+        let here = "repo:aaaaaaaaaaaaaaaa";
+        let there = "repo:bbbbbbbbbbbbbbbb";
+        let filed = [
+            ("global", "Keep docs out of git; only the README is tracked"),
+            (here, "Keep docs out of git, only the README is tracked"),
+            (
+                there,
+                "List follow-up items in chat; don't file them to a team tracker",
+            ),
+            (
+                "global",
+                "List follow-up items in chat instead of filing them to a team tracker",
+            ),
+            (here, "Never push to the main"),
+            ("global", "Never push to main"),
+            ("global", "Write the changelog by hand"),
+        ];
+        for (i, (scope, title)) in filed.iter().enumerate() {
+            let mut p = agent_proposal(&format!("01JD00000000000000000000{i:02}"), &session, title);
+            p.scope = Scope::parse(scope).unwrap();
+            p.proposed_at += time::Duration::minutes(i64::try_from(i).unwrap());
+            if i == 5 {
+                p.relation = Some(Relation::Updates(NoteId::parse(&push).unwrap()));
+            }
+            lore_memory::inbox::propose(&vault, p).unwrap();
+        }
+
+        let repeats: Vec<Option<(String, String, String)>> = proposals(&vault, &conn)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.repeats.map(|r| (r.kind, r.id, r.title)))
+            .collect();
+        let first = (
+            "proposal".to_owned(),
+            "01JD0000000000000000000000".to_owned(),
+            filed[0].1.to_owned(),
+        );
+        let note = ("note".to_owned(), push, "Never push to main".to_owned());
+        assert_eq!(
+            repeats,
+            [None, Some(first), None, None, Some(note), None, None]
+        );
     }
 
     #[test]
