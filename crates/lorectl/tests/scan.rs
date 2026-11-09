@@ -67,6 +67,27 @@ fn a_scan_creates_the_archive_it_was_pointed_at() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_new_archive_is_readable_by_its_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &Path| {
+        format!(
+            "{:o}",
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+        )
+    };
+    let archive = tempfile::tempdir().unwrap();
+    let homes = empty_homes();
+    let target = archive.path().join("fresh");
+
+    let out = lorectl(&target, homes.path(), &["scan"]);
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(mode(&target), "700", "archive directory");
+    assert_eq!(mode(&target.join("lore.db")), "600", "lore.db");
+    assert_eq!(mode(&target.join("blobs")), "700", "blobs/");
+}
+
 #[test]
 fn a_scan_of_empty_agent_homes_reports_zero_and_succeeds() {
     // Nothing to ingest is a successful scan, not an error: "I looked and found

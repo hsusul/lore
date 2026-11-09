@@ -77,7 +77,11 @@ impl BlobStore {
     /// creates nothing.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
-        fs::create_dir_all(root.join("tmp")).map_err(|_| StorageError::Io)?;
+        super::create_private_dir(&root.join("tmp"))?;
+        // A store an older build made 0755: closing the root hides the blob
+        // files inside it, whatever their own modes.
+        #[cfg(unix)]
+        super::set_mode_if_supported(&root, 0o700)?;
         Ok(Self { root })
     }
 
@@ -119,7 +123,7 @@ impl BlobStore {
         let relpath = format!("{shard}/{content_hash}");
 
         if !final_path.exists() {
-            fs::create_dir_all(&dir).map_err(|_| StorageError::Io)?;
+            super::create_private_dir(&dir)?;
             let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
             let tmp = self
                 .root
@@ -211,7 +215,11 @@ fn safe_relpath(relpath: &str) -> bool {
 
 /// Write `bytes` to `path` and flush to disk before returning.
 fn write_all_synced(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut file = File::create(path).map_err(|_| StorageError::Io)?;
+    let mut options = File::options();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path).map_err(|_| StorageError::Io)?;
     file.write_all(bytes).map_err(|_| StorageError::Io)?;
     file.sync_all().map_err(|_| StorageError::Io)?;
     Ok(())

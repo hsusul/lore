@@ -67,10 +67,95 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 /// Open (creating if absent) the archive database at `path`, configure it, and
 /// apply all pending migrations.
 pub fn open(path: &Path) -> Result<Connection> {
+    make_private_file(path)?;
     let conn = Connection::open(path)?;
     configure(&conn)?;
     migrations::run(&conn)?;
     Ok(conn)
+}
+
+/// Create `dir` and any missing parents readable by their owner only, as the
+/// archive directory and the blob store must be: they hold full transcripts.
+pub fn create_private_dir(dir: &Path) -> Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)?;
+    Ok(())
+}
+
+/// Create the database file 0600 before SQLite does, matching backups. SQLite
+/// gives new `-wal` and `-shm` files the database file's mode, but reuses ones
+/// an older build left behind after a crash, so those are tightened here too.
+/// An existing file is only chmodded, never opened, so a read-only database
+/// stays read-only and SQLite reports it as such.
+#[cfg(unix)]
+fn make_private_file(path: &Path) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if !path.exists() {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)?;
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        drop_group_and_other_access(Path::new(&file))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn drop_group_and_other_access(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = match std::fs::metadata(path) {
+        Ok(meta) => meta.permissions().mode(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    if mode & 0o077 != 0 {
+        set_mode_if_supported(path, mode & 0o700)?;
+    }
+    Ok(())
+}
+
+/// Set `path`'s mode, skipping filesystems that cannot hold one (exFAT, some
+/// network shares answer `EPERM` or `ENOTSUP`): there the archive opens with
+/// whatever access that filesystem gives, rather than not opening at all.
+#[cfg(unix)]
+pub(crate) fn set_mode_if_supported(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)) {
+        Err(e) if chmod_unsupported(&e) => Ok(()),
+        other => Ok(other?),
+    }
+}
+
+#[cfg(unix)]
+fn chmod_unsupported(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+    ) || e.raw_os_error() == Some(libc_enotsup())
+}
+
+/// `ENOTSUP` without a libc dependency: 45 on macOS and the BSDs, 95 on Linux.
+#[cfg(unix)]
+const fn libc_enotsup() -> i32 {
+    if cfg!(target_os = "linux") {
+        95
+    } else {
+        45
+    }
+}
+
+#[cfg(not(unix))]
+fn make_private_file(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 /// Open an in-memory database with identical configuration and migrations.
@@ -294,6 +379,16 @@ pub fn write_lock() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_filesystem_without_modes_does_not_stop_the_archive_opening() {
+        let raw = std::io::Error::from_raw_os_error;
+        assert!(chmod_unsupported(&raw(1)), "EPERM");
+        assert!(chmod_unsupported(&raw(libc_enotsup())), "ENOTSUP");
+        assert!(!chmod_unsupported(&raw(2)), "ENOENT is a real error");
+        assert!(!chmod_unsupported(&raw(5)), "EIO is a real error");
+    }
 
     fn foreign_keys_on(conn: &Connection) -> bool {
         conn.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))

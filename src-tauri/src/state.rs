@@ -182,7 +182,7 @@ pub fn init_state(app: &AppHandle) -> Result<AppState, Box<dyn std::error::Error
     // by `tauri_conf_identifier_matches_core_constant` below); an explicit
     // `LORE_ARCHIVE_DIR` now moves both surfaces together rather than only one.
     let data_dir = lore_core::paths::archive_dir(None)?;
-    std::fs::create_dir_all(&data_dir)?;
+    lore_core::storage::create_private_dir(&data_dir)?;
 
     // Taken before the database is opened, and held for the whole run. Anything
     // between opening and locking is a window in which two writers both believe

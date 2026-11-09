@@ -41,7 +41,6 @@ use lore_core::lock::ScanLock;
 use lore_core::paths::{ARCHIVE_DB_FILENAME, BLOBS_DIRNAME};
 use lore_core::pipeline::{DrainSummary, NullSink};
 use lore_core::storage::blob::BlobStore;
-use lore_core::storage::StorageError;
 use lore_core::worker::{self, WorkerConfig};
 use lore_core::{settings, source_roots, storage};
 
@@ -125,7 +124,7 @@ pub(crate) fn scan_until(
     deadline: Option<std::time::Instant>,
     compact: bool,
 ) -> Result<Scanned, CliError> {
-    std::fs::create_dir_all(archive_dir).map_err(|_| CliError::Storage(StorageError::Io))?;
+    storage::create_private_dir(archive_dir)?;
 
     // Before anything opens the database. See the module docs.
     let _lock = ScanLock::acquire(archive_dir)?;
