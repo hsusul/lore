@@ -59,10 +59,19 @@ pub fn on_a_terminal(command: &mut Command, input: &str) -> Output {
     use rustix::pty::{self, OpenptFlags};
     assert!(input.is_empty() || input.ends_with('\n'), "{input:?}");
     let keyboard = pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
+    // Close-on-exec, as std's own pipes are: tests run in parallel, and a
+    // terminal every sibling's child inherited held those children open at
+    // exit for seconds (openpt cannot set this flag on macOS).
+    rustix::io::fcntl_setfd(&keyboard, rustix::io::FdFlags::CLOEXEC).unwrap();
     pty::grantpt(&keyboard).unwrap();
     pty::unlockpt(&keyboard).unwrap();
     let name = pty::ptsname(&keyboard, Vec::new()).unwrap();
-    let terminal = rustix::fs::open(&name, OFlags::RDWR | OFlags::NOCTTY, Mode::empty()).unwrap();
+    let terminal = rustix::fs::open(
+        &name,
+        OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .unwrap();
     let child = command
         .stdin(terminal)
         .stdout(Stdio::piped())
